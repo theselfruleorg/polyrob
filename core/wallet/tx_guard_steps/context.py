@@ -27,6 +27,10 @@ class GuardContext:
     autonomous_ok_fn: Optional[Callable]
     liquidity_rpc: Optional[Callable]
     account_rpc: Optional[Callable]
+    #: step 9: the caller's own ask-above value (the signer); None = the owner's dial.
+    approve_above_usd: Optional[float] = None
+    #: step 9: a send valued at the weaker price passes inside the caps (the signer).
+    unverified_within_caps: bool = False
     # -- derived, in step order ------------------------------------------
     #: step 0: THE OWNER is asking in this turn.
     owner_direct: bool = False
@@ -52,6 +56,10 @@ class GuardContext:
     lp_implied: bool = False
     #: step 2: the order's recipient when the run fulfils an order (099), else None.
     offer_recipient: Optional[str] = None
+    #: step 2: what an order run's transaction does (the kernel's offer step), else None.
+    #: Step 2 only CHECKS the order's budget; :func:`turn.reserve_offer_budget` books it
+    #: after the final allow, so a transaction a later step refuses books nothing.
+    offer_scope: Optional[dict] = None
     #: step 6: the measured outflow.
     outflow_raw: int = 0
     #: step 6: the LP position the simulation minted.

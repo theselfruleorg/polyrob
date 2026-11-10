@@ -36,7 +36,6 @@ class TestCostCalculationConsistency:
         # Claude series
         ("claude-sonnet-4-5", 10000, 5000, 0.105),  # $3/M * 10k + $15/M * 5k = $0.03 + $0.075
         ("claude-haiku-4-5", 10000, 5000, 0.035),  # $1/M * 10k + $5/M * 5k = $0.01 + $0.025
-        ("claude-opus-4.1", 10000, 5000, 0.525),  # $15/M * 10k + $75/M * 5k = $0.15 + $0.375
     ])
     def test_registry_cost_calculation(self, model, input_tok, output_tok, expected):
         """Test model registry calculates correct costs."""
@@ -49,7 +48,7 @@ class TestCostCalculationConsistency:
         expected_models = [
             "gpt-5", "gpt-5-mini", "gpt-5-nano",
             "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
-            "claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4.1"
+            "claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-5-5",
         ]
 
         for model in expected_models:

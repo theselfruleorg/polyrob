@@ -12,12 +12,11 @@ UPDATED = "# Calibration\n\nRead the gauge, record the corrected value, and veri
 
 @pytest.fixture
 def manager(tmp_path, monkeypatch):
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "true")
     return SkillManager(skills_dir=tmp_path)
 
 
 def test_pending_skill_has_reviewable_exact_revision(manager):
-    result = manager.create_skill("calibration", BODY, user_id="u1")
+    result = manager.create_skill("calibration", BODY, user_id="u1", created_by="untrusted_turn")
     assert result.ok and result.pending and len(result.revision) == 64
     pending = manager.list_pending_skills("u1")
     assert pending[0]["revision"] == result.revision
@@ -27,21 +26,21 @@ def test_pending_skill_has_reviewable_exact_revision(manager):
 
 
 def test_stale_patch_cas_cannot_overwrite_newer_pending_body(manager):
-    first = manager.create_skill("calibration", BODY, user_id="u1")
+    first = manager.create_skill("calibration", BODY, user_id="u1", created_by="untrusted_turn")
     second = manager.patch_skill("calibration", user_id="u1", old_string="gauge",
-                                 new_string="sensor", expected_revision=first.revision)
+                                 new_string="sensor", expected_revision=first.revision, created_by="untrusted_turn")
     assert second.ok
     stale = manager.patch_skill("calibration", user_id="u1", old_string="sensor",
-                                new_string="meter", expected_revision=first.revision)
+                                new_string="meter", expected_revision=first.revision, created_by="untrusted_turn")
     assert not stale.ok and "revision conflict" in stale.errors[0]
     assert manager._read_skill_text(manager.skills_dir / "user_u1" / ".pending" /
                                     "calibration" / "SKILL.md").find("sensor") >= 0
 
 
 def test_promotion_binds_to_reviewed_pending_bytes(manager):
-    first = manager.create_skill("calibration", BODY, user_id="u1")
+    first = manager.create_skill("calibration", BODY, user_id="u1", created_by="untrusted_turn")
     changed = manager.patch_skill("calibration", user_id="u1", old_string="gauge",
-                                  new_string="sensor", expected_revision=first.revision)
+                                  new_string="sensor", expected_revision=first.revision, created_by="untrusted_turn")
     refused = manager.promote_pending_skill("calibration", user_id="u1",
                                             expected_revision=first.revision)
     assert not refused.ok and "changed after review" in refused.errors[0]
@@ -53,7 +52,7 @@ def test_promotion_binds_to_reviewed_pending_bytes(manager):
 
 
 def test_versioned_active_skill_refuses_tampered_body(manager):
-    pending = manager.create_skill("calibration", BODY, user_id="u1")
+    pending = manager.create_skill("calibration", BODY, user_id="u1", created_by="untrusted_turn")
     assert manager.promote_pending_skill("calibration", user_id="u1",
                                          expected_revision=pending.revision).ok
     path = manager.skills_dir / "user_u1" / "calibration" / "SKILL.md"
@@ -73,7 +72,6 @@ def test_legacy_active_skill_without_revision_still_loads(manager):
 
 
 def test_failed_rule_commit_cannot_load_new_unverified_active_body(manager, monkeypatch):
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
     initial = manager.create_skill("calibration", BODY, user_id="u1", created_by="user")
     assert initial.ok
     monkeypatch.setattr(manager, "_upsert_rule", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")))
@@ -95,7 +93,7 @@ def test_revision_metadata_cannot_be_malformed_into_a_load(manager):
 
 
 def test_an_unreadable_revision_store_cannot_disable_verification(manager, monkeypatch):
-    pending = manager.create_skill("calibration", BODY, user_id="u1")
+    pending = manager.create_skill("calibration", BODY, user_id="u1", created_by="untrusted_turn")
     assert manager.promote_pending_skill("calibration", user_id="u1",
                                          expected_revision=pending.revision).ok
     from modules.skills import skill_usage
@@ -115,7 +113,6 @@ def _sha(text):
 
 
 def test_an_active_write_records_the_revision_in_the_db_not_rules_json(manager, monkeypatch):
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
     res = manager.create_skill("calibration", BODY, user_id="u1", created_by="user")
     assert res.ok and not res.pending
     from modules.skills.skill_usage import get_skill_usage_store
@@ -147,7 +144,6 @@ def test_read_old_a_tampered_legacy_skill_is_still_refused(manager):
 
 
 def test_write_new_the_next_write_moves_a_legacy_revision_to_the_db(manager, monkeypatch):
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
     root = _legacy(manager, _sha(BODY))
     res = manager.patch_skill("calibration", user_id="u1", old_string="value",
                               new_string="reading", created_by="user")
@@ -161,7 +157,6 @@ def test_write_new_the_next_write_moves_a_legacy_revision_to_the_db(manager, mon
 
 
 def test_a_failed_revision_commit_cannot_load_the_new_body(manager, monkeypatch):
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
     assert manager.create_skill("calibration", BODY, user_id="u1", created_by="user").ok
     from modules.skills import skill_usage
 

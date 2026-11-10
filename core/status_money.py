@@ -235,6 +235,7 @@ def _money_section(user_id: str, ledger: Any, data_dir: Optional[str] = None) ->
     except Exception as e:
         sec.lines.append(f"open positions: UNKNOWN ({type(e).__name__}: {e})")
     _trading_block(sec, user_id, data_dir)
+    _commerce_block(sec, user_id)
     from core.activity_evidence import ledger_note
     note = ledger_note(ledger)
     if note:
@@ -242,6 +243,20 @@ def _money_section(user_id: str, ledger: Any, data_dir: Optional[str] = None) ->
         sec.reason = note
         sec.lines.append(f"⚠ {note}")
     return sec
+
+
+def _commerce_block(sec: Section, user_id: str) -> None:
+    """109 W6: offers, open orders, refunds owed and the public-thread intake."""
+    try:
+        from core.commerce.report import status_lines
+        lines, health = status_lines(user_id)
+    except Exception as e:
+        sec.lines.append(f"selling: UNKNOWN ({type(e).__name__}: {e})")
+        return
+    sec.lines.extend(lines)
+    for key, text, remedy in health:
+        sec.health.append(HealthItem(key=key, severity=SEVERITY_WARN, text=text,
+                                     remedy=remedy))
 
 
 #: The verbs that CREATE something the owner will later be asked about. Derived

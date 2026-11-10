@@ -60,6 +60,39 @@ export async function patchJson(url, payload, options = {}) {
   return requestJson("PATCH", url, payload, options);
 }
 
+/**
+ * GET JSON — the ONE read helper (113 W5, C-09). The same `{ok, status, body}`
+ * as `postJson`: `body` is the parsed answer or `null`. A network failure
+ * rejects, as `postJson` does, so a caller that retries on a rejection
+ * (`money.js::shareOnce`) still retries. No `Content-Type`: a GET sends no body.
+ */
+export async function getJson(url, { fetcher, headers } = {}) {
+  const call = fetcher || fetch;
+  const init = { credentials: 'include' };
+  if (headers) init.headers = { ...headers };
+  const resp = await call(url, init);
+  let body = null;
+  try {
+    body = await resp.json();
+  } catch (err) {
+    body = null;
+  }
+  return { ok: Boolean(resp.ok), status: resp.status, body };
+}
+
+/**
+ * The shape the destination readers draw from `getJson`: the body on success,
+ * `{error: "<status>"}` on a refusal (an HTTP refusal reads as unreadable, never
+ * as empty). `allow404` keeps a 404's own body (a goal that is gone says so).
+ * A 200 that is not JSON rejects, as `resp.json()` always did here.
+ */
+export async function readJson(url, fetcher, { allow404 = false } = {}) {
+  const res = await getJson(url, { fetcher });
+  if (!res.ok && !(allow404 && res.status === 404)) return { error: String(res.status) };
+  if (res.body === null) throw new Error(`${url}: the answer is not JSON`);
+  return res.body;
+}
+
 async function requestJson(method, url, payload, { fetcher, headers } = {}) {
   const call = fetcher || fetch;
   const init = {

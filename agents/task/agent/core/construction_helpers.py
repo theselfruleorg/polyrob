@@ -304,7 +304,6 @@ class AgentConstructionHelpersMixin:
 			"model_name": self.model_name,
 			"created_at": datetime.now().isoformat(),
 			"steps": [],
-			"llm_requests": []
 		}
 
 		# Native tools debug flag

@@ -94,8 +94,9 @@ def _security_section(user_id: str, data_dir: str, now: float,
         if not perms.skipped and perms.offender_total:
             sec.health.append(HealthItem(
                 key="data_perms", severity=SEVERITY_WARN,
-                text=(f"{perms.offender_total} entr(ies) under {data_dir} the shared "
-                      f"group cannot write" + (" (first 2000 checked)" if perms.truncated else "")
+                text=(f"file permissions: {perms.offender_total} entr(ies) under {data_dir} "
+                      f"lack group write for sibling services (an ops chore; the agent's file "
+                      f"tools still work)" + (" (first 2000 checked)" if perms.truncated else "")
                       + ": " + "; ".join(o.path for o in perms.offenders)),
                 remedy="re-run your deploy's data-ownership pass, or "
                        "`polyrob doctor --perms` to name them all"))
@@ -356,7 +357,8 @@ def _x_session_line(sec: Section, data_dir: Optional[str]) -> None:
         sec.health.append(HealthItem(
             key="x_session_absent", severity=SEVERITY_WARN,
             text="X browser rail enabled (X_BROWSER_ENABLED) but no login session is stored — "
-                 "public replies/posts through the browser cannot run",
+                 "the browser rail (x_browser_*) cannot post; the twitter_* API tools are not "
+                 "affected",
             remedy="run `polyrob x-account capture-session` from an owner shell (≈2 min, "
                    "log in as the agent's account)"))
     else:

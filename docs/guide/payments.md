@@ -148,7 +148,8 @@ modes.
 
 A pending invoice completes by any of:
 
-1. **Owner attestation** — `polyrob owner settle <id> [--tx-hash]`.
+1. **Owner attestation** — `polyrob owner settle <id> [--tx-hash]`. An order's invoice
+   settles only with `--tx-hash`: an attestation alone never pays an order.
 2. **Payer-driven facilitator** — a machine payer hits
    `POST /api/x402/requests/{id}/pay` (the public endpoint runs the x402 facilitator
    verify+settle).
@@ -220,16 +221,32 @@ Buyers order in the chats you list (`/offers`, `/buy <offer> field=value`,
 code, never by the AI), over HTTP (`GET /api/offers`, `POST /api/offers/<id>/orders`,
 then `GET /api/orders/<id>?token=…` for the status), as other agents and apps, or on
 a marketplace the operator configures in `<data_home>/commerce_markets.json`.
+One offer takes at most 25 unpaid orders at a time from HTTP, agents, apps and
+marketplaces (the next one refuses until some are paid or expire); chat and
+public-reply buyers have no such limit.
+**Public replies:** where the agent can read public replies (X today), it
+announces a live offer in one post; a person replies under it with `/buy field=value`
+(or `/order <id>`), and code answers under that reply with the exact amount, asset,
+network, pay-to address and expiry, then the payment, the delivery proof and any
+failure. Your go-live Confirm approves those public replies; they use at most two
+thirds of the hour's X writes, and the run's own words never go out in public.
 **Email is never a way to buy.** Each order gets its own invoice; when the payment
 arrives on the network, one goal run delivers the order inside its own budget and
 only to the buyer's address. Deliver by a contract call (for example a mint): a
 direct token or NFT send always waits for your approval, order by order.
 
-Your verbs: `/offer` (list), `/offer show <id>`, `/offer orders`,
-`/offer quote <order> <usd>` (a quote-priced order), `/offer resolve <order>
+Your verbs: `/offer` (list), `/offer show <id>`, `/offer orders`, `/offer report`
+(income, order spend and margin; your LLM cost stays on `/usage`), `/offer threads`
+(the announcement posts), and `/status` names open orders, refunds owed and a
+stopped reply intake.
+Also `/offer quote <order> <usd>` (a quote-priced order), `/offer resolve <order>
 accept|refund` (a dispute), `/offer pause|resume|retire <id>`. Refunds are always
 yours: refund the order's invoice to the buyer's refund address — never to the
-address the payment came from.
+address the payment came from. A paid order that will not be delivered (it failed,
+went over its limit, or was paid after a cancel or an expiry) moves its invoice to
+`refund_due`: `/invoices refund_due` lists them, and `/invoices refunded <id> [tx]`
+closes one after you paid it back. An offer that delivers a file with no url proof
+takes orders only in a direct chat.
 
 ---
 
@@ -240,7 +257,12 @@ on-chain probe, the settlement scan, the public challenge and the EIP-681 URI al
 it. One row per asset, no default row: an unknown asset id resolves to `None` and the
 caller refuses with the known ids echoed back.
 
-**Pin an asset** (operator only — there is deliberately no agent action and no
+**Built in:** every dollar the network table pins on a money network is payable with
+no step, as `<symbol>-<network>`: `usdc-base`, `usdc-ethereum`, `usdc-arbitrum`,
+`usdc-polygon`, `usdg-robinhood` (the Robinhood network's dollar is USDG; it has no USDC).
+A network whose one pinned dollar is not USDC uses it as its default.
+
+**Pin another asset** (operator only — there is deliberately no agent action and no
 chat verb that writes one):
 
 ```bash

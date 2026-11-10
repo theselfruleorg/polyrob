@@ -10,13 +10,9 @@ one composition of them. Tier-0: imports nothing above ``core``.
 
 
 def owner_refusal(user_id):
-    try:
-        from core.instance import resolve_owner_principal
-        owner = resolve_owner_principal()
-        if isinstance(user_id, str) and user_id and user_id == owner:
-            return None
-    except Exception:
-        pass
+    from core.instance import is_owner_uid
+    if isinstance(user_id, str) and is_owner_uid(user_id, allow_local=False):
+        return None
     return 'operator wallet access requires the bound owner identity'
 
 

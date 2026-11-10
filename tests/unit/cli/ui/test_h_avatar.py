@@ -1,9 +1,10 @@
 """/avatar in the REPL (cli/ui/commands/h_avatar.py) — show and set the slot."""
 from __future__ import annotations
 
+import asyncio
 import base64
 
-from cli.ui.commands.h_avatar import h_avatar
+from cli.ui.commands.h_avatar import h_avatar as _h_avatar
 from cli.ui.commands.registry import CommandContext
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
@@ -16,9 +17,14 @@ def _ctx(args):
     return ctx
 
 
+def h_avatar(ctx):
+    asyncio.run(_h_avatar(ctx))
+
+
 def _home(monkeypatch, tmp_path):
     monkeypatch.setattr("cli.commands.avatar._home",
                         lambda write=None: (str(tmp_path), "alice"))
+    monkeypatch.setattr("core.instance.resolve_instance_id", lambda *a, **k: "alice")
 
 
 def test_show_reports_the_default(monkeypatch, tmp_path):
@@ -26,7 +32,8 @@ def test_show_reports_the_default(monkeypatch, tmp_path):
     ctx = _ctx([])
     h_avatar(ctx)
     out = "\n".join(ctx._emitted)
-    assert "avatar the default" in out and "/avatar set" in out
+    assert "the default polyrob mark" in out and "/avatar set" in out
+    assert "image: " in out  # the terminal names the file a chat app sends
 
 
 def test_show_reports_not_set_without_the_shipped_default(monkeypatch, tmp_path):
@@ -62,6 +69,26 @@ def test_a_non_image_is_refused(monkeypatch, tmp_path):
     ctx = _ctx(["set", str(f)])
     h_avatar(ctx)
     assert "avatar not set" in "\n".join(ctx._emitted)
+
+
+def test_show_is_the_chat_text_plus_the_file(monkeypatch, tmp_path):
+    """113 W4 item 3: the chat seat's own words; the terminal adds the file."""
+    from surfaces.telegram.owner_ops import avatar_reply
+    _home(monkeypatch, tmp_path)
+    ctx = _ctx([])
+    h_avatar(ctx)
+    text, img = avatar_reply(str(tmp_path), [])
+    assert ctx._emitted == [f"{text}\nimage: {img}"]
+
+
+def test_clear_removes_the_avatar(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    f = tmp_path / "me.png"
+    f.write_bytes(PNG)
+    h_avatar(_ctx(["set", str(f)]))
+    ctx = _ctx(["clear"])
+    h_avatar(ctx)
+    assert "avatar cleared" in "\n".join(ctx._emitted)
 
 
 def test_registered_in_default_registry():

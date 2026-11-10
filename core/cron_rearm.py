@@ -18,7 +18,10 @@ from core.sqlite_util import execute_retry
 def rearm_job(cron_db_path: str, job_id: str, now: datetime) -> bool:
     """Set an enabled, 'scheduled' job's ``next_run_at`` to *now*. A CAS on
     status so a 'running'/'done'/'cancelled' row is never touched. True iff
-    the row moved."""
+    the row moved. An aware *now* is stored as naive LOCAL time, the store's
+    convention: the scheduler subtracts a naive clock from it."""
+    if now.tzinfo is not None:
+        now = now.astimezone().replace(tzinfo=None)
     rowcount = execute_retry(
         cron_db_path,
         "UPDATE cron_jobs SET next_run_at=? WHERE id=? AND enabled=1 "

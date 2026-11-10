@@ -231,13 +231,16 @@ def record_external_write(*, effect: str, tool: str = "", action: str = "",
                           autonomous: bool = False, confidence: str = "action",
                           outcome: str = "ok", user_id: str = "",
                           session_id: str = "", fingerprint: str = "",
+                          subject: str = "",
                           extra: Optional[Dict[str, Any]] = None,
                           event_log: Any = None) -> None:
     """Record ONE outward act as an ``external_write`` row. Never raises.
 
     An unknown effect class is DROPPED rather than written, so a typo cannot
     pollute the vocabulary every reader depends on. The content itself is never
-    stored — only its hash in ``dedup``. ``user_id``/``session_id`` fall back to
+    stored — only its hash in ``dedup``. ``subject`` is what the act answers, for a
+    verb that declares one (``VerbPolicy.subject``); no other row carries the key.
+    ``user_id``/``session_id`` fall back to
     the ambient action-batch identity (``core/exec_identity.py``).
     ``event_log`` is the injected-store seam a writer with its own log handle
     (the app supervisor) passes; default is the process singleton.
@@ -261,6 +264,8 @@ def record_external_write(*, effect: str, tool: str = "", action: str = "",
         # per-job post spacing reads it (packs/x/polyrob_x/post_spacing.py).
         from core.autonomy_marker import cron_job_for_session
         attrs["cron_job_id"] = cron_job_for_session(str(session_id or "")) or None
+        if subject:
+            attrs["subject"] = str(subject)
         attrs.update({
             "tool": str(tool or ""),
             "action": str(action or ""),
@@ -278,6 +283,33 @@ def record_external_write(*, effect: str, tool: str = "", action: str = "",
             source=str(surface or tool or "agent"), effect=effect, attrs=attrs)
     except Exception:
         logger.debug("record_external_write failed (fail-open)", exc_info=True)
+
+
+#: How far back one post counts as answered. ``TELEMETRY_EVENT_LOG_RETENTION_DAYS`` (default
+#: 30) bounds what the log still holds.
+SUBJECT_WINDOW_SECONDS = 30 * 86400
+
+
+def last_good_act_on(subject: str, *, user_id: str, data_dir: Optional[str] = None,
+                     now: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """The newest ``social`` act that went out on *subject* inside the window, for *user_id*
+    plus the untenanted rows (the status snapshot's rule). ``{}`` when there is none, and
+    ``None`` when the log cannot be read. A failed or refused act does not count."""
+    import time
+    from core.event_kinds import EXTERNAL_WRITE
+    from core.event_log import open_event_log
+    try:
+        log = open_event_log(data_dir)
+    except Exception:
+        logger.warning("last_good_act_on: event log did not open", exc_info=True)
+        return None
+    if log is None:
+        return {}
+    return log.last_where(
+        kind=EXTERNAL_WRITE, effect="social",
+        since_ts=(time.time() if now is None else now) - SUBJECT_WINDOW_SECONDS,
+        user_ids={str(user_id or ""), ""},
+        attrs_in={"subject": str(subject), "outcome": "ok"})
 
 
 #: Plain words per effect for the owner-facing rollups (digest, activity feed,
@@ -345,7 +377,8 @@ __all__ = [
     "EffectVerdict", "GATED_EFFECTS", "NON_WRITE_ACTIONS", "OUTCOMES",
     "TOKEN_TO_EFFECT", "WRITE_ACTIONS", "ceiling", "classify_effect", "dedup_key",
     "effect_line", "effect_pause_refusal", "external_write_pause_gate_enabled",
-    "external_write_strict", "external_write_telemetry_enabled", "outward_counts",
+    "external_write_strict", "external_write_telemetry_enabled", "last_good_act_on",
+    "outward_counts",
     "outward_line", "pause_kind_for", "record_external_write",
 ]
 

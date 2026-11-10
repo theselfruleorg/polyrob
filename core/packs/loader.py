@@ -564,6 +564,19 @@ def _hook_delivery_channel(rec: "state.PackRecord", value: Any) -> None:
         register_channel(name, resolve_ref(sender), pack_id=rec.id)
 
 
+def _hook_thread_channel(rec: "state.PackRecord", value: Any) -> None:
+    """109: ``{surface id: "module:factory"}`` — the public-thread channel of a
+    surface THIS pack declares (``[surfaces.<id>]``), so a pack can only answer
+    threads on its own surface. The factory is called once, with no argument."""
+    from core.commerce.hooks import register_thread_channel
+    declared = {getattr(s, "id", None) for s in rec.manifest.surfaces}
+    for surface, ref in dict(value).items():
+        if surface not in declared:
+            raise ValueError(f"thread channel {surface!r}: the pack declares no such surface")
+        factory = resolve_ref(ref)
+        register_thread_channel(surface, factory() if callable(factory) else factory)
+
+
 def verb_source(pack_id: str) -> str:
     """The ``core.verbs`` registration source of a pack's owner verbs."""
     return f"pack:{pack_id}"
@@ -589,6 +602,7 @@ def _hook_owner_verbs(rec: "state.PackRecord", value: Any) -> None:
 #: hook name -> ``(record, value) -> None``. The seams core already owns.
 HOOKS: Dict[str, Callable[["state.PackRecord", Any], None]] = {
     "autonomy.boot_reconciler": _hook_boot_reconciler,
+    "commerce.thread_channel": _hook_thread_channel,
     "cron.delivery_channel": _hook_delivery_channel,
     "owner.verbs": _hook_owner_verbs,
 }

@@ -90,8 +90,8 @@ def fork(monkeypatch, tmp_path):
         "ownerOf", [{"type": "uint256"}], [token_id])}, "latest"]))[0]
     for a in (owner, TREASURY):
         _rpc("anvil_setBalance", [a, hex(10 ** 18)])
-    _send(owner, erc6551.REGISTRY, erc6551.encode_create_account(4663, parent, token_id))
-    account = erc6551.account_address(4663, parent, token_id)
+    _send(owner, erc6551.REGISTRY, erc6551.encode_create_account(4663, parent, token_id, implementation=erc6551.ACCOUNT_V3_IMPL))
+    account = erc6551.account_address(4663, parent, token_id, implementation=erc6551.ACCOUNT_V3_IMPL)
     # 069 v4 (the simple model): the treasury OWNS the NFT — no grant exists.
     _send(owner, parent, abi.encode_call(
         "transferFrom", [{"type": "address"}, {"type": "address"}, {"type": "uint256"}],

@@ -335,3 +335,129 @@ def test_inline_attachment_refuses_hardlinked_secret(ws, tmp_path):
     text, images = inject_file_content(ws, "innocent.txt", "read this")
     assert "private secret content" not in text
     assert images is None
+
+
+# --- video ---------------------------------------------------------------------
+
+def test_a_refused_attachment_is_named_with_its_reason_and_never_fetched(ws):
+    import asyncio
+    from core.surfaces.inbound_attachments import absorb_inbound_media
+    from core.surfaces.media import Media
+
+    fetched = []
+
+    async def fetch(item):
+        fetched.append(item)
+        return b"x"
+
+    media = [Media(kind="video", ref="v1", filename="clip.mp4",
+                   refused="it is 148.0MB and a Telegram bot can download only 20MB")]
+    text, images = asyncio.run(absorb_inbound_media(media, str(ws), fetch_bytes=fetch))
+    assert fetched == []
+    assert images is None
+    assert "clip.mp4" in text
+    assert "148.0MB" in text
+    assert "could not be downloaded" not in text
+
+
+def test_a_stored_video_says_the_agent_cannot_watch_it_and_gives_no_read_call(ws):
+    from core.surfaces.inbound_attachments import inject_file_content, persist_inbound_file
+
+    rel, _ = persist_inbound_file(str(ws), "clip.mp4", b"\x00\x00\x00\x18ftypmp42", kind="video")
+    text, images = inject_file_content(str(ws), rel, "look")
+    assert images is None
+    assert rel in text
+    assert "CANNOT watch" in text
+    assert "filesystem_read_file(" not in text
+
+
+def _absorb(media, ws, fetch):
+    import asyncio
+    from core.surfaces.inbound_attachments import absorb_inbound_media
+    return asyncio.run(absorb_inbound_media(media, ws, fetch_bytes=fetch))
+
+
+def test_a_streamed_video_lands_under_inbound_with_no_spool_left(ws):
+    import os
+    from pathlib import Path
+    from core.surfaces.media import Media
+
+    async def fetch(item):
+        Path(item.spool).write_bytes(b"VIDEO")
+        return Path(item.spool)
+
+    item = Media(kind="video", ref="v1", filename="clip.mp4")
+    text, _ = _absorb([item], ws, fetch)
+    assert item.path == os.path.join("inbound", "clip.mp4")
+    assert os.listdir(os.path.join(ws, "inbound")) == ["clip.mp4"]
+    assert "Attached video: clip.mp4" in text
+
+
+def test_a_failed_stream_leaves_no_spool_and_is_named(ws):
+    import os
+    from core.surfaces.media import Media
+
+    async def fetch(item):
+        return None
+
+    text, _ = _absorb([Media(kind="video", ref="v1", filename="clip.mp4")], ws, fetch)
+    assert os.listdir(os.path.join(ws, "inbound")) == []
+    assert "clip.mp4 could not be downloaded" in text
+
+
+def test_a_video_from_a_bytes_surface_leaves_no_spool(ws):
+    import os
+    from core.surfaces.media import Media
+
+    async def fetch(item):
+        return b"VIDEO"
+
+    _absorb([Media(kind="video", ref="v1", filename="clip.mp4")], ws, fetch)
+    assert os.listdir(os.path.join(ws, "inbound")) == ["clip.mp4"]
+
+
+def test_a_streamed_video_over_the_cap_is_named_and_removed(ws, monkeypatch):
+    import os
+    from pathlib import Path
+    from core.surfaces.media import Media
+
+    monkeypatch.setenv("INBOUND_VIDEO_MAX_MB", "0.000001")
+
+    async def fetch(item):
+        Path(item.spool).write_bytes(b"VIDEO")
+        return Path(item.spool)
+
+    text, _ = _absorb([Media(kind="video", ref="v1", filename="clip.mp4")], ws, fetch)
+    assert os.listdir(os.path.join(ws, "inbound")) == []
+    assert "too large" in text
+
+
+def test_a_full_disk_refuses_before_any_download(ws, monkeypatch):
+    import shutil
+    from collections import namedtuple
+    from core.surfaces.media import Media
+
+    usage = namedtuple("usage", "total used free")
+    monkeypatch.setattr(shutil, "disk_usage", lambda _p: usage(10, 10, 0))
+    fetched = []
+
+    async def fetch(item):
+        fetched.append(item)
+        return b"x"
+
+    text, _ = _absorb([Media(kind="video", ref="v1", filename="clip.mp4", size=5)], ws, fetch)
+    assert fetched == []
+    assert "too little free space" in text
+
+
+def test_a_spool_file_keeps_the_ordinary_permission_shape(ws):
+    import os
+    import stat
+    from core.surfaces.inbound_attachments import _open_spool
+
+    old = os.umask(0o022)
+    try:
+        spool = _open_spool(ws)
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE(os.stat(spool).st_mode) == 0o644

@@ -48,6 +48,23 @@ def test_budget_accumulates_across_calls(monkeypatch):
         t._enforce_x402_budget("u", "s1", 500)      # 1100 > 1000
 
 
+def test_a_full_accumulator_never_resets_an_in_flight_session(monkeypatch):
+    """At the bound the map used to be CLEARED, which reset every in-flight
+    paid session's budget (a cap that got looser). Only the least recently
+    used entry leaves."""
+    monkeypatch.setenv("X402_MAX_TOKENS_PER_REQUEST", "1000")
+    t = _tracker()
+    t._x402_session_tokens = {f"old{i}": 1 for i in range(10000)}
+    t._enforce_x402_budget("u", "live", 900)
+    for i in range(5):
+        t._enforce_x402_budget("u", f"new{i}", 1)
+    assert len(t._x402_session_tokens) <= 10002
+    assert t._x402_session_tokens["live"] == 900
+    with pytest.raises(InsufficientCreditsError):
+        t._enforce_x402_budget("u", "live", 200)   # 1100 > 1000: still capped
+    assert "old0" not in t._x402_session_tokens
+
+
 # ── _get_user_tier refresh ───────────────────────────────────────────────────
 
 @pytest.mark.asyncio

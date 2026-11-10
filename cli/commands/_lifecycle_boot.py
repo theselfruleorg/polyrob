@@ -119,8 +119,8 @@ def boot_step(command: str, *, data_home: Optional[Path] = None,
             from cli.commands.update import rollback_for_boot as rollback
         echo("[polyrob] the last update was interrupted — rolling it back")
         rb = rollback(res)
-        res.update(in_progress=False, ok=False, boot_failed=True, rolled_back=bool(rb.get("ok")),
-                   rollback=rb)
+        res.update(in_progress=False, ok=False, boot_failed=True, interrupted=True,
+                   rolled_back=bool(rb.get("ok")), rollback=rb)
         lc.set_request_state(lc.STATE_EXITING, data_home=data_home, request_id=req.id,
                              expect=(lc.STATE_EXITING,), update_result=res)
         lc.reset_boot_attempts(data_home=data_home)

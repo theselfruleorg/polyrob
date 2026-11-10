@@ -216,10 +216,10 @@ async def test_show_a_live_pin_says_nothing_extra(tmp_path, monkeypatch):
 
 # 2026-10-17 06:53Z: the agent "verified" a BOUNTY JUDGE schedule of `0 18 */3 * *` as
 # "24h after the announce", but the announce job had the very same spec, so the
-# two fired at the same minute. Show and edit now name the job it collides with.
+# two fired at the same minute. Show and edit now name the job it overlaps.
 
 @pytest.mark.asyncio
-async def test_show_and_edit_name_a_job_firing_the_same_minute(tmp_path, owner_turn):
+async def test_show_and_edit_name_a_job_in_the_same_slot(tmp_path, owner_turn):
     t = _tool(tmp_path)
     svc = t._cron_service
     svc.schedule(task="BOUNTY ANNOUNCE post today's round", schedule_spec="0 18 */3 * *",
@@ -227,14 +227,16 @@ async def test_show_and_edit_name_a_job_firing_the_same_minute(tmp_path, owner_t
     judge = svc.schedule(task="BOUNTY JUDGE judge the round", schedule_spec="0 18 2-31/3 * *",
                          user_id="u1")
     res = await t.cronjob_show(CronShowAction(job_id=judge.id), execution_context=_ctx())
-    assert "SAME minute" not in res.extracted_content
-    res = await t.cronjob_edit(CronEditAction(job_id=judge.id, schedule="0 18 */3 * *"),
+    assert "overlaps" not in res.extracted_content
+    res = await t.cronjob_edit(CronEditAction(job_id=judge.id, schedule="0 18 */3 * *",
+                                              exact_time=True),
                                execution_context=_ctx())
     assert res.error is None
     assert "next run" in res.extracted_content
-    assert "SAME minute" in res.extracted_content and "BOUNTY ANNOUNCE" in res.extracted_content
+    assert "overlaps" in res.extracted_content and "BOUNTY ANNOUNCE" in res.extracted_content
+    assert "one at a time" in res.extracted_content
     res = await t.cronjob_show(CronShowAction(job_id=judge.id), execution_context=_ctx())
-    assert "SAME minute" in res.extracted_content and "BOUNTY ANNOUNCE" in res.extracted_content
+    assert "overlaps" in res.extracted_content and "BOUNTY ANNOUNCE" in res.extracted_content
 
 
 @pytest.mark.asyncio

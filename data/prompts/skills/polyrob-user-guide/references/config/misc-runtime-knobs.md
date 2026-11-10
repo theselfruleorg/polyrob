@@ -7,7 +7,6 @@ One line per setting: NAME — default — meaning. Code anchors and full prose:
 
 - DATA_PERMS_MAX_ENTRIES — default: 200000 — entry budget for the data-home permission walk (`polyrob doctor --perms`, the status `security` line); over it the report says `truncated` and names the budget — "no offenders in the first N" is not "no offenders".
 - POLYROB_ALLOW_ROOT_CLI — default: OFF (false) — let a root-run owner CLI verb WRITE the deployed data home (script escape hatch; `--as-root` is the interactive one).
-- TWITTER_REQUIRE_APPROVAL — default: ON ('true') — Ask the owner once more before an X write on a genuine owner turn (OFF = the owner's request is the approval).
 - TWITTER_POST_COOLDOWN_ENABLED — default: **ON** — 2026-08-28: durable, cross-session minimum gap between AUTONOMOUS `twitter_post`/`twitter_thread` writes (a repeat goal re-firing in a fresh session, each with its own fresh in-memory rate-limit bucket, posted 30+ near-duplicate tweets ove…
 - TWITTER_POST_COOLDOWN_SEC — default: 3600 — Minimum seconds between two autonomous `twitter_post`/`twitter_thread` writes for the same tenant, enforced by `TWITTER_POST_COOLDOWN_ENABLED`.
 - X_BROWSER_ENABLED — default: OFF — Register the captured-session `x_browser` tool for visible-inbox reads, existing-thread DM sends, posting, and self-registration.

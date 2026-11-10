@@ -1,4 +1,4 @@
-"""RFC 8628 device-authorization flow (proposal 024, L2).
+"""RFC 8628 device-authorization flow.
 
 **The default flow.** A typical install is a headless VPS reached over SSH, where a
 loopback browser redirect is worthless — nothing on that box can open a browser

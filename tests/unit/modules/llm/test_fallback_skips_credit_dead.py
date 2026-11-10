@@ -36,7 +36,7 @@ def _manager(monkeypatch, *, clients, hierarchy, dead):
         return True
     monkeypatch.setattr(mgr, "_test_client_health", _healthy)
 
-    def _fake_create_llm_client(*, name, config, container, model_type=None):
+    def _fake_create_llm_client(*, name, config, container, model_type=None, isolated=False):
         return _FakeClient(model_type=model_type)
     monkeypatch.setattr("modules.llm.llm_manager.create_llm_client",
                         _fake_create_llm_client)

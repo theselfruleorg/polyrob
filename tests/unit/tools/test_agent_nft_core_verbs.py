@@ -17,7 +17,7 @@ from tests.unit.tools.test_agent_nft_withdraw import FakeRail, _run, _tool
 from tools.agent_nft.tool import BindParams, InspectParams, JournalParams, SnapshotParams
 
 PINNED = "0xC011000000000000000000000000000000000001"
-ACCOUNT = erc6551.account_address(4663, PINNED, 3)
+ACCOUNT = erc6551.account_address(4663, PINNED, 3, implementation=erc6551.ACCOUNT_V3_IMPL)
 OTHER = "0x" + "77" * 20
 REG_CODE = "0x" + "11" * 10
 REGISTRY = erc8004.resolve_identity_registry("robinhood")

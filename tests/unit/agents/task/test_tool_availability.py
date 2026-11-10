@@ -160,3 +160,15 @@ def test_a_session_that_creates_no_goal_is_not_told_about_goal_tools():
     from agents.task.agent.core.tool_availability import build_tool_availability_note
     assert "Goals you create" in build_tool_availability_note(set())
     assert "Goals you create" not in build_tool_availability_note(set(), can_create_goals=False)
+
+
+def test_capability_gap_rule_is_in_every_shape(monkeypatch):
+    """112 W4: the gap rule (deterministic tool first, never hand-judge money, never a
+    third-party service for a seed) reaches every seat, pinned catalog or not."""
+    from agents.task.agent.core import tool_availability as ta
+    monkeypatch.setattr(ta, "_hint_enabled", lambda: True)
+    for kw in (dict(catalog_pinned=True), dict(catalog_pinned=True, can_create_goals=False),
+               dict(catalog_pinned=False)):
+        note = ta.build_tool_availability_note([], **kw)
+        assert ta.CAPABILITY_GAP_RULE in note, kw
+    assert "compute" in ta.CAPABILITY_GAP_RULE and "third-party" in ta.CAPABILITY_GAP_RULE

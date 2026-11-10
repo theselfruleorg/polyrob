@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from core.llm_auth.store import AuthStore, AuthStoreError, auth_store_path
+from core.llm_auth.store import AuthStore, AuthStoreError, AuthStoreUnreadable, auth_store_path
 
 
 @pytest.fixture
@@ -32,9 +32,10 @@ class TestFileDiscipline:
         assert data["providers"] == {} and data["borrowed"] == {}
         assert not store.path.exists()  # a pure read never creates the file
 
-    def test_corrupt_file_treated_as_empty(self, store):
+    def test_corrupt_file_is_not_an_empty_store(self, store):
         store.path.write_text("{not json")
-        assert store.load()["providers"] == {}
+        with pytest.raises(AuthStoreUnreadable):
+            store.load()
 
     def test_crash_mid_write_leaves_old_content(self, store, monkeypatch):
         store.set_provider("p", {"access_token": "t1"})

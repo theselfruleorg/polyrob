@@ -16,6 +16,7 @@ from typing import Optional
 
 import click
 
+from cli.commands._options import json_option, yes_option
 from cli.update.context import resolve_update_context
 from cli.update.detect import (
     DEFER_TO_MANAGER, DOCKER, EDITABLE_GIT, GIT, PIP, PIPX, SYSTEMD, UNKNOWN,
@@ -371,19 +372,21 @@ def apply_for_boot(channel: str = "stable", target_version: str = "") -> dict:
             status = dataclasses.replace(status, latest=target_version, error=None)
         if status.error is not None or status.latest is None:
             return {"ok": False, "failed_step": "check", "error": status.human_note,
-                    "rolled_back": True, "from_version": status.current}
+                    "rolled_back": False, "not_applied": True, "from_version": status.current}
         if not status.update_available and not (git_state and git_state.get("behind")):
             return {"ok": False, "no_update": True, "from_version": status.current,
                     "to_version": status.current}
         runners = build_runners(ctx, target_ref=_target_ref(channel, status))
         if runners is None:
-            return {"ok": False, "failed_step": "unsupported", "rolled_back": True,
+            return {"ok": False, "failed_step": "unsupported", "rolled_back": False,
+                    "not_applied": True,
                     "error": f"no automated apply for a {ctx.method} install: "
                              + _manual_steps_for(ctx.method, ctx.repo_root)}
         uctx = resolve_update_context()
         reasons = active_use_reasons(uctx.db_paths)  # this process is excluded
         if reasons:
-            return {"ok": False, "failed_step": "in_use", "rolled_back": True,
+            return {"ok": False, "failed_step": "in_use", "rolled_back": False,
+                    "not_applied": True,
                     "error": "; ".join(reasons)}
         with update_lock(uctx.snapshots_root):
             res = apply_update(ctx=uctx, runners=runners,
@@ -404,8 +407,11 @@ def apply_for_boot(channel: str = "stable", target_version: str = "") -> dict:
                 "old_sha": runners.state.get("old_sha", ""),
                 "old_branch": runners.state.get("old_branch", "")}
     except Exception as exc:  # noqa: BLE001 — the boot must go on with the old code
+        # Every raise here comes before a change: the plan, the lock
+        # (UpdateLockHeld) or the master snapshot (apply_update returns a result
+        # for every step failure and never raises after its snapshot).
         return {"ok": False, "failed_step": "apply", "error": f"{type(exc).__name__}: {exc}",
-                "rolled_back": False}
+                "rolled_back": False, "not_applied": True}
 
 
 def rollback_for_boot(result: dict) -> dict:
@@ -628,9 +634,28 @@ def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool,
         click.echo("Aborted.")
         sys.exit(EXIT_UP_TO_DATE)
 
-    from cli.update.journal import (clear_failed, failed_rollback, shield_signals,
-                                    update_journal)
-    torn = failed_rollback(uctx.snapshots_root)
+    from cli.update.journal import (clear_failed, failed_rollback, set_aside_unreadable,
+                                    shield_signals, update_journal)
+    from core.state.files import UnreadableStateFile
+    try:
+        torn = failed_rollback(uctx.snapshots_root)
+    except UnreadableStateFile as exc:
+        jpath = str(exc.path)
+        if not force:
+            if as_json:
+                click.echo(_json.dumps({"applied": False, "error": "journal_unreadable",
+                                        "path": jpath}))
+            else:
+                click.echo(click.style(
+                    f"Refusing to apply: the update journal {jpath} is unreadable, so an "
+                    "interrupted update may not be rolled back. Run `polyrob update "
+                    "--rollback` first, or pass --force to set it aside.", fg="red"))
+            sys.exit(EXIT_ERROR)
+        aside = set_aside_unreadable(uctx.snapshots_root)
+        if not as_json:
+            click.echo(click.style(f"The unreadable update journal is kept as {aside}.",
+                                   fg="yellow"))
+        torn = None
     if torn and not force:
         msg = ("Refusing to apply: the last update's rollback did not complete "
                f"({torn.get('error') or 'see the log'}). Run `polyrob update --rollback` "
@@ -761,10 +786,10 @@ def _restart_hints() -> list:
 @click.option("--snapshot", "snapshot_name", default="", metavar="NAME",
               help="With --rollback, restore this specific snapshot (see --list-snapshots).")
 @click.option("--list-snapshots", "do_list", is_flag=True, help="List restorable snapshots.")
-@click.option("--yes", "-y", "assume_yes", is_flag=True, help="Assume yes (non-interactive).")
+@yes_option(help="Assume yes (non-interactive).", dest="assume_yes")
 @click.option("--force", is_flag=True,
               help="With --rollback or --apply, override the in-use guard (risks DB corruption).")
-@click.option("--json", "as_json", is_flag=True, help="Machine-readable output.")
+@json_option(help="Machine-readable output.")
 @click.option("--wait-idle", "wait_idle", type=float, default=1800.0, metavar="SECONDS",
               help="With --apply: wait up to this long for a live turn / goal / cron job "
                    "to wrap up before swapping code (default 1800).")

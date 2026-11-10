@@ -99,3 +99,23 @@ def test_nothing_mutated_yet_is_just_closed(tmp_path):
     assert recover_open_update(tmp_path, rollback=lambda r: calls.append(r),
                                echo=lambda *_: None) == "rolled_back"
     assert calls == []
+
+
+def test_two_recoverers_never_both_roll_back(tmp_path, monkeypatch):
+    """ST-8: two starts that both saw the dead owner both rolled back. The first
+    now claims the entry under the journal lock; the second reads it as live."""
+    j = _open_journal(tmp_path, ProcIdentity(999999, "gone", "other-boot"))
+    real_claim = j.claim.__func__
+    raced = {}
+
+    def _claim_after_a_rival(self, expect, new):
+        if not raced:  # a rival process takes the entry between our read and claim
+            raced["rival"] = real_claim(self, expect, "rival-owner")
+        return real_claim(self, expect, new)
+
+    monkeypatch.setattr(type(j), "claim", _claim_after_a_rival)
+    calls = []
+    out = recover_open_update(tmp_path, rollback=lambda r: calls.append(r) or {"ok": True},
+                              echo=lambda *_: None)
+    assert raced["rival"] is not None
+    assert out == "live" and calls == []

@@ -21,8 +21,8 @@ from modules.llm.messages import MessageOrigin, make_control_message
 BLOCKS = (
 	("awareness", "You act on behalf of OWNER A."),
 	("soul", "SOUL: I am Nova."),
-	("owner_rules", "## Owner facts\n\nNo public bug-fix reports."),
 	("contract", ""),
+	("owner_rules", "## Owner facts\n\nNo public bug-fix reports."),
 	("self_doc", "SELF: I learned X."),
 )
 
@@ -83,6 +83,7 @@ def test_replay_round_trips_the_blocks(monkeypatch):
 	b = _mm()
 	assert replay_foundation(b, blob)
 	assert [m.content for m in b._self_context_blocks] == [m.content for m in a._self_context_blocks]
+	assert [m.content for m in b._self_context_soul] == [m.content for m in a._self_context_soul]
 	assert b._self_context_message is None
 
 

@@ -111,10 +111,10 @@ async def test_x_post_success_returns_url(monkeypatch):
     driver = FakeDriver(url="https://x.com/robbot/status/42")
     tool = _tool(monkeypatch, session={"handle": "robbot", "storage_state": {}},
                  driver=driver)
-    res = await tool.x_post(XPostAction(text="hello world"), execution_context=_Ctx())
+    res = await tool.x_post(XPostAction(text="the release notes are out today"), execution_context=_Ctx())
     assert res.error is None
     assert "https://x.com/robbot/status/42" in res.extracted_content
-    assert driver.posted == "hello world"
+    assert driver.posted == "the release notes are out today"
 
 
 @pytest.mark.asyncio
@@ -173,11 +173,11 @@ async def test_x_dm_sends_existing_thread(monkeypatch):
     driver = FakeDriver()
     tool = _tool(monkeypatch, session={"storage_state": {}}, driver=driver)
     res = await tool.x_dm(
-        XDMAction(participant="alice", text="hello"),
+        XDMAction(participant="alice", text="the release notes shipped"),
         execution_context=_Ctx())
     assert res.error is None
     assert "42-999" in res.extracted_content
-    assert driver.dm_sends == [("alice", "hello")]
+    assert driver.dm_sends == [("alice", "the release notes shipped")]
 
 
 @pytest.mark.asyncio
@@ -185,7 +185,7 @@ async def test_x_dm_refused_on_leaf_turn(monkeypatch):
     from polyrob_x.x_browser.tool import XDMAction
     tool = _tool(monkeypatch, session={"storage_state": {}}, driver=FakeDriver())
     res = await tool.x_dm(
-        XDMAction(participant="alice", text="hello"),
+        XDMAction(participant="alice", text="the release notes shipped"),
         execution_context=_Ctx(role="leaf"))
     assert res.error and "delegated" in res.error.lower()
 
@@ -220,7 +220,7 @@ async def test_signup_refused_when_account_exists(monkeypatch):
 
     async def _flow(user_id, resume):
         return FakeSignupFlow(
-            raise_paused=SignupPaused(Obstacle.BLOCKED, "already exists"))
+            raise_paused=SignupPaused(Obstacle.BLOCKED, "already exists")), None, None
     tool._build_signup_flow = _flow
 
     res = await tool.x_signup_start(XSignupStartAction(), execution_context=_Ctx())
@@ -235,7 +235,7 @@ async def test_signup_success_returns_handle(monkeypatch):
 
     async def _flow(user_id, resume):
         return FakeSignupFlow(
-            result=SignupResult(handle="robbot", address="carol@agentmail.to"))
+            result=SignupResult(handle="robbot", address="carol@agentmail.to")), None, None
     tool._build_signup_flow = _flow
 
     res = await tool.x_signup_start(XSignupStartAction(), execution_context=_Ctx())
@@ -252,7 +252,7 @@ async def test_signup_paused_reports_to_owner(monkeypatch):
 
     async def _flow(user_id, resume):
         return FakeSignupFlow(
-            raise_paused=SignupPaused(Obstacle.INTERACTIVE_CHALLENGE, "captcha"))
+            raise_paused=SignupPaused(Obstacle.INTERACTIVE_CHALLENGE, "captcha")), None, None
     tool._build_signup_flow = _flow
 
     async def _esc(paused, user_id, session_id, driver=None):
@@ -356,7 +356,7 @@ async def test_x_post_result_carries_the_x_post_proof_rule(monkeypatch):
     driver = FakeDriver(url="https://x.com/robbot/status/42")
     tool = _tool(monkeypatch, session={"handle": "robbot", "storage_state": {}},
                  driver=driver)
-    res = await tool.x_post(XPostAction(text="hello world"), execution_context=_Ctx())
+    res = await tool.x_post(XPostAction(text="the release notes are out today"), execution_context=_Ctx())
     expected = verification_line("x_post", url="https://x.com/robbot/status/42")
     assert res.extracted_content.endswith(expected)
     assert "only the returned URL/id proves publication" in res.extracted_content
@@ -390,3 +390,100 @@ async def test_a_refused_post_claims_no_proof(monkeypatch):
     res = await tool.x_post(XPostAction(text="hi"), execution_context=_Ctx())
     assert res.error
     assert "proof:" not in (res.extracted_content or "")
+
+
+# --- the operator's deny stops a browser post at every posture -------------------
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verb", ["x_post", "x_reply"])
+async def test_operator_deny_stops_a_browser_write(monkeypatch, verb):
+    from types import SimpleNamespace
+    from polyrob_x.x_browser.tool import XBrowserTool, XPostAction, XReplyAction
+    monkeypatch.setenv("APPROVAL_PROVIDER", "deny")
+    tool = object.__new__(XBrowserTool)
+    params = (XPostAction(text="x") if verb == "x_post"
+              else XReplyAction(in_reply_to="123", text="x"))
+    ctx = SimpleNamespace(role="orchestrator", is_sub_agent=False, metadata={},
+                          session_id="s", user_id="u1")
+    res = await getattr(tool, verb)(params, execution_context=ctx)
+    assert res.error and "APPROVAL_PROVIDER=deny" in res.error
+
+
+# --- an unconfirmed post / a post without its permalink is said as such ----
+
+@pytest.mark.asyncio
+async def test_unconfirmed_post_is_not_called_a_failure_or_a_success(monkeypatch):
+    from polyrob_x.x_browser.driver import PostUnconfirmed
+    from polyrob_x.x_browser.tool import XPostAction
+
+    class _Unconfirmed(FakeDriver):
+        async def post(self, text):
+            raise PostUnconfirmed("the post is NOT confirmed — a retry can post twice")
+    tool = _tool(monkeypatch, session={"storage_state": {}}, driver=_Unconfirmed())
+    res = await tool.x_post(XPostAction(text="the release notes are out today"),
+                            execution_context=_Ctx())
+    assert res.error and "not confirmed" in res.error.lower()
+    assert "post failed" not in res.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_post_without_permalink_says_so(monkeypatch):
+    from polyrob_x.x_browser.tool import XPostAction
+    driver = FakeDriver(url="https://x.com/robbot")
+    tool = _tool(monkeypatch, session={"storage_state": {}}, driver=driver)
+    res = await tool.x_post(XPostAction(text="the release notes are out today"),
+                            execution_context=_Ctx())
+    assert res.error is None
+    assert "posted (permalink not found)" in res.extracted_content
+    assert "proof:" not in res.extracted_content.lower()
+
+
+# --- every signup pass closes its own browser context ----------------------
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcomes,expect_error", [
+    (["cleared", "ok"], False),          # a pass per escalation, each closed
+    (["paused"], False),
+    (["boom"], True),
+])
+async def test_each_signup_pass_releases_its_context_after_the_escalation(
+        monkeypatch, outcomes, expect_error):
+    from polyrob_x.x_browser.escalation import EscalationOutcome
+    from polyrob_x.x_browser.signup import Obstacle, SignupPaused, SignupResult
+    from polyrob_x.x_browser.tool import XSignupStartAction
+    tool = _tool(monkeypatch, session=None)
+    events, plan = [], list(outcomes)
+
+    async def _flow(user_id, resume):
+        n = len([e for e in events if e[0] == "open"])
+        events.append(("open", n))
+        step = plan.pop(0)
+        if step == "ok":
+            flow = FakeSignupFlow(result=SignupResult(handle="robbot",
+                                                      address="agent@example.test"))
+        elif step == "boom":
+            flow = FakeSignupFlow(raise_paused=RuntimeError("page crashed"))
+        else:
+            flow = FakeSignupFlow(raise_paused=SignupPaused(
+                Obstacle.INTERACTIVE_CHALLENGE, step))
+        driver = object()
+
+        async def _release():
+            events.append(("release", n))
+        return flow, driver, _release
+    tool._build_signup_flow = _flow
+
+    async def _esc(paused, user_id, session_id, driver=None):
+        assert driver is not None
+        assert events[-1][0] == "open"      # the page is still open for the owner
+        events.append(("escalate", paused.prompt))
+        return (EscalationOutcome.CLEARED if paused.prompt == "cleared"
+                else EscalationOutcome.PAUSED)
+    tool._escalate = _esc
+
+    res = await tool.x_signup_start(XSignupStartAction(), execution_context=_Ctx())
+    assert bool(res.error) is expect_error
+    opens = [e for e in events if e[0] == "open"]
+    releases = [e for e in events if e[0] == "release"]
+    assert len(opens) == len(outcomes) and len(releases) == len(opens)
+    assert not hasattr(tool, "_signup_release") and not hasattr(tool, "_signup_driver")

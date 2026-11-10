@@ -451,64 +451,6 @@ from cli.ui.commands.h_persona import (  # noqa: E402
 )
 
 
-def _h_sessions(ctx: CommandContext) -> None:
-    """List all sessions from the session manager."""
-    from cli.ui import candy
-    from cli.ui.theme import style
-
-    task_agent = ctx.task_agent
-    sm = getattr(task_agent, "session_manager", None) if task_agent is not None else None
-    if sm is None:
-        ctx.emit("(session manager unavailable)")
-        return
-    try:
-        sessions = sm.get_all_sessions() or []
-    except Exception as exc:
-        ctx.emit(f"Could not list sessions: {exc}")
-        return
-    if not sessions:
-        ctx.emit(candy.empty("sessions"), title="sessions")
-        return
-
-    # C45: the FULL id — a 16-char prefix is not a handle any other verb takes
-    # (/replay, polyrob session … all want the whole thing). C43: an unknown
-    # model renders an em dash with the rest of the row intact, never a blank
-    # cell the reader has to interpret.
-    rows = [
-        [
-            str(s.get("id", "")) or "—",
-            str(s.get("status", "")) or "—",
-            str(s.get("created_at", ""))[:19] or "—",
-            _session_model(s) or "—",
-        ]
-        for s in sessions
-    ]
-
-    console = ctx.console()
-    if console is not None:
-        from rich import box
-        from rich.table import Table
-
-        table = Table(box=box.SIMPLE, header_style=style("label"), pad_edge=False, show_edge=False)
-        for col in ("id", "status", "created", "model"):
-            table.add_column(col)
-        for r in rows:
-            table.add_row(*[str(c) for c in r])
-        _print_scrubbed(console, table)
-        return
-
-    ctx.emit(candy.table_lines(["id", "status", "created", "model"], rows), title="sessions")
-
-
-def _session_model(session: Dict[str, Any]) -> str:
-    agents = session.get("agents") or []
-    if agents and isinstance(agents, list):
-        first = agents[0]
-        if isinstance(first, dict):
-            return str(first.get("model", "") or "")
-    return str(session.get("model", "") or "")
-
-
 def _h_history(ctx: CommandContext) -> None:
     """Show the conversation turns (user + assistant)."""
     from cli.ui import candy
@@ -663,76 +605,11 @@ def _h_cwd(ctx: CommandContext) -> None:
 
 
 async def _h_memory(ctx: CommandContext) -> None:
-    """Show the active cross-session memory provider, or search it.
-
-    ``/memory``               → show the active provider (FTS / RAG / hybrid / none).
-    ``/memory search <query>`` → cross-session recall over the active provider.
-    """
-    try:
-        from modules.memory.registry import get_memory_registry
-
-        provider = get_memory_registry().active()
-        name = getattr(provider, "name", None) if provider is not None else None
-        external = bool(getattr(provider, "is_external", False)) if provider is not None else False
-
-        # ---- /memory search <query> -----------------------------------------
-        if ctx.args and str(ctx.args[0]).lower() == "search":
-            query = " ".join(ctx.args[1:]).strip()
-            if not query:
-                ctx.emit("Usage: /memory search <query>", title="memory")
-                return
-            if provider is None or not external or not callable(getattr(provider, "search", None)):
-                ctx.emit(
-                    "No searchable memory backend active (recall disabled).",
-                    title="memory",
-                )
-                return
-            # 025: no `scope=` = the SHARED view — a goal's quarantined findings
-            # never surface here (`/memory scopes` names them without reading them).
-            try:
-                hits = await provider.search(query, user_id=ctx.user_id or "local", limit=10)
-            except Exception as exc:  # an unreadable store is not an empty one
-                ctx.emit(f"Memory could not be read ({type(exc).__name__}: {exc}); "
-                         "nothing was searched.", title="memory")
-                return
-            text = hits.strip() if isinstance(hits, str) else str(hits or "").strip()
-            if not text:
-                from cli.ui import candy
-                ctx.emit(candy.empty(f"matches for {query!r}", yet=False), title="memory")
-                return
-            ctx.emit(text, title="memory")
-            return
-
-        # ---- /memory scopes — quarantined goal/cron findings (025) -------------
-        if ctx.args and str(ctx.args[0]).lower() == "scopes":
-            ctx.emit(_memory_scopes_text(provider, ctx.user_id or "local"), title="memory")
-            return
-
-        # ---- /memory (no args) — active provider name (legacy) ---------------
-        if not name or not external:
-            ctx.emit("No external memory backend active (recall disabled).", title="memory")
-            return
-        ctx.emit(f"Active memory provider: {name}", title="memory")
-    except Exception as exc:
-        ctx.emit(f"Could not resolve memory provider: {exc}", title="memory")
-
-
-def _memory_scopes_text(provider, user_id: str) -> str:
-    """`/memory scopes`: what is quarantined, by scope (never the findings)."""
-    from cli.ui import candy
-    from modules.memory.scope import scopes_enabled
-    if provider is None or not hasattr(provider, "list_scopes"):
-        return "unavailable(this memory backend has no scopes)"
-    try:
-        rows = provider.list_scopes(user_id)
-    except Exception as exc:
-        return f"unavailable({type(exc).__name__}: {exc})"
-    head = ("Memory scopes: ON" if scopes_enabled() else
-            "Memory scopes: OFF — these rows are already visible as shared recall")
-    if not rows:
-        return head + "\n" + candy.empty("quarantined memory scopes", yet=False)
-    lines = [f"  {r['label']}  {r['rows']} row(s)" for r in rows]
-    return "\n".join([head, *lines, "Promote or purge: polyrob owner memory scopes"])
+    """``/memory [search <query> | scopes]`` — the chat seat's own reply
+    (``surfaces.telegram.self_memory_ops.memory_reply``, 113 W6 G-6): the
+    active provider, a cross-session recall, or the quarantined scopes."""
+    from surfaces.telegram.self_memory_ops import memory_reply
+    ctx.emit(await memory_reply(ctx.user_id or "local", list(ctx.args or [])), title="memory")
 
 
 def _resolve_memory_backend_name() -> str:
@@ -853,8 +730,9 @@ def _h_verbose(ctx: CommandContext) -> None:
 def _h_quiet(ctx: CommandContext) -> None:
     """Toggle the default tool transcript on the renderer.
 
-    The tool call/result lines are ON by default; ``/quiet`` mutes them for a
-    clean chat-only view (dialog + final answer). This is a separate axis from
+    The tool call/result lines are ON by default; ``/brief`` mutes them for a
+    clean chat-only view (dialog + final answer) — ``/quiet`` is its old name for
+    one release (113 I-3: "quiet" means quiet hours). This is a separate axis from
     ``/verbose`` (the full raw trace) — quieting tools does not affect verbose.
     """
     renderer = ctx.renderer
@@ -866,12 +744,12 @@ def _h_quiet(ctx: CommandContext) -> None:
     try:
         renderer.show_tools = new
     except Exception:
-        ctx.emit("This renderer does not support /quiet.")
+        ctx.emit("This renderer does not support /brief.")
         return
     if new:
         ctx.emit("Tool transcript ON (tool calls + results shown).")
     else:
-        ctx.emit("Tool transcript OFF (muted — chat only). /quiet to restore.")
+        ctx.emit("Tool transcript OFF (muted — chat only). /brief to restore.")
 
 
 def _h_steps(ctx: CommandContext) -> None:
@@ -1363,12 +1241,12 @@ def build_default_registry() -> CommandRegistry:
                 usage="<description>", group="work", raw_arguments=True)
     )
     reg.register(Command("tools", _h_tools, "List the agent's registered tools/actions", group="look"))
-    from cli.ui.commands.h_diag import h_auth, h_doctor
+    from cli.ui.commands.h_diag import h_auth, h_doctor, h_status
     reg.register(Command("auth", h_auth, "Show provider credentials + how to connect one", group="set up"))
     reg.register(Command("doctor", h_doctor, "Run the polyrob doctor health report", group="look", **help_kwargs("doctor")))
     # E16: ONE meaning per name. /status is the agent-wide snapshot on every
     # seat; the per-turn token meter is /meter.
-    reg.register(Command("status", h_doctor,
+    reg.register(Command("status", h_status,
                          "Health first, then session, goals, loops, and wallet",
                          group="look", **help_kwargs("status")))
     reg.register(Command(
@@ -1383,7 +1261,6 @@ def build_default_registry() -> CommandRegistry:
         "List available personas, or set the default persona for new sessions",
         usage="[name-or-text]", group="set up", raw_arguments=True,
     ))
-    reg.register(Command("sessions", _h_sessions, "List all known sessions", group="talk"))
     # NOTE (030 WS-C C2): /resume lifts the owner pause (mirrors
     # `polyrob owner resume` + telegram /resume) — it is NO LONGER an alias of
     # /replay. Session replay stays on its canonical /replay name.
@@ -1392,7 +1269,7 @@ def build_default_registry() -> CommandRegistry:
             "replay",
             _h_resume,
             "Replay a session's feed (visual history) — NOT a re-attach; continue a "
-            "session with `polyrob run --resume <id>`",
+            "session with `polyrob run --continue <id> \"message\"`",
             usage="<session-id>", group="talk",
         )
     )
@@ -1432,7 +1309,8 @@ def build_default_registry() -> CommandRegistry:
         group="set up",
     ))
     reg.register(Command("verbose", _h_verbose, "Toggle the live trace (steps, tools, reasoning)", group="display"))
-    reg.register(Command("quiet", _h_quiet, "Mute/restore the default tool transcript", group="display"))
+    reg.register(Command("brief", _h_quiet, "Mute/restore the default tool transcript",
+                         aliases=("quiet",), group="display"))  # I-3: /quiet for one release
     reg.register(Command("steps", _h_steps, "Show the last turn's steps/tools trace", group="look"))
     reg.register(Command(
         "autonomy", _h_autonomy,
@@ -1520,6 +1398,7 @@ def build_default_registry() -> CommandRegistry:
         h_halt,
         h_invoices,
         h_missed,
+        h_pair,
         h_pause,
         h_settle,
     )
@@ -1586,6 +1465,11 @@ def build_default_registry() -> CommandRegistry:
         "allowlist", h_allowlist,
         "Show who the agent is allowed to message (outbound allowlist)",
         group="set up",
+    ))
+    reg.register(Command(
+        "pair", h_pair,
+        "Strangers who asked to talk to the agent: list, approve or revoke",
+        usage="[list|approve <surface> <code>|revoke <surface> <id>]", group="set up",
     ))
     reg.register(Command(
         "invoices", h_invoices,

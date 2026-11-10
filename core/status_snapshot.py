@@ -96,7 +96,7 @@ def _read_telemetry(user_id: str, data_dir: str, since_ts: float) -> Section:
         path,
         "SELECT ts, kind, user_id, session_id, source, attrs FROM telemetry_events "
         "WHERE ts >= ? AND kind NOT IN "
-        "('memory_write','memory_recall','inbound_routed','access_denied') "
+        "('memory_write','memory_recall','memory_recall_empty','inbound_routed','access_denied') "
         "AND (user_id = ? OR user_id = '') ORDER BY ts DESC LIMIT 20000",
         (float(since_ts), str(user_id)))
     for r in rows:

@@ -27,8 +27,9 @@
  * crosses from Python into JS. Book leads; Moves, Cash, Invoices and Limits are
  * the other four panes of this one page, each drawn from its own reader.
  */
-import { postJson } from "./http.js";
+import { postJson, readJson } from "./http.js";
 import { fmtSignedUsd, fmtUsd } from "./format.js";
+import { stateBlock } from "./state.js";
 import { bindTokenActions, lifecycleWords, loadTokens, tokensSection,
          trackedSection } from "./money-tokens.js";
 
@@ -347,34 +348,18 @@ export function runSection(copy) {
  *  the one action, never an empty table and three zeroes. The machine reason,
  *  when there is one, sits behind a disclosure. */
 export function emptyState(data, copy) {
-  const state = el("div", "state");
-  const glyph = el("div", "state-glyph", "◇");
-  glyph.setAttribute("aria-hidden", "true");
-  state.appendChild(glyph);
-  state.appendChild(el("h2", "state-title", (copy && copy.empty_title) || ""));
-  state.appendChild(el("p", "state-body", (copy && copy.empty_body) || ""));
-  const reason = data && data.error;
-  if (reason) {
-    const details = el("details");
-    details.appendChild(el("summary", null, (copy && copy.empty_why) || ""));
-    details.appendChild(el("p", "entry-meta", reason));
-    state.appendChild(details);
-  }
-  return state;
+  return stateBlock({
+    glyph: "◇", title: copy && copy.empty_title,
+    body: [copy && copy.empty_body, copy && copy.empty_how],
+    why: copy && copy.empty_why, reason: data && data.error,
+  });
 }
 
 /** The dashed entry for a book that could not be read at all (the fetch itself
  *  failed) — never a confident empty book. */
 export function unreadableEntry(reason, copy) {
-  const entry = el("div", "state");
-  entry.appendChild(el("h2", "state-title", (copy && copy.unreadable) || ""));
-  if (reason) {
-    const details = el("details");
-    details.appendChild(el("summary", null, (copy && copy.unreadable_why) || ""));
-    details.appendChild(el("p", "entry-meta", reason));
-    entry.appendChild(details);
-  }
-  return entry;
+  return stateBlock({ title: (copy && copy.unreadable) || "",
+    why: copy && copy.unreadable_why, reason });
 }
 
 /**
@@ -1148,19 +1133,14 @@ export function renderLimits(root, ledger, copy) {
 // non-200 is shaped `{error}` here; a reader's own honest body (unreadable /
 // unavailable / available:false) is respected by the renderer above.
 
-async function getJson(url, fetcher) {
-  const call = fetcher || fetch;
-  const resp = await call(url, { credentials: "include" });
-  if (!resp.ok) return { error: String(resp.status) };
-  return await resp.json();
-}
+// 113 W5 (C-09): every read goes through http.js::readJson (over getJson).
 
-export const loadBridges = (f) => getJson("/api/webgate/bridges", f);
-export const loadMovesFeed = (f) => getJson("/api/webgate/moves", f);
-export const loadCreations = (f) => getJson("/api/webgate/creations", f);
-export const loadLedger = (f) => getJson("/api/webgate/ledger", f);
-export const loadWallet = (f) => getJson("/api/webgate/wallet", f);
-export const loadInvoices = (f) => getJson("/api/webgate/invoices", f);
+export const loadBridges = (f) => readJson("/api/webgate/bridges", f);
+export const loadMovesFeed = (f) => readJson("/api/webgate/moves", f);
+export const loadCreations = (f) => readJson("/api/webgate/creations", f);
+export const loadLedger = (f) => readJson("/api/webgate/ledger", f);
+export const loadWallet = (f) => readJson("/api/webgate/wallet", f);
+export const loadInvoices = (f) => readJson("/api/webgate/invoices", f);
 
 /** Attest an invoice as paid via the existing owner route, over http.js's
  *  same-origin POST. Returns `{ok, message}` — the caller SAYS it on the row,
@@ -1250,9 +1230,9 @@ function bind() {
   const liquidityPane = byId("money-liquidity");
   function reloadLiquidity(onchain = false) {
     if (!liquidityPane) return;
-    getJson("/api/webgate/liquidity" + (onchain ? "?onchain=true" : ""))
+    readJson("/api/webgate/liquidity" + (onchain ? "?onchain=true" : ""))
       .then((section) => {
-        // ⚠️ A4: `getJson` answers `{error: "<status>"}` on ANY non-200, and
+        // ⚠️ A4: `readJson` answers `{error: "<status>"}` on ANY non-200, and
         // that object was rendered as though it were a Section — no `name`, no
         // `lines`, no `state`. The pane drew an empty heading and nothing
         // else, so a refused or failed liquidity read looked exactly like a
@@ -1376,6 +1356,11 @@ function bind() {
   // Honour an initial hash pointing at a non-Book tab (a bookmarked #cash).
   const initial = (location.hash || "").replace(/^#/, "");
   if (initial && initial !== "book" && lazy[initial]) selectTab(initial, ensure);
+  // 113 W0: Back/Forward and an in-page #cash link change the hash without a click.
+  window.addEventListener("hashchange", () => {
+    const name = (location.hash || "").replace(/^#/, "") || "book";
+    if (name === "book" || lazy[name]) selectTab(name, ensure);
+  });
 }
 
 if (typeof document !== "undefined") {

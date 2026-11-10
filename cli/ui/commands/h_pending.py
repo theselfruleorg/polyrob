@@ -118,9 +118,7 @@ def _h_pending(ctx: CommandContext) -> None:
                               instance_id=instance_id)
     items = pending_set.items
     if not items:
-        ctx.emit(pending_set.degraded_line()
-                 or candy.empty("pending proposals",
-                                "/pending approve <kind> <id> reviews one"),
+        ctx.emit(pending_set.degraded_line() or "No pending approvals.",   # the chat seat's words
                  title="pending")
         return
     # 096 W7 (R4): the rows the Telegram notice shows — what · Why · Changes,

@@ -20,6 +20,7 @@ import time
 import click
 
 from cli._admin_home import as_root_option
+from cli.commands._options import json_option, yes_option
 
 
 def _store(write: bool):
@@ -67,7 +68,7 @@ def scopes():
 
 @scopes.command("list")
 @click.option("--user", default=None, help="Tenant user_id (default: the bound owner).")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def scopes_list(user, as_json):
     """Every scope that still holds quarantined findings, newest first."""
     store, db = _store(write=False)
@@ -136,7 +137,7 @@ def scopes_promote(label, user, max_rows):
 @scopes.command("purge")
 @click.argument("label")
 @click.option("--user", default=None, help="Tenant user_id (default: the bound owner).")
-@click.option("--yes", is_flag=True, help="Do not ask for confirmation.")
+@yes_option(help="Do not ask for confirmation.")
 @as_root_option
 def scopes_purge(label, user, yes):
     """Delete every finding held under one scope."""

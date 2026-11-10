@@ -90,6 +90,17 @@ class SlackClient:
                                 json={"channel": channel, "ts": str(ts),
                                       "text": escape(text, quote=False), "parse": "none", "link_names": False})
 
+    async def add_reaction(self, channel: str, ts: str, name: str) -> dict:
+        """``reactions.add`` (needs the ``reactions:write`` scope)."""
+        return await self._call("reactions.add", token=self._bot_token,
+                                json={"channel": channel, "timestamp": str(ts),
+                                      "name": name})
+
+    async def remove_reaction(self, channel: str, ts: str, name: str) -> dict:
+        return await self._call("reactions.remove", token=self._bot_token,
+                                json={"channel": channel, "timestamp": str(ts),
+                                      "name": name})
+
     async def open_dm(self, user_id: str) -> str:
         payload = await self._call("conversations.open", token=self._bot_token,
                                    json={"users": str(user_id)})

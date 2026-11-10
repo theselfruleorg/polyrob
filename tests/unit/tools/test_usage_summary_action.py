@@ -188,3 +188,21 @@ async def test_usage_summary_never_creates_a_payment_request(monkeypatch):
     result = await action.function(action.param_model(), execution_context=None)
     assert called["v"] is False
     assert result.error is None
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_rollup_is_an_error_not_zeros(monkeypatch):
+    c = _live_controller(monkeypatch, user_id="tenant-A")
+
+    async def _fake_rollup(user_id, *, session_id=None, since=None, db=None):
+        return {"user_id": user_id, "session_id": None, "since": None,
+                "api_cost_usd": 0.0, "credits": 0.0, "calls": 0,
+                "unreadable": "OperationalError: database is locked"}
+
+    import modules.credits.usage_rollup as ur
+    monkeypatch.setattr(ur, "usage_rollup", _fake_rollup)
+    action = c.registry.registry.actions["usage_summary"]
+    result = await action.function(action.param_model(), execution_context=None)
+    assert result.error and "could not be read (OperationalError: database is locked)" in result.error
+    assert "This is not $0" in result.error
+    assert not result.extracted_content

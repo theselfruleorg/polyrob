@@ -156,3 +156,28 @@ def test_two_processes_cancel_and_resume(tmp_path):
             assert store.read()["request"] == "cancel"
         finally:
             store.finish(gen)
+
+
+def test_a_pid_reused_after_a_reboot_is_not_a_live_run(tmp_path):
+    """The mailbox stored a bare pid: after a reboot a reused live pid read as
+    "already has a live run" for ever. The generation now carries the run's process
+    identity (no schema change); an old row keeps the bare-pid check."""
+    import os
+    import sqlite3
+    from core.state.proc import ProcIdentity, process_identity
+    store = SessionControl(tmp_path)
+    generation = store.start()
+    assert process_identity().encode() in generation
+    assert SessionControl.alive(store.read())
+    # The same live pid, recorded by a run of an earlier boot.
+    ghost = ProcIdentity(os.getppid(), "earlier", "boot-earlier").encode()
+    with sqlite3.connect(store.path) as conn:
+        conn.execute("UPDATE control SET generation=?, pid=? WHERE id=1",
+                     (f"deadbeef|{ghost}", os.getppid()))
+    assert not SessionControl.alive(store.read())
+    assert store.start()                      # not refused
+    # An old-format row (a bare uuid): the bare-pid check still holds it live.
+    with sqlite3.connect(store.path) as conn:
+        conn.execute("UPDATE control SET generation='deadbeef', pid=? WHERE id=1",
+                     (os.getppid(),))
+    assert SessionControl.alive(store.read())

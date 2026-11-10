@@ -21,6 +21,14 @@ Rules:
 
 Returns ``None`` for anything that is not a storefront line, so the caller's
 normal routing (and its drop of strangers) is unchanged.
+
+**Public threads (109).** :func:`thread_intake` reads replies under the agent's own
+announcement posts on a surface whose pack registers a thread channel
+(``core.commerce.hooks.thread_channel``) and answers ``/buy`` and ``/order`` lines
+IN that thread, by the same code. The buyer is the platform-authenticated author;
+one post makes at most one order; an edited post, a post older than its
+announcement or a reply under any other root is ignored; a reply is written only
+when the surface's write share allows it, else the post waits for the next poll.
 """
 from __future__ import annotations
 
@@ -105,7 +113,8 @@ def catalog_text(surface: str) -> str:
     return "\n".join(lines)
 
 
-async def _buy(surface: str, buyer: str, words: List[str], db=None) -> str:
+async def _buy(surface: str, buyer: str, words: List[str], db=None, *,
+               thread_ref: Optional[str] = None) -> str:
     from modules.commerce.service import OrderRefused, create_order
     if not words:
         return "Usage: /buy <offer> field=value … — /offers lists what is for sale."
@@ -116,11 +125,14 @@ async def _buy(surface: str, buyer: str, words: List[str], db=None) -> str:
         return f"{offer_id} is not for sale here. /offers lists what is."
     try:
         fields = parse_fields(words[1:])
-        order, pay = await create_order(offer_id, channel=surface, buyer=buyer, inputs=fields,
-                                        source=f"native:{surface}", listing=f"native:{surface}",
-                                        db=db)
+        order, pay = await create_order(
+            offer_id, channel=surface, buyer=buyer, inputs=fields,
+            source=f"native:{surface}:post:{thread_ref}" if thread_ref else f"native:{surface}",
+            listing=f"native:{surface}", db=db, thread_ref=thread_ref)
     except (OrderRefused, ValueError) as exc:
         return f"❌ {exc}"
+    if thread_ref:
+        return thread_payment_text(order, m, pay)
     if pay is None:
         return (f"Order {order.id} received. This offer is priced per order: you will get a "
                 f"payment request here once it is quoted. /order {order.id} shows it.")
@@ -187,4 +199,149 @@ async def storefront_reply(container: Any, surface: str, sender: str, text: str,
         return "Sorry — that could not be done right now. Try again later."
 
 
-__all__ = ["VERBS", "catalog_text", "is_open", "parse_fields", "storefront_reply"]
+# -- public threads (109) ------------------------------------------------------------
+
+#: Posts handled per poll; the rest wait for the next tick.
+THREAD_MAX_PER_POLL = 10
+_THREAD_VERBS = ("/buy", "/order")
+
+
+def thread_line(text: str) -> Optional[Tuple[str, List[str]]]:
+    """``(verb, words)`` of a thread post, after the platform's leading ``@mentions``;
+    ``None`` for anything else (it is never answered)."""
+    words = (text or "").strip().split()
+    while words and words[0].startswith("@"):
+        words.pop(0)
+    if not words:
+        return None
+    head = words[0].lower()
+    return (head, words[1:]) if head in _THREAD_VERBS else None
+
+
+def _human_amount(pay: Dict[str, Any]) -> str:
+    from decimal import Decimal
+    from core.payments.assets import resolve
+    a = resolve(pay.get("asset"))
+    try:
+        if a is not None and pay.get("amount_raw"):
+            amt = Decimal(int(pay["amount_raw"])) / (Decimal(10) ** a.decimals)
+            return f"{amt.normalize():f} {a.symbol}"
+    except Exception:
+        pass
+    return f"${pay.get('amount_usd')} in {pay.get('asset')}"
+
+
+def thread_payment_text(order: Any, m: Any, pay: Optional[Dict[str, Any]]) -> str:
+    """The in-thread answer to an order: everything needed to pay, nothing else."""
+    if pay is None:
+        return (f"Order {order.id}: {m.title} is priced per order; the price comes here. "
+                f"/order {order.id} shows it.")
+    import time as _t
+    exp = pay.get("expires_at")
+    when = _t.strftime("%H:%M UTC", _t.gmtime(float(exp))) if exp else "soon"
+    return (f"Order {order.id}: pay exactly {_human_amount(pay)} on {pay.get('chain')} to "
+            f"{pay.get('pay_to')} before {when}. Pay only to an address in a reply from "
+            f"this account. /order {order.id} shows the status.")
+
+
+def _roots(surface: str, path: Optional[str]) -> Dict[str, Tuple[str, float]]:
+    """``{root post: (offer id, announced at)}`` of LIVE offers listed on *surface*."""
+    from core.commerce import thread
+    from core.commerce.store import live_offers
+    live = {m.id for m in live_offers(listing=f"native:{surface}")}
+    return {r["root_id"]: (r["offer_id"], float(r["created_at"] or 0))
+            for r in thread.threads(surface=surface, path=path) if r["offer_id"] in live}
+
+
+async def _answer_post(container: Any, ch: Any, post: Any, offer_id: str, verb: str,
+                       words: List[str], db=None) -> None:
+    from core.commerce import orders as ords
+    surface = post.surface
+    if verb == "/buy":
+        if words and "=" not in words[0]:
+            words = words[1:]           # "/buy <offer> …": the root names the offer
+        if ords.by_thread(surface, post.post_id) is not None:
+            return                      # already answered (a re-read post)
+        try:
+            text = await _buy(surface, post.author_id, [offer_id] + words, db=db,
+                              thread_ref=post.post_id)
+        except Exception:
+            made = ords.by_thread(surface, post.post_id)
+            if made is not None:        # the order exists: its answer must still go out
+                ords.set_notice_pending(made.id, f"Order {made.id} is received. /order "
+                                                 f"{made.id} shows how to pay.")
+            raise
+    else:
+        text = await _order(surface, post.author_id, words, container=container, db=db)
+    try:
+        from core.commerce.store import owner_of
+        ok = bool(await ch.reply(post.post_id, text, subject=post.post_id,
+                                 user_id=owner_of(offer_id) or ""))
+    except Exception:
+        logger.warning("storefront: reply under %s failed", post.post_id, exc_info=True)
+        ok = False
+    if not ok:
+        made = ords.by_thread(surface, post.post_id)
+        if made is not None:
+            ords.set_notice_pending(made.id, text)
+
+
+async def thread_intake(container: Any, surface: str, *, db=None,
+                        path: Optional[str] = None, now: Optional[float] = None) -> int:
+    """Read and answer the new replies under *surface*'s announcements. Returns the
+    number answered. Closed (and no platform read) unless a live offer lists the
+    surface AND has an announcement. Never raises."""
+    from core.commerce import thread
+    from core.commerce.hooks import thread_channel
+    ch = thread_channel(surface)
+    if ch is None or not is_open(surface):
+        return 0
+    try:
+        roots = _roots(surface, path)
+        if not roots:
+            return 0
+        cur = thread.cursor(surface, path=path)
+        since = cur["since_id"] if cur else None
+        try:
+            posts, newest = await ch.poll(since)
+        except thread.ThreadUnavailable as exc:
+            thread.save_cursor(surface, None, stop_reason=str(exc), path=path, now=now)
+            return 0
+        me = ch.agent_id()
+        handled, answered, stop = since, 0, ""
+        for post in posts or ():
+            if answered >= THREAD_MAX_PER_POLL:
+                stop = "more replies wait for the next poll"
+                break
+            root = roots.get(post.root_id)
+            line = thread_line(post.text)
+            if (root is None or line is None or post.edited or not post.author_id
+                    or post.author_id == me or post.post_id == post.root_id
+                    or (post.created_at and post.created_at < root[1])):
+                handled = post.post_id
+                continue
+            if not ch.can_reply():
+                stop = "the write share for this hour is used; replies wait"
+                break
+            if _limited(surface, post.author_id, time.time() if now is None else float(now)):
+                handled = post.post_id
+                continue
+            try:
+                await _answer_post(container, ch, post, root[0], line[0], line[1], db=db)
+            except Exception:
+                # One bad post never blocks the cursor behind it (each re-read costs
+                # API credit). A made order keeps its answer for the notice retry.
+                logger.warning("storefront: %s post %s failed", surface, post.post_id,
+                               exc_info=True)
+            handled, answered = post.post_id, answered + 1
+        else:
+            handled = newest or handled
+        thread.save_cursor(surface, handled, stop_reason=stop, path=path, now=now)
+        return answered
+    except Exception:
+        logger.warning("storefront: %s thread intake failed", surface, exc_info=True)
+        return 0
+
+
+__all__ = ["THREAD_MAX_PER_POLL", "VERBS", "catalog_text", "is_open", "parse_fields",
+           "storefront_reply", "thread_intake", "thread_line", "thread_payment_text"]

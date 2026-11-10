@@ -21,6 +21,11 @@ _BUSY_TIMEOUT_S = 1.0
 _WAL_SIZE_LIMIT_BYTES = 67108864
 
 
+def read_only_connect(db_path) -> sqlite3.Connection:
+    """A connection that can only read an existing database. It never creates the file."""
+    return sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+
+
 def wal_connect(db_path: str, timeout: float = _BUSY_TIMEOUT_S) -> sqlite3.Connection:
     if str(db_path) != ':memory:':
         # Create private BEFORE SQLite can write sensitive rows or sidecars.

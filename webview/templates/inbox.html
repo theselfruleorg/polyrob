@@ -19,6 +19,7 @@
   Every word comes from webview/copy/en.py. Every value is a context variable.
 #}
 {% extends "shell.html" %}
+{% from "_state.html" import state %}
 {% block body %}
     <div class="page">
       <div class="page-head">
@@ -101,19 +102,13 @@
 {%- elif inbox_uncertain or not cards_waiting %}
       {# Only cards wait: they are below, in their own section — "nothing
          needs you" above them would be false (080 WS-3). #}
-      <div class="state">
-        <div class="state-glyph" aria-hidden="true">{{ page_glyph }}</div>
 {%- if inbox_uncertain %}
-        <p class="state-body">{{ t('inbox.unreadable.body') }}</p>
+      {{ state(glyph=page_glyph, body=[t('inbox.unreadable.body')]) }}
 {%- else %}
-        <h2 class="state-title">{{ t('inbox.empty.title') }}</h2>
-        <p class="state-body">{{ t('inbox.empty.body') }}</p>
-        <p class="state-body">{{ t('inbox.empty.checked') }}</p>
-        <div class="state-actions">
-          <a class="btn" href="/work">{{ t('inbox.empty.see_work') }}</a>
-        </div>
+      {{ state(glyph=page_glyph, title=t('inbox.empty.title'),
+               body=[t('inbox.empty.body'), t('inbox.empty.checked')],
+               actions=[{'href': '/work', 'label': t('inbox.empty.see_work')}]) }}
 {%- endif %}
-      </div>
 {%- endif %}
 
       {# Action cards (core/surfaces/cards.py): money quotes to confirm, the

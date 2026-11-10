@@ -5,13 +5,15 @@ Adapter contract: with the flag ON and a client exposing
 ``LLMClientAdapter.astream`` yields scrubbed AIMessage deltas whose
 concatenation (deltas + final chunk content) reconstructs EXACTLY what the
 non-streaming path would return; tool_calls/usage/provider-response-id ride
-the final chunk. Flag OFF (or no client support, or pre-first-chunk failure)
-= legacy single-chunk, byte-identical.
+the final chunk. Flag OFF (or no client support, or a stream-specific failure
+before the first chunk) = the single chunk.
 """
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
+from core.exceptions import LLMError, LLMInvalidRequestError, LLMRateLimitError
 from modules.llm.adapters import LLMClientAdapter
 from modules.llm.messages import AIMessage, HumanMessage
 
@@ -153,13 +155,62 @@ def test_no_client_support_falls_back_single_chunk(monkeypatch):
     assert chunks[0].content == "plain"
 
 
-def test_failure_before_first_chunk_falls_back(monkeypatch):
+def test_a_provider_failure_before_first_chunk_makes_no_second_call(monkeypatch):
+    """A 429 or a 5xx before the first chunk fails the batch call too, and pays for it."""
     monkeypatch.setenv("LLM_TOKEN_STREAMING", "1")
     client = _StreamClient(["Hello"], fail_immediately=True)
     adapter = LLMClientAdapter(client=client)
-    chunks = _collect(adapter, tools=TOOLS)
-    assert len(chunks) == 1
-    assert chunks[0].content == "Hello"  # via the batch fallback
+    with pytest.raises(LLMError, match="stream setup failed"):
+        _collect(adapter, tools=TOOLS)
+    assert client.batch_calls == 0
+
+
+def test_a_translated_stream_error_is_typed(monkeypatch):
+    monkeypatch.setenv("LLM_TOKEN_STREAMING", "1")
+
+    class _RateLimited(_StreamClient):
+        async def astream_agent_response(self, messages=None, tools=None, **kwargs):
+            raise RuntimeError("429 too many requests")
+            yield  # pragma: no cover
+
+    client = _RateLimited(["Hello"])
+    with pytest.raises(LLMRateLimitError):
+        _collect(LLMClientAdapter(client=client), tools=TOOLS)
+    assert client.batch_calls == 0
+
+
+def test_a_stream_refusal_falls_back_on_one_reservation(monkeypatch):
+    monkeypatch.setenv("LLM_TOKEN_STREAMING", "1")
+    reservations = []
+
+    async def _reserve(self):
+        reservations.append(1)
+        return "llm-reserve:one"
+
+    monkeypatch.setattr(LLMClientAdapter, "_reserve_call", _reserve)
+
+    class _NoStream(_StreamClient):
+        async def astream_agent_response(self, messages=None, tools=None, **kwargs):
+            raise LLMInvalidRequestError("this model does not support streaming")
+            yield  # pragma: no cover
+
+    client = _NoStream(["Hello"])
+    chunks = _collect(LLMClientAdapter(client=client), tools=TOOLS)
+    assert client.batch_calls == 1 and chunks[0].content == "Hello"
+    assert len(reservations) == 1
+    assert chunks[0]._polyrob_billing_reservation_id == "llm-reserve:one"
+
+
+def test_a_stream_with_no_final_event_falls_back(monkeypatch):
+    monkeypatch.setenv("LLM_TOKEN_STREAMING", "1")
+
+    class _Cut(_StreamClient):
+        async def astream_agent_response(self, messages=None, tools=None, **kwargs):
+            return
+            yield  # pragma: no cover
+
+    client = _Cut(["Hello"])
+    assert _collect(LLMClientAdapter(client=client), tools=TOOLS)[0].content == "Hello"
     assert client.batch_calls == 1
 
 
@@ -169,9 +220,56 @@ def test_failure_after_first_chunk_propagates(monkeypatch):
     monkeypatch.setenv("LLM_TOKEN_STREAMING", "1")
     client = _StreamClient(["Hello ", "world"], fail_after_first=True)
     adapter = LLMClientAdapter(client=client)
-    with pytest.raises(RuntimeError, match="mid-stream failure"):
+    with pytest.raises(LLMError, match="mid-stream failure"):
         _collect(adapter, tools=TOOLS)
     assert client.batch_calls == 0
+
+
+def test_stream_ends_with_the_same_result_as_batch(monkeypatch):
+    """Cause 4: one post-call path. The final chunk and the batch message hold one shape."""
+    usage = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15,
+             "cached_tokens": 2, "billed_cost_usd": 0.01, "billed_source": "provider"}
+    raw = SimpleNamespace(id="r1", provider="UpA", stop_reason=None, usage=SimpleNamespace(
+        completion_tokens_details=SimpleNamespace(reasoning_tokens=3)),
+        choices=[SimpleNamespace(finish_reason="length", message=SimpleNamespace(reasoning_content="why"))])
+
+    class _Round(_StreamClient):
+        last_response = raw
+
+    client = _Round(["Hello"], usage=usage, response_id="r1")
+    from modules.llm.adapters import DeepSeekAdapter
+    adapter = DeepSeekAdapter(client=client)   # the one seat that stamps reasoning
+    monkeypatch.setenv("LLM_TOKEN_STREAMING", "1")
+    final = _collect(adapter, tools=TOOLS)[-1]
+    batch = asyncio.run(adapter.ainvoke([HumanMessage(content="hi")], tools=TOOLS))
+    assert final.call_facts == batch.call_facts
+    assert final.usage_metadata == batch.usage_metadata
+    assert final.additional_kwargs == batch.additional_kwargs
+    assert final.additional_kwargs["reasoning_content"] == "why"
+    assert final.call_facts.finish_reason == "length" and final.call_facts.upstream == "UpA"
+    assert final._polyrob_provider_response_id == batch._polyrob_provider_response_id == "r1"
+
+
+def test_an_explicit_no_tools_wins_on_the_stream_path(monkeypatch):
+    monkeypatch.setenv("LLM_TOKEN_STREAMING", "1")
+    seen = []
+
+    class _Records(_StreamClient):
+        async def astream_agent_response(self, messages=None, tools=None, **kwargs):
+            seen.append(tools)
+            async for event in super().astream_agent_response(messages, tools, **kwargs):
+                yield event
+
+    adapter = LLMClientAdapter(client=_Records(["Hello"]))
+    _collect(adapter, tools=TOOLS)
+    assert getattr(adapter, "_pending_tools", None) is None, "a finished stream leaves the set armed"
+    adapter._pending_tools = TOOLS
+
+    async def _run():
+        return [c async for c in adapter.astream([HumanMessage(content="hi")], tools=None)]
+
+    asyncio.run(_run())
+    assert seen[-1] is None
 
 
 # ---------------------------------------------------------------------------
@@ -179,11 +277,12 @@ def test_failure_after_first_chunk_propagates(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _openai_chunk(*, content=None, tool_call=None, usage=None, chunk_id="cmpl_9"):
+def _openai_chunk(*, content=None, tool_call=None, usage=None, chunk_id="cmpl_9",
+                  finish_reason=None):
     from types import SimpleNamespace as NS
     delta = NS(content=content, tool_calls=[tool_call] if tool_call else None)
     choices = [] if usage is not None and content is None and tool_call is None \
-        else [NS(delta=delta)]
+        and finish_reason is None else [NS(delta=delta, finish_reason=finish_reason)]
     return NS(id=chunk_id, usage=usage, choices=choices)
 
 
@@ -212,6 +311,7 @@ def test_openai_astream_assembles_deltas_and_tool_calls(monkeypatch):
                                    function=NS(name="send_message", arguments='{"te'))),
         _openai_chunk(tool_call=NS(index=0, id=None,
                                    function=NS(name=None, arguments='xt":"hi"}'))),
+        _openai_chunk(finish_reason="tool_calls"),
         _openai_chunk(usage=usage),
     ]
 
@@ -244,6 +344,56 @@ def test_openai_astream_assembles_deltas_and_tool_calls(monkeypatch):
     assert final["response_id"] == "cmpl_9"
 
 
+def _openai_stream_client(monkeypatch, chunks_in):
+    from types import SimpleNamespace as NS
+
+    from modules.llm.openai_client import OpenAIClient
+
+    client = OpenAIClient.__new__(OpenAIClient)
+    client._initialized = True
+    client.logger = __import__("logging").getLogger("test")
+    client.model_type = "gpt-4o"
+    client.last_response = None
+    monkeypatch.setattr(
+        OpenAIClient, "_build_tool_request_params",
+        lambda self, m, t, s, temp, mx, kw: {"model": "gpt-4o", "messages": [],
+                                             "tools": t, "tool_choice": "auto"},
+    )
+
+    async def _fake_stream():
+        for c in chunks_in:
+            yield c
+
+    async def _create(**params):
+        return _fake_stream()
+
+    client._client = NS(chat=NS(completions=NS(create=_create)))
+
+    async def _run():
+        return [e async for e in client.astream_agent_response(messages=[], tools=TOOLS)]
+    return _run
+
+
+def test_openai_astream_content_filter_raises_typed_like_batch(monkeypatch):
+    """The batch path refuses a filtered choice; the stream path must too, so the owner
+    is told what stopped the output instead of getting an empty action."""
+    from core.exceptions import LLMRefusalError
+    run = _openai_stream_client(monkeypatch, [
+        _openai_chunk(content="Hel"), _openai_chunk(content="", finish_reason="content_filter")])
+    with pytest.raises(LLMRefusalError, match="content filter") as caught:
+        asyncio.run(run())
+    assert caught.value.kind == "filtered"
+
+
+def test_openai_astream_cut_before_its_last_chunk_raises(monkeypatch):
+    """No finish_reason = the stream closed early: a partial answer or partial tool-call
+    JSON is not executed as if it were complete."""
+    from core.exceptions import LLMConnectionError
+    run = _openai_stream_client(monkeypatch, [_openai_chunk(content="Hel")])
+    with pytest.raises(LLMConnectionError, match="no finish_reason"):
+        asyncio.run(run())
+
+
 # ---------------------------------------------------------------------------
 # AnthropicClient.astream_agent_response — delta events over a fake SDK stream
 # ---------------------------------------------------------------------------
@@ -264,10 +414,6 @@ def test_anthropic_astream_yields_text_deltas_and_final(monkeypatch):
         lambda self, m, t, s, temp, mx, kw: {"model": "claude-sonnet-5",
                                              "messages": [], "max_tokens": 4096,
                                              "tools": t, "tool_choice": {"type": "auto"}},
-    )
-    monkeypatch.setattr(
-        AnthropicClient, "_extract_usage_and_capture_telemetry",
-        lambda self, *a, **kw: None,
     )
 
     final_message = NS(

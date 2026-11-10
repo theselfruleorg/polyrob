@@ -188,7 +188,7 @@ async def run_exhaustion_summary(agent: Any, max_steps: int,
         mm.push_ephemeral_message(request)
         try:
             # Per call (a context variable), never a stamp on the shared client.
-            from modules.llm.output_budget import bounded_output
+            from modules.llm.call_scope import bounded_output
             bound = (bounded_output(BUDGET_REPORT_MAX_TOKENS)
                      if budget_stop else contextlib.nullcontext())
             with bound:

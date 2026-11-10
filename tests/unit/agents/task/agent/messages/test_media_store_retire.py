@@ -186,3 +186,22 @@ def test_a_saved_image_file_is_not_removed(tmp_path):
         mm._add_message_with_tokens(_image_turn(step, path=str(saved)))
     mm.get_messages_for_llm(consume_ephemeral=False)
     assert saved.read_bytes() == b"\x89PNG"
+
+
+def test_a_model_with_no_vision_keeps_its_rows():
+	"""106 C9: the adapter sends an image as ``[IMAGE]`` to a model with no vision.
+	Retirement frees no wire bytes there and rewrites a row the provider cached."""
+	from tests.support.prefix_cache import wire_adapter
+
+	adapter = wire_adapter()
+	adapter._supports_vision_cached = False
+	mm = MessageManager(llm=adapter, task="t", action_descriptions="a",
+	                    system_prompt_class=SystemPrompt, max_input_tokens=128000,
+	                    image_tokens=800, session_id="s-no-vision")
+	for i in range(9):
+		mm._add_message_with_tokens(_image_turn(i), _internal=True)
+	before = [m.message for m in mm.history.messages]
+	wire = mm.get_messages_for_llm(consume_ephemeral=False)
+	assert [m.message for m in mm.history.messages] == before
+	assert all(a is b for a, b in zip(before, [m.message for m in mm.history.messages]))
+	assert sum("base64" in str(m.content) for m in wire) == 9

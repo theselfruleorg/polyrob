@@ -527,18 +527,35 @@ describe("Memory — notes, recall and the knowledge base, each its own state", 
   });
 });
 
-describe("Settings — prefs grouped by intent, and the money limits", () => {
+describe("Settings — prefs grouped by when they take effect, and the money limits", () => {
   const PREFS = { preferences: [
-    { key: "notify.max_per_day", description: "Messages a day", value: 30, source: "user", applies: "notify" },
-    { key: "notify.quiet", description: "Quiet hours", value: "", source: "default", applies: "notify" },
-    { key: "model.name", description: "The agent answers with", value: "flash", source: "user", applies: "model" },
+    { key: "notify.max_per_day", label: "Messages a day", help: "From the agent.", value: 30, source: "user", applies: "live" },
+    { key: "notify.quiet", label: "Quiet hours", value: "", source: "default", applies: "next-step" },
+    { key: "model.name", label: "The agent answers with", value: "flash", source: "user", applies: "next-session" },
   ] };
   const LEDGER = { caps: { daily_cap_usd: 100, daily_used_usd: 12 } };
 
-  it("groups by the intent field", () => {
+  it("groups by when a change takes effect (113 W5, CP-1)", () => {
     const groups = groupPreferences(PREFS.preferences);
-    expect([...groups.keys()]).toEqual(["notify", "model"]);
-    expect(groups.get("notify")).toHaveLength(2);
+    expect([...groups.keys()]).toEqual(["now", "next_chat"]);
+    expect(groups.get("now")).toHaveLength(2);
+    expect([...groupPreferences([{ applies: "restart" }, { applies: "x" }, { applies: "live" }]).keys()])
+      .toEqual(["now", "restart", "other"]);
+  });
+
+  it("heads each group with when, labels each row in owner words, and has ONE Save per group", () => {
+    const r = root();
+    const copy = { ...COPY, read_only: "0", control_save: "Save",
+      set_group_now: "Takes effect now", set_group_next_chat: "In the next chat" };
+    renderSettings(r, PREFS, LEDGER, copy);
+    const titles = [...r.querySelectorAll(".section-title")].map((n) => n.textContent);
+    expect(titles).toContain("Takes effect now");
+    expect(titles).toContain("In the next chat");
+    expect(r.textContent).toContain("From the agent.");
+    expect(r.textContent).not.toContain("notify.max_per_day");
+    const now = r.querySelector('[data-when="now"]');
+    const saves = [...now.querySelectorAll("button")].filter((b) => b.textContent === "Save");
+    expect(saves).toHaveLength(1);
   });
 
   it("draws the money limits from the ledger caps and the grouped prefs", () => {
@@ -554,6 +571,15 @@ describe("Settings — prefs grouped by intent, and the money limits", () => {
     renderSettings(r, PREFS, { error: "500" }, COPY);
     expect(r.textContent).toContain("I could not read the limits.");
     expect(r.textContent).toContain("Messages a day");
+  });
+
+  it("an empty list setting reads No entries, never the word empty (113 W6)", () => {
+    const r = root();
+    const prefs = { preferences: [{ key: "shell.deny", label: "Commands it may not run",
+      type: "list", applies: "next-session", value: [], source: "built-in" }] };
+    renderSettings(r, prefs, LEDGER, { ...COPY, read_only: "0", set_list_none: "No entries" });
+    expect(r.querySelector("[data-effective]").textContent).toBe("No entries");
+    expect(r.querySelector("textarea").value).toBe("");
   });
 
   it("an unreadable prefs read is dashed", () => {

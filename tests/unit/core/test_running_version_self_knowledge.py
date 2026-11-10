@@ -106,8 +106,15 @@ def test_the_real_changelog_has_the_running_version():
 def test_install_lines_lead_with_the_running_version():
     from core.install_facts import install_lines
     lines = install_lines()
-    assert lines[0].startswith(f"Running version: v{v.get_version()}")
+    assert lines[0].startswith(f"Running version: v{v.get_version()}.")
     assert "release_notes" in lines[0]
+
+
+def test_the_identity_row_holds_no_sha(monkeypatch):
+    """C4: a deploy with the same version must not change the bytes of the row."""
+    from core.install_facts import install_lines
+    monkeypatch.setattr(v, "deployed_sha", lambda: "abcdef123456")
+    assert "abcdef123456" not in install_lines()[0]
 
 
 def test_bootstrap_describe_labels_the_install_version(tmp_path):

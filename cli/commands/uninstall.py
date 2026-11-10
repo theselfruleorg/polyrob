@@ -30,6 +30,7 @@ from pathlib import Path
 
 import click
 
+from cli.commands._options import yes_option
 _BEGIN = "# >>> polyrob >>>"
 _END = "# <<< polyrob <<<"
 
@@ -97,8 +98,7 @@ def _package_removal_hint() -> str:
 @click.command("uninstall")
 @click.option("--purge", is_flag=True, default=False,
               help="Also delete the data home (keys, memory, wallet seed).")
-@click.option("--yes", "-y", "assume_yes", is_flag=True, default=False,
-              help="Skip the confirmation for --purge (scripted removal).")
+@yes_option(help="Skip the confirmation for --purge (scripted removal).", dest="assume_yes")
 def uninstall_cmd(purge: bool, assume_yes: bool):
     """Remove the command, the PATH entry and the service. Keeps your data."""
     from cli.commands._bootstrap import ensure_env_loaded

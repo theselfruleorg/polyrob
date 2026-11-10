@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import time
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
@@ -44,15 +46,36 @@ def _path(user_id: str, home_dir, instance_id: str) -> Optional[Path]:
         return None
 
 
-def _load(path: Optional[Path]) -> Dict[str, str]:
+def _load(path: Optional[Path], *, for_write: bool = False) -> Optional[Dict[str, str]]:
+    """The links. A missing file is empty. A corrupt one reads as empty; for a write
+    it is moved aside as ``<path>.corrupt-<epoch>`` (its pairs kept for a person to
+    read) and the write starts from empty. A file that cannot be READ (OSError) is
+    None for a write: it is never moved or rewritten."""
     if path is None or not path.is_file():
         return {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        logger.warning("pending links unreadable at %s — each draft is decided alone", path)
+        if not isinstance(data, dict):
+            raise ValueError("not a JSON object")
+    except OSError:
+        logger.warning("pending links unreadable at %s — each draft is decided alone%s",
+                       path, "; the file is not rewritten" if for_write else "")
+        return None if for_write else {}
+    except ValueError as e:
+        if not for_write:
+            logger.warning("pending links corrupt at %s — each draft is decided alone", path)
+            return {}
+        aside = f"{path}.corrupt-{int(time.time())}"
+        try:
+            os.replace(path, aside)
+        except OSError as move_err:
+            logger.warning("pending links corrupt at %s and not moved aside (%s) — "
+                           "not rewritten", path, move_err)
+            return None
+        logger.warning("pending links corrupt at %s (%s) — kept as %s; a new file is written",
+                       path, e, aside)
         return {}
-    return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+    return {str(k): str(v) for k, v in data.items()}
 
 
 def _save(path: Optional[Path], links: Dict[str, str]) -> None:
@@ -71,7 +94,9 @@ def link(user_id: str, a: Tuple[str, str], b: Tuple[str, str], *, home_dir,
          instance_id: str) -> None:
     """Make drafts ``a`` and ``b`` (``(kind, id)``) one decision."""
     path = _path(user_id, home_dir, instance_id)
-    links = _load(path)
+    links = _load(path, for_write=True)
+    if links is None:
+        return
     ka, kb = _key(*a), _key(*b)
     for k in (ka, kb):  # a draft belongs to one pair only
         old = links.pop(k, None)
@@ -84,14 +109,16 @@ def link(user_id: str, a: Tuple[str, str], b: Tuple[str, str], *, home_dir,
 def partner(user_id: str, kind: str, item_id, *, home_dir,
             instance_id: str) -> Optional[Tuple[str, str]]:
     """The ``(kind, id)`` linked to this draft, or None."""
-    other = _load(_path(user_id, home_dir, instance_id)).get(_key(kind, item_id))
+    other = (_load(_path(user_id, home_dir, instance_id)) or {}).get(_key(kind, item_id))
     return _split(other) if other else None
 
 
 def unlink(user_id: str, kind: str, item_id, *, home_dir, instance_id: str) -> None:
     """Drop the pair this draft is in (it was decided)."""
     path = _path(user_id, home_dir, instance_id)
-    links = _load(path)
+    links = _load(path, for_write=True)
+    if links is None:
+        return
     other = links.pop(_key(kind, item_id), None)
     if other is None:
         return

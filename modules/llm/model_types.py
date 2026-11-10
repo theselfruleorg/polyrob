@@ -1,11 +1,11 @@
 """Model registry TYPES — provider enum, pricing/capability/config dataclasses.
 
-Split out of ``modules/llm/model_registry.py`` (S4, 2026-08-29); ``model_registry``
+Split out of ``modules/llm/model_registry.py`` ; ``model_registry``
 re-exports every name so existing importers are unaffected. Pure data + tiny helpers:
 no registry state, no I/O.
 """
 from dataclasses import dataclass
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Tuple
 from enum import Enum
 import logging
 import re
@@ -25,9 +25,9 @@ class ModelProvider(Enum):
 
 
 # ---------------------------------------------------------------------------
-# Canonical agent-facing provider strings (WS-2.3: ONE source of truth)
+# Canonical agent-facing provider strings (ONE source of truth)
 # ---------------------------------------------------------------------------
-# The rest of the agent stack (Agent.provider_name, the streaming whitelist, the
+# The rest of the agent stack (Agent.provider_name, the
 # schema-generator registry, native-tools reconciliation) keys off PROVIDER
 # STRINGS, not the ModelProvider enum. Those strings had drifted across ≥4
 # hand-rolled maps — most painfully ``GOOGLE`` whose enum VALUE is ``"google"``
@@ -48,8 +48,12 @@ PROVIDER_CANONICAL_NAMES: Dict[ModelProvider, str] = {
 #: Every canonical provider string the agent stack recognises.
 CANONICAL_PROVIDER_NAMES = frozenset(PROVIDER_CANONICAL_NAMES.values())
 
-#: Canonical providers that support response streaming (everything but custom).
-STREAMING_PROVIDER_NAMES = CANONICAL_PROVIDER_NAMES - {"custom"}
+#: A provider string to its enum member: the canonical name and the enum value, so both
+#: ``gemini`` and ``google`` read as ``ModelProvider.GOOGLE``.
+PROVIDER_BY_NAME: Dict[str, ModelProvider] = {
+    **{member.value: member for member in ModelProvider},
+    **{name: member for member, name in PROVIDER_CANONICAL_NAMES.items()},
+}
 
 
 def canonical_provider_name(provider: ModelProvider, default: str = "generic") -> str:
@@ -61,10 +65,72 @@ def canonical_provider_name(provider: ModelProvider, default: str = "generic") -
     return PROVIDER_CANONICAL_NAMES.get(provider, default)
 
 
+#: The o-series prefixes. A prefix match covers every id of a family (``o4-mini``).
+_OPENAI_REASONING_PREFIXES = ("o1", "o3", "o4")
+
+
+def openai_reasoning_model(model: str) -> bool:
+    """True for OpenAI o-series reasoning models (o1/o3/o4 families). These reject
+    ``temperature``, ``parallel_tool_calls`` and ``max_tokens``."""
+    if not model:
+        return False
+    m = model.lower().rsplit("/", 1)[-1]
+    return any(m.startswith(p) for p in _OPENAI_REASONING_PREFIXES)
+
+
+def openai_omits_temperature(model: str) -> bool:
+    """True if the OpenAI model rejects a custom ``temperature`` and it must be omitted:
+    the o-series reasoning models plus the gpt-5 family (default-temperature only)."""
+    if not model:
+        return False
+    m = model.lower().rsplit("/", 1)[-1]
+    return openai_reasoning_model(model) or m.startswith("gpt-5")
+
+
+def _family_target(model_lower: str) -> Optional[str]:
+    """The catalog row of *model_lower*'s own family, or None. A model never reads
+    another family's limits or vision."""
+    if "claude" in model_lower:
+        # Keep the tier. `claude-opus-5[1m]` is the 1M variant of an opus id, so the
+        # suffix goes before the match. Haiku rows are a smaller tier than the 1M default.
+        family = model_lower.split("[")[0]
+        for tier, row in (("opus", "claude-opus-5"), ("sonnet", "claude-sonnet-4-6"),
+                          ("fable", "claude-fable-5"), ("haiku", "claude-haiku-4-5")):
+            if tier in family:
+                return row
+        return "claude-sonnet-4-6"
+    if "gpt" in model_lower or "openai" in model_lower or openai_reasoning_model(model_lower):
+        return "gpt-5.1"
+    if "gemini" in model_lower:
+        return "gemini-3-pro-preview" if "3" in model_lower or "pro" in model_lower \
+            else "gemini-2.5-flash"
+    if "deepseek" in model_lower:
+        # An OpenRouter slug keeps OpenRouter metadata, a bare name is DeepSeek's own API.
+        via_or = "/" in model_lower or "openrouter" in model_lower or "or-" in model_lower
+        return "deepseek/deepseek-v4.1-flash" if via_or else "deepseek-flash"
+    if "glm" in model_lower or "z-ai" in model_lower or "zhipu" in model_lower:
+        return "z-ai/glm-5.2"
+    if "grok" in model_lower:
+        return "x-ai/grok-4.5"
+    if "kimi" in model_lower:
+        return "moonshotai/kimi-k2-0905"
+    if "qwen" in model_lower:
+        return "qwen/qwen3-coder"
+    return None
+
+
+def model_family(model: Optional[str]) -> Optional[str]:
+    """The family word of *model* (``deepseek``, ``glm``, ``claude``), or None. The
+    registry's family rule decides; the word is the first word of its row's name."""
+    target = _family_target(str(model or "").lower())
+    word = re.match(r"[a-z]+", target.rsplit("/", 1)[-1]) if target else None
+    return word.group() if word else None
+
+
 # Cache-READ price multipliers vs base input price. Reads are the discounted,
 # high-volume slice: Anthropic/OpenAI/DeepSeek/OpenRouter ~0.1x, Gemini implicit ~0.25x
-# (verified 2026-07-02: OpenAI GPT-5.x cached = 0.1x; Anthropic cache read = 0.1x;
-# DeepSeek already 0.028 = 0.1x of 0.28). Only used to DERIVE cached_input_price when a
+# (OpenAI GPT-5.x cached = 0.1x; Anthropic cache read = 0.1x;
+# DeepSeek 0.028 = 0.1x of 0.28). Only used to DERIVE cached_input_price when a
 # model leaves it unset; inert on models that never report cache hits.
 CACHE_READ_PRICE_MULTIPLIER = {
     ModelProvider.ANTHROPIC: 0.1,
@@ -78,14 +144,14 @@ _DEFAULT_CACHE_READ_MULTIPLIER = 0.1
 
 # Cache-WRITE (creation) price multipliers vs base input price. Only providers that
 # charge a per-token surcharge to WRITE a cache entry appear here. Anthropic bills
-# cache creation at 1.25x input (verified 2026-07-02, doc'd in anthropic_client). OpenAI
+# cache creation at 1.25x input (doc'd in anthropic_client). OpenAI
 # implicit caching, DeepSeek, and Gemini implicit caching have NO per-token write charge,
 # so they are absent → cache-creation tokens bill at plain input price (no surcharge).
 CACHE_WRITE_PRICE_MULTIPLIER = {
     ModelProvider.ANTHROPIC: 1.25,
 }
 
-# Cache-WRITE price for a ONE-HOUR window (F4, 2026-09-22). Anthropic bills a 1h
+# Cache-WRITE price for a ONE-HOUR window. Anthropic bills a 1h
 # `cache_control` write at 2.0x base input against 1.25x for the 5m default; the
 # response says which is which (`usage.cache_creation.ephemeral_1h_input_tokens`).
 CACHE_WRITE_1H_PRICE_MULTIPLIER = {
@@ -99,10 +165,10 @@ class ModelPricing:
     input_price: float  # Price per 1M input tokens
     cached_input_price: Optional[float] = None  # Price for cached input (reads)
     output_price: float = 0.0  # Price per 1M output tokens
-    # G3 (telemetry audit 2026-07-04): price to WRITE a cache entry (Anthropic 1.25x).
+    # Price to WRITE a cache entry (Anthropic 1.25x).
     # None => no per-token write surcharge; cache-creation tokens bill at input_price.
     cache_write_price: Optional[float] = None
-    # F4 (2026-09-22): price to WRITE a 1h cache entry (Anthropic 2.0x). None =>
+    # Price to WRITE a 1h cache entry (Anthropic 2.0x). None =>
     # a 1h write bills at cache_write_price (then input_price).
     cache_write_price_1h: Optional[float] = None
     batch_api_available: bool = False
@@ -123,16 +189,25 @@ class ModelCapabilities:
     supports_search: bool = False
     supports_computer_use: bool = False
     supports_thinking: bool = False
-    # F9 (063 WS-4, 2026-09-23): does this model accept Anthropic's
+    # This model's endpoint refuses ``reasoning: {enabled: false}`` with a 400. No block and
+    # a budget or an effort are accepted (modules/llm/openrouter_reasoning.py).
+    reasoning_mandatory: bool = False
+    # Does this model accept Anthropic's
     # mid-conversation tool changes (`defer_loading` + `tool_addition`, beta
-    # `mid-conversation-tool-changes-2026-07-01`)? Claude Opus 5 onward only —
-    # NOT Opus 4.8 or older, not Sonnet 4.6, and Sonnet 5 is unverified, so it
-    # stays False there. The deferred late-tool mode reads THIS, never a name
+    # `mid-conversation-tool-changes-2026-07-01`)? Opus 5.5, Opus 5, Opus 4.8,
+    # Fable 5, Fable 5.1 and Sonnet 5.5 — NOT Sonnet 5, Sonnet 4.6 or Opus 4.7
+    # and older. The deferred late-tool mode reads THIS, never a name
     # pattern (modules/llm/deferred_tools.py::model_supports_deferred_tools).
     supports_mid_conversation_tool_changes: bool = False
-    # UP-07: per-model reasoning budget/effort. None => provider/SDK default (current
-    # behavior). thinking_budget_tokens -> Anthropic thinking.budget_tokens / DeepSeek
-    # max_cot_tokens; reasoning_effort -> OpenAI ("minimal"|"low"|"medium"|"high"|"none").
+    # Does this Anthropic model bind a thinking block to the conversation that produced it?
+    # Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5. A request on such a row asks for
+    # `drop_block` (modules/llm/anthropic_wire.py).
+    preserves_thinking: bool = False
+    # Per-model reasoning budget/effort. None => provider/SDK default.
+    # thinking_budget_tokens -> Anthropic thinking.budget_tokens on a row older than 4.6 /
+    # DeepSeek max_cot_tokens; reasoning_effort -> Anthropic output_config.effort on every
+    # real-API request (the docs say to set it explicitly), and on OpenAI and DeepSeek
+    # behind THINKING_CONFIG_ENABLED.
     thinking_budget_tokens: Optional[int] = None
     reasoning_effort: Optional[str] = None
 
@@ -148,12 +223,14 @@ class ModelConfig:
     capabilities: ModelCapabilities
     chars_per_token: float = 4.0
     aliases: List[str] = None
+    # Aliases the provider's API still serves as typed: catalog_wire_id leaves them.
+    served_aliases: Tuple[str, ...] = ()
     deprecated: bool = False
     knowledge_cutoff: Optional[str] = None
-    # FIX (Jan 2026): Typical completion for dynamic reservation
+    # Typical completion for dynamic reservation
     # Most agent responses are 500-2000 tokens, not 64K
     typical_completion_tokens: int = 4000  # Conservative typical usage
-    # P0.4: optional human-readable name override for UI surfaces (e.g. a model
+    # Optional human-readable name override for UI surfaces (e.g. a model
     # picker). None => derive a readable name from `name` (see
     # `_derive_display_name`). Hand-author overrides for flagship models when
     # the derived name reads badly.
@@ -168,7 +245,7 @@ class ModelConfig:
         if self.pricing is not None and self.pricing.cached_input_price is None:
             _mult = CACHE_READ_PRICE_MULTIPLIER.get(self.provider, _DEFAULT_CACHE_READ_MULTIPLIER)
             self.pricing.cached_input_price = round(self.pricing.input_price * _mult, 6)
-        # G3: derive cache-WRITE price for providers that surcharge cache creation
+        # Derive cache-WRITE price for providers that surcharge cache creation
         # (Anthropic 1.25x). Absent providers keep None → billed at plain input price.
         if self.pricing is not None and self.pricing.cache_write_price is None:
             _wmult = CACHE_WRITE_PRICE_MULTIPLIER.get(self.provider)
@@ -194,7 +271,7 @@ class ModelConfig:
     def effective_completion_reserve(self) -> int:
         """Get effective completion token reservation.
 
-        FIX (Jan 2026): Dynamic reservation based on typical usage.
+        Dynamic reservation based on typical usage.
         Reserves 2x typical for safety, capped at max.
         This prevents wasting 47% of context on unused completion space.
 
@@ -210,8 +287,8 @@ class ModelConfig:
     def safe_input_tokens(self) -> int:
         """Get safe input token limit (leaving room for completion).
 
-        FIX (Jan 2026): Now uses effective_completion_reserve instead of
-        max_completion_tokens for much better context utilization.
+        Uses effective_completion_reserve instead of
+        max_completion_tokens for better context utilization.
         """
         return self.context_window - self.effective_completion_reserve
 

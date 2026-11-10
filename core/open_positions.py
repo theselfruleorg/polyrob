@@ -46,6 +46,8 @@ from __future__ import annotations
 
 import logging
 import os
+import random
+import sqlite3
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional
@@ -584,90 +586,130 @@ def apply_delta(user_id: str, delta: PositionDelta, *,
         return
     acct = _account_key(delta.account)
     try:
-        from core.sqlite_util import execute_retry
         path = db_path or open_positions_db_path()
         _init(path)
         ts = time.time() if now is None else now
-        row = execute_retry(
-            path,
-            "SELECT qty, entry_usd, entry_ts, status, status_reason, status_ts, "
-            "qty_source, high_water_usd, high_water_ts "
-            "FROM open_positions "
-            "WHERE user_id=? AND chain=? AND account=? AND address=?",
-            (uid, delta.chain, acct, delta.address), fetch="one")
-        if row and row["status"] == STATUS_RETIRED:
-            # 086 W0: a retired row holds nothing on the book: a sell is a
-            # no-op and a buy starts a fresh row (the old basis is history).
-            if delta.qty <= 0:
-                return
-            row = None
-        cur_qty = float(row["qty"]) if row else 0.0
-        # None = unknown basis. A new row starts from a known $0 of nothing.
-        cur_entry: Optional[float] = (
-            (None if row["entry_usd"] is None else float(row["entry_usd"]))
-            if row else 0.0)
-        cur_entry_ts = float(row["entry_ts"]) if row else ts
-        source = str(delta.qty_source or "")
-
-        if delta.qty > 0:  # acquire (open / increase)
-            new_qty = cur_qty + delta.qty
-            new_entry = (None if cur_entry is None or delta.cost_usd is None
-                         else cur_entry + float(delta.cost_usd))
-            # Adding a simulated trade cannot upgrade unverified legacy size.
-            if row:
-                quality = ("", "quote", "receipt", "simulation", "inherited")
-                sources = (row["qty_source"] or "", source)
-                source = min(sources, key=lambda s: quality.index(s) if s in quality else 0)
-            # W0: a later buy never silently lifts a quarantine — the question
-            # of which contract is real has not changed.
-            execute_retry(
-                path,
-                "INSERT OR REPLACE INTO open_positions "
-                "(user_id, chain, account, address, symbol, qty, entry_usd, entry_ts, "
-                "updated_ts, status, status_reason, status_ts, qty_source, "
-                "high_water_usd, high_water_ts) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (uid, delta.chain, acct, delta.address, delta.symbol, new_qty,
-                 new_entry, cur_entry_ts, ts,
-                 _status_after_buy(row),
-                 (row["status_reason"] if row and row["status"] != STATUS_DUST else "") or "",
-                 row["status_ts"] if row and row["status"] != STATUS_DUST else None,
-                 source,
-                 row["high_water_usd"] if row else None,
-                 row["high_water_ts"] if row else None))
-            _event("opened" if (not row or row["status"] == STATUS_DUST) else "changed",
-                   uid, delta, acct, qty=new_qty, usd=delta.cost_usd, ts=ts)
-            return
-
-        # dispose (reduce / close)
-        if not row or cur_qty <= 0:
-            return  # nothing held — never open a negative/short position
-        sell = -delta.qty
-        sold = min(sell, cur_qty)
-        _book_realized(path, uid, delta, acct, sold=sold, sell=sell,
-                       cur_qty=cur_qty, cur_entry=cur_entry, ts=ts)
-        if sell >= cur_qty - abs(cur_qty) * _CLOSE_EPS:
-            execute_retry(
-                path,
-                "DELETE FROM open_positions "
-                "WHERE user_id=? AND chain=? AND account=? AND address=?",
-                (uid, delta.chain, acct, delta.address))
-            _event("closed", uid, delta, acct, qty=0.0, usd=delta.proceeds_usd, ts=ts,
-                   reason=delta.close_reason)
-            return
-        remaining = cur_qty - sell
-        # Reduce the cost basis in the SAME proportion as the size, so the
-        # entry_usd left still describes the size left (average cost).
-        new_entry = None if cur_entry is None else cur_entry * (remaining / cur_qty)
-        execute_retry(
-            path,
-            "UPDATE open_positions SET qty=?, entry_usd=?, updated_ts=? "
-            "WHERE user_id=? AND chain=? AND account=? AND address=?",
-            (remaining, new_entry, ts, uid, delta.chain, acct, delta.address))
-        _event("changed", uid, delta, acct, qty=remaining, usd=delta.proceeds_usd, ts=ts,
-               reason=delta.close_reason)
+        # The read and the write are ONE write transaction. A SELECT then a blind
+        # INSERT OR REPLACE lost a concurrent buy's size and overwrote a quarantine or a
+        # write-off set between them with the status read before it. Write contention
+        # ("database is locked") retries the WHOLE transaction, never drops the leg.
+        from core.sqlite_util import _MAX_RETRIES, wal_connect
+        for attempt in range(_MAX_RETRIES):
+            try:
+                conn = wal_connect(path)
+                try:
+                    conn.isolation_level = None
+                    conn.execute("BEGIN IMMEDIATE")
+                    try:
+                        event = _apply_delta_locked(conn, uid, delta, acct, ts)
+                        conn.execute("COMMIT")
+                    except Exception:
+                        try:
+                            conn.execute("ROLLBACK")
+                        except Exception:
+                            pass
+                        raise
+                finally:
+                    conn.close()
+                break
+            except sqlite3.OperationalError as exc:
+                if not _is_contention(exc) or attempt == _MAX_RETRIES - 1:
+                    raise
+                _contention_pause()
+        if event is not None:
+            _event(event[0], uid, delta, acct, **event[1])
     except Exception:
-        logger.debug("open-position write skipped (fail-open)", exc_info=True)
+        # A lost leg leaves the book wrong (a buy the stop rules never see): loud.
+        logger.warning("open-position write FAILED for %s on %s (qty %s) — the book "
+                       "misses this leg", delta.address, delta.chain, delta.qty,
+                       exc_info=True)
+
+
+def _is_contention(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "locked" in text or "busy" in text
+
+
+def _contention_pause() -> None:
+    """The jittered wait between two attempts (the ``core.sqlite_util`` range)."""
+    time.sleep(random.uniform(0.02, 0.15))
+
+
+def _apply_delta_locked(conn, uid: str, delta: PositionDelta, acct: str, ts: float):
+    """:func:`apply_delta` inside its write transaction. Returns the position event to
+    emit after the commit, ``(kind, kwargs)``, or None."""
+    row = conn.execute(
+        "SELECT qty, entry_usd, entry_ts, status, status_reason, status_ts, "
+        "qty_source, high_water_usd, high_water_ts "
+        "FROM open_positions "
+        "WHERE user_id=? AND chain=? AND account=? AND address=?",
+        (uid, delta.chain, acct, delta.address)).fetchone()
+    if row and row["status"] == STATUS_RETIRED:
+        # 086 W0: a retired row holds nothing on the book: a sell is a
+        # no-op and a buy starts a fresh row (the old basis is history).
+        if delta.qty <= 0:
+            return None
+        row = None
+    cur_qty = float(row["qty"]) if row else 0.0
+    # None = unknown basis. A new row starts from a known $0 of nothing.
+    cur_entry: Optional[float] = (
+        (None if row["entry_usd"] is None else float(row["entry_usd"]))
+        if row else 0.0)
+    cur_entry_ts = float(row["entry_ts"]) if row else ts
+    source = str(delta.qty_source or "")
+
+    if delta.qty > 0:  # acquire (open / increase)
+        new_qty = cur_qty + delta.qty
+        new_entry = (None if cur_entry is None or delta.cost_usd is None
+                     else cur_entry + float(delta.cost_usd))
+        # Adding a simulated trade cannot upgrade unverified legacy size.
+        if row:
+            quality = ("", "quote", "receipt", "simulation", "inherited")
+            sources = (row["qty_source"] or "", source)
+            source = min(sources, key=lambda s: quality.index(s) if s in quality else 0)
+        # W0: a later buy never silently lifts a quarantine — the question
+        # of which contract is real has not changed.
+        conn.execute(
+            "INSERT OR REPLACE INTO open_positions "
+            "(user_id, chain, account, address, symbol, qty, entry_usd, entry_ts, "
+            "updated_ts, status, status_reason, status_ts, qty_source, "
+            "high_water_usd, high_water_ts) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (uid, delta.chain, acct, delta.address, delta.symbol, new_qty,
+             new_entry, cur_entry_ts, ts,
+             _status_after_buy(row),
+             (row["status_reason"] if row and row["status"] != STATUS_DUST else "") or "",
+             row["status_ts"] if row and row["status"] != STATUS_DUST else None,
+             source,
+             row["high_water_usd"] if row else None,
+             row["high_water_ts"] if row else None))
+        return ("opened" if (not row or row["status"] == STATUS_DUST) else "changed",
+                dict(qty=new_qty, usd=delta.cost_usd, ts=ts))
+
+    # dispose (reduce / close)
+    if not row or cur_qty <= 0:
+        return None  # nothing held — never open a negative/short position
+    sell = -delta.qty
+    sold = min(sell, cur_qty)
+    _book_realized(conn, uid, delta, acct, sold=sold, sell=sell,
+                   cur_qty=cur_qty, cur_entry=cur_entry, ts=ts)
+    if sell >= cur_qty - abs(cur_qty) * _CLOSE_EPS:
+        conn.execute(
+            "DELETE FROM open_positions "
+            "WHERE user_id=? AND chain=? AND account=? AND address=?",
+            (uid, delta.chain, acct, delta.address))
+        return ("closed", dict(qty=0.0, usd=delta.proceeds_usd, ts=ts,
+                               reason=delta.close_reason))
+    remaining = cur_qty - sell
+    # Reduce the cost basis in the SAME proportion as the size, so the
+    # entry_usd left still describes the size left (average cost).
+    new_entry = None if cur_entry is None else cur_entry * (remaining / cur_qty)
+    conn.execute(
+        "UPDATE open_positions SET qty=?, entry_usd=?, updated_ts=? "
+        "WHERE user_id=? AND chain=? AND account=? AND address=?",
+        (remaining, new_entry, ts, uid, delta.chain, acct, delta.address))
+    return ("changed", dict(qty=remaining, usd=delta.proceeds_usd, ts=ts,
+                            reason=delta.close_reason))
 
 
 def _event(kind: str, uid: str, delta: PositionDelta, acct: str, *, qty: float,
@@ -686,15 +728,15 @@ def _status_after_buy(row) -> str:
     return STATUS_OPEN if status == STATUS_DUST else status
 
 
-def _book_realized(path: str, uid: str, delta: PositionDelta, acct: str, *,
+def _book_realized(conn, uid: str, delta: PositionDelta, acct: str, *,
                    sold: float, sell: float, cur_qty: float,
                    cur_entry: Optional[float], ts: float) -> None:
     """Add one dispose leg to ``position_realized`` (average cost).
 
     The basis of the size sold is ``entry_usd × sold / qty``; the proceeds of
     that size are the leg's proceeds × ``sold / sell`` (an oversell's excess was
-    never tracked). Either side unknown → an unknown leg, never a $0 one."""
-    from core.sqlite_util import execute_retry
+    never tracked). Either side unknown → an unknown leg, never a $0 one. Runs on
+    :func:`apply_delta`'s connection, inside its write transaction."""
     known = (cur_entry is not None and delta.proceeds_usd is not None
              and sell > 0 and cur_qty > 0)
     pnl = 0.0
@@ -702,8 +744,7 @@ def _book_realized(path: str, uid: str, delta: PositionDelta, acct: str, *,
         basis_sold = cur_entry * (sold / cur_qty)
         proceeds = float(delta.proceeds_usd) * (sold / sell)
         pnl = proceeds - basis_sold
-    execute_retry(
-        path,
+    conn.execute(
         "INSERT INTO position_realized (user_id, chain, account, address, symbol, "
         "realized_usd, known_legs, unknown_legs, sold_qty, updated_ts, close_reason) "
         "VALUES (?,?,?,?,?,?,?,?,?,?,?) "

@@ -27,12 +27,26 @@ def _word(n: int) -> str:
     return "0x" + hex(n)[2:].rjust(64, "0")
 
 
-def fake_rpc(*, erc721=True, max_supply=6551, archive=True, pruned_empty=False):
+IMPL = "0x" + "a1" * 20
+MARKET = "0x" + "b1" * 20
+ZONE = "0x" + "c1" * 20
+
+
+def _addr_word(a: str) -> str:
+    return "0x" + a[2:].lower().rjust(64, "0")
+
+
+def fake_rpc(*, erc721=True, max_supply=6551, archive=True, pruned_empty=False, polyrob=False,
+             zone=True):
     sel = {abi.selector("supportsInterface(bytes4)"): _word(1 if erc721 else 0),
            abi.selector("maxSupply()"): _word(max_supply) if max_supply else None,
            abi.selector("MAX_SUPPLY()"): None,
            abi.selector("balanceOf(address)"): _word(2),
            abi.selector("name()"): None, abi.selector("symbol()"): None}
+    if polyrob:
+        sel.update({abi.selector("accountImplementation()"): _addr_word(IMPL),
+                    abi.selector("MARKET()"): _addr_word(MARKET),
+                    abi.selector("ZONE()"): _addr_word(ZONE) if zone else None})
 
     def rpc(method, params, timeout=8.0):
         if method == "eth_blockNumber":
@@ -232,3 +246,49 @@ def test_a_pruned_node_that_answers_empty_code_is_not_trusted_for_the_deploy_blo
 def test_a_from_block_past_the_head_refuses(_stores):
     ok, msg = ct.trust(_owner(), "robinhood", COLL, rpc=fake_rpc(), from_block=HEAD + 1)
     assert not ok and "not a block" in msg
+
+
+# ------------------------------------------------------------------ the collection's own account
+def test_a_collection_without_its_own_account_is_pinned_with_account_v3(_stores):
+    from core.wallet import erc6551
+    f = ct.read_facts("robinhood", COLL, rpc=fake_rpc())
+    assert f["profile"]["accounts"][0]["implementation"] == erc6551.ACCOUNT_V3_IMPL
+    assert "transfer_safe" not in f["profile"]
+
+
+def test_a_polyrob_collection_is_pinned_with_its_account_market_and_zone(_stores):
+    import hashlib
+    sha = hashlib.sha256(bytes.fromhex(CODE[2:])).hexdigest()
+    f = ct.read_facts("robinhood", COLL, rpc=fake_rpc(polyrob=True))
+    prof = f["profile"]
+    assert prof["accounts"][0]["implementation"] == IMPL
+    assert prof["transfer_safe"] == {"account_impl_runtime_sha256": sha, "market": MARKET,
+                                     "market_runtime_sha256": sha, "zone": ZONE,
+                                     "zone_runtime_sha256": sha}
+    (p,) = R.parse({"profiles": [prof]})
+    assert p.accounts[0].is_polyrob
+    assert "PolyrobAccount" in ct.trust_quote("robinhood", COLL, rpc=fake_rpc(polyrob=True))
+    ok, msg = ct.trust(_owner(), "robinhood", COLL, rpc=fake_rpc(polyrob=True))
+    assert ok, msg
+    assert R.load_owner_pins()[0].accounts[0].is_polyrob
+
+
+def test_an_unreadable_zone_refuses_instead_of_falling_back_to_account_v3(_stores):
+    msg = ct.trust_quote("robinhood", COLL, rpc=fake_rpc(polyrob=True, zone=False))
+    assert msg.startswith("❌") and "ZONE" in msg
+
+
+def test_a_failed_account_implementation_read_refuses_instead_of_pinning_account_v3(_stores):
+    """A timeout on accountImplementation() is not "this collection has no account of its
+    own": pinning AccountV3 then made every act through the real account refuse."""
+    base = fake_rpc(polyrob=True)
+
+    def flaky(method, params, timeout=8.0):
+        if method == "eth_call" and params[0]["data"][:10] == abi.selector(
+                "accountImplementation()"):
+            raise TimeoutError("read timed out")
+        return base(method, params, timeout)
+    msg = ct.trust_quote("robinhood", COLL, rpc=flaky)
+    assert msg.startswith("❌") and "accountImplementation()" in msg
+    with pytest.raises(ValueError, match="could not read"):
+        ct.read_facts("robinhood", COLL, rpc=flaky)

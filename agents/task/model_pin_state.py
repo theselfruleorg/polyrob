@@ -51,6 +51,17 @@ def remember_session_pin(session_id: Optional[str], session_info: Optional[dict]
             pass
 
 
+def stored_pin_refusal(provider: Optional[str], model: Optional[str]) -> str:
+    """Why a billed session may not load this stored pin, naming the model (``""`` = it
+    may). Each call on it would fail, so the session runs on the default instead, as it
+    does when the owner's default cannot be read."""
+    from modules.llm.billing_guard import pricing_refusal
+    if not model or not pricing_refusal(model, provider or ""):
+        return ""
+    return (f"The stored model {model} has no catalog price, so a billed session cannot "
+            "run on it. This session uses the default model; /model chooses another one.")
+
+
 def note_switch(session_id: Optional[str], model: str, switched_from: str,
                 at: Optional[float] = None) -> None:
     """Remember the owner's switch to ``model`` (``at`` = epoch, default now)."""

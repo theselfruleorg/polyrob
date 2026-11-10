@@ -38,6 +38,7 @@ from fastapi.templating import Jinja2Templates
 from webview import webgate
 from webview.audit import console_write
 from webview.decision_rev import rev_from_body
+from webview.copy import t
 from core.event_kinds import (
     CONSOLE_CONFIG_WRITE, CONSOLE_GOAL_VERB,
     CONSOLE_INVOICE_SETTLE, CONSOLE_PENDING_DECIDE,
@@ -60,12 +61,12 @@ from core import self_evolution
 from core.prefs import (
     PREF_SCHEMA,
     SENSITIVITY_GUARDED,
-    display_effective,
     write_preference,
 )
+from webview.prefs_view import display_effective  # an empty list is [] (113 W6)
 from core.surfaces import owner_admin
 from cron.jobs import CronJobStore
-from cron.service import CronService, last_outcome as job_last_outcome
+from cron.service import CronService, last_outcome as job_last_outcome, next_note as job_next_note
 from core.version import get_version
 from modules.credits.unified_ledger import build_ledger, ledger_availability_note
 # One reader over EVERY money chain (043 A34) — the loop lives in the tools
@@ -298,7 +299,7 @@ def _cron_dict(j) -> dict:
         "next_run_at": j.next_run_at.isoformat() if j.next_run_at else None,
         "one_shot": j.one_shot,
         "enabled": j.enabled,
-        "status": j.status, "last_outcome": job_last_outcome(j),
+        "status": j.status, "last_outcome": job_last_outcome(j), "next_note": job_next_note(j),
         "last_run_at": j.last_run_at.isoformat() if getattr(j, "last_run_at", None) else None,
     }
 
@@ -1010,7 +1011,7 @@ async def api_preferences(request: Request):
         value, source = display_effective(key, user_id, home)
         items.append({
             "key": key,
-            "description": spec.description,
+            "label": t(f"pref.{key}.label"), "help": t(f"pref.{key}.help"),   # 113 W5 (CP-1)
             "type": spec.type,
             "sensitivity": spec.sensitivity,
             "merge": spec.merge,
@@ -1185,15 +1186,16 @@ async def api_pending(request: Request):
 
 @router.get("/api/webgate/pending/{kind}/{item_id}")
 async def api_pending_show(request: Request, kind: str, item_id: str):
-    """ONE pending item in full — the SAME review every seat opens (096 W7:
-    Why, Changes, the diff, both halves of a linked pair; a tool approval's
-    full card). The Inbox's "Read it" button calls this."""
+    """ONE pending item in full — the SAME review every seat opens (096 W7: Why, Changes, the diff,
+    both halves of a linked pair; a tool approval's full card). The Inbox's "Read it" button calls this."""
     from core.pending_seats import SEAT_CONSOLE, find_item, review_one
     from tools.controller.approval_queue import all_pending
     kw = _pending_kwargs(request)
-    item = find_item(all_pending(board=_webgate_goal_board(), **kw,
-                                 correspondent_registry=_webgate_correspondent_registry()
-                                 ).items, kind, item_id)
+    res = all_pending(board=_webgate_goal_board(), **kw, correspondent_registry=_webgate_correspondent_registry())
+    item = find_item(res.items, kind, item_id)
+    if item is None and res.unavailable:  # an unreadable store is not "no pending": name it
+        return JSONResponse({"ok": False, "unavailable": res.unavailable,
+                             "body": f"I could not read {', '.join(res.unavailable)}. {t('inbox.unreachable')}"})
     if item is None:
         return JSONResponse({"ok": False, "body": f"no pending {kind} '{item_id}'"})
     ok, body = review_one(item, seat=SEAT_CONSOLE, **kw)
@@ -1269,7 +1271,6 @@ def _decide_pending_safely(kind: str, item_id: str, kw: dict, *, approved: bool,
         return ok, msg, None
     except Exception as exc:
         logger.warning("pending decide %s/%s failed", kind, item_id, exc_info=True)
-        from webview.copy import t
         return False, t("inbox.unreachable"), _safe_reason(exc)
 
 
@@ -1646,13 +1647,12 @@ async def api_invoices(request: Request, status: str = ""):
 
 @money_router.post("/api/webgate/invoices/{request_id}/settle", dependencies=webgate.MUTATION_DEPS)
 async def api_invoice_settle(request: Request, request_id: str):
-    """Attest an invoice as PAID (pending → completed) — owner attestation,
-    not a payment. Same primitive as `polyrob owner settle <id> [--tx-hash]`
-    and the REPL `/settle` (``settle_payment_request``), with Telegram
-    `/settle`'s tenant scoping: the id is resolved among the CALLER's OWN
-    pending invoices first (via ``owner_ops.resolve_prefix``, so the short
-    ids listings show are accepted), so one tenant can never attest another
-    tenant's row. Optional JSON body: ``{"tx_hash": "0x…"}``."""
+    """Attest an invoice as PAID (pending → completed) — owner attestation, not a payment.
+    Same primitive as `polyrob owner settle <id> [--tx-hash]` and the REPL `/settle`
+    (``settle_payment_request``), with Telegram `/settle`'s tenant scoping: the id is
+    resolved among the CALLER's OWN pending invoices first (via ``owner_ops.resolve_prefix``,
+    so the short ids listings show are accepted), so one tenant can never attest another
+    tenant's row. Optional JSON body: ``{"tx_hash": "0x…"}`` (an order's invoice needs it)."""
     user_id = _effective_user_id(request)
     try:
         body = await request.json()
@@ -1676,9 +1676,9 @@ async def api_invoice_settle(request: Request, request_id: str):
                                                transaction_hash=tx_hash, db=db)
         if not settled:
             return {"ok": False, "status_code": 409,
-                    "message": (f"{resolved} was not settled — it may already "
-                                "be completed, or that tx hash already "
-                                "settled another invoice")}
+                    "message": (f"{resolved} was not settled — it may already be completed, "
+                                "or that tx hash already settled another invoice, "
+                                "or it is an order's invoice: give the transaction hash")}
         return {"ok": True, "status_code": 200, "request_id": resolved,
                 "message": f"settled {resolved}"}
 

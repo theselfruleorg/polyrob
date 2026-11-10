@@ -12,9 +12,9 @@ from __future__ import annotations
 
 import json
 
+from modules.llm.tool_schemas import schema_tool_names
 from modules.llm.openrouter_client import (
     recover_textual_tool_calls,
-    tool_names_from_schemas,
 )
 
 _KNOWN = {"done", "send_message", "filesystem_write_file"}
@@ -99,12 +99,12 @@ def test_no_op_for_plain_content():
     assert recover_textual_tool_calls("", _KNOWN) == ("", [])
 
 
-def test_tool_names_from_schemas():
+def test_schema_tool_names():
     tools = [
         {"type": "function", "function": {"name": "done"}},
         {"type": "function", "function": {"name": "send_message"}},
         {"name": "bare_name"},
         "not-a-dict",
     ]
-    assert tool_names_from_schemas(tools) == {"done", "send_message", "bare_name"}
-    assert tool_names_from_schemas(None) == set()
+    assert set(schema_tool_names(tools)) == {"done", "send_message", "bare_name"}
+    assert schema_tool_names(None) == []

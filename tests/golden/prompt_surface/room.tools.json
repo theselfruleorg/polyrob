@@ -1,6 +1,58 @@
 {
   "tools": [
     {
+      "name": "done",
+      "sha": "d52ce43147c8"
+    },
+    {
+      "name": "send_message",
+      "sha": "5639154a5361"
+    },
+    {
+      "name": "load_skill",
+      "sha": "1cf2893b4073"
+    },
+    {
+      "name": "read_skill_resource",
+      "sha": "5157194c3386"
+    },
+    {
+      "name": "task_todo_add",
+      "sha": "11502431e548"
+    },
+    {
+      "name": "task_todo_complete",
+      "sha": "5dd6ac7cf5af"
+    },
+    {
+      "name": "task_todo_list",
+      "sha": "e1cd22ac08bd"
+    },
+    {
+      "name": "task_todo_next",
+      "sha": "1164773d627d"
+    },
+    {
+      "name": "task_todo_progress",
+      "sha": "20d5a866a3d7"
+    },
+    {
+      "name": "tool_describe",
+      "sha": "5b897a46f500"
+    },
+    {
+      "name": "tool_search",
+      "sha": "7d8f9245f92d"
+    },
+    {
+      "name": "compute",
+      "sha": "30a9af73bd55"
+    },
+    {
+      "name": "web_fetch_fetch_url",
+      "sha": "3bbc659950d4"
+    },
+    {
       "name": "defi_data_contract_read",
       "sha": "dae0db5291bc"
     },
@@ -59,54 +111,6 @@
     {
       "name": "defi_data_trending",
       "sha": "c314db246d3c"
-    },
-    {
-      "name": "done",
-      "sha": "d52ce43147c8"
-    },
-    {
-      "name": "load_skill",
-      "sha": "1cf2893b4073"
-    },
-    {
-      "name": "read_skill_resource",
-      "sha": "5157194c3386"
-    },
-    {
-      "name": "send_message",
-      "sha": "5639154a5361"
-    },
-    {
-      "name": "task_todo_add",
-      "sha": "11502431e548"
-    },
-    {
-      "name": "task_todo_complete",
-      "sha": "5dd6ac7cf5af"
-    },
-    {
-      "name": "task_todo_list",
-      "sha": "e1cd22ac08bd"
-    },
-    {
-      "name": "task_todo_next",
-      "sha": "1164773d627d"
-    },
-    {
-      "name": "task_todo_progress",
-      "sha": "20d5a866a3d7"
-    },
-    {
-      "name": "tool_describe",
-      "sha": "5b897a46f500"
-    },
-    {
-      "name": "tool_search",
-      "sha": "7d8f9245f92d"
-    },
-    {
-      "name": "web_fetch_fetch_url",
-      "sha": "3bbc659950d4"
     }
   ]
 }

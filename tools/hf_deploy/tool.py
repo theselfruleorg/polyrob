@@ -239,14 +239,22 @@ class HFDeployTool(BaseTool):
         row = registry.get(app_name, uid)
         needs_approval = row is None or row.get("approved_at") is None
         if needs_approval:
+            from core.security.owner_turn import is_owner_driven
+            from tools.controller.approval import operator_denies_approvals
+            if operator_denies_approvals():
+                # The operator's standing stop: no owner-turn rule passes it. Checked
+                # before the pending row, so a refused publish leaves no row behind.
+                return ActionResult(
+                    error=f"first publish of '{app_name}' blocked: APPROVAL_PROVIDER=deny "
+                          f"stops every new public address on this install",
+                    include_in_memory=True)
             registry.upsert_pending(app_name, uid, space_repo=space_repo)
-            approver = self._get_approval_provider()
             try:
-                approved = await approver.request(
-                    "hf_deploy_publish",
-                    {"app_name": app_name, "space_repo": space_repo},
-                    execution_context,
-                )
+                approved = is_owner_driven(execution_context) or await (
+                    self._get_approval_provider().request(
+                        "hf_deploy_publish",
+                        {"app_name": app_name, "space_repo": space_repo},
+                        execution_context))
             except Exception as e:
                 return ActionResult(
                     error=f"approval denied (provider error) for first publish of '{app_name}': {e}",

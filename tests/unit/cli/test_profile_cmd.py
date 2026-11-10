@@ -220,3 +220,27 @@ def test_create_service_emits_unit_with_explicit_homes(env, tmp_path, monkeypatc
     assert 'POLYROB_PROFILE=%i' in text          # a systemd TEMPLATE unit
     assert f'POLYROB_PROFILES_ROOT={env / "profiles"}' in text
     assert "polyrob@daemon1" in r.output and "polyrob-daemon1" not in r.output
+
+
+def test_from_project_include_data_keeps_rows_still_in_the_wal(env, tmp_path):
+    """A live WAL db holds committed rows in its -wal file; a plain file copy of
+    the .db loses them. The copy goes through SQLite's online backup."""
+    import sqlite3
+    proj = tmp_path / "legacy"
+    d = proj / ".polyrob"
+    d.mkdir(parents=True)
+    live = sqlite3.connect(d / "memory.db")
+    try:
+        live.execute("PRAGMA journal_mode=WAL")
+        live.execute("PRAGMA wal_autocheckpoint=0")
+        live.execute("CREATE TABLE m (x INTEGER)")
+        live.executemany("INSERT INTO m VALUES (?)", [(i,) for i in range(5)])
+        live.commit()                         # committed, not checkpointed
+        result = create_profile("rob3", from_project=str(proj), include_data=True)
+    finally:
+        live.close()
+    copy = sqlite3.connect(result["home"] / "data" / "memory.db")
+    try:
+        assert copy.execute("SELECT COUNT(*) FROM m").fetchone()[0] == 5
+    finally:
+        copy.close()

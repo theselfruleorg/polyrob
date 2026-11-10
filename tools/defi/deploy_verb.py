@@ -461,10 +461,11 @@ async def _perform_deploy(tool, *, execution_context, verb: str, chain: str,
         recorded = False
         try:
             async with gate.reserve():
-                gate.record(venue="defi", action=verb,
-                            amount_usd=decision.amount_usd or 0.0,
-                            counterparty=counterparty,
-                            idempotency_key=idem, result_ref=tx_hash, chain=chain)
+                from tools.defi.receipt_wait import book_after_receipt
+                book_after_receipt(gate, receipt, venue="defi", action=verb,
+                                   amount_usd=decision.amount_usd or 0.0,
+                                   counterparty=counterparty,
+                                   idempotency_key=idem, result_ref=tx_hash, chain=chain)
             recorded = True
         finally:
             _settled_notice(recorded)

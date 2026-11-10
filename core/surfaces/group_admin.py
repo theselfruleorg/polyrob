@@ -183,7 +183,32 @@ def allow_here(container: Any, surface: str, chat_id: str, title: str, *,
             logger.warning("group_admin: allow_here could not set chat.name for %s: %s",
                            label, msg)
     suffix = f' "{title}"' if title else ""
-    return f"✅ Allowed {label}{suffix}."
+    return f"✅ Allowed {label}{suffix}." + _kept_grants(container, owner_uid, surface, chat_id)
+
+
+def _kept_grants(container: Any, owner_uid: str, surface: str, chat_id: str) -> str:
+    """What a re-allowed room still holds: ``deny`` keeps its grants and roles, so an
+    allow brings them back and says so. Unreadable is said, never read as nothing."""
+    from core.surfaces import chat_policy, room_grants
+    try:
+        pol = chat_policy.load(_data_dir(container), owner_uid, surface, chat_id)
+        # A read never creates the store: no surfaces.db yet means no roles yet.
+        has_roles = (_service(container, "group_roles") is not None
+                     or os.path.exists(_surfaces_db(container)))
+        admins = sum(1 for r in _roles(container).list(surface, chat_id)
+                     if r.get("role") == "admin") if has_roles else 0
+    except Exception as e:
+        logger.warning("group_admin: kept grants of %s:%s unreadable: %s", surface, chat_id, e)
+        return " What it held before (bundles, tools, admins) could not be read."
+    if getattr(pol, "unreadable", False):
+        return " Its settings file could not be read, so every /admin bundle refuses."
+    bundles = room_grants.live_admin_bundles(pol)
+    tools = room_grants.live_room_tools(pol)
+    if not (bundles or tools or admins):
+        return ""
+    return (" It keeps what it held before: /admin bundles "
+            f"{', '.join(bundles) or 'none'}; room tools {', '.join(tools) or 'none'}; "
+            f"{admins} admin(s). Change them with /groups tools and /groups role.")
 
 
 def deny_here(container: Any, surface: str, chat_id: str, *,

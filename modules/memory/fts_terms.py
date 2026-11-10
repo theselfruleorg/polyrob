@@ -5,11 +5,17 @@ the first 12 raw tokens of a long task spent the budget on boilerplate ("the",
 "this", a repeated word), so the topic further on was never searched. Here
 stopwords and case-insensitive duplicates are dropped first, order kept; a
 query of ONLY stopwords falls back to its raw terms so a MATCH is never empty.
+
+A recall query is the subject and then the brain's ``next_goal``, so the end of the
+query is the live work. A long subject must not spend the whole cap: the last
+``TAIL_TERMS`` terms keep their slots.
 """
 import re
 from typing import List
 
 MAX_TERMS = 12
+#: Slots of ``MAX_TERMS`` held for the end of a query that is over the cap.
+TAIL_TERMS = 4
 
 #: The ONE recall tokenizer (every FTS5 recall path and the query builder).
 #: Unicode-aware since 2026-10-13 (review D7): ``[A-Za-z0-9…]`` dropped every
@@ -49,7 +55,8 @@ def informative_terms(text: str) -> List[str]:
 
 
 def select_terms(terms: List[str], limit: int = MAX_TERMS) -> List[str]:
-    """At most ``limit`` terms: stopwords and duplicates out, first-seen order."""
+    """At most ``limit`` terms: stopwords and duplicates out, first-seen order; over
+    the cap, the first terms and the last ``TAIL_TERMS`` terms."""
     seen, picked = set(), []
     for t in terms:
         k = t.lower()
@@ -57,4 +64,8 @@ def select_terms(terms: List[str], limit: int = MAX_TERMS) -> List[str]:
             continue
         seen.add(k)
         picked.append(t)
-    return (picked or list(terms))[:limit]
+    picked = picked or list(terms)
+    if len(picked) <= limit:
+        return picked
+    tail = min(TAIL_TERMS, limit // 3)
+    return picked[:limit - tail] + (picked[-tail:] if tail else [])

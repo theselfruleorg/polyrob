@@ -60,14 +60,17 @@ late_send = true
 effect = "social"
 outbound = "write"
 late_send = true
+# subject: the param that names the post this act answers; one post, one act.
 [tools.twitter.verbs.twitter_reply]
 effect = "social"
 outbound = "write"
 late_send = true
+subject = "tweet_id"
 [tools.twitter.verbs.twitter_quote]
 effect = "social"
 outbound = "write"
 late_send = true
+subject = "tweet_id"
 [tools.twitter.verbs.twitter_retweet]
 effect = "social"
 [tools.twitter.verbs.twitter_unretweet]
@@ -121,9 +124,12 @@ outbound = "write"
 [tools.x_browser.verbs.x_browser_x_signup_start]
 effect = "social"
 approval = ["recommended", "always_queued"]
+# subject: XReplyAction.status_id, the bare id, so both X rails name a post the same way.
 [tools.x_browser.verbs.x_browser_x_reply]
+effect = "social"
 approval = ["recommended", "always_queued"]
 outbound = "write"
+subject = "status_id"
 [tools.x_browser.verbs.x_browser_x_dm]
 approval = ["recommended", "always_queued"]
 outbound = "write"

@@ -230,7 +230,7 @@ def test_account_mode_holdings_watch_and_rule_5_on_a_fork(fork, tmp_path, monkey
     owner_of = lambda: abi.decode([{"type": "address"}], _call(collection, abi.encode_call(  # noqa: E731
         "ownerOf", [{"type": "uint256"}], [token_id])))[0].lower()
     assert owner_of() == human.lower()
-    account = erc6551.account_address(4663, collection, token_id)
+    account = erc6551.account_address(4663, collection, token_id, implementation=erc6551.ACCOUNT_V3_IMPL)
     assert len(_rpc("eth_getCode", [account, "latest"])) > 2, "the account exists at mint"
 
     pin(monkeypatch, live_profile(collection, _rpc, deploy_block=deploy_block, journal_prefix="POLYROB"))

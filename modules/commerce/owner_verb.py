@@ -28,7 +28,7 @@ from core.commerce import store as st
 logger = logging.getLogger(__name__)
 
 USAGE = ("Usage: /offer [list] | show <id> | pause|resume|retire <id> | orders [id] | "
-         "quote <order> <usd> | resolve <order> accept|refund\n"
+         "report [id] | threads [id] | quote <order> <usd> | resolve <order> accept|refund\n"
          "Say \"sell …\" in chat and I draft the offer, set it up and put it to you on a card.")
 
 
@@ -54,6 +54,13 @@ def live_card_body(o: st.Offer) -> str:
         lines.append(f"Test evidence: {ev}")
     else:
         lines.append("⚠️ No test was recorded.")
+    from core.commerce.hooks import thread_channel
+    public = [x for x in m.native_surfaces() if thread_channel(x) is not None]
+    if public:
+        lines.append(f"Public threads on {', '.join(public)}: after the agent announces the "
+                     f"offer, code answers /buy and /order replies under that post IN PUBLIC "
+                     f"(payment details, status, delivery proof). This Confirm approves those "
+                     f"replies; they use at most 2/3 of the hour's writes.")
     lines.append("Confirm takes it live: buyers on those channels can order and pay, and each "
                  "paid order is fulfilled with no further tap.")
     return "\n".join(lines)
@@ -155,6 +162,17 @@ def _orders(user_id: str, oid: Optional[str]) -> str:
         + (f" — {r.error}" if r.error else "") for r in rows)
 
 
+def _threads(user_id: str, oid: Optional[str]) -> str:
+    from core.commerce import thread
+    mine = {o.id for o in st.list_offers(user_id)}
+    rows = [r for r in thread.threads(offer_id=oid) if r["offer_id"] in mine]
+    if not rows:
+        return ("No announcement posts. The agent records one with "
+                "offer_manage(op=\"announce\") after the go-live.")
+    return "Announcement posts (code answers order replies under them):\n" + "\n".join(
+        f"• {r['offer_id']} — {r['surface']} post {r['root_id']}" for r in rows)
+
+
 async def offer_reply(user_id: Optional[str], args: List[str], *, container: Any = None,
                       db=None, skill_manager=None) -> str:
     """The ``/offer`` answer. ``user_id`` is the owner (the seat ran its own gate)."""
@@ -170,6 +188,11 @@ async def offer_reply(user_id: Optional[str], args: List[str], *, container: Any
             return _show(user_id, rest[0].lower())
         if sub == "orders":
             return _orders(user_id, rest[0].lower() if rest else None)
+        if sub == "report":
+            from core.commerce.report import offer_report
+            return offer_report(user_id, rest[0].lower() if rest else None)
+        if sub == "threads":
+            return _threads(user_id, rest[0].lower() if rest else None)
         if sub == "setup" and len(rest) >= 2:
             o = st.start_setup(rest[0].lower(), user_id, budget_usd=float(rest[1].lstrip("$")),
                                actor=st.OWNER_SEAT)
@@ -193,7 +216,15 @@ async def offer_reply(user_id: Optional[str], args: List[str], *, container: Any
                 await _withdraw(o)
             else:
                 await _publish(o)
-            return f"✅ Offer {o.id} is {o.state.upper()}."
+            if to != st.RETIRED:
+                return f"✅ Offer {o.id} is {o.state.upper()}."
+            from modules.commerce.service import close_open_orders
+            closed, failed = await close_open_orders(o.id, container=container, db=db)
+            return (f"✅ Offer {o.id} is RETIRED. {closed} unpaid order(s) cancelled and their "
+                    f"payment requests closed; paid orders are still fulfilled."
+                    + (f" ⚠️ {failed} unpaid order(s) could not be cancelled (a payment in "
+                       f"flight or an unreadable store): /offer orders {o.id}." if failed
+                       else ""))
         if sub == "quote" and len(rest) >= 2:
             from modules.commerce.service import OrderRefused, quote_order, tell_buyer
             try:
@@ -210,7 +241,7 @@ async def offer_reply(user_id: Optional[str], args: List[str], *, container: Any
                     f"sent it from here: they read the payment request with /order "
                     f"{order.id} (or their order status on {order.channel}).")
         if sub == "resolve" and len(rest) >= 2:
-            return await _resolve(user_id, rest[0], rest[1].lower(), container)
+            return await _resolve(user_id, rest[0], rest[1].lower(), container, db=db)
     except (st.CommerceError, ords.OrderError, ValueError) as exc:
         return f"❌ {exc}"
     except st.CommerceUnreadable as exc:
@@ -219,8 +250,8 @@ async def offer_reply(user_id: Optional[str], args: List[str], *, container: Any
     return USAGE
 
 
-async def _resolve(user_id: str, order_id: str, how: str, container) -> str:
-    from modules.commerce.service import tell_buyer
+async def _resolve(user_id: str, order_id: str, how: str, container, db=None) -> str:
+    from modules.commerce.service import _stop_goal, mark_refund_due, tell_buyer
     o = ords.get(order_id)
     if o is None or o.user_id != user_id:
         return f"No order {order_id}."
@@ -232,6 +263,8 @@ async def _resolve(user_id: str, order_id: str, how: str, container) -> str:
     if how == "refund":
         if not ords.fail(o.id, "owner: refund"):
             return f"Order {o.id} is {o.status}; it cannot be refunded from here."
+        _stop_goal(o.goal_id)          # a run still fulfilling it stops now
+        await mark_refund_due(o, db=db)
         await tell_buyer(container, o, f"Order {o.id} will be refunded by the owner.")
         refund_to = None
         try:
@@ -244,7 +277,8 @@ async def _resolve(user_id: str, order_id: str, how: str, container) -> str:
         return (f"✅ Order {o.id} is FAILED. Refund ${o.amount_usd} of invoice {o.request_id} "
                 + (f"to the buyer's refund address {refund_to}" if refund_to
                    else "— the buyer gave no refund address; ask them on their channel")
-                + " (never to the sending address: it is often an exchange).")
+                + " (never to the sending address: it is often an exchange), then record it "
+                f"with /invoices refunded {o.request_id}.")
     return "Usage: /offer resolve <order> accept|refund"
 
 

@@ -103,7 +103,8 @@ def _list(svc, user_id: str) -> str:
         return _with_note("No scheduled jobs.\nAdd one: /job new <when> <what>\n"
                           + _NEW_EXAMPLE + _stopped(svc, user_id))
     shown = jobs[:_LIST_LIMIT]
-    lines = [f"{len(jobs)} scheduled job(s):"] + [_row(j) for j in shown]
+    from core.cron_slots import server_clock
+    lines = [f"{len(jobs)} scheduled job(s), times {server_clock()}:"] + [_row(j) for j in shown]
     if len(jobs) > len(shown):
         # 096 W5: the rest one tap away (/more_<token>), never "see the console".
         from core.surfaces.more_store import cut_line
@@ -124,7 +125,8 @@ def _show(svc, user_id: str, rest: List[str]) -> str:
            f"max duration {job.max_duration_seconds}s"]
     paused = (job.payload or {}).get("paused") or {}
     if paused:
-        out.append(f"   paused via {paused.get('via') or '-'} at {paused.get('at') or '-'}")
+        why = f" ({paused['reason']})" if paused.get("reason") else ""
+        out.append(f"   paused via {paused.get('via') or '-'} at {paused.get('at') or '-'}{why}")
     stopped = (job.payload or {}).get("stopped") or {}
     if stopped:
         out.append(f"   stopped via {stopped.get('via') or '-'} at {stopped.get('at') or '-'}")
@@ -168,7 +170,7 @@ def _new(svc, user_id: str, rest: List[str], via: str) -> str:
     from cron.service import next_run_text
     notes = "".join(f"\n{n}" for n in schedule_notes(job))
     return _with_note(f"✅ Scheduled job {_code(job.id[:8])} ({spec}) — next run "
-                      f"{next_run_text(job)}." + _grant_note(job.payload) + notes)
+                      f"{next_run_text(job, clock=True)}." + _grant_note(job.payload) + notes)
 
 
 def _edit(svc, user_id: str, rest: List[str], via: str) -> str:
@@ -205,14 +207,15 @@ def _state_op(svc, user_id: str, sub: str, rest: List[str], via: str) -> str:
         return err
     short = _code(job.id[:8])
     if sub == "pause":
+        cut = svc.cut_note(job.id, user_id=user_id)
         if svc.pause(job.id, user_id=user_id, via=via):
-            return f"⏸ Paused job {short}. It will not run until /job resume {job.id[:8]}."
+            return f"⏸ Paused job {short}. It will not run until /job resume {job.id[:8]}.{cut}"
         return f"Job {short} is {job.status} — nothing to pause."
     if sub == "resume":
         if svc.resume(job.id, user_id=user_id, via=via):
             from cron.service import next_run_text
             fresh = svc.store.get(job.id, user_id=user_id)
-            return _with_note(f"▶ Resumed job {short} — next run {next_run_text(fresh)}.")
+            return _with_note(f"▶ Resumed job {short} — next run {next_run_text(fresh, clock=True)}.")
         return f"Job {short} is {job.status}, not paused — nothing to resume."
     if sub == "run":
         why = svc.run_now(job.id, user_id=user_id, via=via)

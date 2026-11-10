@@ -54,7 +54,19 @@
           "type": "string"
         },
         "op": {
-          "description": "One of: draft, resource, test, propose_setup, propose_live, pause, status, orders",
+          "description": "One of: draft, resource, test, propose_setup, propose_live, pause, status, orders, announce",
+          "type": "string"
+        },
+        "post_id": {
+          "default": null,
+          "description": "announce: YOUR public post that announced this LIVE offer; code then answers order replies under it",
+          "nullable": true,
+          "type": "string"
+        },
+        "surface": {
+          "default": null,
+          "description": "announce: the surface of the post (e.g. x)",
+          "nullable": true,
           "type": "string"
         }
       },

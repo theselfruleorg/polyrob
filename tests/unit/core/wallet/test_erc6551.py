@@ -22,7 +22,7 @@ NFT = "0x" + "d4" * 20
 # --- address math -------------------------------------------------------------
 
 def test_account_address_reproduces_the_measured_registry_answer():
-    assert erc6551.account_address(4663, NORMIES, 232).lower() == FIXTURE
+    assert erc6551.account_address(4663, NORMIES, 232, implementation=erc6551.ACCOUNT_V3_IMPL).lower() == FIXTURE
 
 
 def test_the_hashed_tuple_salt_is_wrong():
@@ -30,7 +30,7 @@ def test_the_hashed_tuple_salt_is_wrong():
     hashed = int.from_bytes(keccak(
         (0).to_bytes(32, "big") + (4663).to_bytes(32, "big") + bytes(12)
         + bytes.fromhex(NORMIES[2:]) + (232).to_bytes(32, "big")), "big")
-    assert erc6551.account_address(4663, NORMIES, 232, salt=hashed).lower() != FIXTURE
+    assert erc6551.account_address(4663, NORMIES, 232, salt=hashed, implementation=erc6551.ACCOUNT_V3_IMPL).lower() != FIXTURE
 
 
 def _clone_code(impl=erc6551.ACCOUNT_V3_IMPL, chain_id=4663, contract=NORMIES, token_id=232):
@@ -116,7 +116,7 @@ def test_execute_round_trips_and_admin_selectors_are_named():
 
 
 def test_create_account_calldata_targets_the_pinned_impl_with_the_raw_salt():
-    data = erc6551.encode_create_account(4663, NORMIES, 232)
+    data = erc6551.encode_create_account(4663, NORMIES, 232, implementation=erc6551.ACCOUNT_V3_IMPL)
     assert data.startswith(abi.selector("createAccount(address,bytes32,uint256,address,uint256)"))
     impl, salt, chain_id, contract, tid = abi.decode(
         [{"type": "address"}, {"type": "bytes32"}, {"type": "uint256"}, {"type": "address"},

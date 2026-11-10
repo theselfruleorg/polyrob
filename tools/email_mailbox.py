@@ -411,18 +411,27 @@ class EmailMailboxMixin:
         param_model=EmailListAction,
     )
     async def email_list(self, params: EmailListAction, execution_context=None) -> ActionResult:
+        scanned = None
         try:
             if self.provider == "agentmail":
-                rows = await self._list_agentmail(params)
+                rows, scanned = await self._list_agentmail(params)
             else:
                 rows = await self._list_imap(params)
         except Exception as e:
             return self._err("email_list", e)
+        where = f"in {params.folder}"
+        if scanned is not None:
+            # AgentMail lists only the newest MAX_LIST, and it has no folders.
+            where = (f"among the newest {scanned} in the agent's inbox (older mail was not "
+                     "searched" + ("" if (params.folder or "INBOX").upper() == "INBOX" else
+                                   f"; AgentMail has no folders, so {params.folder!r} does "
+                                   "not apply") + ")")
         if not rows:
-            return ActionResult(extracted_content=f"email_list: no mail in {params.folder} "
-                                                  "matches (the folder was read; it holds none)",
-                                include_in_memory=True)
-        lines = [f"{len(rows)} message(s) in {params.folder}, newest first:"]
+            return ActionResult(extracted_content=(
+                f"email_list: no mail matches {where}" if scanned is not None else
+                f"email_list: no mail in {params.folder} matches (the folder was read; it "
+                "holds none)"), include_in_memory=True)
+        lines = [f"{len(rows)} message(s) {where}, newest first:"]
         for r in rows:
             mark = " [unread]" if r.get("unread") else ""
             lines.append(f"- uid {r['uid']} · {r.get('date', '')} · {r.get('from', '')} · "
@@ -476,9 +485,10 @@ class EmailMailboxMixin:
             return [rows[u] for u in uids if u in rows]
         return await self._mbox(_do)
 
-    async def _list_agentmail(self, p: EmailListAction) -> List[Dict[str, Any]]:
+    async def _list_agentmail(self, p: EmailListAction) -> "tuple[List[Dict[str, Any]], int]":
+        """``(matching rows, how many of the newest messages were searched)``."""
         await self.ensure_imap()
-        summaries = await self.agentmail.list_messages(limit=MAX_LIST)
+        summaries = list(await self.agentmail.list_messages(limit=MAX_LIST))
         needles = [(k, (v or "").lower()) for k, v in (("from", p.from_contains),
                                                       ("subject", p.subject_contains))
                    if v]
@@ -498,7 +508,7 @@ class EmailMailboxMixin:
             out.append(row)
             if len(out) >= p.limit:
                 break
-        return out
+        return out, len(summaries)
 
     @BaseTool.action(
         "Read one message from the agent's own mailbox in full: from, to, date, "

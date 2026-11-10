@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "polyrob"
-version = "1.7.6"
+version = "1.7.7"
 description = "POLYROB — autonomous AI agent framework"
 requires-python = ">=3.11"
 license = "MIT"
@@ -43,7 +43,7 @@ dependencies = [
 # Provider SDKs behind extras (058 T1.3/T1.4). The Gemini SDK alone pulled 12
 # exclusive packages (128.6 MB) into every install for one provider.
 gemini = ["google-generativeai>=0.8.0"]
-anthropic = ["anthropic>=0.20.0"]
+anthropic = ["anthropic>=1.6"]
 # python-magic (058 T1.6): the upload MIME sniffer; a server without it REFUSES uploads.
 server = ["fastapi==0.141.1", "starlette==1.6.0", "uvicorn[standard]==0.38.0", "Jinja2==3.1.6", "python-socketio>=5.11.0", "python-multipart>=0.0.6", "watchfiles>=1.0.0", "argon2-cffi>=23.1.0", "python-magic>=0.4.27"]
 # 058 T1.6: document parsing (PDF / DOCX) — the filesystem tool refuses with the remedy without it.

@@ -9,7 +9,11 @@ MONEY_PATHS = {"/api/webgate/wallet", "/api/webgate/ledger", "/api/webgate/posit
                "/api/webgate/invoices/{request_id}/settle", "/api/webgate/bridges",
                "/api/webgate/creations", "/api/webgate/moves",
                # W1: the tokens the agent trusts + the owner's word on one
-               "/api/webgate/tokens", "/api/webgate/tokens/{action}"}
+               "/api/webgate/tokens", "/api/webgate/tokens/{action}",
+               # 113 W6 (G-3): what the AI use cost, the /usage view
+               "/api/webgate/usage",
+               # 113 W6 (G-2): the offers and orders, and pause/resume of one offer
+               "/api/webgate/offers", "/api/webgate/offers/{offer_id}/{verb}"}
 
 
 def _paths(routers):

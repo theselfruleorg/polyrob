@@ -22,23 +22,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from cli.ui import candy
 from cli.ui.commands.registry import CommandContext
 from core.runtime_paths import data_dir_or_home
 
-# How much of each identity doc to show inline before truncating. The docs are
-# already char-capped at load time (SELF_CONTEXT_TOTAL_MAX_CHARS ~60k / the SELF
-# doc ~2.2k); this keeps a single ``/self`` bubble legible in the REPL.
-_DOC_PREVIEW_CHARS = 1500
-_TRUNCATION_MARKER = "… (truncated)"
-
-
-def _preview(text: str, limit: int = _DOC_PREVIEW_CHARS) -> str:
-    """Return *text* trimmed to *limit* chars with a truncation marker if cut."""
-    text = str(text or "").strip()
-    if len(text) <= limit:
-        return text
-    return text[:limit].rstrip() + "\n" + _TRUNCATION_MARKER
+# 113 W6 G-6: the one `/self` text every seat renders.
+from surfaces.telegram.self_memory_ops import (  # noqa: E402,F401 — the shared reply
+    DOC_PREVIEW_CHARS as _DOC_PREVIEW_CHARS,
+    TRUNCATION_MARKER as _TRUNCATION_MARKER,
+    preview as _preview,
+)
 
 
 def _resolve_home_dir(ctx: CommandContext) -> Any:
@@ -58,64 +50,12 @@ def _resolve_home_dir(ctx: CommandContext) -> Any:
 def h_self(ctx: CommandContext) -> None:
     """Show the running instance's identity: SOUL + SELF docs (read-only).
 
-    Usage:
-      /self   — framework/instance/owner header, then the SOUL and SELF docs.
-
-    Read-only. Fail-open per field: a missing/unavailable loader degrades to a
-    placeholder, never raises into the REPL.
+    The chat seat's own reply (``surfaces.telegram.self_memory_ops.self_reply``,
+    113 W6 G-6): the phone and the terminal read one text. Fail-open: an error
+    degrades to one line, never raises into the REPL.
     """
     try:
-        from core.instance import (
-            FRAMEWORK_NAME,
-            load_self_context,
-            load_self_doc,
-            owner_label,
-            resolve_instance_id,
-        )
-
-        instance_id = resolve_instance_id()
-        owner = owner_label()
-        home_dir = _resolve_home_dir(ctx)
-        user_id = ctx.user_id or "local"
-
-        # SOUL — operator-authored, frozen, instance-global.
-        try:
-            soul = load_self_context(home_dir)
-        except Exception:
-            soul = ""
-        # SELF — agent-writable, per-(instance, user).
-        try:
-            self_doc = load_self_doc(home_dir, user_id, instance_id)
-        except Exception:
-            self_doc = ""
-
-        # The label is resolved once, by the ONE helper every owner seat shares
-        # (`core.instance.owner_label`): unbound SAYS unpaired, and a bound owner
-        # equal to the instance id is marked so it does not read as a second,
-        # distinct human owner.
-        lines = [
-            candy.kv_lines([
-                ("framework", FRAMEWORK_NAME),
-                ("instance", instance_id),
-                ("owner", owner),
-                ("user", user_id),
-            ]),
-            "",
-        ]
-
-        lines.append(candy.section("SOUL (operator-authored, frozen)"))
-        if soul:
-            lines.append(_preview(soul))
-        else:
-            lines.append(candy.empty("SOUL/identity doc authored", yet=False))
-
-        lines.append("")
-        lines.append(candy.section("SELF (agent-writable identity doc)"))
-        if self_doc:
-            lines.append(_preview(self_doc))
-        else:
-            lines.append(candy.empty("SELF/identity doc authored", yet=False))
-
-        ctx.emit("\n".join(lines), title="self")
+        from surfaces.telegram.self_memory_ops import self_reply
+        ctx.emit(self_reply(ctx.user_id or "local", _resolve_home_dir(ctx)), title="self")
     except Exception as exc:
         ctx.emit(f"Could not resolve self-context: {exc}", title="self")

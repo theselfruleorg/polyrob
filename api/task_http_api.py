@@ -16,8 +16,9 @@ from datetime import datetime
 from api.session_routing import guard_remote
 from api.tenant_tools import refuse_terminal_chat
 from api.upload_sniff import _sniff_upload_mime
-from api.session_preflight import no_model as _no_model
+from api.session_preflight import no_model as _no_model, refuse_no_model
 from api.upload_store import store_upload as _store_upload
+from agents.task.runtime.run_outcome import run_session_naming_refusal as _run_naming_refusal
 import asyncio
 
 
@@ -198,7 +199,7 @@ async def send_user_message(
         if not session_info:
             raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
         refuse_terminal_chat(session_info, session_id)
-        
+        refuse_no_model(agent)
         # Check session status (unified field name)
         status = session_info.get('status', 'unknown').lower()
 
@@ -351,7 +352,7 @@ async def send_user_message(
                     logger.info(f"Starting session execution for {_session_id}")
                     with surface_owner_turn(kind="console_chat",
                                             session_id=_session_id):
-                        result = await agent.run_session(_user_id, _session_id)
+                        result = await _run_naming_refusal(agent, _user_id, _session_id)
                     logger.info(f"Session {_session_id} completed with result: {result}")
                 except Exception as e:
                     logger.error(f"Session {_session_id} failed with error: {e}", exc_info=True)
@@ -469,7 +470,7 @@ async def send_user_message(
             # session task after the handler returns (the asyncio.shield below only
             # keeps it alive during the 2s wait, not afterward).
             restart_task = asyncio.create_task(
-                agent.run_session(user_id_from_session, session_id)
+                _run_naming_refusal(agent, user_id_from_session, session_id)
             )
             _BACKGROUND_SESSION_TASKS.add(restart_task)
             restart_task.add_done_callback(_BACKGROUND_SESSION_TASKS.discard)
@@ -1075,12 +1076,10 @@ async def get_capabilities(request: Request):
                 model_info = {"provider": provider, "model": model}
                 # Enrich with registry data
                 config = get_model_config(model)
-                if config:
-                    model_info["context_window"] = config.context_window
-                    model_info["max_output"] = config.max_completion_tokens
-                    if config.pricing:
-                        model_info["price_input"] = config.pricing.input_price
-                        model_info["price_output"] = config.pricing.output_price
+                model_info["context_window"] = config.context_window
+                model_info["max_output"] = config.max_completion_tokens
+                model_info["price_input"] = config.pricing.input_price
+                model_info["price_output"] = config.pricing.output_price
                 available_models.append(model_info)
         else:
             # P0.6: fallback (no llm_manager) now rides the ONE catalog too. Import the
@@ -1089,12 +1088,10 @@ async def get_capabilities(request: Request):
             for c in _build_models():
                 model_info = {"provider": c.provider, "model": c.model}
                 config = get_model_config(c.model)
-                if config:
-                    model_info["context_window"] = config.context_window
-                    model_info["max_output"] = config.max_completion_tokens
-                    if config.pricing:
-                        model_info["price_input"] = config.pricing.input_price
-                        model_info["price_output"] = config.pricing.output_price
+                model_info["context_window"] = config.context_window
+                model_info["max_output"] = config.max_completion_tokens
+                model_info["price_input"] = config.pricing.input_price
+                model_info["price_output"] = config.pricing.output_price
                 available_models.append(model_info)
         
         # Get available tools dynamically from descriptors
@@ -1283,7 +1280,7 @@ async def create_session(
             if "provider" in request_body:
                 session_config.llm.provider = request_body["provider"]
             else:
-                session_config.llm.provider = detect_llm_provider(None, req_model)
+                session_config.llm.provider = detect_llm_provider(req_model)
                 logger.info(f"Auto-detected provider '{session_config.llm.provider}' for model '{req_model}'")
         else:
             # No model: the operator pin > first keyed — never a gpt-5 literal (2026-08-14).
@@ -1298,13 +1295,8 @@ async def create_session(
             session_config.llm.use_vision = request_body["use_vision"]
         else:
             from modules.llm.model_registry import get_model_config
-            model_config = get_model_config(session_config.llm.model)
-            if model_config and model_config.capabilities:
-                session_config.llm.use_vision = model_config.capabilities.supports_vision
-                logger.info(f"Auto-detected vision support for '{session_config.llm.model}': {session_config.llm.use_vision}")
-            else:
-                session_config.llm.use_vision = False  # Conservative default for unknown models
-                logger.warning(f"Model '{session_config.llm.model}' not in registry - defaulting to no vision")
+            session_config.llm.use_vision = get_model_config(session_config.llm.model).capabilities.supports_vision
+            logger.info(f"Auto-detected vision support for '{session_config.llm.model}': {session_config.llm.use_vision}")
 
         session_config.limits.max_steps = request_body.get("max_steps", interactive_max_steps())
         from api.tenant_tools import default_session_tools, tenant_toolset  # 085 A6: a tenant carries no money tool
@@ -1362,6 +1354,7 @@ async def create_session(
 
         session_id = session_info.get("id")
         start_with_pin(agent, session_id, request_body.get("_chat_pin"))
+        pin_notice = f". {request_body['_pin_notice']}" if request_body.get("_pin_notice") else ""
         # Create workspace directory immediately to prevent race condition with file uploads
         from agents.task.path import pm
         workspace_dir = pm().get_workspace_dir(session_id, user_id)
@@ -1407,7 +1400,7 @@ async def create_session(
             async def start_session_with_task():
                 try:
                     logger.info(f"Starting session execution for {session_id}")
-                    result = await agent.run_session(user_id, session_id)
+                    result = await _run_naming_refusal(agent, user_id, session_id)
                     logger.info(f"Session {session_id} completed with result: {result}")
                 except Exception as e:
                     logger.error(f"Session {session_id} failed with error: {e}", exc_info=True)
@@ -1423,7 +1416,7 @@ async def create_session(
                 model=session_request.model,
                 tools=session_request.tools,
                 webview_url=webview_url,
-                message="Session created and started successfully"
+                message=f"Session created and started successfully{pin_notice}"
             )
         else:
             # Client will upload files and send first message manually
@@ -1436,7 +1429,7 @@ async def create_session(
                 model=session_request.model,
                 tools=session_request.tools,
                 webview_url=webview_url,
-                message="Session created - send a message to start"
+                message=f"Session created - send a message to start{pin_notice}"
             )
         
     except HTTPException:

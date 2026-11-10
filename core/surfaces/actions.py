@@ -58,7 +58,7 @@ OWNER_ASK_SOURCE = "owner_ask"
 _ASK_OPTION_IN_TEXT = re.compile(r"(?<![\w/])(/fulfill_[0-9a-f]{6,24}_[a-f])(?![\w])")
 
 #: Owner verbs whose reply is a code-rendered decision list.
-DECISION_LIST_COMMANDS = frozenset({"/pending"})
+DECISION_LIST_COMMANDS = frozenset({"/pending", "/inbox"})   # 113: the one list has the buttons
 
 
 def is_action_command(command: str) -> bool:

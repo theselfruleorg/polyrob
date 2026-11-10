@@ -65,15 +65,14 @@ def test_request_extras_applies_routing_then_reasoning(monkeypatch):
         "usage": {"include": True}}
 
 
-def test_request_extras_stamps_the_prefix_identity_on_the_client():
+def test_request_extras_stamps_the_prefix_identity_on_the_call():
     import types
+    from modules.llm.call_scope import begin_call
     from modules.llm.openrouter_reasoning import apply_request_extras
-    from modules.llm.prefix_stamp import read_stamps
-    client = types.SimpleNamespace()
+    request = begin_call()
     params = {"messages": [{"role": "system", "content": "S"}], "tools": [{"n": 1}]}
-    apply_request_extras(params, client, 8192)
-    st = read_stamps(types.SimpleNamespace(_client=client))
-    assert set(st) == {"prefix_sha", "tools_sha"}
+    apply_request_extras(params, types.SimpleNamespace(), 8192)
+    assert set(request.stamps) == {"prefix_sha", "tools_sha"}
     assert "extra_body" not in params or "reasoning" not in params.get("extra_body", {}) or True
 
 
@@ -140,7 +139,8 @@ def test_mandatory_reasoning_model_never_gets_the_off_switch(monkeypatch):
 
 
 def test_session_off_is_ignored_for_a_mandatory_model(monkeypatch):
-    from modules.llm.openrouter_reasoning import reasoning_extra_body, session_reasoning
+    from modules.llm.call_scope import session_reasoning
+    from modules.llm.openrouter_reasoning import reasoning_extra_body
     monkeypatch.delenv("OPENROUTER_REASONING_ENABLED", raising=False)
     monkeypatch.delenv("OPENROUTER_REASONING_MAX_TOKENS", raising=False)
     with session_reasoning("off"):

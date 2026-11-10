@@ -114,6 +114,7 @@ async def test_error_fails_open_to_zeros():
     assert rollup["credits"] == 0.0
     assert rollup["calls"] == 0
     assert "by_session" not in rollup
+    assert rollup["unreadable"].startswith("RuntimeError")  # ST-5: zeros, not measured
 
 
 @pytest.mark.asyncio
@@ -140,6 +141,7 @@ async def test_no_db_service_fails_open(monkeypatch):
     rollup = await usage_rollup("alice")
     assert rollup["api_cost_usd"] == 0.0
     assert rollup["calls"] == 0
+    assert rollup["unreadable"] == "no usage database"
 
 
 # --- build_invoice_draft --------------------------------------------------------
@@ -212,3 +214,11 @@ def test_bridge_flag_on(monkeypatch):
 def test_markup_flag_default_passthrough(monkeypatch):
     monkeypatch.delenv("USAGE_INVOICE_MARKUP", raising=False)
     assert usage_invoice_markup() == 1.0
+
+
+def test_unreadable_text_names_the_reason_and_is_none_for_a_readable_rollup():
+    from modules.credits.usage_rollup import unreadable_text
+    assert unreadable_text({"calls": 0}) is None
+    text = unreadable_text({"calls": 0, "unreadable": "no usage database"})
+    assert text == ("Usage could not be read (no usage database); no figures are shown. "
+                    "This is not $0 and no invoice draft was made.")

@@ -1,11 +1,9 @@
 """Ask a provider whether it can serve RIGHT NOW, instead of inferring it.
 
-⚠️ **2026-09-24.** `polyrob doctor` correctly reported that the credit sentinel
-does not block `zai-coding` — the latch is per provider and zai was never
-latched. That was read as "zai is a working escape hatch" and offered to the
-owner as one of two ways out of a credit wall, without a single call against it.
-z.ai was out of funds (`429 · 1113 · Insufficient balance`), and the advice had
-to be corrected 18 minutes later.
+⚠️ The credit sentinel latch is per provider. A provider that is not latched is
+not thereby usable: `zai-coding` may be out of funds
+(`429 · 1113 · Insufficient balance`) while no latch names it. Never offer a
+provider as an escape hatch without a call against it.
 
 **"Not blocked" is a statement about OUR latch. "Usable" is a statement about the
 PROVIDER'S account, and only the provider can make it.** This module is the gap
@@ -27,12 +25,12 @@ import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from core.credit_sentinel import looks_like_credit_death
+
 #: The provider codes that mean "this account cannot pay", as opposed to
 #: "slow down". z.ai dresses BOTH as HTTP 429, so the status alone would make
 #: credit death look retryable and a retry storm look like a billing problem.
 _ZAI_CREDIT_CODES = ("1113", "1310", "1311")
-_CREDIT_TEXT_MARKERS = ("insufficient balance", "insufficient_quota",
-                        "limit exhausted", "please recharge", "add credits")
 
 OPENROUTER_CREDITS_URL = "https://openrouter.ai/api/v1/credits"
 ZAI_MESSAGES_URL = "https://api.z.ai/api/anthropic/v1/messages"
@@ -96,11 +94,6 @@ class _OwnClient:
         return False
 
 
-def _looks_like_credit_death(text: str) -> bool:
-    low = (text or "").lower()
-    return any(m in low for m in _CREDIT_TEXT_MARKERS)
-
-
 def _probe_openrouter(api_key: str, http: Any) -> SeatVerdict:
     resp = http.get(OPENROUTER_CREDITS_URL, timeout=20,
                     headers={"authorization": f"Bearer {api_key}"})
@@ -141,7 +134,7 @@ def _probe_zai(api_key: str, http: Any) -> SeatVerdict:
         except Exception:
             err = {}
         err_code = str(err.get("code") or "")
-        if err_code in _ZAI_CREDIT_CODES or _looks_like_credit_death(str(err.get("message") or body)):
+        if err_code in _ZAI_CREDIT_CODES or looks_like_credit_death(str(err.get("message") or body)):
             return _verdict("zai-coding", "no_credit",
                             f"429 · code {err_code or '?'} · {str(err.get('message') or '')[:160]}",
                             False)
@@ -191,12 +184,12 @@ def release_funded_latches(*, http: Any = None, now: Optional[float] = None,
                            interval: float = RECOVERY_INTERVAL_SEC) -> list:
     """Release a provider's credit latch once the provider itself says it can pay.
 
-    ⚠️ 2026-10-02: a top-up plus a restart left cron and goals skipping for
-    35 min because the durable CREDIT_SENTINEL outlives the process. Only a
+    ⚠️ The durable CREDIT_SENTINEL outlives the process, so a top-up plus a restart
+    would leave cron and goals skipping until a release. Only a
     free balance check is used, only an ``ok`` verdict releases (``unknown`` /
     ``unreachable`` / ``no_credit`` never do), the global ``*`` trip is left to
     its owner, and each provider is checked at most once per *interval*.
-    098 CO-11: the cadence is stamped in the latch doc under its lock
+    The cadence is stamped in the latch doc under its lock
     (``claim_recovery_check``), so all units on one data home share it.
     Never raises; returns the providers it released.
     """

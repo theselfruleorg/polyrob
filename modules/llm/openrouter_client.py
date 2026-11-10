@@ -4,30 +4,29 @@ OpenRouter provides unified access to multiple AI models through a single API.
 API is OpenAI-compatible, supporting Grok, Kimi, Qwen, and many others.
 
 Docs: https://openrouter.ai/docs/quickstart
-
-Refactored Dec 2025: All model configuration comes from model_registry.
-No deprecated fallback constants - registry is the single source of truth.
 """
 
 from modules.llm.billing_guard import inference_sdk
-import logging, re, time, json  # noqa: E401
+import asyncio, logging, re, time, json  # noqa: E401
 from typing import List, Dict, Any, Optional, Union, Tuple
 from uuid import uuid4
 from modules.llm.recovery_boundary import structured_prefix as _recovery_prefix_is_structured, textual_envelope
 from openai import AsyncOpenAI
 
-from modules.llm.llm_client import LLMClient, translate_llm_error
-from modules.llm.token_counter import count_messages_tokens
-from modules.llm.model_registry import get_model_config, ModelProvider
-from core.exceptions import LLMError, ServiceError, LLMRateLimitError, LLMAuthenticationError
+from modules.llm.call_scope import call_timeout_param
+from modules.llm.llm_client import LLMClient, raise_llm_error
+from modules.llm.catalog_lookup import catalog_wire_id
+from modules.llm.model_registry import get_model_config
+from modules.llm.model_types import model_family
+from core.exceptions import LLMResponseError, ServiceError
 from core.config import BotConfig
 from core.security.redaction import args_shape as _args_shape  # [RAW_TOOL_CALL]: never the VALUES
 
-# Import default model from registry (mirrors anthropic_client.py's pattern; no
-# circular import — llm_client_registry only imports openrouter_client lazily,
-# inside function bodies, never at module level).
+# No circular import: llm_client_registry imports openrouter_client lazily.
 from modules.llm.llm_client_registry import get_default_model
 from modules.llm.openrouter_reasoning import apply_request_extras, create_with_reasoning_fallback  # PROVIDER_SORT + REASONING_MAX_TOKENS
+from modules.llm.tool_schemas import schema_tool_names
+from modules.llm.usage_extract import chat_usage_fields
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +39,8 @@ logger = logging.getLogger(__name__)
 # We locate each call's *header* (name + idx + the argument-begin marker) with a
 # narrow regex, then decode the JSON args with ``json.JSONDecoder().raw_decode``
 # from the first ``{`` so a complete JSON object is consumed regardless of any
-# trailing tokens. The old ``(?P<args>\{.*?\})`` group truncated when a string
-# value literally contained ``} <|tool_call_end|>`` (Bug 3).
+# trailing tokens. A lazy ``(?P<args>\{.*?\})`` group would truncate when a string
+# value literally contained ``} <|tool_call_end|>``.
 _KIMI_TOOL_CALL_HEADER_RE = re.compile(
     r"<\|tool_call_begin\|>\s*functions\.(?P<name>[\w.\-]+):(?P<idx>\d+)\s*"
     r"<\|tool_call_argument_begin\|>\s*",
@@ -66,11 +65,10 @@ def parse_kimi_tool_calls(content: str) -> List[Dict[str, Any]]:
     are skipped (with a distinct WARN) rather than guessed.
 
     Recovered ids are **globally unique** via ``_new_recovered_call_id`` (uuid4
-    suffix). This subsumes the earlier per-response uniqueness fix (Bug 1: Kimi's
-    ``idx`` restarts at 0 per function name, so two parallel calls could collide
-    within one response) AND the cross-response collision (P0-4: deterministic
-    ids repeated across recovery turns, corrupting ``tool_message_repair``'s
-    id-keyed history map). The enumeration index ``i`` is retained for ordering
+    suffix). Kimi's ``idx`` restarts at 0 per function name, so two parallel
+    calls could collide within one response, and deterministic ids would repeat
+    across recovery turns and corrupt ``tool_message_repair``'s id-keyed history
+    map. The enumeration index ``i`` is retained for ordering
     and intra-response distinctness.
     """
     text = content or ""
@@ -132,9 +130,9 @@ def recover_kimi_content(content: str) -> Tuple[str, List[Dict[str, Any]]]:
     Returns ``(cleaned_content, recovered_tool_calls)``. When no Kimi control
     token is present this is a no-op: ``(content, [])``.
 
-    The key invariant (WS-2.1): **stripping is unconditional once any token
+    The key invariant: **stripping is unconditional once any token
     leaks**, independent of whether structured calls were recovered. Three leak
-    shapes were seen from kimi-k2.6 on NVIDIA NIM:
+    shapes come from kimi-k2.6 on NVIDIA NIM:
       1. pure brain JSON (no tokens)                  → no marker, untouched
       2. brain JSON + full ``<|tool_call_begin|>`` blocks → calls recovered + stripped
       3. brain JSON + stray ``<|tool_call_end|>`` only   → 0 calls but STILL stripped
@@ -147,7 +145,7 @@ def recover_kimi_content(content: str) -> Tuple[str, List[Dict[str, Any]]]:
 
 
 # ---------------------------------------------------------------------------
-# Textual tool-call recovery (B4, 2026-06-16). kimi-k2.6 on NVIDIA NIM ALSO
+# Textual tool-call recovery. kimi-k2.6 on NVIDIA NIM ALSO
 # leaks tool calls in two NON-pipe-token shapes when the serving layer fails to
 # emit structured ``tool_calls`` — both captured live:
 #   A. Anthropic XML:  <invoke name="done"><parameter name="text">hi</parameter></invoke>
@@ -166,9 +164,8 @@ _XML_PARAM_RE = re.compile(
     r"<parameter\b[^>]*\bname=\"(?P<key>[\w.\-]+)\"[^>]*>(?P<val>.*?)</parameter>",
     re.DOTALL,
 )
-#: Stray/partial function-call XML tags to strip even when no full block parses
-#: (mirrors the WS-2.1 "always strip" invariant for pipe tokens — a lone
-#: ``</invoke>`` must never reach the user).
+#: Stray/partial function-call XML tags to strip when no full block parses
+#: (:func:`_holds_call_syntax` decides).
 _XML_TOOLCALL_TAG_RE = re.compile(
     r"</?(?:function_calls|invoke|parameter)\b[^>]*>", re.DOTALL
 )
@@ -192,19 +189,6 @@ def _has_toolcall_xml_marker(content: Optional[str]) -> bool:
     if not content:
         return False
     return "<function_calls" in content or "<invoke" in content
-
-
-def tool_names_from_schemas(tools: Optional[List[Dict[str, Any]]]) -> set:
-    """Extract the set of callable tool names from OpenAI-format tool schemas."""
-    names: set = set()
-    for t in tools or []:
-        if not isinstance(t, dict):
-            continue
-        fn = t.get("function") if isinstance(t.get("function"), dict) else None
-        name = (fn or {}).get("name") or t.get("name")
-        if isinstance(name, str) and name:
-            names.add(name)
-    return names
 
 
 def _coerce_param_value(raw: str) -> Any:
@@ -294,6 +278,21 @@ def _find_balanced_paren(text: str, open_idx: int) -> int:
     return -1
 
 
+def _holds_call_syntax(content: str, known_names: Optional[set]) -> bool:
+    """With no parsed call, a tag is syntax to strip only after a brain object, or inside a
+    block that holds call parts. Any other tag is prose that mentions it."""
+    tag = _XML_TOOLCALL_TAG_RE.search(content)
+    if tag is None:
+        return False
+    if _recovery_prefix_is_structured(content[:tag.start()]):
+        return True
+    block = _FUNCTION_CALLS_BLOCK_RE.search(content)
+    if block is None:
+        return False
+    body = block.group(0)
+    return "<arg_key" in body or any(f"<{name}" in body for name in known_names or ())
+
+
 def recover_textual_tool_calls(
     content: str, known_names: Optional[set] = None
 ) -> Tuple[str, List[Dict[str, Any]]]:
@@ -309,7 +308,7 @@ def recover_textual_tool_calls(
         return (content, [])
     found: List[Tuple[int, int, str, Dict[str, Any]]] = []
 
-    # A. Anthropic <invoke name="...">...</invoke> blocks, only for OFFERED names (2026-09-23).
+    # A. Anthropic <invoke name="...">...</invoke> blocks, only for OFFERED names.
     for m in _XML_INVOKE_RE.finditer(content):
         if known_names is not None and m.group("name") not in known_names: continue  # noqa: E701
         body = m.group("body")
@@ -351,6 +350,8 @@ def recover_textual_tool_calls(
     found.sort(key=lambda f: f[0])
     if found and not textual_envelope(content, found):
         return content, []
+    if not found and not _holds_call_syntax(content, known_names):
+        return content, []
     calls = [
         {
             "id": _new_recovered_call_id("txt", i),
@@ -380,22 +381,28 @@ class OpenRouterClient(LLMClient):
     All model capabilities and limits come from model_registry.
     """
 
-    # OpenRouter API base URL (fallback; the declarative source is ProviderProfile — P8)
     OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
-    # Human-readable provider name used in log/exception messages. Subclasses that
-    # reuse this OpenAI-compatible pipeline (e.g. NvidiaClient) override it so their
-    # logs/errors name the real provider instead of "OpenRouter".
     _PROVIDER_LABEL = "OpenRouter"
 
-    def _profile_base_url(self) -> str:
-        """Transport base URL sourced from the declarative ProviderProfile (P8),
-        falling back to the hardcoded constant if the profile is unavailable.
+    #: The catalog provider whose aliases this client sends as their row names.
+    WIRE_ID_PROVIDER: Optional[str] = "openrouter"
+    #: A Z.AI upstream keeps its cache per ``session_id``.
+    SENDS_SESSION_ID = True
+    #: None asks for ``required`` on an agent step (``openrouter_routing.tool_choice_for``).
+    DEFAULT_TOOL_CHOICE: Optional[str] = None
 
-        Delegates to the base ``_resolve_profile_base_url`` helper (profiles.py
-        is the single source of truth); keeps the class-level constant as the
-        fallback so no prior call sites need to change.
-        """
+    @property
+    def model_type(self) -> Optional[str]:
+        return self._model_type
+
+    @model_type.setter
+    def model_type(self, name: Optional[str]) -> None:
+        # Every request, validation and usage record reads this: keep it an API id.
+        self._model_type = catalog_wire_id(name, self.WIRE_ID_PROVIDER)
+
+    def _profile_base_url(self) -> str:
+        """Transport base URL from the ProviderProfile, else the constant."""
         return self._resolve_profile_base_url("openrouter") or self.OPENROUTER_BASE_URL
 
     def __init__(self, config: BotConfig, name: str = "openrouter_client"):
@@ -406,8 +413,8 @@ class OpenRouterClient(LLMClient):
         # Get OpenRouter config
         openrouter_config = config.get_llm_config().get('openrouter', {})
         self.api_key = openrouter_config.get('api_key')
-        # Default to the registry's SSOT default (P0.7: was a stale hardcoded
-        # literal that had drifted from DEFAULT_MODELS['openrouter']). Honors the
+        # Default to the registry's SSOT default (never a hardcoded
+        # literal that could drift from DEFAULT_MODELS['openrouter']). Honors the
         # operator's DEFAULT_MODEL pin via get_default_model().
         self.model_type = openrouter_config.get('model') or get_default_model('openrouter')
 
@@ -415,18 +422,7 @@ class OpenRouterClient(LLMClient):
         self.site_url = openrouter_config.get('site_url', '')
         self.site_name = openrouter_config.get('site_name', 'POLYROB AI Agent')
 
-        self.last_response = None
-
-        # Get model config from registry (single source of truth)
-        model_config = get_model_config(self.model_type)
-        if model_config:
-            self.max_tokens = model_config.max_completion_tokens
-        else:
-            # Fallback defaults for OpenRouter (Grok defaults)
-            self.max_tokens = 32768
-            self.logger.warning(f"Model '{self.model_type}' not found in registry, using defaults")
-
-        # Resolve vision support via base helper (falls back to True if not in registry)
+        self.max_tokens = get_model_config(self.model_type).max_completion_tokens
         self.supports_vision = self._resolve_supports_vision()
 
         self.temperature = 0.7  # OpenRouter default
@@ -438,27 +434,25 @@ class OpenRouterClient(LLMClient):
 
     def _supports_tools(self) -> bool:
         """Check if current model supports tool calling via model_registry."""
-        config = get_model_config(self.model_type)
-        if config and config.capabilities:
-            return config.capabilities.supports_function_calling
-        return True  # Most OpenRouter models support tools
+        return get_model_config(self.model_type).capabilities.supports_function_calling
 
     def _validate_llm_config(self) -> None:
         """Validate LLM config."""
         if not self.api_key:
-            raise ServiceError(f"{self._PROVIDER_LABEL} API key not provided")
+            raise ServiceError(f"{self.provider_label} API key not provided")
 
     async def _setup_client(self) -> None:
         """Set up the OpenRouter client using OpenAI SDK."""
         try:
             self._client = AsyncOpenAI(
                 api_key=self.api_key,
-                base_url=self._profile_base_url(),  # P8: profile-sourced transport URL
-                default_headers=self._get_openrouter_headers()
+                base_url=self._profile_base_url(),  # profile-sourced transport URL
+                default_headers=self._get_openrouter_headers(),
+                **self._sdk_limits(),
             )
-            self.logger.debug(f"{self._PROVIDER_LABEL} client setup completed")
+            self.logger.debug(f"{self.provider_label} client setup completed")
         except Exception as e:
-            raise ServiceError(f"Failed to set up {self._PROVIDER_LABEL} client: {e}")
+            raise ServiceError(f"Failed to set up {self.provider_label} client: {e}")
 
     def _get_openrouter_headers(self) -> Dict[str, str]:
         """Get OpenRouter-specific headers for app attribution."""
@@ -478,11 +472,11 @@ class OpenRouterClient(LLMClient):
                 max_tokens=5
             )
             if not response or not response.choices:
-                raise LLMError(f"No valid response from {self._PROVIDER_LABEL} API")
-            self.logger.debug(f"{self._PROVIDER_LABEL} API connection validated successfully")
+                raise LLMResponseError(f"No valid response from {self.provider_label} API")
+            self.logger.debug(f"{self.provider_label} API connection validated successfully")
         except Exception as e:
-            self.logger.error(f"Failed to validate {self._PROVIDER_LABEL} connection: {e}")
-            raise ServiceError(f"Failed to validate {self._PROVIDER_LABEL} connection: {e}")
+            self.logger.error(f"Failed to validate {self.provider_label} connection: {e}")
+            raise ServiceError(f"Failed to validate {self.provider_label} connection: {e}")
 
     async def _cleanup_client(self) -> None:
         """Clean up OpenRouter client."""
@@ -490,38 +484,26 @@ class OpenRouterClient(LLMClient):
             if hasattr(self._client, 'close'):
                 await self._client.close()
             self._client = None
-            self.logger.debug(f"{self._PROVIDER_LABEL} client resources released")
+            self.logger.debug(f"{self.provider_label} client resources released")
 
     async def _initialize(self) -> None:
-        """Initialize the client."""
-        if self._initialized:
-            return
-
-        try:
-            # Log initialization attempt
-            self.logger.info(f"Initializing {self._PROVIDER_LABEL} client with model {self.model_type}")
-
-            # Validate API key
-            self._validate_llm_config()
-
-            # Setup client
-            await self._setup_client()
-
-            # Test connection (skipped for fast startup; validates lazily)
-            if not self._skip_validate:
-                await self._validate_connection()
-
-            # Mark as initialized
-            self._initialized = True
-
-            # Log successful initialization
-            self.logger.info(f"✨ {self._PROVIDER_LABEL} client initialized successfully with model {self.model_type}")
-
-        except Exception as e:
-            # Single error log with clear cause
-            error_msg = f"Failed to initialize {self._PROVIDER_LABEL} client: {str(e)}"
-            self.logger.error(error_msg)
-            raise ServiceError(error_msg)
+        """Initialize the client once: concurrent first calls of two sessions share one SDK."""
+        async with self.__dict__.setdefault("_init_lock", asyncio.Lock()):
+            if self._initialized:
+                return
+            try:
+                self.logger.info(f"Initializing {self.provider_label} client with model {self.model_type}")
+                self._validate_llm_config()
+                await self._setup_client()
+                # Test connection (skipped for fast startup; validates lazily)
+                if not self._skip_validate:
+                    await self._validate_connection()
+                self._initialized = True
+                self.logger.info(f"✨ {self.provider_label} client initialized successfully with model {self.model_type}")
+            except Exception as e:
+                error_msg = f"Failed to initialize {self.provider_label} client: {str(e)}"
+                self.logger.error(error_msg)
+                raise ServiceError(error_msg)
 
     async def _generate(
         self,
@@ -531,8 +513,6 @@ class OpenRouterClient(LLMClient):
         **kwargs
     ) -> str:
         """Generate a response from OpenRouter API."""
-        start_time = time.time()
-
         try:
             if not self._initialized:
                 await self._initialize()
@@ -566,30 +546,18 @@ class OpenRouterClient(LLMClient):
             }
 
             apply_request_extras(request_params, self, max_tokens_value)
-            self.logger.debug(f"{self._PROVIDER_LABEL} API request: model={self.model_type}, max_tokens={max_tokens_value}")
+            self.logger.debug(f"{self.provider_label} API request: model={self.model_type}, max_tokens={max_tokens_value}")
 
+            request_params.update(call_timeout_param())
             self.last_response = await create_with_reasoning_fallback(self, inference_sdk(self), request_params)
 
             # Extract response
-            response_text = ""
-            if self.last_response.choices:
-                choice = self.last_response.choices[0]
-                if choice.message:
-                    response_text = choice.message.content or ""
-
-            self._extract_usage_and_capture_telemetry(start_time, True, None, kwargs.get('metadata'))
-            return response_text
+            choice = self._first_choice(self.last_response)
+            return (choice.message.content or "") if choice.message else ""
 
         except Exception as e:
-            self._extract_usage_and_capture_telemetry(start_time, False, str(e), kwargs.get('metadata'))
-            self.logger.error(f"{self._PROVIDER_LABEL} API error: {e}")
-
-            # Route through the unified classifier; fall back to ServiceError for generic
-            # errors (preserving the original observable contract at this call site).
-            translated = translate_llm_error(e, self._PROVIDER_LABEL)
-            if type(translated) is LLMError:
-                raise ServiceError(f"{self._PROVIDER_LABEL} API error: {e}")
-            raise translated
+            self.logger.error(f"{self.provider_label} API error: {e}")
+            raise_llm_error(e, self.provider_label, model=self.model_type)
 
     async def generate_response(
         self,
@@ -622,7 +590,7 @@ class OpenRouterClient(LLMClient):
 
         except Exception as e:
             self.logger.error(f"Failed to generate response: {e}")
-            raise ServiceError(f"Failed to generate response: {e}")
+            raise_llm_error(e, self.provider_label, model=self.model_type)
 
     async def _generate_with_tools(
         self,
@@ -635,7 +603,7 @@ class OpenRouterClient(LLMClient):
         tool_choice: Optional[str] = None,
         **kwargs
     ) -> Tuple[str, List[Dict[str, Any]], Dict[str, Optional[int]]]:
-        """Generate response with tool calling support (B-3 tool_choice: openrouter_routing).
+        """Generate response with tool calling support.
 
         Args:
             messages: List of messages
@@ -649,8 +617,6 @@ class OpenRouterClient(LLMClient):
         Returns:
             Tuple of (text_response, tool_calls, usage_data)
         """
-        start_time = time.time()
-
         try:
             if not self._initialized:
                 await self._initialize()
@@ -688,9 +654,9 @@ class OpenRouterClient(LLMClient):
                 formatted_messages.append(formatted_msg)
 
             temp = temperature if temperature is not None else self.temperature
-            max_tokens_value = self._adjust_max_tokens(messages, max_tokens)
+            max_tokens_value = self._adjust_max_tokens(messages, max_tokens, tools=tools)
 
-            # P1-3: mark the stable system prefix cacheable for breakpoint-style models
+            # Mark the stable system prefix cacheable for breakpoint-style models
             # (Anthropic/Gemini via OpenRouter). No-op unless prompt caching is on.
             from modules.llm.cache_hints import apply_openrouter_cache_control
             from modules.llm.openrouter_routing import tool_choice_for, create_with_tool_choice_fallback
@@ -717,7 +683,7 @@ class OpenRouterClient(LLMClient):
                         tools = None
 
                 if tools:
-                    # UP-08: extend the cache breakpoint over the tools block for
+                    # Extend the cache breakpoint over the tools block for
                     # breakpoint-style models (no-op unless prompt caching is on).
                     from modules.llm.cache_hints import apply_openrouter_tools_cache_control
                     tools = apply_openrouter_tools_cache_control(tools, self.model_type)
@@ -727,6 +693,7 @@ class OpenRouterClient(LLMClient):
             self.logger.info(f"[_generate_with_tools] Starting API request: model={self.model_type}, tools={len(tools) if tools else 0}, messages={len(formatted_messages)}")
 
             apply_request_extras(request_params, self, max_tokens_value)
+            request_params.update(call_timeout_param())
             api_start = time.time()
             response = await create_with_reasoning_fallback(self, inference_sdk(self), request_params, create_with_tool_choice_fallback)
             api_duration = time.time() - api_start
@@ -734,7 +701,7 @@ class OpenRouterClient(LLMClient):
             self.last_response = response
             self.logger.info(f"[_generate_with_tools] API request completed in {api_duration:.1f}s")
 
-            message = response.choices[0].message
+            message = self._first_choice(response).message
             usage_data = self._extract_usage_data()
 
             if hasattr(message, 'tool_calls') and message.tool_calls:
@@ -757,19 +724,20 @@ class OpenRouterClient(LLMClient):
             # Fallback: serving layers (notably NVIDIA NIM with Kimi-K2)
             # intermittently fail to parse Kimi's native tool-call tokens and
             # return them as raw text in content with no structured tool_calls.
-            # Recover any calls AND always strip the tokens (WS-2.1) so the agent
+            # Recover any calls AND always strip the tokens so the agent
             # executes the actions (instead of wasting a planning turn) and the
             # control tokens never leak — even in the stray-end-token shape that
             # recovers 0 calls.
             raw_content = message.content or ""
-            # L3 FIX: only run Kimi token recovery for Kimi models. The marker
+            # Only run Kimi token recovery for Kimi models. The marker
             # ("<|tool_call") is only ever leaked by Kimi-K2 on NIM; gating on the
             # model means a non-Kimi OpenRouter model (Grok/Qwen/…) that legitimately
             # quotes that literal in prose isn't silently truncated.
             cleaned_content, recovered = raw_content, []
-            if "kimi" in (self.model_type or "").lower():
+            is_kimi = model_family(self.model_type) == "kimi"
+            if is_kimi:
                 cleaned_content, recovered = recover_kimi_content(raw_content)
-            # B4 + GLM leak: also recover/strip tool calls leaked as <invoke> XML,
+            # Also recover/strip tool calls leaked as <invoke> XML,
             # GLM <function_calls> dumps, or done(...) python-call syntax. The pipe
             # pass (Kimi-only above) handles <|tool_call| tokens; this handles XML.
             # Marker-gated (provider-agnostic): a <function_calls>/<invoke> marker in
@@ -777,37 +745,25 @@ class OpenRouterClient(LLMClient):
             # (z-ai) leaks are now recovered/stripped too, not just Kimi. No marker =>
             # untouched (byte-identical for the common path).
             if not recovered and (
-                _has_toolcall_xml_marker(cleaned_content)
-                or "kimi" in (self.model_type or "").lower()
+                _has_toolcall_xml_marker(cleaned_content) or is_kimi
             ):
                 cleaned_content, textual = recover_textual_tool_calls(
-                    cleaned_content, tool_names_from_schemas(tools)
+                    cleaned_content, set(schema_tool_names(tools))
                 )
                 recovered = textual
             if cleaned_content != raw_content or recovered:
-                # R4: emit a structured, greppable breadcrumb so a Kimi recovery is
-                # observable in telemetry/logs at PARSE time (the structured-provider
-                # path has no equivalent silent step). Stable marker: kimi_toolcall_recovery.
-                if recovered:
-                    self.logger.warning(
-                        f"event=kimi_toolcall_recovery model={self.model_type} "
-                        f"recovered_calls={len(recovered)} action=recovered "
-                        f"({self._PROVIDER_LABEL}: recovered Kimi tool call(s) from unparsed "
-                        f"content tokens — serving-layer parser miss)"
-                    )
-                else:
-                    self.logger.warning(
-                        f"event=kimi_toolcall_recovery model={self.model_type} "
-                        f"recovered_calls=0 action=stripped_only "
-                        f"({self._PROVIDER_LABEL}: stripped leaked Kimi control token(s) with no "
-                        f"recoverable tool calls — serving-layer parser miss)"
-                    )
+                self.logger.warning(
+                    f"event=toolcall_recovery model={self.model_type} "
+                    f"recovered_calls={len(recovered)} "
+                    f"action={'recovered' if recovered else 'stripped_only'} "
+                    f"({self.provider_label}: tool-call syntax in the content, "
+                    f"serving-layer parser miss)"
+                )
             return (cleaned_content, recovered, usage_data)
 
         except Exception as e:
-            self._extract_usage_and_capture_telemetry(start_time, False, str(e), metadata)
-            self.logger.error(f"{self._PROVIDER_LABEL} tool generation failed: {e}")
-            raise LLMError(f"{self._PROVIDER_LABEL} generation failed: {e}")
+            self.logger.error(f"{self.provider_label} tool generation failed: {e}")
+            raise_llm_error(e, self.provider_label, model=self.model_type)
 
     async def generate_agent_response(
         self,
@@ -870,10 +826,10 @@ class OpenRouterClient(LLMClient):
 
             self.logger.info(f"[generate_agent_response] Returning {len(tool_calls)} tool calls + usage")
 
-            # Always return the 3-tuple (Bug 2). Tool-free conversational/planning
-            # turns (and every 0-recovered-call Kimi turn) previously returned a
-            # bare content string, dropping message-level usage/billing telemetry.
-            # tool_calls may be an empty list; OpenAI/Gemini clients already do this.
+            # Always return the 3-tuple. Tool-free conversational/planning
+            # turns (and every 0-recovered-call Kimi turn) keep the message-level
+            # usage/billing telemetry.
+            # tool_calls may be an empty list; OpenAI/Gemini clients do the same.
             return (content, tool_calls, usage_data)
 
         except NotImplementedError:
@@ -881,39 +837,15 @@ class OpenRouterClient(LLMClient):
             raise
         except Exception as e:
             self.logger.error(f"Error in generate_agent_response: {e}", exc_info=True)
-            raise LLMError(f"Failed to generate agent response: {e}")
-
-    async def validate(self) -> bool:
-        """Validate the OpenRouter client by making a test request."""
-        try:
-            if not self._client:
-                await self._setup_client()
-
-            response = await inference_sdk(self).chat.completions.create(
-                model=self.model_type,
-                messages=[{"role": "user", "content": "test"}],
-                max_tokens=1
-            )
-            if not response or not response.choices:
-                raise ValueError(f"Invalid response from {self._PROVIDER_LABEL}")
-            self.logger.info(f"{self._PROVIDER_LABEL} client validated with model {self.model_type}")
-            return True
-        except Exception as e:
-            self.logger.error(f"{self._PROVIDER_LABEL} validation failed: {e}")
-            # Use similar error translation as DeepSeek
-            error_str = str(e).lower()
-            if "rate" in error_str or "429" in error_str:
-                raise ValueError(f"{self._PROVIDER_LABEL} API rate limit exceeded. Please try again later.")
-            elif "key" in error_str or "auth" in error_str or "401" in error_str:
-                raise ValueError(f"Invalid {self._PROVIDER_LABEL} API key.")
-            else:
-                raise ValueError(f"{self._PROVIDER_LABEL} validation failed: {str(e)}")
+            raise_llm_error(e, self.provider_label, model=self.model_type)
 
     async def _make_validation_request(self) -> Any:
         """Make a validation request to OpenRouter API.
 
         Required abstract method implementation for LLMClient base class.
         """
+        if not self._client:
+            await self._setup_client()
         return await inference_sdk(self).chat.completions.create(
             model=self.model_type,
             messages=[{"role": "user", "content": "test"}],
@@ -929,32 +861,25 @@ class OpenRouterClient(LLMClient):
             response: Response from _make_validation_request
 
         Raises:
-            LLMError: If response is invalid
+            LLMResponseError: If response is invalid
         """
         if not response or not response.choices:
-            raise LLMError(f"Invalid response from {self._PROVIDER_LABEL} API - no choices returned")
+            raise LLMResponseError(f"Invalid response from {self.provider_label} API - no choices returned")
 
     def _extract_usage_data(self) -> Dict[str, Optional[int]]:
-        """Extract usage data from response."""
-        if not self.last_response or not hasattr(self.last_response, 'usage'):
-            return {'prompt_tokens': None, 'completion_tokens': None, 'total_tokens': None,
-                    'billed_cost_usd': None, 'cache_discount_usd': None}
-
-        usage = self.last_response.usage
-        # UP-08: server-side prefix-cache hits (mirrors OpenAIClient; NIM subclasses this).
-        cached_tokens = getattr(getattr(usage, 'prompt_tokens_details', None), 'cached_tokens', None)
-        # F23: carry what OpenRouter billed, or the native tool path stores the catalog estimate.
-        from modules.llm.usage_extract import _billed_cost_fields
-        return {
-            'prompt_tokens': getattr(usage, 'prompt_tokens', None),
-            'completion_tokens': getattr(usage, 'completion_tokens', None),
-            'total_tokens': getattr(usage, 'total_tokens', None),
-            'cached_tokens': cached_tokens or 0,
-            **_billed_cost_fields(self.last_response),
-        }
+        return chat_usage_fields(self.last_response)
 
     async def cleanup(self) -> None:
         """Clean up resources."""
         await self._cleanup_client()
         self._initialized = False
-        self.logger.info(f"{self._PROVIDER_LABEL} client cleaned up")
+        self.logger.info(f"{self.provider_label} client cleaned up")
+
+
+class OpenAIWireSeat(OpenRouterClient):
+    """The OpenAI-compatible pipeline of :class:`OpenRouterClient` on a seat that is not
+    OpenRouter. Its server may refuse the reasoning field, it sends each id as given, it has
+    no session field, and an agent step keeps ``auto`` unless the caller asks explicitly."""
+    WIRE_ID_PROVIDER: Optional[str] = None
+    SENDS_SESSION_ID = False
+    DEFAULT_TOOL_CHOICE: Optional[str] = "auto"

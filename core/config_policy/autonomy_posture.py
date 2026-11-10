@@ -61,13 +61,12 @@ def _autonomy_group_default(flag_name: str) -> bool:
 #
 #   silent        (default) — today's behavior: autonomy runs but is unverified + silent.
 #   owner-visible — the agent's autonomous work becomes VERIFIED + owner-visible:
-#                   completion judge, blocker->owner escalation (+ ask), self-wake
+#                   completion judge, self-wake
 #                   delivery, continuity bridge. Safe for single-user local; on a
 #                   multi-tenant server it is an opt-in (unsolicited pushes / aux cost).
 #   full          — owner-visible PLUS time-based initiative (cron ticker).
 _POSTURE_OWNER_VISIBLE_FLAGS = frozenset({
     "GOAL_COMPLETION_JUDGE",
-    "GOAL_BLOCKER_ESCALATION",
     "GOAL_SELF_WAKE_ENABLED",
     "AUTONOMOUS_CONTINUITY_BRIDGE",
     # Continuity/learning trio: ON under the local profile, and an owner-visible

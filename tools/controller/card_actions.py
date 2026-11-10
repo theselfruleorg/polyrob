@@ -1,11 +1,11 @@
-"""Action cards from the agent: ``present_choice`` and ``propose_action``.
+"""Action cards from the agent: ``ask_choice`` and ``propose_action``.
 
 Before these (crypto-UX review, 2026-09-27) the agent could put a question to
 the owner only as prose, and a money action only as a sentence the owner had to
 turn into a typed command. Both are now cards (``core/surfaces/cards.py``):
 
-* ``present_choice(question, options)`` — 2 to 6 options as buttons on
-  Telegram, numbered in the terminal. The tool WAITS for the pick and returns
+* ``ask_choice`` — the live half of ``owner_ask(question, options)``: 2 to 6
+  options as buttons on Telegram, numbered in the terminal. It WAITS for the pick and returns
   it into this turn. The pick is stored text the owner tapped, never a model
   paraphrase.
 * ``propose_action(command, why)`` — a money verb and its arguments (e.g.
@@ -19,8 +19,8 @@ is at its size ceiling), so every session can reach them.
 
 ⚠️ Refused in a room, for a leaf/sub-agent, in a session a correspondent
 drives, and for a tenant that is not the owner — the same gates as
-``owner_ask``. ``present_choice`` is also refused in an autonomous run (the run
-cannot wait for a person; ``owner_ask`` is the durable question for that).
+``owner_ask``. ``owner_ask`` never calls ``ask_choice`` in an autonomous run: the
+run cannot wait for a person, so it raises the durable ask instead.
 """
 import asyncio
 import logging
@@ -33,7 +33,7 @@ from agents.task.agent.views import ActionResult
 
 logger = logging.getLogger(__name__)
 
-#: How long ``present_choice`` waits by default, and at most.
+#: How long ``ask_choice`` waits by default, and at most.
 DEFAULT_WAIT_S = 300
 MAX_WAIT_S = 900
 #: Headroom over the wait for delivery, the expiry transition and the result.
@@ -41,8 +41,10 @@ _TIMEOUT_GRACE_S = 30
 
 
 def choice_action_timeout(params, base: float) -> float:
-    """The controller's timeout for one ``present_choice`` call: never less
-    than the wait it declared (the generic 180 s cut a 300 s wait, 2026-10-15)."""
+    """The controller's timeout for one ``owner_ask`` call: with options, never
+    less than the wait it declared (the generic 180 s cut a 300 s wait, 2026-10-15)."""
+    if not (params or {}).get("options"):
+        return float(base)
     try:
         wait = int((params or {}).get("wait_seconds") or DEFAULT_WAIT_S)
     except (TypeError, ValueError, AttributeError):
@@ -63,10 +65,8 @@ def _refusal(controller, execution_context, user_id: str) -> Optional[str]:
         return ("Refused: a session holding a correspondent's message cannot put a "
                 "card to the owner.")
     try:
-        from core.config_policy import local_mode_enabled
-        from core.instance import is_owner_local_safe, resolve_owner_principal
-        if not is_owner_local_safe(user_id, owner_principal=resolve_owner_principal(),
-                                   local_enabled=local_mode_enabled()):
+        from core.instance import is_owner_uid
+        if not is_owner_uid(user_id):
             return "Refused: cards go to the owner, and this tenant is not the owner."
     except Exception:
         return "Refused: the owner could not be resolved."
@@ -148,6 +148,15 @@ def _send_recipient(args) -> Optional[str]:
     return None
 
 
+class _CardStoreUnreadable(Exception):
+    """The /send repeat guards could not read the card store: they refuse, never pass."""
+
+
+#: What ``propose_action`` says when a repeat guard cannot read the card store.
+STORE_UNREADABLE = ("propose_action: the card store is unreadable, so I cannot check for "
+                    "an earlier payment to this address. Nothing was proposed.")
+
+
 def _open_sends_to(cards, user_id: str, words) -> list:
     """OPEN /send proposal cards that pay the same address as ``words``."""
     if not words or words[0].lower() != "/send":
@@ -158,10 +167,12 @@ def _open_sends_to(cards, user_id: str, words) -> list:
     from core.wallet.addresses import same_address
     try:
         open_ = cards.store().open_cards(user_id, limit=100)
-    except Exception:
-        return []
+    except Exception as e:
+        logger.warning("/send repeat guard: open cards unreadable: %s", e, exc_info=True)
+        raise _CardStoreUnreadable() from e
     return [c for c in open_ if c.kind == cards.KIND_PROPOSAL and c.verb == "/send"
-            and _send_recipient(c.args) and same_address(_send_recipient(c.args), to)]
+            and _send_recipient(c.args)
+            and same_address(_hex_fold(_send_recipient(c.args)), _hex_fold(to))]
 
 
 #: A /send of the same token to the same address that finished inside this window
@@ -185,23 +196,51 @@ def _send_asset(args) -> tuple:
     return chain, token
 
 
+def _hex_fold(word: str) -> str:
+    """An 0x-hex word in one form (``0X``/mixed case -> lower ``0x``); any other word
+    (a base58 Solana address is case-SENSITIVE) unchanged."""
+    w = str(word)
+    if w[:2] in ("0x", "0X") and all(c in "0123456789abcdefABCDEF" for c in w[2:]) and w[2:]:
+        return "0x" + w[2:].lower()
+    return w
+
+
+def _send_key(args) -> tuple:
+    """What a /send MEANS: ``(chain, token, recipient)`` through the seat's own parser
+    (``tools.defi.send_order.parse``: free word order, ``max``/``go`` words, the gas
+    symbol or its sentinel = ``native``), with 0x-hex folded. No network. Arguments
+    the parser refuses fall back to the positional reading."""
+    folded = [_hex_fold(a) for a in args]
+    try:
+        from tools.defi.send_order import parse
+        order, err = parse(folded)
+    except Exception as e:
+        logger.debug("send parser unavailable for the /send repeat guard: %s", e)
+        order, err = None, "unavailable"
+    if order is not None and not err:
+        return (str(order["chain"]).lower(), _hex_fold(order["token"]),
+                _hex_fold(order["to"]))
+    chain, token = _send_asset(folded)
+    return chain, _hex_fold(token), _hex_fold(_send_recipient(folded) or "")
+
+
 def _paid_recently(cards, user_id: str, words, now: Optional[float] = None) -> list:
-    """/send cards of the same asset to the same address, done or running, inside
-    ``_PAID_WINDOW_S``."""
+    """/send cards of the same asset to the same address, done, running or of an
+    unknown outcome, inside ``_PAID_WINDOW_S``."""
     if not words or words[0].lower() != "/send" or len(words) < 3:
         return []
     to = _send_recipient(words[1:])
     if not to:
         return []
     import time as _time
-    from core.wallet.addresses import same_address
     try:
         recent = cards.store().recent_sends(
             user_id, (now if now is not None else _time.time()) - _PAID_WINDOW_S)
-    except Exception:
-        return []
-    asset = _send_asset(words[1:])
-    return [r for r in recent if same_address(r[0], to) and _send_asset(r[3]) == asset]
+    except Exception as e:
+        logger.warning("/send repeat guard: recent sends unreadable: %s", e, exc_info=True)
+        raise _CardStoreUnreadable() from e
+    key = _send_key(words[1:])
+    return [r for r in recent if _send_key(r[3]) == key]
 
 
 def _send_precheck(words) -> Optional[str]:
@@ -301,91 +340,67 @@ async def _send_value(words, why: str) -> Tuple[Optional[str], str]:
     return None, line
 
 
-def register_card_actions(controller) -> None:
-    class PresentChoice(BaseModel):
-        question: str = Field(..., min_length=4, max_length=200,
-                              description="The one question the owner answers with a tap.")
-        options: List[str] = Field(..., min_length=2, max_length=6,
-                                   description="2 to 6 short options (each ≤ 80 characters).")
-        wait_seconds: int = Field(DEFAULT_WAIT_S, ge=10, le=MAX_WAIT_S,
-                                  description="How long to wait for the tap.")
-
-    @controller.registry.action(
-        "Ask the OWNER to pick one of 2-6 options, as buttons (Telegram) or a numbered "
-        "prompt (terminal), and WAIT for the pick in this turn. Use it when you need the "
-        "owner's choice to continue now. Not in autonomous runs (use owner_ask there).",
-        param_model=PresentChoice,
-    )
-    async def present_choice(params: PresentChoice, execution_context=None) -> ActionResult:
-        from tools.controller.owner_ask_action import _user
-        user_id = _user(controller, execution_context)
-        why = _refusal(controller, execution_context, user_id)
-        if why:
-            return ActionResult(error=why, include_in_memory=True)
-        sid = _session_id(controller, execution_context)
-        try:
-            from core.autonomy_marker import is_autonomous
-            if sid and is_autonomous(sid):
+async def ask_choice(controller, execution_context, user_id: str, question: str,
+                     options: List[str], *, why: str = "",
+                     wait_seconds: int = DEFAULT_WAIT_S) -> Optional[ActionResult]:
+    """The live half of ``owner_ask(options=…)``: a card, and WAIT for the pick in this
+    turn. ``None`` when the card cannot reach the owner: the caller raises the durable
+    ask instead, so the question is never lost."""
+    why_not = _refusal(controller, execution_context, user_id)
+    if why_not:
+        return ActionResult(error=why_not, include_in_memory=True)
+    sid = _session_id(controller, execution_context)
+    from core.surfaces import cards
+    try:
+        card = cards.choice_card(user_id, question, list(options), body=why,
+                                 session_id=sid or None, ttl=wait_seconds + 60)
+    except ValueError as e:
+        return ActionResult(error=f"owner_ask: {e}", include_in_memory=True)
+    typed = await _terminal_pick(card)
+    if typed is not None:
+        if typed:
+            p = cards.press(card.card_id, typed, user_id)
+            if p.card is not None and p.card.answer:
                 return ActionResult(
-                    error=("Refused: an autonomous run cannot wait for a tap. Raise "
-                           "owner_ask(question=\"… A) … or B) …\") — the answer reaches "
-                           "this rail's next run."), include_in_memory=True)
-        except Exception:
-            pass
-        from core.surfaces import cards
-        try:
-            card = cards.choice_card(user_id, params.question, list(params.options),
-                                     session_id=sid or None,
-                                     ttl=params.wait_seconds + 60)
-        except ValueError as e:
-            return ActionResult(error=f"present_choice: {e}", include_in_memory=True)
-        typed = await _terminal_pick(card)
-        if typed is not None:
-            if typed:
-                p = cards.press(card.card_id, typed, user_id)
-                if p.card is not None and p.card.answer:
-                    return ActionResult(
-                        extracted_content=f"The owner picked: {p.card.answer}",
-                        include_in_memory=True)
-            cards.store().transition(card.card_id, frozenset({cards.S_OPEN}),
-                                     cards.S_CANCELLED)
-            return ActionResult(extracted_content="The owner gave no answer. Do not assume one.",
-                                include_in_memory=True)
-        outcome = await _deliver(controller, user_id, card, sid)
-        if outcome not in ("sent", "queued"):
-            cards.store().transition(card.card_id, frozenset({cards.S_OPEN}),
-                                     cards.S_CANCELLED)
-            return ActionResult(
-                error=(f"The card could not reach the owner live ({outcome}); no answer "
-                       f"will come. Ask in your reply instead, or raise owner_ask."),
-                include_in_memory=True)
-        got = await asyncio.to_thread(cards.wait_for_answer, card.card_id,
-                                      float(params.wait_seconds))
-        if got is not None and got.state == cards.S_DONE and got.answer:
-            return ActionResult(extracted_content=f"The owner picked: {got.answer}",
-                                include_in_memory=True)
-        if got is not None and (got.result or "").startswith(cards.TEXT_REPLY_RESULT):
-            return ActionResult(
-                extracted_content=("The owner did not tap an option; they replied in text "
-                                   "instead (queued for you as their next message). Read "
-                                   "that message as their answer; do not assume an option."),
-                include_in_memory=True)
-        if got is not None and got.state == cards.S_OPEN:
-            expired = cards.store().transition(card.card_id, frozenset({cards.S_OPEN}),
-                                               cards.S_EXPIRED)
-            if expired is not None:
-                cards._notify(expired)
-            else:   # picked in the last instant
-                late = cards.store().get(card.card_id)
-                if late is not None and late.answer:
-                    return ActionResult(extracted_content=f"The owner picked: {late.answer}",
-                                        include_in_memory=True)
+                    extracted_content=f"The owner picked: {p.card.answer}",
+                    include_in_memory=True)
+        cards.store().transition(card.card_id, frozenset({cards.S_OPEN}),
+                                 cards.S_CANCELLED)
+        return ActionResult(extracted_content="The owner gave no answer. Do not assume one.",
+                            include_in_memory=True)
+    outcome = await _deliver(controller, user_id, card, sid)
+    if outcome not in ("sent", "queued"):
+        cards.store().transition(card.card_id, frozenset({cards.S_OPEN}),
+                                 cards.S_CANCELLED)
+        return None
+    got = await asyncio.to_thread(cards.wait_for_answer, card.card_id, float(wait_seconds))
+    if got is not None and got.state == cards.S_DONE and got.answer:
+        return ActionResult(extracted_content=f"The owner picked: {got.answer}",
+                            include_in_memory=True)
+    if got is not None and (got.result or "").startswith(cards.TEXT_REPLY_RESULT):
         return ActionResult(
-            extracted_content=(f"No pick within {params.wait_seconds}s (the card is closed). "
-                               f"Do not assume an answer; continue with the safe reading or "
-                               f"ask again later."),
+            extracted_content=("The owner did not tap an option; they replied in text "
+                               "instead (queued for you as their next message). Read "
+                               "that message as their answer; do not assume an option."),
             include_in_memory=True)
+    if got is not None and got.state == cards.S_OPEN:
+        expired = cards.store().transition(card.card_id, frozenset({cards.S_OPEN}),
+                                           cards.S_EXPIRED)
+        if expired is not None:
+            cards._notify(expired)
+        else:   # picked in the last instant
+            late = cards.store().get(card.card_id)
+            if late is not None and late.answer:
+                return ActionResult(extracted_content=f"The owner picked: {late.answer}",
+                                    include_in_memory=True)
+    return ActionResult(
+        extracted_content=(f"No pick within {wait_seconds}s (the card is closed). "
+                           f"Do not assume an answer; continue with the safe reading or "
+                           f"ask again later."),
+        include_in_memory=True)
 
+
+def register_card_actions(controller) -> None:
     class ProposeAction(BaseModel):
         command: str = Field(..., min_length=3, max_length=600, description=(
             "The owner money verb and its arguments, WITHOUT `go`, exactly as the owner "
@@ -433,7 +448,11 @@ def register_card_actions(controller) -> None:
             return ActionResult(error=(f"propose_action: this /send could not quote, so "
                                        f"no card was made: {refused}"), include_in_memory=True)
         from core.surfaces import cards
-        clash = _open_sends_to(cards, user_id, words)
+        try:
+            clash = _open_sends_to(cards, user_id, words)
+            paid = _paid_recently(cards, user_id, words)
+        except _CardStoreUnreadable:
+            return ActionResult(error=STORE_UNREADABLE, include_in_memory=True)
         unlisted = [c for c in clash if c.card_id not in params.replaces]
         if unlisted and not params.also_owed:
             listed = "; ".join(f"{c.card_id} ({c.line})" for c in unlisted)
@@ -441,15 +460,20 @@ def register_card_actions(controller) -> None:
                 f"An open card already pays this address: {listed}. Pass "
                 f"replaces=[<id>] to supersede it, or also_owed=true if BOTH payments "
                 f"are owed. Nothing was proposed."), include_in_memory=True)
-        paid = _paid_recently(cards, user_id, words)
         if paid and not params.also_owed:
             import datetime as _dt
             when = _dt.datetime.fromtimestamp(paid[0][2], _dt.timezone.utc).strftime("%m-%d %H:%MZ")
+            unknown = sum(1 for r in paid if r[4] == "unknown")
+            how = ("a confirmed /send" if not unknown else
+                   f"a /send whose outcome is unknown ({unknown} of them: it may have "
+                   f"landed, check /book)")
+            then = ("If /book shows that it did not land, pass also_owed=true; otherwise "
+                    "pass it only if ANOTHER payment is really owed." if unknown else
+                    "Pass also_owed=true only if ANOTHER payment is really owed.")
             return ActionResult(error=(
-                f"This address was already paid the same token by a confirmed /send "
+                f"This address was already paid the same token by {how} "
                 f"({len(paid)} in the last 72 h, the latest {when}). Nothing was "
-                f"proposed. Pass also_owed=true only if ANOTHER payment is really owed."),
-                include_in_memory=True)
+                f"proposed. {then}"), include_in_memory=True)
         sid = _session_id(controller, execution_context)
         group_id = _group_for(user_id, sid)
         try:

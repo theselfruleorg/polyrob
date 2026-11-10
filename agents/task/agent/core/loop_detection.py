@@ -1,9 +1,9 @@
 """Loop-detection + intervention mixin (roadmap P9 decomposition; code-motion from service.py).
 
-Stop-flag checks, multi-signal action-loop detection (action repetition + memory
-similarity + goal stagnation), the guidance-injection intervention, and the
-identical-call escalation (guidance -> the next identical call is not executed ->
-the run ends with ``StopReason.LOOP``). ``Agent`` composes ``LoopDetectionMixin``.
+Stop-flag checks, the guidance-injection intervention, the identical-call
+escalation (guidance -> the next identical call is not executed -> the run ends
+with ``StopReason.LOOP``) and the no-progress guard over a whole run.
+``Agent`` composes ``LoopDetectionMixin``.
 """
 from __future__ import annotations
 
@@ -27,8 +27,37 @@ REPEAT_OK_ACTIONS = frozenset({
     "browser_scroll", "browser_scroll_down", "browser_scroll_up", "browser_scroll_to_text",
     "browser_click_element", "browser_send_keys", "browser_go_back_action",
     "browser_refresh_page", "browser_switch_tab", "browser_extract_page_content",
+    "browser_click_at", "browser_go_forward", "browser_hover_element",
+    "browser_read_element", "browser_wait",
     "process_wait", "process_poll", "process_log", "process_list",
 })
+
+#: A run of send-only steps to one recipient (prod 2026-11-06: a job sent the owner
+#: 40 reworded lines in 5 minutes and wrote "stopping now" in many of them). The
+#: text and the message id change, so the identical-call escalation never saw it.
+#: Guidance after REPLY_LOOP_WARN_AT sends in a row; a send after
+#: REPLY_LOOP_BLOCK_AT is not run; the attempt after that ends the run.
+REPLY_LOOP_WARN_AT = 3
+REPLY_LOOP_BLOCK_AT = 4
+
+#: Steps in a row that add nothing new to the run (prod 2026-11-06: 25 reads of 2
+#: files at changing offsets and 6 owner messages, no post; earlier runs read one
+#: log 66 times). New arguments are not progress when only the window moved. A step
+#: is new when a call has a target this run has not used; a send is never new.
+#: Guidance at STALE_WARN_AT; at STALE_BLOCK_AT a stale step does not run, and the
+#: stale attempt after that ends the run.
+STALE_WARN_AT = 8
+STALE_BLOCK_AT = 12
+#: Arguments that move a window over one target. They do not name a new target.
+PAGING_ARGS = frozenset({
+    "offset", "limit", "char_offset", "max_chars", "page", "page_size", "cursor",
+    "start_line", "end_line", "line", "lines", "max_results", "count",
+    "since_id", "until_id", "pagination_token", "next_token",
+})
+#: A run-ending or waiting call: it is neither progress nor a lack of progress.
+_NEUTRAL_ACTIONS = REPEAT_OK_ACTIONS | {"done"}
+#: A browser page changes under the same call, so its calls prove nothing here.
+_NEUTRAL_PREFIXES = ("browser_", "dapp_browser_")
 
 
 class LoopDetectionMixin:
@@ -145,10 +174,12 @@ TAKE A DIFFERENT ACTION IMMEDIATELY.{_next}""", MessageOrigin.INTERVENTION)
             error_msg += " Context cleared."
         error_msg += " You MUST fix the issue - DO NOT repeat the same broken call."
 
-        self._last_result.append(ActionResult(
+        # A fresh list: the step's own list may be marked as already sent in
+        # ToolMessages (F14, by identity), and an append to it would hide this error.
+        self._last_result = [*self._last_result, ActionResult(
             error=error_msg,
             include_in_memory=True
-        ))
+        )]
 
         # The identical-call counter is NOT reset here: an intervention is the first
         # rung of the escalation (_loop_guard_check blocks the next identical call and
@@ -227,6 +258,15 @@ TAKE A DIFFERENT ACTION IMMEDIATELY.{_next}""", MessageOrigin.INTERVENTION)
         self._loop_observe_hashes = set()
         self._loop_blocked_step = False
         self._loop_stop_text = None
+        self._reply_streak = None
+        self._seen_targets = set()
+        self._stale_steps = 0
+        self._stale_blocked = False
+        self._errored_tools = set()
+        self._tool_claim_refusals = 0
+        # owner_answer: one corrective step per owner message, so a new run or a
+        # new owner batch may earn it again, even with the same words ("status?").
+        self._owner_answer_nudged = None
         self._last_step_key = None
         self._action_repetition_counter = 0
         # 098 AG-04: the A-B-A-B window is per run too (a cycle never spans turns).
@@ -240,10 +280,190 @@ TAKE A DIFFERENT ACTION IMMEDIATELY.{_next}""", MessageOrigin.INTERVENTION)
         self._loop_stop_text = None
         return text
 
+    @staticmethod
+    def _reply_target(dump: list) -> Optional[str]:
+        """The one recipient of a step made only of sends, else None. A `message`
+        read (posts, delete) is not a send, and any other action is work."""
+        targets = set()
+        for d in dump:
+            if not isinstance(d, dict):
+                return None
+            names = [k for k in d if k != 'interacted_element']
+            if len(names) != 1:
+                return None
+            params = d[names[0]] if isinstance(d[names[0]], dict) else {}
+            if names[0] == 'send_message':
+                targets.add('owner')
+            elif names[0] == 'message' and params.get('action') in (None, 'send'):
+                target = str(params.get('target') or 'owner')
+                targets.add('owner' if target == 'owner'
+                            else f"{params.get('surface') or ''}:{target}")
+            else:
+                return None
+        return targets.pop() if len(targets) == 1 else None
+
+    def _reply_loop_check(self, model_output) -> Optional[List[ActionResult]]:
+        """The refusal for one more send in a run of sends to one recipient, or None."""
+        streak = getattr(self, '_reply_streak', None)
+        if not streak or streak['count'] < REPLY_LOOP_BLOCK_AT:
+            return None
+        if self._reply_target(self._step_dump(model_output)) != streak['target']:
+            return None
+        self._loop_blocked_step = True
+        n = streak['count']
+        if not streak.get('blocked'):
+            streak['blocked'] = True
+            self.logger.warning(f"🛑 LOOP: send not run, {n} sends to one recipient with no new work")
+            error = (
+                f"MESSAGE NOT SENT: you sent {n} messages in a row to this recipient and "
+                "did nothing new. Those messages were delivered. Call done now, or do the "
+                "remaining work with another tool. One more send ends this run.")
+        else:
+            from agents.task.runtime.stop_reason import StopReason, set_stop
+            self.logger.error("🛑 LOOP: send repeated after a block — ending the run")
+            self._loop_stop_text = f"{n} sends to one recipient with no new work, and one more after a block"
+            set_stop(self, StopReason.LOOP)
+            error = "RUN ENDED: you tried to send again after the send was blocked."
+        n_actions = max(1, len(getattr(model_output, 'action', None) or []))
+        return [ActionResult(error=error, include_in_memory=True) for _ in range(n_actions)]
+
+    def _record_reply_streak(self, action_dump: list, stale: Optional[bool] = False) -> None:
+        """Count a send-only step. New work or another recipient restarts the count;
+        a stale step between two sends does not (prod 2026-11-06: a re-read between
+        each of 6 owner messages hid them from this count)."""
+        target = self._reply_target(action_dump)
+        if target is None:
+            if not stale:
+                self._reply_streak = None
+            return
+        streak = getattr(self, '_reply_streak', None)
+        if not streak or streak['target'] != target:
+            streak = self._reply_streak = {'target': target, 'count': 0}
+        streak['count'] += 1
+        if streak['count'] == REPLY_LOOP_WARN_AT:
+            self.logger.warning(f"🔄 LOOP DETECTED: {streak['count']} sends in a row to one recipient")
+            self.message_manager.add_message(make_control_message(
+                f"You sent {streak['count']} messages to this recipient and did nothing "
+                "new. They were delivered: do not restate them, and do not announce "
+                "that you stop. Call done now, or do the remaining work with another tool. "
+                "Sends in a row are refused soon, and then the run ends.",
+                MessageOrigin.INTERVENTION))
+
+    # --- no-progress guard (prod 2026-11-06) -----------------------------------
+    #
+    # The identical-call escalation needs the same arguments and the same result.
+    # A walk over one file changes the offset each time, so it never counts. This
+    # guard keys on the target: the tool plus its arguments without PAGING_ARGS.
+
+    @staticmethod
+    def _step_targets(dump: list) -> Optional[List[tuple]]:
+        """``(is_send, target)`` per call of a step, or None for a step made only of
+        neutral calls."""
+        out: List[tuple] = []
+        for d in dump:
+            if not isinstance(d, dict):
+                return [(False, repr(d))]
+            for name, params in d.items():
+                if (name == 'interacted_element' or name in _NEUTRAL_ACTIONS
+                        or name.startswith(_NEUTRAL_PREFIXES)):
+                    continue
+                params = params if isinstance(params, dict) else {}
+                is_send = name == 'send_message' or (
+                    name == 'message' and params.get('action') in (None, 'send'))
+                identity = {k: v for k, v in params.items() if k not in PAGING_ARGS}
+                out.append((is_send, f"{name}:{json.dumps(identity, sort_keys=True, default=str)}"))
+        return out or None
+
+    def _step_is_stale(self, dump: list) -> Optional[bool]:
+        """True when the step adds nothing new, None for a neutral step. Reads state only."""
+        targets = self._step_targets(dump)
+        if targets is None:
+            return None
+        seen = getattr(self, '_seen_targets', None) or set()
+        return all(is_send or target in seen for is_send, target in targets)
+
+    def _record_progress(self, dump: list) -> Optional[bool]:
+        """Count a stale step, or restart the count on a new target. Returns the
+        verdict of :meth:`_step_is_stale`."""
+        stale = self._step_is_stale(dump)
+        if stale is None:
+            return None
+        if getattr(self, '_seen_targets', None) is None:
+            self._seen_targets = set()
+        self._seen_targets.update(t for is_send, t in self._step_targets(dump) if not is_send)
+        if not stale:
+            self._stale_steps = 0
+            self._stale_blocked = False
+            return False
+        self._stale_steps = getattr(self, '_stale_steps', 0) + 1
+        if self._stale_steps == STALE_WARN_AT:
+            self.logger.warning(f"🔄 LOOP DETECTED: {self._stale_steps} steps with nothing new")
+            self.message_manager.add_message(make_control_message(
+                f"Your last {self._stale_steps} steps added nothing new to this run. A new "
+                "offset on a file you already read, or one more message, is not new work. "
+                "Use what you already have: do the next write or post now, or call done "
+                "with the result. Soon these calls are refused, and then the run ends.",
+                MessageOrigin.INTERVENTION))
+        return True
+
+    def _stale_check(self, model_output) -> Optional[List[ActionResult]]:
+        """The refusal for one more stale step after STALE_BLOCK_AT, or None."""
+        n = getattr(self, '_stale_steps', 0)
+        if n < STALE_BLOCK_AT or not self._step_is_stale(self._step_dump(model_output)):
+            return None
+        self._loop_blocked_step = True
+        if not getattr(self, '_stale_blocked', False):
+            self._stale_blocked = True
+            self.logger.warning(f"🛑 LOOP: step not run, {n} steps with nothing new")
+            error = (f"STEP NOT RUN: your last {n} steps added nothing new to this run. Use "
+                     "what you already have: do the next write or post, use a tool or a "
+                     "target you have not used, or call done. One more such step ends this run.")
+        else:
+            from agents.task.runtime.stop_reason import StopReason, set_stop
+            self.logger.error("🛑 LOOP: stale step repeated after a block — ending the run")
+            self._loop_stop_text = f"{n} steps with nothing new, and one more after a block"
+            set_stop(self, StopReason.LOOP)
+            error = "RUN ENDED: you tried another step with nothing new after a refusal."
+        n_actions = max(1, len(getattr(model_output, 'action', None) or []))
+        return [ActionResult(error=error, include_in_memory=True) for _ in range(n_actions)]
+
+    def _tool_claim_check(self, model_output) -> Optional[List[ActionResult]]:
+        """The refusal for a text that says a registered tool does not exist, or None."""
+        from agents.task.runtime.tool_claims import MAX_REFUSALS, refusal_for_step
+        if (getattr(self, '_is_sub_agent', False)
+                or getattr(self, '_tool_claim_refusals', 0) >= MAX_REFUSALS):
+            return None
+        controller = getattr(self, 'controller', None)
+        names = set(controller.get_action_names()) if controller else set()
+        error = refusal_for_step(self._step_dump(model_output), names,
+                                 getattr(self, '_errored_tools', None) or set())
+        if error is None:
+            return None
+        self._tool_claim_refusals = getattr(self, '_tool_claim_refusals', 0) + 1
+        self._loop_blocked_step = True
+        self.logger.warning("🛑 text refused: it says a registered tool does not exist")
+        n_actions = max(1, len(getattr(model_output, 'action', None) or []))
+        return [ActionResult(error=error, include_in_memory=True) for _ in range(n_actions)]
+
+    def _track_tool_errors(self, action_dump: list, results: list) -> None:
+        """Remember the tools whose last call failed: a claim about them can be true."""
+        errored = getattr(self, '_errored_tools', None)
+        if errored is None:
+            errored = self._errored_tools = set()
+        for dumped, result in zip(action_dump, results):
+            if isinstance(dumped, dict):
+                for name in dumped:
+                    (errored.add if getattr(result, 'error', None) else errored.discard)(name)
+
     def _loop_guard_check(self, model_output) -> Optional[List[ActionResult]]:
         """Before execution: the error results for a call that must not run again,
         or None to run the step normally. Never raises."""
         try:
+            refused = (self._tool_claim_check(model_output)
+                       or self._reply_loop_check(model_output)
+                       or self._stale_check(model_output))
+            if refused is not None:
+                return refused
             esc = getattr(self, '_loop_escalation', None)
             if not esc:
                 return None
@@ -283,8 +503,8 @@ TAKE A DIFFERENT ACTION IMMEDIATELY.{_next}""", MessageOrigin.INTERVENTION)
 
     def _record_action_for_loop_detection(self, model_output) -> None:
         """Hash-based action-repetition + alternating-pattern detector (the second of the
-        three loop signals; ``detect_action_loop`` is the H-MEM multi-signal one and
-        ``AgentState.track_action`` the string-similarity one). A repetition is the same
+        loop signals; ``AgentState.track_action`` is the string-similarity one and
+        ``_record_progress`` the no-progress one). A repetition is the same
         arguments AND the same result as the previous step; it feeds the escalation
         above. ``_previous_actions`` / ``_action_repetition_counter`` /
         ``_max_allowed_repetitions`` are set in construction.
@@ -307,6 +527,12 @@ TAKE A DIFFERENT ACTION IMMEDIATELY.{_next}""", MessageOrigin.INTERVENTION)
         if getattr(self, '_loop_blocked_step', False):
             self._loop_blocked_step = False
             return
+
+        # Before the error return below: a send refused as a duplicate is still a
+        # send in the run (prod 2026-11-06: 7 of the 40 were refused).
+        stale = self._record_progress(action_dump)
+        self._record_reply_streak(action_dump, stale)
+        self._track_tool_errors(action_dump, list(getattr(self, '_last_result', None) or []))
 
         # A step whose every result is an error is the 093 retry wall's to count
         # (tools/controller/execution.py: the operation key, max retries, then two
@@ -382,131 +608,3 @@ TAKE A DIFFERENT ACTION IMMEDIATELY.{_next}""", MessageOrigin.INTERVENTION)
                 # Start the pattern window afresh so it does not fire again on
                 # every following step.
                 self._previous_actions.clear()
-
-    def detect_action_loop(
-        self,
-        current_brain: Any,
-        current_actions: List[Dict],
-        lookback_steps: int = 5
-    ) -> tuple[bool, Optional[str]]:
-        """Detect if agent is repeating the same action pattern.
-
-        PHASE 2 FIX (Nov 4, 2025): Multi-signal loop detection prevents infinite loops
-        where agent repeats same actions without progress.
-
-        Detection Signals:
-        - Action repetition (same tool called N+ times in recent steps)
-        - Memory similarity (semantic overlap >70% in brain state)
-        - Goal stagnation (same next_goal for N+ consecutive steps)
-
-        Args:
-            current_brain: Current step's brain state
-            current_actions: Actions agent wants to take
-            lookback_steps: How many recent steps to check (default: 5)
-
-        Returns:
-            (is_loop, warning_message) tuple
-        """
-        if not self.task_context_manager or not self.session_id:
-            return False, None
-
-        # Get session data using correct API
-        session_data = self.task_context_manager.get_session(self.session_id)
-        if not session_data or not session_data.memory:
-            return False, None
-
-        memory = session_data.memory
-        recent_steps = memory.recent_steps[-lookback_steps:] if hasattr(memory, 'recent_steps') else []
-
-        if len(recent_steps) < 3:
-            return False, None  # Need at least 3 steps to detect pattern
-
-        # SIGNAL 1: Action Repetition
-        current_action_names = set()
-        for action_dict in current_actions:
-            if isinstance(action_dict, dict):
-                current_action_names.update(action_dict.keys())
-
-        if not current_action_names:
-            return False, None
-
-        repeated_action_count = 0
-        repeated_step_nums = []
-        for step in recent_steps:
-            step_summary_lower = step.action_summary.lower()
-            if any(action.lower() in step_summary_lower for action in current_action_names):
-                repeated_action_count += 1
-                repeated_step_nums.append(step.step_number)
-
-        action_repeat_ratio = repeated_action_count / len(recent_steps)
-
-        # SIGNAL 2: Memory Similarity
-        similar_memory_count = 0
-        similar_memories = []
-
-        if hasattr(current_brain, 'memory') and current_brain.memory:
-            import re
-            current_keywords = set(re.findall(r'\b\w{4,}\b', current_brain.memory.lower()))
-
-            for step in recent_steps:
-                if step.finding:
-                    step_keywords = set(re.findall(r'\b\w{4,}\b', step.finding.lower()))
-                    if current_keywords and step_keywords:
-                        overlap = len(current_keywords & step_keywords)
-                        total = len(current_keywords | step_keywords)
-                        if total > 0:
-                            similarity = overlap / total
-                            if similarity > 0.70:  # 70% keyword overlap
-                                similar_memory_count += 1
-                                similar_memories.append((step.step_number, similarity, step.finding[:60]))
-
-        memory_similarity_ratio = similar_memory_count / len(recent_steps) if recent_steps else 0
-
-        # SIGNAL 3: Goal Stagnation (if available)
-        goal_stagnation = False
-        if hasattr(current_brain, 'next_goal') and current_brain.next_goal:
-            stagnant_goals = 0
-            for step in recent_steps:
-                if hasattr(step, 'brain_state') and step.brain_state:
-                    if hasattr(step.brain_state, 'next_goal'):
-                        if step.brain_state.next_goal == current_brain.next_goal:
-                            stagnant_goals += 1
-            if stagnant_goals >= len(recent_steps) * 0.6:
-                goal_stagnation = True
-
-        # DETECTION LOGIC: Multiple signals = higher confidence
-        is_loop = False
-        warning_message = None
-
-        if action_repeat_ratio >= 0.60:  # Action repeated in 60%+ of steps
-            severity = "🔄 LOOP DETECTED"
-            if memory_similarity_ratio >= 0.60:  # AND memory is similar
-                severity = "🚨 SEVERE LOOP"
-                is_loop = True
-            elif goal_stagnation:  # AND goal hasn't changed
-                severity = "⚠️  POSSIBLE LOOP"
-                is_loop = True
-            else:
-                severity = "⚠️  ACTION REPETITION"
-                is_loop = True
-
-            warning_message = (
-                f"{severity} at step {self.state.n_steps}:\n\n"
-                f"📊 Detection Signals:\n"
-                f"  • Action repetition: {action_repeat_ratio:.0%} ({repeated_action_count}/{len(recent_steps)} steps)\n"
-                f"  • Memory similarity: {memory_similarity_ratio:.0%} ({similar_memory_count}/{len(recent_steps)} steps)\n"
-                f"  • Goal stagnation: {'YES' if goal_stagnation else 'NO'}\n\n"
-                f"🔍 Pattern Analysis:\n"
-                f"  • Repeated action: {', '.join(current_action_names)}\n"
-                f"  • Steps with this action: {repeated_step_nums}\n"
-                f"  • Current memory: {current_brain.memory[:100] if hasattr(current_brain, 'memory') else 'N/A'}...\n\n"
-                f"💡 Recommended Actions:\n"
-                f"  1. Review recent steps to avoid repeating work\n"
-                f"  2. Check if data/result already available from previous steps\n"
-                f"  3. Try a DIFFERENT approach or tool\n"
-                f"  4. Verify your goal hasn't already been achieved\n"
-            )
-
-            self.logger.warning(warning_message)
-
-        return is_loop, warning_message

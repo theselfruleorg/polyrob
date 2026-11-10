@@ -61,6 +61,9 @@
     <span class="mark">{{ wordmark }}</span>
     <p class="head-truth">{% if pause_headline %}{{ pause_headline }} {% endif %}{{ waiting_line }}</p>
     <button class="icon-btn chats-btn" id="chats-open" type="button" aria-haspopup="dialog" aria-label="{{ t('shell.search') }}"><span class="glyph" aria-hidden="true">&#8981;</span><span class="btn-label">{{ t('shell.chats') }}</span><span class="kbd">&#8984;K</span></button>
+    {# 113 W5 (IA-2): the command palette had no control on screen; ⌘⇧P was
+       written nowhere. palette.js opens it on a click. #}
+    <button class="icon-btn chats-btn palette-btn" id="palette-open" type="button" aria-haspopup="dialog" aria-label="{{ t('shell.commands_label') }}"><span class="palette-glyph" aria-hidden="true">/</span><span class="btn-label">{{ t('shell.commands') }}</span><span class="kbd">&#8984;&#8679;P</span></button>
 {%- if not read_only and owner_console %}
     {# A2 (2026-09-21 audit): the pause headline above has always named "the
        Pause button" / "the Resume button", and no such control existed on any
@@ -113,7 +116,7 @@
     <div class="page-head"><h2 class="page-title">{{ t('chats.title') }}</h2></div>
     <div class="ledger" id="chats-list"></div>
     <p class="state-body" id="chats-state" hidden></p>
-    <div class="state-actions"><button class="btn btn-quiet" id="chats-close" type="button">{{ t('chats.close') }}</button></div>
+    <div class="state-actions">{% if not read_only %}<a class="btn" id="chats-new" href="/?new=1">{{ t('chats.new') }}</a> {% endif %}<button class="btn btn-quiet" id="chats-close" type="button">{{ t('chats.close') }}</button></div>
   </div>
 </dialog>
 <div id="chats-copy" hidden data-more="{{ t('chats.more') }}"
@@ -122,12 +125,18 @@
      data-empty="{{ t('chats.empty') }}"
      data-unreadable="{{ t('chats.unreadable') }}"
      data-untitled="{{ t('chats.untitled') }}"
+     data-main="{{ t('chats.main') }}"
+     data-rename="{{ t('chats.rename') }}"
+     data-close_chat="{{ t('chats.close_chat') }}"
+     data-rename_ask="{{ t('chats.rename_ask') }}"
+     {% if not read_only %}data-can_write="1"{% endif %}
      data-creator_owner="{{ t('chats.creator_owner') }}"
      data-creator_cli="{{ t('chats.creator_cli') }}"
      data-creator_api="{{ t('chats.creator_api') }}"
      data-creator_cron="{{ t('chats.creator_cron') }}"
      data-creator_goal="{{ t('chats.creator_goal') }}"
      data-creator_correspondent="{{ t('chats.creator_correspondent') }}"
+     data-creator_group="{{ t('chats.creator_group') }}"
      data-creator_unknown="{{ t('chats.creator_unknown') }}"
      data-status_running="{{ t('chats.status_running') }}"
      data-status_done="{{ t('chats.status_done') }}"

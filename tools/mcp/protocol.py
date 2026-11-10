@@ -532,7 +532,13 @@ class MCPStdioTransport(MCPTransport):
                     reader = self._stdout_reader = LineReader(
                         self.process.stdout, asyncio.get_running_loop(),
                         name=str(getattr(self.process, "pid", "?")))
-                line = await reader.get(receive_timeout)
+                try:
+                    line = await reader.get(receive_timeout)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    raise
+                except Exception as read_error:  # the pipe broke: the reader thread ended
+                    mark(self, PEER_LOST)
+                    raise MCPConnectionError(f"peer lost (stdio read failed: {read_error})")
 
                 if not line:  # EOF: the peer is gone (098 TS-02), not "no message"
                     mark(self, PEER_LOST)

@@ -67,8 +67,6 @@ def _doc_changes(writer, user_id: str) -> str:
 		return ""
 
 
-#: 103 (D3): the size of one rule that may apply at once. A longer write is a draft.
-OWNER_RULE_NOW_MAX_CHARS = 1000
 _UNTRUSTED_OPEN = "<untrusted_tool_result"
 
 
@@ -99,42 +97,37 @@ def _untrusted_since_owner_turn(controller) -> bool:
 	return not found_owner_message
 
 
-def _owner_rule_applies_now(controller, params, execution_context) -> bool:
-	"""103 (D3): the owner said it in this turn, so one short rule needs no second tap.
-
-	095 W10 made every write a draft because an owner conversation can carry untrusted
-	tool results. That reason still holds, so this is narrow and fails closed: a genuine
-	owner turn, no correspondent in the session, no external tool output since the
-	owner's message, a patch of one place (never a whole-document rewrite), one short
-	rule on both sides of the edit, and the identity scan passes. An empty replacement
-	retires the rule, so the owner can undo with no tap; the old text stays under
-	'## Superseded'. Anything else stays a draft.
-	"""
+def _owner_turn_is_clean(controller, execution_context) -> bool:
+	"""The owner said it in this turn and nothing external was read since: a genuine owner
+	turn, no correspondent in the session, no external tool output since the owner's
+	message. Fails closed."""
 	try:
-		from core.security.owner_turn import is_genuine_owner_turn
-		from core.security.taints import turn_tainted
+		from core.security.owner_turn import is_owner_driven, is_owner_standing_run
+		if is_owner_standing_run(execution_context):
+			return False
+		return (is_owner_driven(execution_context, controller)
+		        and not _untrusted_since_owner_turn(controller))
+	except Exception:
+		return False
+
+
+def _owner_doc_applies_now(controller, params, execution_context) -> bool:
+	"""103 (D3): what the owner says in a clean turn is in force with no tap, whatever its
+	size. These two documents speak with the owner's authority in every later session, so
+	text from a web page read in this turn, or an unattended run, stays a draft. An empty
+	replacement retires a rule; the old text stays under '## Superseded'."""
+	try:
 		from modules.memory.task.threat_scan import is_identity_suspicious
-		old = str(getattr(params, "old_string", "") or "")
-		new = str(getattr(params, "new_string", "") or "")
-		if params.action != "patch" or getattr(params, "replace_all", False):
-			return False
-		if not old.strip() or max(len(old), len(new)) > OWNER_RULE_NOW_MAX_CHARS:
-			return False
-		if not is_genuine_owner_turn(execution_context, controller):
-			return False
-		if turn_tainted(execution_context) or is_identity_suspicious(new):
-			return False
-		return not _untrusted_since_owner_turn(controller)
+		text = str(getattr(params, "new_string", "") or getattr(params, "content", "") or "")
+		return (_owner_turn_is_clean(controller, execution_context)
+		        and not is_identity_suspicious(text))
 	except Exception:
 		return False
 
 
 def _write_doc(writer, params, *, user_id: str, created_by: str, pending: bool = True):
-	"""One write path for both identity docs: update|patch, a draft by default.
-
-	A model-written line is not in force before the owner reviews it: an owner
-	conversation can carry untrusted tool results, so its origin is not proof that
-	the owner wrote the line. The one exception is ``_owner_rule_applies_now``.
+	"""One write path for both identity docs: update|patch, a draft unless
+	``_owner_doc_applies_now`` says otherwise.
 
 	057 WS-D: `source`/`observed_at` ride through to the writer, which stamps the
 	NEW or CHANGED lines ` [from: <source> <date>]`. Both are optional — with
@@ -146,7 +139,7 @@ def _write_doc(writer, params, *, user_id: str, created_by: str, pending: bool =
 		if not params.content:
 			return None, "update requires `content`."
 		return writer.propose(params.content, user_id=user_id,
-		                      created_by=created_by, pending=True, **prov), None
+		                      created_by=created_by, pending=pending, **prov), None
 	if params.old_string is None or params.new_string is None:
 		return None, "patch requires `old_string` and `new_string`."
 	return writer.patch(user_id=user_id, old_string=params.old_string,
@@ -279,18 +272,35 @@ def _sweep_report(controller, rule: str, user_id: str, data_dir: str) -> str:
 	from core.instance import resolve_instance_id
 	from core.runtime_paths import cron_db_path, goals_db_path
 	from core.rules_sweep import render_sweep, sweep
-	skills = None
-	try:
-		from agents.task.agent.skill_manager import get_skill_manager
-		sm = get_skill_manager()
-		skills = [(sid, sm._load_skill_content(sid, user_id=user_id) or "")
-		          for sid in sm.get_skill_ids()]
-	except Exception as e:
-		logger.info("rules sweep: skills not swept (%s)", e)
+	skills = _skill_texts(user_id)
 	result = sweep(rule, user_id=user_id, data_dir=data_dir,
 	               instance_id=resolve_instance_id(), cron_db=cron_db_path(data_dir),
 	               goals_db=goals_db_path(data_dir), skills=skills)
 	return render_sweep(result, rule)
+
+
+def _skill_texts(user_id: str, ids=None):
+	"""``[(id, body)]`` for ``ids`` (default: every skill), or None when unreadable."""
+	try:
+		from agents.task.agent.skill_manager import get_skill_manager
+		sm = get_skill_manager()
+		return [(sid, sm._load_skill_content(sid, user_id=user_id) or "")
+		        for sid in (sm.get_skill_ids() if ids is None else ids)]
+	except Exception as e:
+		logger.info("rules sweep: skills not swept (%s)", e)
+		return None
+
+
+def _conflict_report(user_id: str, data_dir: str) -> str:
+	"""Every active rule against enabled job text and pinned skills (`rule-conflict-check`)."""
+	from core.instance import resolve_instance_id
+	from core.runtime_paths import cron_db_path, goals_db_path
+	from core.rules_sweep import conflict_check, pinned_skill_ids, render_conflict_check
+	cron_db, goals_db = cron_db_path(data_dir), goals_db_path(data_dir)
+	skills = _skill_texts(user_id, pinned_skill_ids(user_id, cron_db, goals_db))
+	return render_conflict_check(conflict_check(
+		user_id=user_id, data_dir=data_dir, instance_id=resolve_instance_id(),
+		cron_db=cron_db, goals_db=goals_db, skills=skills))
 
 
 def _sweep_new_rules(controller, before: str, after: str, user_id: str,
@@ -372,14 +382,17 @@ _MAX_SUPERSEDE = 3
 
 
 def draft_owner_supersede(controller, skill_id: str, new_text: str, *, user_id: str,
-                          created_by: str, link: bool = True) -> str:
+                          created_by: str, link: bool = True, name_only: bool = False) -> str:
 	"""095 W10 step 4 (R8 — supersede, do not overwrite). A programme-term change
 	in a lane's pinned skill also drafts the retire of the owner.md line(s) on the
 	same subject, and LINKS the two drafts: one owner tap promotes both or
 	neither (``core.pending_links``). Only on an owner turn, only for a skill an
 	enabled job or live goal pins, only when owner.md is writable here. The lines
 	are found by the rules sweep's matcher (``rules_sweep.same_subject_lines``).
-	Returns the sentence for the skill_manage result ("" when nothing was drafted).
+	The matcher shares words, not meaning, so a hit is a candidate: ``name_only``
+	(a skill change that is already live, with no owner tap to come) names the
+	lines and leaves owner.md unchanged.
+	Returns the sentence for the skill_manage result ("" when nothing was found).
 	Fail-open: the skill draft stands either way."""
 	try:
 		from core.config_policy import AutonomyConfig
@@ -402,6 +415,13 @@ def draft_owner_supersede(controller, skill_id: str, new_text: str, *, user_id: 
 			hits = find_rule(editable, line[:80])
 			if len(hits) == 1 and hits[0] not in rules:
 				rules.append(hits[0])
+		if name_only:
+			if not rules:
+				return ""
+			return ("\nThese owner.md line(s) share words with this change and stay active: "
+			        + " | ".join(f'"{r.strip().splitlines()[0][:100]}"' for r in rules[:_MAX_SUPERSEDE])
+			        + ". If one now disagrees with it, tell the owner; retire a line only when "
+			          "the owner says so.")
 		retired = []
 		for rule in rules[:_MAX_SUPERSEDE]:
 			res = writer.patch(user_id=user_id, old_string=rule, new_string="",
@@ -558,7 +578,9 @@ class DocAuthoringMixin:
 			if _no_reason:
 				return ActionResult(error=NOTHING_WRITTEN + _no_reason, include_in_memory=True)
 			try:
-				res, err = _write_doc(writer, params, user_id=user_id, created_by=created_by)
+				res, err, _now = _write_owner_rule(
+					writer, params, user_id=user_id, created_by=created_by,
+					now=_owner_doc_applies_now(self, params, execution_context))
 				if err:
 					return ActionResult(error=NOTHING_WRITTEN + err, include_in_memory=True)
 			except Exception as e:
@@ -573,6 +595,10 @@ class DocAuthoringMixin:
 			                   data_dir=data_dir)
 			_room = _headroom_note(writer, res, "self.md", replace_hint=False)
 			_self_mod_ev(params.action, pending=res.pending, created_by=created_by)
+			if _now and not res.pending:
+				return ActionResult(
+					extracted_content="Self-context IN EFFECT now, with no tap." + _room,
+					include_in_memory=True)
 			# §7.1: proactively tell the owner a proposal is waiting (fail-open,
 			# gated SELF_EVOLUTION_TRANSPARENCY). Closes the "owner never told" gap.
 			try:
@@ -611,7 +637,7 @@ class DocAuthoringMixin:
 		from typing import Literal as _Literal
 
 		class OwnerDocManageAction(BaseModel):
-			action: _Literal["update", "patch", "replace_rule", "read", "promote", "sweep"]
+			action: _Literal["update", "patch", "replace_rule", "read", "promote", "sweep", "sweep_all"]
 			content: Optional[str] = None      # update: full owner.md body (≤OWNER_DOC_MAX_CHARS)
 			old_string: Optional[str] = None   # patch: exact text to replace
 			new_string: Optional[str] = None   # patch / replace_rule: replacement
@@ -630,22 +656,25 @@ class DocAuthoringMixin:
 		from core.prompt_text import owner_route
 
 		@self.registry.action(
-			"Record the OWNER's durable facts and STANDING RULES — timezone, projects, "
-			"how they want you to operate (owner.md in your identity directory, "
+			"Record the OWNER's STANDING RULES: how they want you to operate, and durable "
+			"facts such as the timezone (owner.md in your identity directory, "
 			f"≤{OWNER_DOC_MAX_CHARS} chars). " + owner_route("owner_doc") + " "
+			"A write is refused when a new or changed line names a job id or claims a "
+			"job's on or off state. "
 			"action='read' returns it with its path — never search the disk for it. "
 			"action='update' replaces the whole doc; action='patch' edits the ACTIVE "
 			"rules by exact-string replace; action='replace_rule' (rule_start=<first "
 			"words of ONE active rule>, new_string=<the new rule>, none = retire it) "
 			"replaces that rule in place; the old text moves under '## Superseded' (off "
-			"the cap). Every write needs reason= (one sentence for the owner: why this "
+			"the cap; '## History' is also off the cap and frozen). Every write needs reason= (one sentence for the owner: why this "
 			"change) and reports the chars left. "
 			"Pass source= ('owner said', 'measured') and observed_at=YYYY-MM-DD to stamp "
 			"new lines (counts toward the cap); a line CLAIMING a world fact (broken, "
 			"since …) may be refused without a source. action='sweep' content=<a rule> "
 			"lists standing instructions (owner rules, SOUL, skills, job/goal text, "
 			"`kind: instruction` docs) that seem to contradict it; advisory; every write "
-			"is swept too.",
+			"is swept too. action='sweep_all' checks every active rule against enabled job "
+			"text and pinned skills, with both quotes.",
 			param_model=OwnerDocManageAction,
 		)
 		async def owner_doc_manage(params: OwnerDocManageAction, execution_context=None) -> ActionResult:
@@ -694,6 +723,10 @@ class DocAuthoringMixin:
 					extracted_content=_sweep_report(self, params.content, user_id, data_dir),
 					include_in_memory=True)
 
+			if params.action == "sweep_all":
+				return ActionResult(extracted_content=_conflict_report(user_id, data_dir),
+				                    include_in_memory=True)
+
 			is_forged = _is_forged_or_autonomous_turn(execution_context, self)
 
 			if params.action == "promote":
@@ -726,7 +759,7 @@ class DocAuthoringMixin:
 			_no_reason = _missing_reason(params, is_forged)
 			if _no_reason:
 				return ActionResult(error=NOTHING_WRITTEN + _no_reason, include_in_memory=True)
-			_now = _owner_rule_applies_now(self, params, execution_context)
+			_now = _owner_doc_applies_now(self, params, execution_context)
 			try:
 				res, err, _now = _write_owner_rule(writer, params, user_id=user_id,
 				                                   created_by=created_by, now=_now)
@@ -751,8 +784,7 @@ class DocAuthoringMixin:
 					extracted_content=(
 						"Owner rule IN EFFECT now, with no tap: the owner gave it in this turn. "
 						"Tell the owner the rule as written. If they want it gone, use "
-						"action='replace_rule' with rule_start and no new_string; that also "
-						"needs no tap." + _room + _swept),
+						"action='replace_rule' with rule_start and no new_string." + _room + _swept),
 					include_in_memory=True)
 			try:
 				from core import self_evolution as _se

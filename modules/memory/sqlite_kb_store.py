@@ -29,14 +29,21 @@ def _collection_clause(collection: Optional[str]):
     return " AND collection = ?", (str(collection),)
 
 
+#: Rows a KB read asks for per requested row. A twin in a second collection is
+#: dropped after the LIMIT, so a bare LIMIT would let it take a result slot.
+_KB_TWIN_OVERFETCH = 3
+
+
 def _dedupe_rows(rows: list) -> list:
-    """Drop repeat chunks by content: with every collection searched, the same
-    document ingested into two collections must answer once, not twice."""
+    """Drop repeat chunks: with every collection searched, one document ingested
+    into two collections must answer once. A twin has the same content or the same
+    ``(source_path, chunk_idx)`` (an older snapshot of that chunk)."""
     seen, out = set(), []
     for row in rows:
-        if row[0] in seen:
+        keys = (row[0], (row[1], str(row[2])))
+        if any(k in seen for k in keys):
             continue
-        seen.add(row[0])
+        seen.update(keys)
         out.append(row)
     return out
 
@@ -211,14 +218,15 @@ class KbStoreMixin:
             conn.close()
 
     def kb_keyword_contents(self, query: str, *, user_id, collection: Optional[str],
-                            limit: int) -> list:
+                            limit: int, weak_floor: bool = False) -> list:
         """FTS5 recall over kb_chunks scoped to user_id and, unless *collection* is
         None, one collection. None searches EVERY collection of the tenant (097: the
         KB has full access by default — the owner does not curate collections).
 
         Returns a list of (content, source_path, chunk_idx) tuples.
         Uses the same token sanitizer as _keyword_contents. Empty query →
-        recent browse (rowid DESC). Never raises — returns [] on error.
+        recent browse (rowid DESC). A read that fails raises: [] means nothing matched.
+        ``weak_floor`` (the automatic prefetch) leaves out a weak bm25 match.
         """
         norm = self._norm_user(user_id)
         limit = self._clamp_limit(limit, 8)
@@ -227,12 +235,17 @@ class KbStoreMixin:
             terms = self._query_terms(query)
             if terms:
                 match = self._fts_match(terms)
+                weak_sql, weak_args = "", ()
+                if weak_floor:
+                    from modules.memory.recall_rank import weak_match_sql
+                    weak_sql, weak_args = weak_match_sql(execute_retry(
+                        self.db_path, "SELECT count(*) AS n FROM kb_chunks", (), fetch="one")["n"])
                 rows = execute_retry(
                     self.db_path,
                     "SELECT content, source_path, chunk_idx FROM kb_chunks "
-                    f"WHERE kb_chunks MATCH ? AND user_id = ?{scope} "
+                    f"WHERE kb_chunks MATCH ? AND user_id = ?{scope}{weak_sql} "
                     "ORDER BY rank LIMIT ?",
-                    (match, norm) + scope_params + (limit,),
+                    (match, norm) + scope_params + weak_args + (limit * _KB_TWIN_OVERFETCH,),
                     fetch="all",
                 )
             elif (query or "").strip():
@@ -246,14 +259,15 @@ class KbStoreMixin:
                     "SELECT content, source_path, chunk_idx FROM kb_chunks "
                     f"WHERE user_id = ?{scope} "
                     "ORDER BY rowid DESC LIMIT ?",
-                    (norm,) + scope_params + (limit,),
+                    (norm,) + scope_params + (limit * _KB_TWIN_OVERFETCH,),
                     fetch="all",
                 )
             return _dedupe_rows([(r["content"], r["source_path"], r["chunk_idx"])
-                                 for r in (rows or [])])
+                                 for r in (rows or [])])[:limit]
         except Exception as e:
+            # [] means "nothing matched": a read that failed raises.
             logger.warning("kb_keyword_contents failed: %s", e)
-            return []
+            raise
 
     def kb_mark_hits(self, *, user_id, source_paths) -> None:
         """Stamp ``last_hit_at`` on every source a search returned (097 D3).
@@ -296,18 +310,22 @@ class KbStoreMixin:
         return out
 
     async def kb_search(self, query: str, *, user_id, collection: Optional[str] = None,
-                        limit: int = 8) -> str:
+                        limit: int = 8, stamp: bool = True) -> str:
         """FTS-only KB recall. Returns provenance-tagged '[source_path #chunk_idx] content'
         lines joined by newline, or '' on anon-block / no results. ``collection=None``
-        searches every collection.
+        searches every collection. ``stamp=False`` (automatic prefetch) leaves
+        ``last_hit_at`` alone: only an explicit search keeps a document in the KB.
         """
         if self._anon_blocked(user_id):
             return ""
-        rows = self.kb_keyword_contents(query, user_id=user_id, collection=collection,
-                                        limit=limit)
+        # Off the event loop: execute_retry sleeps under WAL contention.
+        rows = await self._run_blocking(self.kb_keyword_contents, query, user_id=user_id,
+                                        collection=collection, limit=limit, weak_floor=not stamp)
         if not rows:
             return ""
-        self.kb_mark_hits(user_id=user_id, source_paths=[src for _, src, _ in rows])
+        if stamp:
+            await self._run_blocking(self.kb_mark_hits, user_id=user_id,
+                                     source_paths=[src for _, src, _ in rows])
         return "\n".join(f"[{src} #{idx}] {content}" for content, src, idx in rows)
     async def kb_list_sources(self, *, user_id, collection: str = None) -> list:
         """Return list of source dicts for this tenant, optionally filtered by collection.
@@ -338,7 +356,7 @@ class KbStoreMixin:
             return [dict(r) for r in (rows or [])]
         except Exception as e:
             logger.warning("kb_list_sources failed: %s", e)
-            return []
+            raise
     async def kb_remove(self, *, user_id, collection: str, source: str = None) -> int:
         """Remove kb_chunks (and kb_sources entry) for a source or whole collection.
 

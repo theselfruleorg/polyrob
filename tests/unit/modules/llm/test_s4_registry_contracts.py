@@ -3,9 +3,7 @@
 1. The ``LLM_PROVIDER_REGISTRY`` kill-switch is gone: the env var is inert and
    the seams derive from ``get_specs()`` (subscription rows present) — there is
    no second legacy literal table to fall back to.
-2. ``TokenCounter.estimate_cost`` forwards BOTH cache token classes (B11): a
-   cache-WRITE surcharge is never dropped on the telemetry estimate.
-3. ``ProviderSpec.cache_strategy`` is the ONE per-provider caching table (B17).
+2. ``ProviderSpec.cache_strategy`` is the ONE per-provider caching table (B17).
 """
 import pytest
 
@@ -41,21 +39,11 @@ def test_seams_derive_from_the_registry(clean_registry):
     assert ("DEEPSEEK_API_KEY", "deepseek") in _key_to_provider()  # native since 2026-10-27
 
 
-def test_estimate_cost_forwards_cache_write_tokens():
-    from modules.llm.model_registry import calculate_cost
-    from modules.llm.token_counter import TokenCounter, TokenUsage
-    usage = TokenUsage(prompt_tokens=1000, completion_tokens=10, total_tokens=1010,
-                       cached_tokens=100, cache_creation_tokens=400)
-    est = TokenCounter().estimate_cost(usage, "claude-sonnet-4-5")
-    assert est == pytest.approx(calculate_cost("claude-sonnet-4-5", 1000, 10, 100, 400))
-    assert est > calculate_cost("claude-sonnet-4-5", 1000, 10, 100, 0)  # the 1.25x write surcharge
-
-
 def test_cache_strategy_is_a_spec_field(clean_registry):
     from modules.llm import cache_hints
     from modules.llm.provider_spec import get_spec
     for name, expected in (("anthropic", "in_client"), ("openai", "in_client"),
-                           ("gemini", "explicit"), ("nvidia", "automatic"),
+                           ("gemini", "automatic"), ("nvidia", "automatic"),
                            ("deepseek", "automatic")):
         assert get_spec(name).cache_strategy == expected
         assert cache_hints.provider_cache_strategy(name) == expected

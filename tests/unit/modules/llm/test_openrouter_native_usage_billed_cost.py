@@ -53,7 +53,7 @@ def test_billed_cost_survives_the_adapter_into_extract_token_usage():
 
     usage_data = _client_with(cost=0.0042, cache_discount=0.001)._extract_usage_data()
     meta = OpenRouterAdapter._usage_metadata_from(usage_data)
-    out = extract_token_usage(AIMessage(content="", usage_metadata=meta), "openrouter")
+    out = extract_token_usage(AIMessage(content="", usage_metadata=meta))
     assert out["total_tokens"] == 110
     assert out["billed_cost_usd"] == pytest.approx(0.0042)
     assert out["cache_discount_usd"] == pytest.approx(0.001)

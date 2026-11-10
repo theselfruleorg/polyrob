@@ -13,7 +13,7 @@ Rules:
 - the bot's own messages are dropped;
 - a single chat → dm; a group message is read ONLY when ``isInAtList`` is true
   (fail closed: a missing flag means no group message is read);
-- owner recognition stays pairing-row only (the catalog row has no alias).
+- the owner is the sender whose id equals ``OWNER_DINGTALK_ID`` (``owner_surface_alias``).
 """
 from __future__ import annotations
 
@@ -69,8 +69,9 @@ def parse_message(data: Any, user_directory: Any = None) -> Optional[InboundMess
     chat_id = str(data.get("conversationId") or "")
     source = SessionSource(surface_id="dingtalk", chat_id=chat_id,
                            chat_type="group" if group else "dm")
-    user_id = None
-    if user_directory is not None:
+    from core.instance import owner_surface_alias
+    user_id = owner_surface_alias(author, "dingtalk")
+    if not user_id and user_directory is not None:
         try:
             user_id = user_directory.resolve_internal(author, "dingtalk")
         except Exception:

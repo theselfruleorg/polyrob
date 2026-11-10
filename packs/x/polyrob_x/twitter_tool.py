@@ -153,6 +153,7 @@ class TwitterDMAction(BaseModel):
 class TwitterMentionsAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
     max_results: int = Field(10, ge=5, le=100, description="Max mentions to fetch.")
+    since_id: Optional[str] = Field(None, description="Only mentions newer than this tweet id.")
 
 
 class TwitterPollResultsAction(BaseModel):
@@ -213,6 +214,22 @@ def twitter_write_enabled() -> bool:
     default; a direct TWITTER_ENABLED line is ignored (D7)."""
     from polyrob.sdk import member_flag
     return member_flag("TWITTER_ENABLED")
+
+
+def _storefront_mark(t) -> dict:
+    """109: a storefront line under an offer announcement is answered by CODE; say so
+    on the mention so the model's own mention job does not answer it a second time."""
+    try:
+        from polyrob.sdk import offer_of
+        from polyrob.sdk import storefront_thread_line as thread_line
+        root = str(getattr(t, "conversation_id", "") or "")
+        if root and thread_line(getattr(t, "text", "")) and offer_of("x", root):
+            return {"answered_by": "storefront (code answers this order line; do not reply)"}
+    except Exception:
+        # A missed mark lets the model answer a storefront line a second time: say so.
+        logging.getLogger(__name__).warning("twitter: storefront mark failed for mention %s",
+                       getattr(t, "id", "?"), exc_info=True)
+    return {}
 
 
 class TwitterTool(BaseTool):
@@ -1541,9 +1558,6 @@ class TwitterTool(BaseTool):
     def _dm_cap(self) -> int:
         return self._env_int("TWITTER_DM_MAX_PER_HOUR", 5)
 
-    def _require_approval(self) -> bool:
-        return os.getenv("TWITTER_REQUIRE_APPROVAL", "true").strip().lower() not in _FALSEY
-
     #: New-content publishing actions — a repeat here is a duplicate POST, not
     #: engagement. twitter_reply/twitter_quote are deliberately excluded: a
     #: reply to a DIFFERENT tweet is not a repeat by construction.
@@ -1615,7 +1629,8 @@ class TwitterTool(BaseTool):
                     f"{cooldown}s cooldown between autonomous posts (repeat-goal "
                     f"guard, TWITTER_POST_COOLDOWN_SEC). retry_after_sec={retry_after}. "
                     f"If this text reports something NEW (an executed transaction, a "
-                    f"fact not yet posted): do NOT drop it — defer it with "
+                    f"fact not yet posted): do NOT drop it — defer it with cronjob_schedule "
+                    f"(if it is not in your tools, call load_tool(tool_id='cronjob') first): "
                     f"cronjob_schedule(schedule='{once_at}' (one-shot ISO — never a bare duration, that repeats), task='Post to X "
                     f"exactly this text: <your text>') and say so in your result. If it "
                     f"repeats what was just posted (this run is a re-fire of a goal that "
@@ -1701,32 +1716,8 @@ class TwitterTool(BaseTool):
             return False
 
     def _owner_standing_run(self, execution_context) -> bool:
-        """True for the MAIN run of a standing cron job or goal (the daily promo
-        post, a recurring trade notice): its post is the owner's standing decision.
-        Not a sub-agent/leaf, not a room or forged re-entry, no correspondent's
-        message in the session, the owner tenant, and the run is recorded by
-        the cron runner or the goal dispatcher. Fail-closed."""
-        if execution_context is None:
-            return False
-        try:
-            # W5: the ONE owner-turn definition and the shared taint view.
-            from polyrob.sdk import (forged_kind, is_leaf, is_owner_tenant, is_room_turn,
-                                     turn_tainted)
-            if is_leaf(execution_context):
-                return False
-            if not isinstance(getattr(execution_context, "metadata", None), dict) or \
-                    turn_tainted(execution_context):
-                return False
-            if forged_kind(execution_context) or is_room_turn(execution_context):
-                return False
-            from core.autonomy_marker import job_task_for_session
-            if not job_task_for_session(getattr(execution_context, "session_id", None)):
-                return False
-            return is_owner_tenant(execution_context)
-        except Exception:
-            self.logger.debug("twitter standing-job probe failed (not an owner job)",
-                              exc_info=True)
-            return False
+        from polyrob.sdk import is_owner_standing_run
+        return is_owner_standing_run(execution_context)
 
     def _with_reason(self, text: str, execution_context) -> str:
         from polyrob_x.gate_reason import with_reason
@@ -1750,38 +1741,33 @@ class TwitterTool(BaseTool):
     async def _approval_gate(self, action_name: str, params, execution_context):
         """AGT-7/SUP-6: who may write to X. Returns a refusal, or None.
 
-        - A genuine OWNER turn: asking the agent to post IS the owner's
-          decision. It is allowed; with ``TWITTER_REQUIRE_APPROVAL`` on and a
-          human provider configured, the owner is asked once more.
-        - A standing cron job or goal run posts as its text says.
+        - A genuine OWNER turn, or the main run of a standing cron job or goal, posts:
+          what the owner asked or scheduled is the decision, and a rule about what to
+          post lives in the agent's owner rules, not here. Only the operator's
+          ``APPROVAL_PROVIDER=deny`` stops it.
         - Any other turn (forged, room, correspondent-tainted, non-owner) needs a
-          REAL owner approval whatever ``TWITTER_REQUIRE_APPROVAL`` or
-          ``APPROVAL_PROVIDER`` say: an automatic provider (``auto``,
-          ``auto_notify``) is replaced by the durable owner queue, which asks
-          the owner (Telegram /approve) and itself refuses what may not ask.
+          REAL owner approval whatever ``APPROVAL_PROVIDER`` says: an automatic
+          provider (``auto``, ``auto_notify``) is replaced by the durable owner queue,
+          which asks the owner (Telegram /approve) and itself refuses what may not ask.
         """
         # A late owner approval being sent (``send_approved``): the owner's tap
         # on THIS action is the approval; its one-shot grant is already consumed.
         if _OWNER_APPROVED_ACTION.get() == action_name:
             return None
-        # A standing cron job or goal posts as written; a room, a
-        # correspondent-tainted or a delegated run does not.
         owner_turn = (self._genuine_owner_turn(execution_context)
                       or self._owner_standing_run(execution_context))
-        if owner_turn and not self._require_approval():
-            return None
         timeout = 0.0
         try:
-            from tools.controller.approval import get_approval_provider_or_deny
+            from tools.controller.approval import DenyByDefaultApprover, get_approval_provider_or_deny
             try:
                 import tools.controller.approval_interactive  # noqa: F401  # registers interactive_cli
             except Exception:
                 pass
             provider = get_approval_provider_or_deny(os.getenv("APPROVAL_PROVIDER"))
             provider_name = (os.getenv("APPROVAL_PROVIDER") or "auto").strip().lower()
+            if owner_turn and not isinstance(provider, DenyByDefaultApprover):
+                return None
             if not self._human_provider(provider):
-                if owner_turn:
-                    return None   # the owner asked; no person to ask again
                 import tools.controller.approval_queue  # noqa: F401  # registers owner_queue
                 provider = get_approval_provider_or_deny(
                     "owner_queue", user_id=getattr(execution_context, "user_id", None))
@@ -1837,7 +1823,10 @@ class TwitterTool(BaseTool):
         pause_block = self._pause_block(action_name, execution_context)
         if pause_block:
             return self.create_action_result(error=pause_block, include_in_memory=True)
-        from polyrob_x.post_spacing import spacing_refusal
+        from polyrob_x.post_spacing import placeholder_refusal, spacing_refusal
+        placeholder = placeholder_refusal(action_name, getattr(params, "text", None))
+        if placeholder:
+            return self.create_action_result(error=placeholder, include_in_memory=True)
         cooldown_block = (spacing_refusal(action_name, execution_context)
                           or await self._social_cooldown_block(action_name, execution_context))
         if cooldown_block:
@@ -1847,7 +1836,8 @@ class TwitterTool(BaseTool):
             return self.create_action_result(error=gate, include_in_memory=True)
         from polyrob_x.write_budget import reserve_write
         units = (len(params.texts) if action_name == "twitter_thread" else
-                 len(self._split_tweet_text(params.text)) if action_name == "twitter_post" else 1)
+                 len(self._split_tweet_text(params.text))
+                 if action_name in ("twitter_post", "twitter_reply") else 1)
         if not await asyncio.to_thread(reserve_write, is_dm=is_dm, units=units):
             cap = self._dm_cap() if is_dm else self._write_cap()
             kind = "DMs" if is_dm else "writes"
@@ -2344,12 +2334,17 @@ class TwitterTool(BaseTool):
             me_id = await self.get_authenticated_user_id()
             if not me_id:
                 return self._err("Could not resolve authenticated user id")
+            extra = {"since_id": params.since_id} if params.since_id else {}
             resp = await self._make_request(func=self.client.get_users_mentions, endpoint_type="tweets",
                                             id=me_id, max_results=params.max_results, user_fields=["username"],
-                                            tweet_fields=["created_at", "text", "author_id"], expansions=["author_id"])
+                                            tweet_fields=["created_at", "text", "author_id",
+                                                          "conversation_id"],
+                                            expansions=["author_id"], **extra)
             users = {str(u.id): u.username for u in ((getattr(resp, "includes", None) or {}).get("users") or [])}
             items = [{"id": str(t.id), "text": t.text, "author_id": str(t.author_id) if t.author_id else None,
-                      "author_username": users.get(str(t.author_id))} for t in (getattr(resp, "data", None) or [])]
+                      "author_username": users.get(str(t.author_id)),
+                      "conversation_id": str(getattr(t, "conversation_id", "") or "") or None,
+                      **_storefront_mark(t)} for t in (getattr(resp, "data", None) or [])]
             return self._ok(f"🐦 Mentions:\n{json.dumps(items, indent=2)}")
         except Exception as e:
             return self._err(f"Error getting mentions: {e}")

@@ -187,19 +187,6 @@ def test_cancel_when_idle_says_so():
         h_rooms._TURN.pop("ctrl", None)
 
 
-def test_new_clears_and_states_the_session_is_unchanged(monkeypatch):
-    cleared = {}
-    monkeypatch.setattr("cli.ui.commands.handlers._h_clear",
-                        lambda ctx: cleared.setdefault("yes", True))
-    ctx, buf = _ctx([])
-    ctx.session_id = "abc-123"
-    h_rooms.h_new(ctx)
-    out = buf.getvalue()
-    assert cleared == {"yes": True}
-    assert "Started fresh" in out
-    assert "abc-123" in out            # no claim of a new session id
-
-
 def test_start_prints_the_welcome():
     ctx, buf = _ctx([])
     h_rooms.h_start(ctx)

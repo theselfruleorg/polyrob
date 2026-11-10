@@ -61,8 +61,17 @@ class SessionControl:
 
     @staticmethod
     def alive(row):
+        """A live run holds the row. The generation carries the run's process
+        identity (``<uuid>|<pid>|<start>|<boot>``), so a pid reused after a reboot
+        is not the holder; an old row (a bare uuid) keeps the bare-pid check."""
         if not row or not row["active"]:
             return False
+        gen = str(row["generation"] or "")
+        if "|" in gen:
+            from core.state.proc import ProcIdentity, is_alive
+            ident = ProcIdentity.decode(gen.split("|", 1)[1])
+            if ident is not None:
+                return is_alive(ident)
         try:
             os.kill(row["pid"], 0)
             return True
@@ -72,7 +81,8 @@ class SessionControl:
             return True
 
     def start(self):
-        generation = uuid.uuid4().hex
+        from core.state.proc import process_identity
+        generation = f"{uuid.uuid4().hex}|{process_identity().encode()}"
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT * FROM control WHERE id=1").fetchone()

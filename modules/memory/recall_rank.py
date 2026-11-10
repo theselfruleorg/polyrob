@@ -36,20 +36,29 @@ NEAR_DUP_JACCARD = 0.8
 #: Rows shorter than this many distinct words are never merged.
 NEAR_DUP_MIN_WORDS = 4
 
-#: F7 (prod review 2026-10-29): an owner-chat recall reads only EPISODIC rows
-#: from the last N days, unless the owner's message names an older date. 96 %
-#: of prod rows were older than two weeks, and a "did we pay?" question got
-#: 10-14 rows. A durable fact (an address, a handle, a contract id, a
-#: preference) has no age limit (review M5).
+#: F7 (prod review 2026-10-29): an owner-chat recall reads only rows from the
+#: last N days, unless the owner's message names an older date. 96 % of prod rows
+#: were older than two weeks, and a "did we pay?" question got 10-14 rows.
 OWNER_RECALL_MAX_AGE_DAYS = 7
-#: The marker of an episodic row: an account of what one run did (the phase
-#: summaries ``memory_writer`` / the close drain write, ``task_context_manager``).
-#: Only such a row ages out of an owner-chat recall; any other row is a fact.
-EPISODIC_MARK = "[phase-summary:"
-#: A row whose content starts with this marker is a claim the run could not
-#: check (``memory_writer`` / ``reflection_service``). An owner chat never
-#: gets it as recall.
+#: An automatic recall injects no match with a bm25 score under this: one common word
+#: from the query is no reason to put a row in front of the model. Nothing is the
+#: allowed answer. Chosen on the recall eval (ops/lab/recall_eval.py).
+RECALL_WEAK_SCORE = 2.0
+#: bm25 weighs a term by the rows it is NOT in, so a small table has no scale to judge
+#: a score against: under this many rows the floor does not apply.
+RECALL_WEAK_MIN_ROWS = 200
+#: ``mem_provenance.kind`` values with no age limit in an owner-chat recall (an
+#: address, a handle, a contract id, a preference). The absence of a mark proves
+#: nothing: run narration has no mark either, so every other kind is episodic.
+DURABLE_KINDS = ("fact",)
+#: A line that holds this marker is a claim the run could not check
+#: (``memory_writer`` / ``reflection_service``). An owner chat never gets it as
+#: recall. ``strip_unverified`` is the one rule; a writer marks through
+#: ``mark_unverified``.
 UNVERIFIED_MARK = "[unverified]"
+
+#: The usual reciprocal-rank constant.
+_FUSE_K = 60
 
 _WORD = re.compile(r"\w+", re.UNICODE)
 _MONTH_NAMES = ("january", "february", "march", "april", "may", "june", "july",
@@ -67,12 +76,6 @@ _MON_DAY = re.compile(r"\b([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b")
 _DAY_MON = re.compile(r"\b(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?([A-Za-z]{3,9})\b")
 
 
-def is_episodic(content: str) -> bool:
-    """True for a row that is an account of one run (it ages out of an
-    owner-chat recall); False for a durable fact."""
-    return EPISODIC_MARK in (content or "")
-
-
 def _named_dates(text: str, year: int):
     """(month, day, year) triples a free-text message names. Pure, best-effort."""
     for y, m, d in _ISO_DATE.findall(text):
@@ -87,11 +90,38 @@ def _named_dates(text: str, year: int):
             yield _MONTHS[mon.lower()], int(d), year
 
 
+def weak_match_sql(row_count: int) -> tuple:
+    """``(sql, args)`` that keeps a weak match out of an automatic recall, for a table
+    of ``row_count`` rows. FTS5 ``rank`` is the negative bm25 score."""
+    if row_count < RECALL_WEAK_MIN_ROWS:
+        return "", ()
+    return " AND rank <= ?", (-RECALL_WEAK_SCORE,)
+
+
+def mark_unverified(text: str) -> str:
+    """``text`` with the marker on each line: the filter reads per line, so a mark
+    on line 1 alone let the other lines of a multi-line summary through."""
+    return "\n".join(ln if not ln.strip() or ln.startswith(UNVERIFIED_MARK)
+                     else f"{UNVERIFIED_MARK} {ln}" for ln in (text or "").split("\n"))
+
+
 def strip_unverified(content: str) -> str:
-    """``content`` without its ``[unverified]`` lines ("" when none is left)."""
-    lines = [ln for ln in (content or "").split("\n")
-             if not ln.lstrip().startswith(UNVERIFIED_MARK)]
-    return "\n".join(lines).strip()
+    """``content`` without a line that holds the marker, at any place in the line
+    ("" when no finding is left). A ``User: …\\nAssistant: …`` row (the server
+    default) is judged on its findings: a row with only its question left is empty."""
+    content = content or ""
+    head, sep, body = (content.partition("\nAssistant: ") if content.startswith("User: ")
+                       else ("", "", content))
+    body = "\n".join(ln for ln in body.split("\n") if UNVERIFIED_MARK not in ln).strip()
+    return f"{head}{sep}{body}" if body else ""
+
+
+def unverified_row_sql() -> tuple:
+    """``(sql, args)`` that keeps a row with no line left under ``strip_unverified``
+    out of the candidate pool. Only a one-line row can be judged in SQL; a longer
+    row goes through ``strip_unverified`` line by line."""
+    return (" AND NOT (instr(m.content, ?) > 0 AND instr(m.content, char(10)) = 0)",
+            (UNVERIFIED_MARK,))
 
 
 def names_older_date(query: str, *, max_age_days: float,
@@ -135,6 +165,27 @@ def near_duplicate(a: str, b: str) -> bool:
     if len(wa) < NEAR_DUP_MIN_WORDS or len(wb) < NEAR_DUP_MIN_WORDS:
         return False
     return len(wa & wb) / len(wa | wb) >= NEAR_DUP_JACCARD
+
+
+def fuse_ranked(first: List[dict], second: List[dict], *, limit: int,
+                demote_automation: bool = True) -> List[dict]:
+    """Reciprocal-rank fusion of two ranked lists of one store (rows carry ``rowid``). The
+    reader's group order holds over the fused list, and of two near-duplicates the better
+    placed one stays, as each list already kept the newer of its own."""
+    scores, rows = {}, {}
+    for ranked in (first, second):
+        for i, r in enumerate(ranked):
+            scores[r["rowid"]] = scores.get(r["rowid"], 0.0) + 1.0 / (_FUSE_K + i + 1)
+            rows.setdefault(r["rowid"], r)
+    order = sorted(scores, key=lambda rowid: (
+        0 if rows[rowid].get("own") else 1,
+        (1 if rows[rowid].get("auto") else 0) if demote_automation else 0,
+        -scores[rowid]))
+    kept: List[dict] = []
+    for rowid in order:
+        if not any(near_duplicate(k["content"], rows[rowid]["content"]) for k in kept):
+            kept.append(rows[rowid])
+    return kept[:limit]
 
 
 def rerank(rows: Iterable[dict], *, limit: int, demote_automation: bool = True,

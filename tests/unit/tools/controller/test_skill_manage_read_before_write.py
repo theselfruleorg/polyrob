@@ -24,8 +24,7 @@ def _sha(text):
 @pytest.fixture
 def env(monkeypatch, tmp_path):
     monkeypatch.setenv("SKILLS_WRITABLE", "true")
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
-    monkeypatch.setenv("SKILL_OVERWRITE_PROTECT", "false")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")  # an owner turn writes live
     sm = SkillManager(skills_dir=tmp_path)
     monkeypatch.setattr("agents.task.agent.skill_manager.get_skill_manager", lambda: sm)
     c = object.__new__(Controller)
@@ -117,7 +116,6 @@ async def test_only_added_lines_are_scanned(env):
 
 
 def test_lint_reports_only_new_warnings(tmp_path, monkeypatch):
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
     sm = SkillManager(skills_dir=tmp_path)
     short = "no heading but long enough text to pass the size floor of a skill body.\n"
     sm.create_skill("s", short, user_id="u1", created_by="user")

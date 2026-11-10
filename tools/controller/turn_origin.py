@@ -187,7 +187,11 @@ def _autonomous_owner_resend_cooldown_refusal(
 			from core.surfaces.user_delivery import content_hash
 			h = content_hash(body)
 			if not any(content_hash((b or "").strip()) == h for b in bodies):
-				return None   # materially new — the owner has not seen this
+				# A new hash is not yet "materially new": a run that cannot finish
+				# paraphrases its last message (prod 2026-11-06 11:00Z: ~30 reworded
+				# copies of one hero-run report in 5 minutes, each a fresh hash).
+				if not _is_paraphrase_of_any(body, bodies) and not _owner_burst(container, user_id):
+					return None   # materially new — the owner has not seen this
 		elif not bodies:
 			return None
 	except Exception:
@@ -195,6 +199,45 @@ def _autonomous_owner_resend_cooldown_refusal(
 			"owner resend cooldown check failed (fail-open)", exc_info=True)
 		return None
 	return _refusal()
+
+
+_PARAPHRASE_MIN_WORDS = 12
+_PARAPHRASE_SIMILARITY = 0.75
+_OWNER_BURST_WINDOW_S = 300
+_OWNER_BURST_MAX = 8
+
+
+def _word_set(text: str) -> frozenset:
+	import re
+	return frozenset(re.findall(r"[a-z0-9][a-z0-9_\-]*", (text or "").lower()))
+
+
+def _is_paraphrase_of_any(body: str, bodies) -> bool:
+	"""True when ``body`` is a reworded copy of something the owner already got in
+	the window: word-set overlap (Jaccard) at or above 0.75 on a message long
+	enough to mean something. Short texts only ever match on an exact hash."""
+	mine = _word_set(body)
+	if len(mine) < _PARAPHRASE_MIN_WORDS:
+		return False
+	for b in bodies or ():
+		theirs = _word_set(b or "")
+		if len(theirs) < _PARAPHRASE_MIN_WORDS:
+			continue
+		union = len(mine | theirs)
+		if union and len(mine & theirs) / union >= _PARAPHRASE_SIMILARITY:
+			return True
+	return False
+
+
+def _owner_burst(container, user_id: str) -> bool:
+	"""True when the owner already received ``_OWNER_BURST_MAX`` messages in the
+	last ``_OWNER_BURST_WINDOW_S`` seconds: an autonomous run does not need a ninth."""
+	try:
+		from core.surfaces.owner_thread import recent_outbound_bodies
+		recent = recent_outbound_bodies(container, user_id or "", _OWNER_BURST_WINDOW_S) if container else None
+		return bool(recent) and len(recent) >= _OWNER_BURST_MAX
+	except Exception:
+		return False
 
 
 def _record_cooldown_suppression(event_log, user_id: str, surface: str,

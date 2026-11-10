@@ -1,0 +1,25 @@
+{
+  "function": {
+    "description": "Set the answer to the NEXT alert, confirm or prompt dialog of the page: accept=false cancels it, prompt_text fills a prompt. With no call a dialog is accepted. Call it before the click that opens the dialog.",
+    "name": "browser_handle_dialog",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for the answer to the next alert, confirm or prompt.",
+      "properties": {
+        "accept": {
+          "default": true,
+          "description": "true = OK, false = Cancel",
+          "type": "boolean"
+        },
+        "prompt_text": {
+          "default": null,
+          "description": "The text to enter in a prompt dialog",
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

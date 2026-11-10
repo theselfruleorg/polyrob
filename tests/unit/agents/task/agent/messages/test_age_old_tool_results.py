@@ -278,17 +278,33 @@ def _no_checkpoint(monkeypatch):
 @pytest.mark.asyncio
 async def test_ageing_alone_can_spare_the_llm_summariser(tmp_path):
 	llm = _NeverCalledLLM()
-	mm = _mm(llm, max_input_tokens=200_000)
+	mm = _mm(llm, max_input_tokens=60_000)
 	mm._compaction_checkpoint_dir = str(tmp_path)
 	for msg in _conversation(pairs=12):
 		mm._add_message_with_tokens(msg, _internal=True)
 
 	before = mm.history.total_tokens
 	assert await mm.llm_compact_history()          # True: work WAS done
+	assert mm.compaction_rewrote_history is True
 	assert mm.history.total_tokens < before
 	# Nothing was summarised away: every turn is still there.
 	assert len(mm.history.messages) == 25
 	assert mm.last_compaction_savings() and mm.last_compaction_savings() > 0
+
+
+@pytest.mark.asyncio
+async def test_a_guard_that_says_no_leaves_the_bytes_alone(tmp_path):
+	"""106 C3: ageing ran before the guards, so a compaction that was going to skip
+	rewrote the history on each step of the band and returned False."""
+	mm = _mm(_NeverCalledLLM(), max_input_tokens=200_000)
+	mm._compaction_checkpoint_dir = str(tmp_path)
+	for msg in _conversation(pairs=12):   # all of it fits the protected tail
+		mm._add_message_with_tokens(msg, _internal=True)
+	before = [m.message.content for m in mm.history.messages]
+
+	assert await mm.llm_compact_history() is False
+	assert [m.message.content for m in mm.history.messages] == before
+	assert mm.compaction_rewrote_history is False
 
 
 @pytest.mark.asyncio

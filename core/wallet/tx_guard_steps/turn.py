@@ -136,6 +136,11 @@ def step_2_turn_origin(c: GuardContext) -> Optional[Decision]:
     if _order.startswith("ord_"):
         from core.money.hooks import offer_recipient
         c.offer_recipient = offer_recipient(_order)
+        if getattr(intent, "is_resource_call", False) and \
+                str(getattr(intent, "resource_recipient", None) or "").lower() != \
+                str(c.offer_recipient or "").lower():
+            return Decision(False, "refused: the resource call names a recipient that is not "
+                                   "the order's recipient")
         if getattr(intent, "is_deploy", False) or getattr(intent, "via_account", None):
             return Decision(False, "refused: an order run deploys nothing and acts through no "
                                    "account; it calls its offer's resources or pays its recipient")
@@ -146,12 +151,22 @@ def step_2_turn_origin(c: GuardContext) -> Optional[Decision]:
                        "contract": str(c.tx.get("to") or "").lower(),
                        "selector": str(c.tx.get("data") or c.tx.get("input") or "")[:10].lower()}
     elif getattr(intent, "is_resource_call", False):
-        return Decision(False, "refused: a resource call is only for a run that fulfils an order")
+        if execution_context is not None:
+            return Decision(False, "refused: a resource call is only for a run that fulfils "
+                                   "an order")
+        # polyrob-signer's re-check (no execution context, no order store): the agent's
+        # guard already bound the order (step 4c); the receipt shape below still runs
+        # against the recipient that guard checked.
+        c.offer_recipient = getattr(intent, "resource_recipient", None)
+    c.offer_scope = offer_scope
     verdict = authorize_spend(
         SpendIntent.turn_origin(mandate=mandate_entry, entry=mandate_entry,
                                 chain=str(intent.chain or ""), token=intent.inflow_token,
                                 usd=intent.max_spend_usd, offer_scope=offer_scope,
-                                idempotency_key=getattr(intent, "idempotency_key", None)),
+                                idempotency_key=getattr(intent, "idempotency_key", None),
+                                # An order run's budget is only CHECKED here; it is booked
+                                # after the final allow (reserve_offer_budget).
+                                dry_run=offer_scope is not None),
         execution_context, forged_fn=forged_fn,
         autonomous_ok_fn=lambda ctx, ts: _tg._autonomous_turn_allowed(
             ctx, ts, autonomous_ok_fn, offer_scoped=offer_scope is not None),
@@ -257,3 +272,38 @@ def step_2b_token_bound_account(c: GuardContext) -> Optional[Decision]:
     c.outer_tx = outer_tx
     c.sender = sender
     return None
+
+
+def reserve_offer_budget(c) -> Optional[Decision]:
+    """After the final allow: book an order run's spend against its order budget (099).
+
+    Step 2 checked the budget without booking it. Booking only an ALLOWED transaction
+    means a dry run's refusal, a reverted simulation or a cap refusal books nothing; an
+    allowed dry run books what its real send then reuses (the same idempotency key).
+    The same owner-direct exception as the kernel's offer step. Fails closed."""
+    if c.offer_scope is None:
+        return None
+    from core.money.authority import owner_direct_turn
+    ctx = c.execution_context
+    if owner_direct_turn(ctx, c.forged_fn, c.tool_self):
+        return None
+    meta = getattr(ctx, "metadata", None)
+    order = str((meta or {}).get("mandate") or "") if isinstance(meta, dict) else ""
+    try:
+        from core.money.hooks import offer_gate
+        gate = offer_gate()
+        if gate is None:
+            return Decision(False, "refused: this run fulfils an order and no offer gate is "
+                                   "registered; failing closed")
+        refusal = gate(order, user_id=str(getattr(ctx, "user_id", "") or ""),
+                       scope=c.offer_scope, usd=c.intent.max_spend_usd, dry_run=False,
+                       key=getattr(c.intent, "idempotency_key", None),
+                       session_id=getattr(ctx, "session_id", None))
+    except Exception as exc:  # noqa: BLE001
+        return Decision(False, f"refused: the order budget could not be booked ({exc}); "
+                               f"failing closed")
+    if refusal:
+        _tg._record_money_refusal("money_gate", c.tool_self, ctx, detail=f"offer: {refusal}")
+        return Decision(False, refusal)
+    return None
+

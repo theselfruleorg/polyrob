@@ -123,12 +123,13 @@ def _is_owner_or_paired(container: Any, uid: str, env: Mapping[str, str],
     if not allow_pairing:
         return False
     try:
-        from core.pairing import PairingStore
+        # Pairing OFF means no paired sender has access, on every chat app: a stored
+        # ``paired`` row is evidence only while the owner keeps the feature on.
+        from core.pairing import pairing_required, store_for
+        if not pairing_required(env):
+            return False
         cfg = getattr(container, "config", None) if container else None
-        from core.runtime_paths import data_dir_or_home
-        data_dir = data_dir_or_home(getattr(cfg, "data_dir", None))
-        store = PairingStore(os.path.join(data_dir, "pairing.db"))
-        if store.is_paired(uid):
+        if store_for(getattr(cfg, "data_dir", None)).is_paired(uid):
             return True
     except Exception as e:
         logger.debug("access-tier pairing check failed (fail-closed): %s", e)

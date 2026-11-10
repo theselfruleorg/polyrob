@@ -91,14 +91,15 @@ def deployed_sha() -> Optional[str]:
     return text[:12] or None
 
 
-def running_version_line() -> str:
-    """``vX.Y.Z (deployed abc123def456)`` — the version of the code that RUNS.
+def running_version_line(with_sha: bool = True) -> str:
+    """``vX.Y.Z (deployed abc123def456)`` — the version of the code that RUNS. A cached
+    prompt row passes ``with_sha=False``: a deploy of one version must keep its bytes.
 
     095 W1a: the version is the one this process imported (``__version__``);
     the tree on disk is read again, and ``; on disk: vY`` is added only when it
     differs (an upgrade landed and the process has not restarted yet).
     """
-    sha = deployed_sha()
+    sha = deployed_sha() if with_sha else None
     line = f"v{__version__}" + (f" (deployed {sha})" if sha else "")
     disk = get_version()
     return line + (f"; on disk: v{disk}" if disk != __version__ else "")

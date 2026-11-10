@@ -445,15 +445,8 @@ async def test_empty_function_call_skipped(gemini_client):
     mock_response.candidates = [Mock()]
     mock_response.candidates[0].content = Mock()
 
-    # Create function call with no name. Production now falls back to alternative
-    # name attributes (function_name/tool_name/method) before skipping, so a bare
-    # Mock would auto-create a truthy `.function_name` and defeat the skip. Null
-    # those alternatives too to represent a genuinely nameless call.
     mock_fc_invalid = Mock()
     mock_fc_invalid.name = None  # Invalid
-    mock_fc_invalid.function_name = None
-    mock_fc_invalid.tool_name = None
-    mock_fc_invalid.method = None
     mock_fc_invalid.args = None
 
     # Create valid function call

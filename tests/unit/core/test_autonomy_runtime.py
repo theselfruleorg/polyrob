@@ -767,8 +767,8 @@ def test_the_reaper_resolver_needs_no_upward_import():
 
 # --------------------------------------------------------------------------
 # 2026-10-03: the reapers skip when this process cannot open the Docker socket.
-# Prod runs as polyrob-agent, deliberately outside the `docker` group (proposal
-# 053 pending), so every reap tick spawned a `docker ps` that was refused —
+# Prod runs as polyrob-agent, deliberately outside the `docker` group,
+# so every reap tick spawned a `docker ps` that was refused —
 # 101 WARNING lines/day since 09-26. The socket probe already exists for
 # run_code (tools/code_exec/sandbox_guard.py); the reapers never consulted it.
 # --------------------------------------------------------------------------
@@ -828,3 +828,38 @@ def test_docker_socket_reachable_reads_the_sandbox_guard(monkeypatch):
     assert ar._docker_socket_reachable() is False
     monkeypatch.setattr(ce, "docker_sandbox_unreachable_reason", lambda: None)
     assert ar._docker_socket_reachable() is True
+
+
+# --------------------------------------------------------------------------
+# 098 TS-23: the receipt resolver runs on its own ticker with the wallet — it rode
+# the bridge watcher, which an install that trades but never bridges does not start.
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_start_autonomy_starts_the_receipt_resolver_with_the_wallet(monkeypatch):
+    resolver = _FakeTicker()
+    monkeypatch.setattr(ar, "_build_receipt_resolver", lambda: resolver)
+    monkeypatch.setattr(ar, "_cron_enabled", lambda: False)
+    monkeypatch.setattr(ar, "_goals_enabled", lambda: False)
+    monkeypatch.setattr(ar, "_curator_enabled", lambda: False)
+    monkeypatch.setattr(ar, "_surface_gc_enabled", lambda: False)
+    monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
+    monkeypatch.setenv("DEFI_BRIDGE_ENABLED", "false")
+    monkeypatch.delenv("BRIDGE_WATCHER_ENABLED", raising=False)
+    handles = ar.start_autonomy(task_agent=object(), data_dir="data")
+    await asyncio.sleep(0.01)
+    assert resolver.started
+    await handles.stop()
+
+
+@pytest.mark.asyncio
+async def test_receipt_resolver_tick_resolves_pending_receipts(monkeypatch):
+    from core.wallet import receipt_resolver
+    calls = []
+
+    async def _resolve(*a, **k):
+        calls.append(1)
+        return []
+    monkeypatch.setattr(receipt_resolver, "resolve_pending_receipts", _resolve)
+    await ar._build_receipt_resolver().tick_coro()
+    assert calls == [1]

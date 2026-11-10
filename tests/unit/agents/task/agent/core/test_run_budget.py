@@ -278,3 +278,19 @@ async def test_child_probe_error_fails_open(monkeypatch, _auto):
     other = _agent(sub=True)
     await rb.attach_parent_run_budget(other, _orch(parent), "main", background=True)
     assert not hasattr(other, "_run_budget_limit")
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_usage_store_is_unmeasured_not_zero(monkeypatch, _auto):
+    """ST-5: the rollup's error zeros read as a $0 baseline, so the next real
+    reading halted a long session on step 1 with a false run_budget_exhausted."""
+    seq = [{"api_cost_usd": 0.0, "unreadable": "OperationalError: locked"},
+           {"api_cost_usd": 10.0}]
+
+    async def rollup(user_id, session_id=None, since=None, *, db=None):
+        return seq.pop(0)
+    monkeypatch.setattr(rb, "usage_rollup", rollup)
+    a = _auto_agent()
+    await rb.snapshot_run_baseline(a)
+    assert a.state.run_spend_baseline is None
+    assert await check_run_budget(a) is None

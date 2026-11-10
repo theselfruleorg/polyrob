@@ -40,6 +40,8 @@ USAGE = (
     "/nft send <id|collection#id> <to> on <chain> [go] — give one away (its account goes "
     "with it; its approvals must be cleared first)\n"
     "/nft list on <chain> [address <0x…>]\n"
+    "/nft account [<id>] on <chain> — one agent NFT's account: approvals, owner, lock, "
+    "balance, journal\n"
     "/nft info <contract> <token-id> on <chain>\n"
     "/nft transfer <contract> <token-id> <to> on <chain> "
     "[std erc721|erc1155] [amount <n>] [go]\n"
@@ -93,7 +95,8 @@ async def nft_reply(user_id: Optional[str], args: List[str]) -> str:
     verb = tokens.pop(0).lower()
     if verb in ("ls", "holdings"):
         verb = "list"
-    if verb not in ("list", "info", "transfer", "revoke", "send", "trust", "untrust"):
+    if verb not in ("list", "info", "transfer", "revoke", "send", "trust", "untrust",
+                    "account"):
         return f"Unknown /nft verb {verb!r}.\n{USAGE}"
 
     execute = False
@@ -124,6 +127,16 @@ async def nft_reply(user_id: Optional[str], args: List[str]) -> str:
             result = await DefiDataTool().nft_holdings(
                 NftHoldingsParams(chain=chain, address=address), ctx)
             return _render(result)
+
+        if verb == "account":
+            # 113 W6 G-5: the account of an NFT this treasury owns — a read
+            # (``agent_nft_snapshot``); it sends nothing.
+            from tools.agent_nft.tool import AgentNftTool, SnapshotParams
+            try:
+                params = SnapshotParams(chain=chain, nft=tokens[0] if tokens else None)
+            except Exception as exc:
+                return f"❌ {exc}"
+            return _render(await AgentNftTool().agent_nft_snapshot(params, ctx))
 
         if verb == "send":
             if len(tokens) < 2:

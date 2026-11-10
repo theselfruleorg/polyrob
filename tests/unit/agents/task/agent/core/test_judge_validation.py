@@ -257,7 +257,7 @@ def test_p2_8_cleanup_closes_judge_client():
     import inspect
     from agents.task.agent.core import model_swap
     from agents.task.session import cleanup
-    assert "close_agent_llms" in inspect.getsource(cleanup)
+    assert "close_session_llms" in inspect.getsource(cleanup)
     assert '"_judge_llm"' in inspect.getsource(model_swap.close_agent_llms), (
         "M2 cleanup must close the cached judge client")
 
@@ -265,10 +265,13 @@ def test_p2_8_cleanup_closes_judge_client():
 def test_p2_8_background_review_reuses_cached_judge():
     import inspect
     from agents.task.agent.core import background_review
+    from agents.task.agent.core import model_swap
     src = inspect.getsource(background_review)
-    # reads the cache before provisioning, and writes back a freshly provisioned one
-    assert 'getattr(self, "_judge_llm", None)' in src
-    assert "self._judge_llm = aux" in src
+    # the one cached builder reads the cache before provisioning and writes it back
+    assert "cached_judge_llm(self)" in src
+    helper = inspect.getsource(model_swap.cached_judge_llm)
+    assert 'getattr(agent, "_judge_llm", None)' in helper
+    assert "agent._judge_llm = built" in helper
 
 
 def test_p2_8_goal_judge_writes_back_cache():

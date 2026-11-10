@@ -117,8 +117,9 @@ def test_ambiguous_send_survives_restart_and_blocks_other_rails():
         assert journal.unresolved()[0]["tx_hash"] == signature
         raise TimeoutError("reply lost after acceptance")
 
-    with pytest.raises(SolanaBroadcastError, match="outcome unknown"):
+    with pytest.raises(SolanaBroadcastError, match="outcome unknown") as info:
         _rail(rpc=rpc).send_raw(raw)
+    assert info.value.signature == signature       # the caller stamps it
     assert journal.unresolved()[0]["tx_hash"] == signature
     gate = PolicyGate(max_per_tx_usd=100)
     assert not gate.check(venue="x402", amount_usd=1, idempotency_key=None).allowed
@@ -155,3 +156,180 @@ def test_rpc_cannot_substitute_transaction_identifier():
     raw, signature = signed_transaction()
     with pytest.raises(SolanaBroadcastError, match="expected signature"):
         _rail(rpc=lambda m, p: "different-signature").send_raw(raw)
+
+
+# -- a definite node refusal is NOT SENT, never "outcome unknown" -----------
+
+def _refusing(code, message, data=None):
+    from core.wallet.solana_onchain import SolanaRpcError
+
+    def rpc(method, params):
+        if method == "sendTransaction":
+            raise SolanaRpcError(code, message, data)
+        return {}
+    return rpc
+
+
+@pytest.mark.parametrize("code,message,data", [
+    (-32002, "Transaction simulation failed: Blockhash not found",
+     {"err": "BlockhashNotFound", "logs": []}),
+    (-32002, "Transaction simulation failed: Error processing Instruction 0",
+     {"err": {"InstructionError": [0, {"Custom": 1}]}, "logs": []}),
+    (-32003, "Transaction signature verification failure", None),
+])
+def test_a_preflight_refusal_releases_the_interlock_and_reads_as_not_sent(code, message, data):
+    from core.wallet import submission_journal as journal
+    from core.wallet.broadcast.evm import outcome_unknown
+    from core.wallet.solana_rail import SolanaRejected
+    raw, signature = signed_transaction()
+    with pytest.raises(SolanaRejected, match="not sent") as info:
+        _rail(rpc=_refusing(code, message, data)).send_raw(raw)
+    assert not outcome_unknown(info.value)
+    assert not journal.unresolved()
+
+
+def test_already_processed_is_not_a_refusal():
+    """`AlreadyProcessed` means the bytes LANDED: never "not sent"."""
+    from core.wallet import submission_journal as journal
+    raw, signature = signed_transaction()
+    with pytest.raises(SolanaBroadcastError, match="outcome unknown"):
+        _rail(rpc=_refusing(-32002, "Transaction simulation failed: This "
+                            "transaction has already been processed",
+                            {"err": "AlreadyProcessed"})).send_raw(raw)
+    assert journal.unresolved()[0]["tx_hash"] == signature
+
+
+@pytest.mark.parametrize("code", [-32005, -32603, -32000])
+def test_other_node_errors_stay_unknown(code):
+    from core.wallet import submission_journal as journal
+    raw, signature = signed_transaction()
+    with pytest.raises(SolanaBroadcastError, match="outcome unknown"):
+        _rail(rpc=_refusing(code, "node is behind")).send_raw(raw)
+    assert journal.unresolved()[0]["tx_hash"] == signature
+
+
+def test_the_default_transport_raises_a_typed_rpc_error(monkeypatch):
+    """`solana_onchain._rpc` carries the node's code, so the rail can tell a
+    refusal from a lost reply; the wrapped error keeps it as its cause."""
+    import io
+    import json as _json
+    from core.wallet import solana_onchain
+    from core.wallet.solana_onchain import SolanaRpcError
+    body = _json.dumps({"jsonrpc": "2.0", "id": 1, "error": {
+        "code": -32002, "message": "Transaction simulation failed",
+        "data": {"err": "BlockhashNotFound"}}}).encode()
+
+    class _Resp(io.BytesIO):
+        headers = {}
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+    monkeypatch.setattr(solana_onchain.urllib.request, "urlopen",
+                        lambda req, timeout=None: _Resp(body))
+    monkeypatch.setattr(solana_onchain, "rpc_url", lambda: "http://rpc.invalid")
+    with pytest.raises(SolanaRpcError) as info:
+        solana_onchain._rpc("sendTransaction", [])
+    assert info.value.code == -32002
+    assert isinstance(info.value, RuntimeError)
+    from core.wallet import submission_journal as journal
+    from core.wallet.solana_rail import SolanaRejected
+    raw, _ = signed_transaction()
+    with pytest.raises(SolanaRejected):
+        SolanaRail(signer=_Signer()).send_raw(raw)
+    assert not journal.unresolved()
+
+
+# -- confirm(): "not seen" is only final once the blockhash has expired ------
+
+def _status_then(statuses, valid):
+    """An RPC whose signature statuses come from *statuses* (the last repeats)
+    and whose isBlockhashValid answers come from *valid* (the last repeats)."""
+    seen = {"status": list(statuses), "valid": list(valid), "calls": []}
+
+    def rpc(method, params):
+        seen["calls"].append((method, params))
+        if method == "getSignatureStatuses":
+            q = seen["status"]
+            return {"value": [q.pop(0) if len(q) > 1 else q[0]]}
+        if method == "isBlockhashValid":
+            q = seen["valid"]
+            return {"value": q.pop(0) if len(q) > 1 else q[0]}
+        return {}
+    return rpc, seen
+
+
+def test_an_unseen_signature_is_expired_only_after_the_blockhash_expired():
+    from core.wallet.solana_rail import confirmation_outcome
+    rpc, seen = _status_then([None], [True, True, False])
+    ok, detail = _rail(rpc=rpc).confirm("5xSig", attempts=1, delay=0,
+                                        blockhash="Hash1111111111111111111111111111")
+    assert ok is False and confirmation_outcome(ok, detail) == "expired"
+    methods = [m for m, _ in seen["calls"]]
+    assert methods.count("isBlockhashValid") == 3
+    assert methods[-1] == "getSignatureStatuses"          # one final read after expiry
+    assert seen["calls"][-1][1][1] == {"searchTransactionHistory": True}
+
+
+def test_a_signature_that_lands_while_the_blockhash_is_valid_is_confirmed():
+    rpc, _ = _status_then([None, None, {"confirmationStatus": "confirmed", "err": None}],
+                          [True])
+    ok, detail = _rail(rpc=rpc).confirm("5xSig", attempts=1, delay=0,
+                                        blockhash="Hash1111111111111111111111111111")
+    assert ok is True and detail == "confirmed"
+
+
+def test_a_signature_that_lands_at_the_final_read_is_not_expired():
+    from core.wallet.solana_rail import confirmation_outcome
+    rpc, _ = _status_then([None, {"confirmationStatus": "finalized", "err": None}], [False])
+    ok, detail = _rail(rpc=rpc).confirm("5xSig", attempts=1, delay=0,
+                                        blockhash="Hash1111111111111111111111111111")
+    assert confirmation_outcome(ok, detail) == "confirmed"
+
+
+def test_a_blockhash_still_valid_at_the_bound_stays_unknown(monkeypatch):
+    from core.wallet import solana_rail
+    from core.wallet.solana_rail import confirmation_outcome
+    clock = iter(range(0, 10_000, 50))
+    monkeypatch.setattr(solana_rail.time, "monotonic", lambda: next(clock))
+    rpc, _ = _status_then([None], [True])
+    ok, detail = _rail(rpc=rpc).confirm("5xSig", attempts=1, delay=0,
+                                        blockhash="Hash1111111111111111111111111111")
+    assert confirmation_outcome(ok, detail) == "unknown"
+
+
+def test_an_unreadable_validity_is_never_expired(monkeypatch):
+    from core.wallet import solana_rail
+    from core.wallet.solana_rail import confirmation_outcome
+    clock = iter(range(0, 10_000, 50))
+    monkeypatch.setattr(solana_rail.time, "monotonic", lambda: next(clock))
+
+    def rpc(method, params):
+        if method == "isBlockhashValid":
+            raise RuntimeError("node down")
+        return {"value": [None]}
+    ok, detail = _rail(rpc=rpc).confirm("5xSig", attempts=1, delay=0,
+                                        blockhash="Hash1111111111111111111111111111")
+    assert confirmation_outcome(ok, detail) == "unknown"
+
+
+def test_confirm_reads_the_blockhash_from_the_journal():
+    """The verbs call confirm(signature) alone: the rail journaled the
+    blockhash at send time and finds it there."""
+    from core.wallet.solana_rail import confirmation_outcome
+    raw, signature = signed_transaction()
+    rpc, seen = _status_then([None], [False])
+
+    def both(method, params):
+        if method == "sendTransaction":
+            return signature
+        return rpc(method, params)
+    rail = _rail(rpc=both)
+    rail.send_raw(raw)
+    ok, detail = rail.confirm(signature, attempts=1, delay=0)
+    assert confirmation_outcome(ok, detail) == "expired"
+    valid_calls = [p for m, p in seen["calls"] if m == "isBlockhashValid"]
+    assert valid_calls and valid_calls[0][0] == "11111111111111111111111111111111"

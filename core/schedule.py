@@ -117,6 +117,60 @@ def dom_step_note(spec: str) -> str:
             f"the anchor plus an offset.")
 
 
+def shift_spec(spec: str, minutes: int) -> Optional[str]:
+    """*spec* moved *minutes* later, or None when it has no fixed slot to move or
+    the move would change its day (a bare duration counts from each run; a
+    one-shot is a promise about one time)."""
+    raw = str(spec or "").strip()
+    low = raw.lower()
+    if low.startswith("every "):
+        return _shift_every(low[len("every "):].strip(), minutes)
+    fields = raw.split()
+    if len(fields) == 5:
+        return _shift_cron(fields, minutes)
+    return None
+
+
+def _shift_every(rest: str, minutes: int) -> Optional[str]:
+    if " from " in f" {rest} ":
+        head, _, anchor = rest.partition(" from ")
+        try:
+            at = datetime.fromisoformat(anchor.strip().upper())
+        except ValueError:
+            return None
+        return f"every {head.strip()} from {(at + timedelta(minutes=minutes)).isoformat()}"
+    parts = rest.split()
+    hm = _HHMM_RE.match(parts[1]) if len(parts) == 2 else None
+    if not hm:
+        return None
+    total = int(hm.group(1)) * 60 + int(hm.group(2)) + minutes
+    if total >= 24 * 60:
+        return None
+    return f"every {parts[0]} {total // 60:02d}:{total % 60:02d}"
+
+
+def _shift_cron(fields: List[str], minutes: int) -> Optional[str]:
+    minute, hour = fields[0], fields[1]
+    if minute.startswith("*/") and minute[2:].isdigit():
+        return (" ".join([f"{minutes}-59/{minute[2:]}"] + fields[1:])
+                if minutes < int(minute[2:]) else None)
+    values = minute.split(",")
+    if not all(v.isdigit() for v in values):
+        return None
+    moved = [int(v) + minutes for v in values]
+    if all(m < 60 for m in moved):
+        return " ".join([",".join(str(m) for m in moved)] + fields[1:])
+    if hour == "*":
+        return " ".join([",".join(str(m % 60) for m in moved)] + fields[1:])
+    hours = hour.split(",")
+    if len(moved) != 1 or not all(h.isdigit() for h in hours):
+        return None
+    new_hours = [int(h) + moved[0] // 60 for h in hours]
+    if max(new_hours) > 23:
+        return None
+    return " ".join([str(moved[0] % 60), ",".join(str(h) for h in new_hours)] + fields[2:])
+
+
 def _parse_anchor(text: str) -> datetime:
     try:
         at = datetime.fromisoformat(text.strip().upper())

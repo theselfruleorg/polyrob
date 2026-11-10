@@ -439,6 +439,23 @@ def _build_nft_holdings_watch(task_agent):
     return IntervalTicker(_tick, interval_seconds=nft_holdings.INTERVAL_SEC)
 
 
+def _build_receipt_resolver():
+    """098 TS-23 — give a money tx booked before its receipt was known its final state
+    (a revert leaves the rolling caps; no answer in 24 h tells the owner). Reads only;
+    NOT pause-gated (the bridge watcher's reasoning). Its own ticker: it rode the bridge
+    watcher, which an install that trades but never bridges does not start."""
+    from core.tickers import IntervalTicker
+    from core.wallet import receipt_resolver
+
+    async def _tick():
+        try:
+            await receipt_resolver.resolve_pending_receipts()
+        except Exception as e:
+            logger.warning("receipt resolver tick failed: %s", type(e).__name__)
+
+    return IntervalTicker(_tick, interval_seconds=receipt_resolver.INTERVAL_SEC)
+
+
 def _build_x402_expiry_watch():
     """Resolve expired, unsettled x402 authorizations from chain state, so a paid
     server that never settles cannot hold every money rail until the owner acts.
@@ -1351,6 +1368,12 @@ def start_autonomy(*, task_agent, data_dir: str | None = None) -> AutonomyHandle
             handles._add("x402_expiry", _build_x402_expiry_watch())
     except Exception as e:
         logger.warning("Could not start the x402 expiry watch: %s", e)
+    try:
+        from core.env import bool_env as _be
+        if _be("AGENT_WALLET_ENABLED", False):
+            handles._add("receipts", _build_receipt_resolver())
+    except Exception as e:
+        logger.warning("Could not start the receipt resolver: %s", e)
     try:
         from core.wallet import nft_holdings as _nh
         if _nh.enabled():

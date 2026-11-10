@@ -87,17 +87,7 @@ def _ownership(request: Request, session_id: str) -> tuple:
     thread says the caller may look. So a failed probe renders the frame with a
     sentence that says exactly what happened, no composer, and no script binding
     to a session the check never cleared.
-
-    ``local`` is still resolved without the probe: that posture has one owner by
-    construction (``webgate.requires_owner_login()`` is False only there), so a
-    missing check does not make its ownership unknown.
     """
-    from webview import webgate
-    try:
-        if not webgate.requires_owner_login():
-            return (True, True, False)
-    except Exception:
-        logger.debug("posture probe failed", exc_info=True)
     try:
         from webview.server import _check_session_ownership
         is_owner, _current, _owner = _check_session_ownership(request, session_id)
@@ -252,6 +242,17 @@ def _session_folder(session_id: str):
         if folder.is_dir():
             return folder
     return None
+
+
+def chat_exists(session_id: str) -> bool:
+    """False only when the read ANSWERED that no such chat folder exists. A read that
+    fails answers True: the page then shows its own unreadable state (an unreadable
+    store is not an empty one)."""
+    try:
+        return _session_folder(session_id) is not None
+    except Exception:
+        logger.warning("chat exists: could not look for %s", session_id, exc_info=True)
+        return True
 
 
 def first_line_context(session_id: str) -> dict:

@@ -86,6 +86,7 @@ _MESSAGE_KINDS = frozenset({
     ek.SOCIAL_WRITE,
     ek.CORRESPONDENT_PENDING,
     ek.CORRESPONDENT_RESUMED,
+    ek.CORRESPONDENT_REBOUND,
     ek.INBOUND_ROUTED,
     # 098: an inbound message the surface could not take (quarantined / skipped / gap)
     ek.EMAIL_QUARANTINED,

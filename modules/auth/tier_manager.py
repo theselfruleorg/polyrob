@@ -14,7 +14,7 @@ class TierManager:
     # standard limits; free gets none (access is blocked at feature level).
     STANDARD_LIMITS = {
         "max_concurrent_sessions": 10,
-        "allowed_models": ["gpt-5", "claude-sonnet-4-5", "gemini-2.5-flash", "deepseek-chat"]
+        "allowed_models": ["gpt-5", "claude-sonnet-5-5", "gemini-2.5-flash", "deepseek-chat"]
     }
     TIER_LIMITS = {
         "free": {"max_concurrent_sessions": 0, "allowed_models": []},

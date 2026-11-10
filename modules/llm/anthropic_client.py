@@ -4,20 +4,24 @@ from modules.llm.billing_guard import inference_sdk
 import json
 import logging
 import asyncio
-import time
 from typing import List, Dict, Any, Optional, Union, Tuple
 
 import anthropic
 from anthropic.types import Message
 
 from modules.llm.llm_client import LLMClient
-from modules.llm.prefix_stamp import stamp_client  # F20: request prefix identity
-from modules.llm.anthropic_sampling import clamp_thinking as _clamp_thinking, route_for_client
-from modules.llm.deferred_tools import (  # F9: Anthropic native deferred tools
+from modules.llm.prefix_stamp import stamp_request  # request prefix identity
+from modules.llm.anthropic_sampling import clamp_thinking as _clamp_thinking, context_room, route_sampling
+from modules.llm.anthropic_wire import (
+    apply_thinking_controls, is_tool_schema_error, note_input_transformations, raise_on_refusal,
+    thinking_controls_unavailable, wire_messages, wire_metadata)
+from modules.llm.call_scope import call_timeout_param, scoped_foundation_len
+from modules.llm.deferred_tools import (  # Anthropic native deferred tools
     call_with_deferral_retry, deferred_tools_enabled, prepare_deferred_tools, stream_with_deferral_retry)
-from modules.llm.token_counter import count_messages_tokens
+from modules.llm.token_counter import count_messages_tokens, count_tools_tokens
+from modules.llm.llm_client import raise_llm_error, translate_llm_error
 from modules.llm.credit_errors import raise_if_credit_refusal  # D3: 1113 = no balance
-from core.exceptions import LLMError, LLMPermanentError, LLMRateLimitError, LLMAuthenticationError, LLMContextLengthError, LLMInvalidRequestError, LLMConnectionError, ServiceError
+from core.exceptions import LLMError, LLMConnectionError, ServiceError
 from core.config import BotConfig
 import os
 
@@ -36,7 +40,7 @@ def _build_cached_system_param(system, ttl=None):
     Args:
         system: the system prompt as a ``str`` or a list of content-block dicts.
         ttl: the resolved cache ttl ("1h") or None for the API default 5-minute
-            window, which is emitted as the BARE ephemeral marker (F4).
+            window, which is emitted as the BARE ephemeral marker.
 
     Returns:
         A list of content-block dicts (last one carrying ``cache_control`` when
@@ -64,16 +68,21 @@ def _apply_conversation_cache(messages, n: int = 3, ttl=None, foundation_len=Non
 
     Anthropic allows up to **4** cache breakpoints per request.
     ``_build_cached_system_param`` spends 1 on the system block; this spends the
-    remaining 3 inside ``messages``. WHERE they go is F12 policy and lives in the
+    remaining 3 inside ``messages``. WHERE they go is policy and lives in the
     cache seam (``modules/llm/cache_hints.py``): with ``foundation_len`` known,
     one marker pins the end of the foundation and two ride the last completed
-    tool transactions; without it, the pre-F12 last-``n`` rows, byte-identically.
+    tool transactions; without it, the last-``n`` rows.
 
     Does not mutate the caller's list. No-op (returns input unchanged) when
     ``ANTHROPIC_PROMPT_CACHE`` is disabled or ``messages`` is empty.
     """
     from modules.llm.cache_hints import mark_conversation_cache
     return mark_conversation_cache(messages, n=n, ttl=ttl, foundation_len=foundation_len)
+
+
+#: The kwargs a caller may set on the wire. `metadata` is filtered further, and the sampling
+#: params go through route_sampling.
+_WIRE_KWARGS = frozenset({'top_p', 'top_k', 'stop_sequences'})
 
 
 class AnthropicClient(LLMClient):
@@ -83,47 +92,36 @@ class AnthropicClient(LLMClient):
     Deprecated fallback dicts removed Dec 13, 2025.
     """
 
-    # UP-07: the dead EXTENDED_THINKING_MODELS dict was removed — its budgets now live in
-    # model_registry (thinking_budget_tokens) and drive a real `thinking` block below.
-
-    # Every user-facing/log message renders the provider through this label so a
-    # spec-driven subclass (AnthropicCompatClient — e.g. a z.ai row) reports ITS
-    # provider, never "Anthropic" (mirrors OpenRouterClient._PROVIDER_LABEL).
     _PROVIDER_LABEL = "Anthropic"
 
-    # F4: only the REAL Anthropic API is known to accept a ``ttl`` inside
+    # Only the REAL Anthropic API is known to accept a ``ttl`` inside
     # ``cache_control``. An Anthropic-compat seat (z.ai / kimi / minimax via
     # AnthropicCompatClient) is a third-party /v1/messages validator that may
     # 4xx on a key it does not know, so it overrides this to False and keeps
     # emitting the bare ephemeral marker.
     _SUPPORTS_CACHE_TTL = True
 
-    # F9: only the REAL Anthropic API knows `defer_loading` / `tool_addition`.
+    # Only the REAL Anthropic API knows `defer_loading` / `tool_addition`.
     _SUPPORTS_DEFERRED_TOOLS = True
+
+    # Only the REAL API takes thinking blocks back, `output_config` and `block_binding`.
+    _SUPPORTS_THINKING_CONTROLS = True
+
+    # The real API has no sampling params on current models (anthropic_sampling).
+    _COMPAT_SEAT = False
 
     def _cache_ttl(self):
         """The prompt-cache ttl for this request, or None for the bare marker.
 
         None is BOTH "no ttl stamped" and "5m" — the 5-minute window is the API
         default and is expressed by omitting the key, so an unstamped client
-        issues the byte-identical pre-F4 request. Fail-open on any error.
+        issues the request without a ttl. Fail-open on any error.
         """
         if not self._SUPPORTS_CACHE_TTL:
             return None
         try:
             from modules.llm.cache_hints import cache_ttl_for
-            return cache_ttl_for(self)
-        except Exception:  # pragma: no cover - defensive
-            return None
-
-    def _foundation_len(self):
-        """F12: how many leading wire messages are the pinned foundation, or None.
-
-        None keeps the pre-F12 placement (the last three rows). Fail-open.
-        """
-        try:
-            from modules.llm.cache_hints import foundation_len_for
-            return foundation_len_for(self)
+            return cache_ttl_for()
         except Exception:  # pragma: no cover - defensive
             return None
 
@@ -135,31 +133,27 @@ class AnthropicClient(LLMClient):
         # Model and API configuration
         self.model_type = config.get_llm_config()['anthropic'].get('model') or get_default_model('anthropic')
         self.api_key = config.get_llm_config()['anthropic']['api_key']
-        self.last_response = None  # Store the last response for token usage reporting
         
         # Get defaults from model_registry (single source of truth)
         from modules.llm.model_registry import get_model_config
         model_config = get_model_config(self.model_type)
         
-        if model_config:
-            self.max_tokens = model_config.max_completion_tokens or 8192
-        else:
-            self.max_tokens = 8192  # Conservative fallback
+        self.max_tokens = model_config.max_completion_tokens or 8192
 
         # Resolve vision support via base helper (falls back to True if not in registry)
         self.supports_vision = self._resolve_supports_vision()
 
-        self.temperature = 0.7  # Default temperature
+        self.temperature = None  # The real API takes no default; see anthropic_sampling
 
         self.logger.debug(
-            f"{self._PROVIDER_LABEL} client initialized: model={self.model_type}, "
+            f"{self.provider_label} client initialized: model={self.model_type}, "
             f"supports_vision={self.supports_vision}"
         )
 
     def _validate_llm_config(self) -> None:
         """Validate LLM config."""
         if not self.api_key:
-            raise ServiceError(f"{self._PROVIDER_LABEL} API key not provided")
+            raise ServiceError(f"{self.provider_label} API key not provided")
 
     def _profile_base_url(self) -> Optional[str]:
         """Read base_url from the Anthropic ProviderProfile (None => SDK default).
@@ -176,10 +170,10 @@ class AnthropicClient(LLMClient):
             base_url = self._profile_base_url()
             if base_url:
                 kwargs["base_url"] = base_url
-            self._client = anthropic.AsyncAnthropic(**kwargs)
-            self.logger.debug(f"{self._PROVIDER_LABEL} client setup completed")
+            self._client = anthropic.AsyncAnthropic(**kwargs, **self._sdk_limits())
+            self.logger.debug(f"{self.provider_label} client setup completed")
         except Exception as e:
-            raise ServiceError(f"Failed to set up {self._PROVIDER_LABEL} client: {e}")
+            raise ServiceError(f"Failed to set up {self.provider_label} client: {e}")
         
     async def _initialize(self) -> None:
         """Initialize the client."""
@@ -199,8 +193,8 @@ class AnthropicClient(LLMClient):
             self._initialized = True
             
         except Exception as e:
-            self.logger.error(f"Failed to initialize {self._PROVIDER_LABEL} client: {e}")
-            raise ServiceError(f"Failed to initialize {self._PROVIDER_LABEL} client: {e}")
+            self.logger.error(f"Failed to initialize {self.provider_label} client: {e}")
+            raise ServiceError(f"Failed to initialize {self.provider_label} client: {e}")
 
     async def _generate_with_tools(
         self,
@@ -216,39 +210,33 @@ class AnthropicClient(LLMClient):
         Returns:
             Tuple of (content, tool_calls) where tool_calls is a list of tool call dicts
         """
-        start_time = time.time()
-        success = False
-        error_message = None
 
         try:
             # Ensure client is initialized
             if not self._initialized:
                 await self._initialize()
 
-            # Param assembly extracted to _build_tool_api_params (019 P5) so the
+            # Param assembly extracted to _build_tool_api_params so the
             # true-streaming path issues byte-identical requests.
             api_params = self._build_tool_api_params(
                 messages, tools, system, temperature, max_tokens, kwargs
             )
 
-            # FIXED: Use streaming for high max_tokens to avoid Anthropic SDK error
+            # Use streaming for high max_tokens to avoid Anthropic SDK error
             # "Streaming is required for operations that may take longer than 10 minutes"
             # This happens when max_tokens is high (e.g., 65536). A thinking budget raises
             # max_tokens above 8192, so this path is always taken when thinking is on.
             use_streaming = api_params['max_tokens'] > 8192
-            stamp_client(self, api_params)   # F20: prefix identity
+            stamp_request(api_params)   # prefix identity
 
-            # F9: on a 400 naming the beta, rebuilds un-deferred and retries once.
+            # On a 400 naming the beta, rebuilds un-deferred and retries once.
             self.last_response = await call_with_deferral_retry(
                 self, api_params, use_streaming)
 
-            success = True
 
             # Process response - extract both content and tool calls
             response_text, tool_calls = self._parse_agent_blocks(self.last_response)
 
-            # Capture telemetry
-            self._extract_usage_and_capture_telemetry(start_time, success, None, kwargs.get('metadata'))
 
             # Extract usage data
             usage_data = self._extract_usage_data()
@@ -256,33 +244,60 @@ class AnthropicClient(LLMClient):
             return response_text, tool_calls, usage_data
 
         except Exception as e:
-            success = False
-            error_message = str(e)
-            self.logger.error(f"{self._PROVIDER_LABEL} tool calling error: {e}")
+            self.logger.error(f"{self.provider_label} tool calling error: {e}")
 
-            # Capture telemetry
-            self._extract_usage_and_capture_telemetry(start_time, success, error_message, kwargs.get('metadata'))
 
-            # Only a request-shape problem can plausibly be cured by dropping
-            # the tools block. Anything else (429/5xx/auth/billing/connection)
-            # must propagate so the adapter classifies it and the agent tries a
-            # provider fallback: retrying WITHOUT tools doubles the hammering
-            # on a rate-limited account, and a "successful" non-tool reply
-            # carries zero tool_calls — the empty-action/thinking-loop storm
-            # of 2026-08-13..16 (856 blind fallback calls in 4 days).
-            from core.exceptions import LLMInvalidRequestError
-            from modules.llm.llm_client import translate_llm_error
-            if not isinstance(translate_llm_error(e), LLMInvalidRequestError):
-                raise
+            # A retry with no tools is a reply with no action. Only a 400 that names the
+            # tools array can be cured by leaving them out.
+            if not is_tool_schema_error(e, translate_llm_error(e)):
+                raise_if_credit_refusal(self.provider_label, e, self.logger)
+                raise_llm_error(e, self.provider_label, model=self.model_type)
 
-            # Fall back to non-tool generation
-            self.logger.warning(f"Falling back to non-tool generation due to error: {e}")
+            self.logger.warning(f"Falling back to non-tool generation due to a tool schema error: {e}")
             response = await self._generate(messages, system, temperature, max_tokens, **kwargs)
-            # P1 finalization: re-extract the REAL usage from the successful fallback
-            # call (self._generate sets self.last_response) instead of fabricating an
-            # all-None dict — the old code silently dropped that turn's tokens from
-            # billing/compaction accounting.
             return response, [], self._extract_usage_data()
+
+    def _estimate_input_tokens(self, messages: List[Dict[str, Any]], system: Optional[Any]) -> int:
+        """The rows and the system prompt, with a recovered system prompt counted once."""
+        rows = [m for m in messages if m.get('role') != 'system']
+        if system:
+            rows = [{"role": "system", "content": system}, *rows]
+        return count_messages_tokens(rows, self.model_type)
+
+    def _thinking_controls_on(self) -> bool:
+        return self._SUPPORTS_THINKING_CONTROLS and not thinking_controls_unavailable(self)
+
+    def _request_params(self, rows: List[Dict[str, Any]], system: Optional[Any],
+                        temperature: Optional[float], max_tokens_value: int,
+                        kwargs: Dict[str, Any],
+                        tools: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        """The one assembly of a request: late tools first, then the cache markers on the
+        rows that go out, the thinking controls, the sampling route and the call's timeout."""
+        api_params = {k: v for k, v in kwargs.items() if k in _WIRE_KWARGS}
+        api_params.update(model=self.model_type, messages=rows, max_tokens=max_tokens_value)
+        metadata = wire_metadata(kwargs.get('metadata'))
+        if metadata:
+            api_params['metadata'] = metadata
+        temp = temperature if temperature is not None else self.temperature
+        if temp is not None:
+            api_params['temperature'] = temp
+        if tools is not None:
+            api_params['tools'] = tools
+            api_params['tool_choice'] = kwargs.get('tool_choice', {'type': 'auto'})
+        system_param = _build_cached_system_param(system, ttl=self._cache_ttl())
+        if system_param is not None:
+            api_params['system'] = system_param
+        api_params = prepare_deferred_tools(
+            api_params, enabled=tools is not None and deferred_tools_enabled(self))
+        # 4 breakpoints — system, the end of the foundation, 2 transactions.
+        api_params['messages'] = _apply_conversation_cache(
+            api_params['messages'], ttl=self._cache_ttl(),
+            foundation_len=scoped_foundation_len())
+        if self._thinking_controls_on():
+            from modules.llm.model_registry import get_model_config
+            apply_thinking_controls(api_params, getattr(get_model_config(self.model_type), "capabilities", None))
+        api_params.update(call_timeout_param())
+        return route_sampling(api_params, compat_seat=self._COMPAT_SEAT)
 
     def _build_tool_api_params(
         self,
@@ -293,177 +308,50 @@ class AnthropicClient(LLMClient):
         max_tokens: Optional[int],
         kwargs: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Assemble the messages.create/stream request params for the tool path.
-
-        Extracted verbatim from _generate_with_tools (019 P5) so the true-
-        streaming path (astream_agent_response) issues byte-identical requests:
-        message conversion, system recovery + cache breakpoints, max_tokens
-        clamping, and the thinking-config block.
-        """
-        # Convert messages to Anthropic format
-        anthropic_messages = []
-        for msg in messages:
-            role = msg.get('role', '')
-            content = msg.get('content', '')
-
-            # Skip system messages as they're handled separately, BUT recover
-            # the system prompt from the message list when no explicit `system`
-            # kwarg was supplied — the agent builds the real system prompt in the
-            # message list, not via the kwarg. Without this the entire system
-            # prompt (persona/brain-state format/security/tool guidance) is
-            # silently dropped on the Anthropic native tool path.
-            if role == 'system':
-                if system is None and isinstance(content, str) and content:
-                    system = content
-                continue
-
-            # Map roles
-            if role == 'user':
-                anthropic_role = 'user'
-            elif role in ['assistant', 'ai']:
-                anthropic_role = 'assistant'
-            elif role == 'tool':
-                # Handle tool result messages
-                anthropic_role = 'user'
-                # Anthropic expects tool results in a specific format
-                tool_call_id = msg.get('tool_call_id', '')
-                content = [{
-                    "type": "tool_result",
-                    "tool_use_id": tool_call_id,
-                    "content": content
-                }]
-            else:
-                self.logger.warning(f"Unknown role {role}, treating as user")
-                anthropic_role = 'user'
-
-            # Handle tool calls in assistant messages
-            if role == 'assistant' and 'tool_calls' in msg:
-                # Convert tool calls to Anthropic format
-                content_blocks = []
-                if content:
-                    content_blocks.append({
-                        "type": "text",
-                        "text": content
-                    })
-
-                for tool_call in msg['tool_calls']:
-                    content_blocks.append({
-                        "type": "tool_use",
-                        "id": tool_call.get('id', ''),
-                        "name": tool_call.get('function', {}).get('name', ''),
-                        "input": json.loads(tool_call.get('function', {}).get('arguments', '{}'))
-                    })
-
-                anthropic_messages.append({
-                    "role": anthropic_role,
-                    "content": content_blocks
-                })
-            else:
-                # Regular message
-                anthropic_messages.append({
-                    "role": anthropic_role,
-                    "content": content
-                })
-
-        # Use provided parameters or defaults
-        temp = temperature if temperature is not None else self.temperature
-
-        # Estimate input tokens (messages + system, Anthropic sends them separately)
-        estimated_input_tokens = count_messages_tokens(messages, self.model_type)
-        if system:
-            estimated_input_tokens += count_messages_tokens([{"role": "system", "content": system}], self.model_type)
+        """The messages.create/stream params of the tool path, for the batch call and for
+        astream_agent_response, so both issue byte-identical requests."""
+        rows, system = wire_messages(messages, system, tool_blocks=True,
+                                     keep_thinking=self._thinking_controls_on())
 
         # Clamp max_tokens to model limits (single canonical logic on base)
         max_tokens_value = self._adjust_max_tokens(
             messages=messages,
             max_tokens=max_tokens,
-            estimated_input_tokens=estimated_input_tokens,
+            estimated_input_tokens=self._estimate_input_tokens(messages, system),
+            tools=tools,
         )
 
-        # Log request
-        self.logger.info(f"{self._PROVIDER_LABEL} API request with tools: model={self.model_type}, tools={len(tools)}, max_tokens={max_tokens_value}")
+        self.logger.info(f"{self.provider_label} API request with tools: model={self.model_type}, tools={len(tools)}, max_tokens={max_tokens_value}")
 
-        # Filter kwargs - CRITICAL: Exclude 'system' to prevent override
-        supported_params = {
-            'model', 'messages', 'temperature', 'max_tokens',
-            'tools', 'tool_choice', 'metadata', 'top_p', 'top_k', 'stop_sequences'
-        }
-        filtered_kwargs = {k: v for k, v in kwargs.items() if k in supported_params}
+        api_params = self._request_params(
+            rows, system, temperature, max_tokens_value, kwargs, tools=tools)
 
-        # Make API request with tools
-        # Convert system to list form + add prompt-cache breakpoint (D4-a).
-        system_param = _build_cached_system_param(system, ttl=self._cache_ttl())
-
-        # Build API call params - only include system if not None
-        api_params = {
-            'model': self.model_type,
-            'messages': anthropic_messages,
-            'temperature': temp,
-            'max_tokens': max_tokens_value,
-            'tools': tools,
-            'tool_choice': kwargs.get('tool_choice', {'type': 'auto'}),
-            **filtered_kwargs
-        }
-        if system_param is not None:
-            api_params['system'] = system_param
-        # B1/F12: 4 breakpoints — system, the end of the foundation, 2 transactions.
-        api_params['messages'] = _apply_conversation_cache(
-            api_params['messages'], ttl=self._cache_ttl(),
-            foundation_len=self._foundation_len())
-
-        # UP-07: extended-thinking block from the registry budget (gated, default OFF).
-        # Anthropic requires max_tokens > budget_tokens and temperature == 1 when
-        # thinking is enabled. Per-call override via kwargs['thinking'] wins.
+        # Extended thinking on a row older than 4.6, the one kind with a budget (gated,
+        # default OFF). A later row takes `output_config.effort` from its capability.
         from modules.llm.model_registry import (
             thinking_config_enabled, get_thinking_config, get_model_config,
         )
-        # P1-9: extended thinking + tool calls requires replaying the assistant's
-        # thinking block(s) (with their signature) ahead of tool_use on the NEXT
-        # request; this client discards thinking blocks (see response processing
-        # below) and never replays them, so the follow-up tool_result request 400s
-        # at step 2 of a tool loop. Until block-replay lands, REFUSE to enable
-        # thinking when tools are present (the agent's primary path is a tool loop).
-        # A forced non-auto tool_choice is likewise invalid with thinking — moot
-        # here since we never combine them. One-time WARN so it's visible.
-        if 'thinking' not in api_params and thinking_config_enabled():
-            if tools:
-                if not getattr(self, '_thinking_tools_warned', False):
-                    self.logger.warning(
-                        "extended thinking is disabled for tool-calling requests in "
-                        "this build (thinking blocks are not yet replayed, which would "
-                        "400 the follow-up tool_result request). Set THINKING_CONFIG_"
-                        "ENABLED=off to silence, or use thinking only on no-tool calls."
-                    )
-                    self._thinking_tools_warned = True
-            else:
-                tcfg = get_thinking_config(self.model_type)
-                budget = tcfg.get('budget_tokens')
+        if self._thinking_controls_on() and 'thinking' not in api_params and thinking_config_enabled():
+            tcfg = get_thinking_config(self.model_type)
+            budget = tcfg.get('budget_tokens')
+            if budget:
+                # Clamp so max_tokens > budget AND max_tokens <= the model cap
+                # (registry entries set budget == cap, which overran the cap -> 400).
+                _cfg = get_model_config(self.model_type)
+                model_cap = getattr(_cfg, 'max_completion_tokens', None) if _cfg else None
+                budget, max_tokens_value = _clamp_thinking(model_cap, budget, max_tokens_value, room=context_room(self, messages, system, count_tools_tokens(tools)))
                 if budget:
-                    # H4: clamp so max_tokens > budget AND max_tokens <= the model cap
-                    # (registry entries set budget == cap, which overran the cap -> 400).
-                    _cfg = get_model_config(self.model_type)
-                    model_cap = getattr(_cfg, 'max_completion_tokens', None) if _cfg else None
-                    budget, max_tokens_value = _clamp_thinking(model_cap, budget, max_tokens_value)
-                    if budget:
-                        api_params['thinking'] = {'type': 'enabled', 'budget_tokens': budget}
-                        api_params['temperature'] = 1  # required by the API when thinking is on
-                        api_params['max_tokens'] = max_tokens_value
-
-        # F9 (LAST, after the cache breakpoints): <tool-addition> envelopes ->
-        # `tool_addition` messages + the beta header, else every trace stripped.
-        api_params = prepare_deferred_tools(
-            api_params, enabled=deferred_tools_enabled(self))
-        return self._route_sampling_params(api_params)
-
-    def _route_sampling_params(self, api_params: Dict[str, Any]) -> Dict[str, Any]:
-        """⚠️ anthropic 1.6.0 dropped temperature/top_p/top_k from create() — see anthropic_sampling."""
-        return route_for_client(getattr(self, "_client", None), api_params)
+                    api_params['thinking'] = {'type': 'enabled', 'budget_tokens': budget}
+                    api_params['max_tokens'] = max_tokens_value
+        return api_params
 
     def _parse_agent_blocks(self, response) -> Tuple[str, List[Dict[str, Any]]]:
         """Extract (text, tool_calls) from an Anthropic message's content blocks.
 
-        Shared by the batch tool path and astream_agent_response (019 P5).
+        Shared by every path, so a refusal raises typed on all of them.
         """
+        raise_on_refusal(response, self.provider_label, self.model_type)
+        note_input_transformations(response)
         response_text = ""
         tool_calls = []
         # Process response - extract both content and tool calls
@@ -491,7 +379,7 @@ class AnthropicClient(LLMClient):
         tools: List[Dict[str, Any]],
         **kwargs
     ):
-        """TRUE token streaming (019 P5): yield text deltas, then one final event.
+        """TRUE token streaming: yield text deltas, then one final event.
 
         Async generator yielding ``{"type": "text", "text": str}`` per
         content_block text delta, then exactly one ``{"type": "final",
@@ -500,7 +388,6 @@ class AnthropicClient(LLMClient):
         params are byte-identical to the batch path (_build_tool_api_params).
         Only consumed when LLM_TOKEN_STREAMING is on (adapters.astream).
         """
-        start_time = time.time()
         if not self._initialized:
             await self._initialize()
 
@@ -516,22 +403,15 @@ class AnthropicClient(LLMClient):
             api_params.pop('tools', None)
             api_params.pop('tool_choice', None)
 
-        # F9: stamps, streams, self-heals ONCE before the first token is yielded.
-        try:
-            async for kind, item in stream_with_deferral_retry(self, api_params):
-                if kind == "text":
-                    yield {"type": "text", "text": item}
-                else:
-                    final = item
-        except Exception as e:
-            self._extract_usage_and_capture_telemetry(
-                start_time, False, str(e), kwargs.get('metadata'))
-            raise
+        # Stamps, streams, self-heals ONCE before the first token is yielded.
+        async for kind, item in stream_with_deferral_retry(self, api_params):
+            if kind == "text":
+                yield {"type": "text", "text": item}
+            else:
+                final = item
 
         self.last_response = final
         response_text, tool_calls = self._parse_agent_blocks(final)
-        self._extract_usage_and_capture_telemetry(
-            start_time, True, None, kwargs.get('metadata'))
         usage_data = self._extract_usage_data()
         yield {
             "type": "final",
@@ -601,10 +481,9 @@ class AnthropicClient(LLMClient):
             # Re-raise LLM errors as-is
             raise
         except Exception as e:
-            raise_if_credit_refusal(self._PROVIDER_LABEL, e, self.logger)
-            # Wrap other exceptions using core.exceptions pattern
+            raise_if_credit_refusal(self.provider_label, e, self.logger)
             self.logger.error(f"generate_agent_response failed: {str(e)}", exc_info=True)
-            raise LLMError(f"Failed to generate agent response: {str(e)}")
+            raise_llm_error(e, self.provider_label, model=self.model_type)
 
     async def _generate(
         self,
@@ -615,105 +494,29 @@ class AnthropicClient(LLMClient):
         **kwargs
     ) -> str:
         """Generate a response from Claude API."""
-        start_time = time.time()
-        success = False
-        error_message = None
         
         try:
             # Ensure client is initialized
             if not self._initialized:
                 await self._initialize()
                 
-            # Convert messages to Anthropic format, skipping system
-            anthropic_messages = []
-            for msg in messages:
-                role = msg.get('role', '')
-                content = msg.get('content', '')
-                
-                # Skip system messages as they're handled separately in Claude API,
-                # BUT recover the in-list system prompt when no explicit `system`
-                # kwarg was supplied (see _generate_with_tools for rationale).
-                if role == 'system':
-                    if system is None and isinstance(content, str) and content:
-                        system = content
-                    continue
-
-                # Map roles
-                if role == 'user':
-                    anthropic_role = 'user'
-                elif role in ['assistant', 'ai']:
-                    anthropic_role = 'assistant'
-                elif role == 'tool':
-                    # Non-tool mode has no tool_use/tool_result blocks (the
-                    # assistant's tool_calls are flattened to content above), so
-                    # carry the result as labeled user text — the model still
-                    # reads it as an observation. This path used to warn
-                    # "Unknown role tool" per message (744× in the 2026-08-12..16
-                    # journals, one per history message on every fallback call).
-                    anthropic_role = 'user'
-                    if isinstance(content, str):
-                        content = f"[tool result] {content}"
-                else:
-                    self.logger.warning(f"Unknown role {role}, treating as user")
-                    anthropic_role = 'user'
-
-                anthropic_messages.append({
-                    "role": anthropic_role,
-                    "content": content
-                })
-                
-            # Use provided parameters or default to instance attributes
-            temp = temperature if temperature is not None else self.temperature
-
-            # Estimate input tokens (messages + system, Anthropic sends them separately)
-            estimated_input_tokens = count_messages_tokens(messages, self.model_type)
-            if system:
-                # Add system message token estimate
-                estimated_input_tokens += count_messages_tokens([{"role": "system", "content": system}], self.model_type)
+            rows, system = wire_messages(messages, system, tool_blocks=False)
 
             # Clamp max_tokens to model limits (single canonical logic on base)
             max_tokens_value = self._adjust_max_tokens(
                 messages=messages,
                 max_tokens=max_tokens,
-                estimated_input_tokens=estimated_input_tokens,
+                estimated_input_tokens=self._estimate_input_tokens(messages, system),
             )
 
-            # Log request details with proper values being used
-            self.logger.info(f"{self._PROVIDER_LABEL} API request: model={self.model_type}, temperature={temp}, max_tokens={max_tokens_value}, est_input_tokens={estimated_input_tokens}")
-            
-            # Filter kwargs to only include supported parameters
-            # CRITICAL: Exclude 'system' from kwargs to prevent override of system_param
-            supported_params = {
-                'model', 'messages', 'temperature', 'max_tokens', 
-                'metadata', 'top_p', 'top_k', 'stop_sequences', 'stream'
-            }
-            
-            filtered_kwargs = {k: v for k, v in kwargs.items() if k in supported_params}
+            self.logger.info(f"{self.provider_label} API request: model={self.model_type}, max_tokens={max_tokens_value}")
 
-            # Make API request
-            # Convert system to list form + add prompt-cache breakpoint (D4-a).
-            system_param = _build_cached_system_param(system, ttl=self._cache_ttl())
+            api_params = self._request_params(rows, system, temperature, max_tokens_value, kwargs)
 
-            # Build API call params - only include system if not None
-            api_params = {
-                'model': self.model_type,
-                'messages': anthropic_messages,
-                'temperature': temp,
-                'max_tokens': max_tokens_value,
-                **filtered_kwargs
-            }
-            if system_param is not None:
-                api_params['system'] = system_param
-            # B1/F12: 4 breakpoints — system, the end of the foundation, 2 transactions.
-            api_params['messages'] = _apply_conversation_cache(
-                api_params['messages'], ttl=self._cache_ttl(),
-                foundation_len=self._foundation_len())
-
-            # FIXED: Use streaming for high max_tokens to avoid Anthropic SDK error
+            # Use streaming for high max_tokens to avoid Anthropic SDK error
             # "Streaming is required for operations that may take longer than 10 minutes"
             use_streaming = max_tokens_value > 8192
-            api_params = self._route_sampling_params(api_params)  # SDK-aware temperature
-            stamp_client(self, api_params)   # F20: prefix identity
+            stamp_request(api_params)   # prefix identity
 
             if use_streaming:
                 self.logger.debug(f"Using streaming for _generate (max_tokens={max_tokens_value})")
@@ -722,36 +525,17 @@ class AnthropicClient(LLMClient):
             else:
                 self.last_response = await inference_sdk(self).messages.create(**api_params)
             
-            # Mark as successful
-            success = True
-            
-            # Process response
-            response_text = ""
-            if hasattr(self.last_response, 'content') and self.last_response.content:
-                text_blocks = [
-                    block.text for block in self.last_response.content 
-                    if hasattr(block, 'text') and block.text
-                ]
-                response_text = " ".join(text_blocks)
-            
-            # Capture telemetry with actual timing and usage data
-            self._extract_usage_and_capture_telemetry(start_time, success, None, kwargs.get('metadata'))
+            response_text, _ = self._parse_agent_blocks(self.last_response)
+
+
             return response_text
         except anthropic.APIError as e:
-            success = False
-            error_message = str(e)
-            self.logger.error(f"{self._PROVIDER_LABEL} API error: {e}")
-            # Capture telemetry for failed requests too
-            self._extract_usage_and_capture_telemetry(start_time, success, error_message, kwargs.get('metadata'))
-            raise_if_credit_refusal(self._PROVIDER_LABEL, e)
-            raise ServiceError(f"{self._PROVIDER_LABEL} API error: {e}")
+            self.logger.error(f"{self.provider_label} API error: {e}")
+            raise_if_credit_refusal(self.provider_label, e)
+            raise_llm_error(e, self.provider_label, model=self.model_type)
         except Exception as e:
-            success = False
-            error_message = str(e)
-            self.logger.error(f"Error generating response from {self._PROVIDER_LABEL}: {e}")
-            # Capture telemetry for failed requests too
-            self._extract_usage_and_capture_telemetry(start_time, success, error_message, kwargs.get('metadata'))
-            raise ServiceError(f"Error generating response from {self._PROVIDER_LABEL}: {e}")
+            self.logger.error(f"Error generating response from {self.provider_label}: {e}")
+            raise_llm_error(e, self.provider_label, model=self.model_type)
 
     async def generate_response(
         self,
@@ -771,25 +555,10 @@ class AnthropicClient(LLMClient):
                 prompt, messages, system, hoist_dict_system=True
             )
 
-            # Anthropic doesn't support all metadata types
-            # Filter to what we can use
             filtered_kwargs = kwargs.copy()
-            
-            # Ensure metadata is passed through to _generate for telemetry
             if metadata:
                 filtered_kwargs['metadata'] = metadata
-                
-                # Extract Anthropic-supported metadata
-                anthropic_metadata = {}
-                for key, value in metadata.items():
-                    # Anthropic supports user_id in metadata
-                    if key == 'user_id' and isinstance(value, str):
-                        anthropic_metadata[key] = value
-                
-                # Only include if we have valid metadata for Anthropic
-                if anthropic_metadata:
-                    filtered_kwargs.update(anthropic_metadata)
-            
+
             # Generate response
             response = await self._generate(
                 messages=formatted_messages,
@@ -801,11 +570,9 @@ class AnthropicClient(LLMClient):
             
             return response
             
-        except LLMPermanentError:
-            raise  # a credit refusal keeps its "NO BALANCE" type (credit_errors.py)
         except Exception as e:
             self.logger.error(f"Failed to generate response: {e}")
-            raise ServiceError(f"Failed to generate response: {e}")
+            raise_llm_error(e, self.provider_label, model=self.model_type)
 
     async def _validate_connection(self) -> None:
         """Validate connection to Anthropic."""
@@ -817,12 +584,12 @@ class AnthropicClient(LLMClient):
                 messages=[{"role": "user", "content": "Test connection"}]
             )
             if not response:
-                raise LLMConnectionError(f"No response from {self._PROVIDER_LABEL} API")
-            self.logger.debug(f"{self._PROVIDER_LABEL} API connection validated successfully")
+                raise LLMConnectionError(f"No response from {self.provider_label} API")
+            self.logger.debug(f"{self.provider_label} API connection validated successfully")
         except Exception as e:
-            raise_if_credit_refusal(self._PROVIDER_LABEL, e, self.logger)
-            self.logger.error(f"Failed to validate {self._PROVIDER_LABEL} connection: {e}")
-            raise ServiceError(f"Failed to validate {self._PROVIDER_LABEL} connection: {e}")
+            raise_if_credit_refusal(self.provider_label, e, self.logger)
+            self.logger.error(f"Failed to validate {self.provider_label} connection: {e}")
+            raise ServiceError(f"Failed to validate {self.provider_label} connection: {e}")
 
     async def _cleanup_client(self) -> None:
         """Clean up Anthropic client."""
@@ -831,14 +598,14 @@ class AnthropicClient(LLMClient):
             if client is not None and hasattr(client, 'close'):
                 await client.close()  # close the httpx pool, not just drop it
         except Exception as e:
-            self.logger.error(f"Error cleaning up {self._PROVIDER_LABEL} client: {e}")
+            self.logger.error(f"Error cleaning up {self.provider_label} client: {e}")
 
     async def cleanup(self) -> None:
         """Clean up resources."""
         await self._cleanup_client()
         self._client = None
         self._initialized = False
-        self.logger.info(f"{self._PROVIDER_LABEL} client cleaned up")
+        self.logger.info(f"{self.provider_label} client cleaned up")
 
     async def _make_validation_request(self) -> Any:
         """Make minimal test request to Anthropic."""
@@ -851,7 +618,7 @@ class AnthropicClient(LLMClient):
     def _check_validation_response(self, response: Any) -> None:
         """Validate Anthropic response."""
         if not response or not response.content:
-            raise ValueError(f"Invalid response from {self._PROVIDER_LABEL}")
+            raise ValueError(f"Invalid response from {self.provider_label}")
 
     def _extract_usage_data(self) -> Dict[str, Optional[int]]:
         """Extract usage data from last_response.
@@ -874,7 +641,7 @@ class AnthropicClient(LLMClient):
         input_tokens = getattr(usage, 'input_tokens', None)
         output_tokens = getattr(usage, 'output_tokens', None)
 
-        # P8a (context-usage audit 2026-08-15): an Anthropic-compat endpoint
+        # An Anthropic-compat endpoint
         # that returns output usage but NO input usage leaves the meter (and
         # any cache-hit verification) input-blind while telemetry silently
         # records prompt_tokens=0. Warn ONCE per client instance, naming the
@@ -887,7 +654,7 @@ class AnthropicClient(LLMClient):
                 except Exception:
                     raw = repr(usage)
                 self.logger.warning(
-                    f"{self._PROVIDER_LABEL}: input-side usage missing from response "
+                    f"{self.provider_label}: input-side usage missing from response "
                     f"(output_tokens={output_tokens}, raw usage={raw}) — prompt-token "
                     f"metering and cache-hit metrics are blind on this endpoint"
                 )
@@ -896,11 +663,11 @@ class AnthropicClient(LLMClient):
         # input_tokens (total input = input_tokens + cache_read + cache_creation).
         # Fold them back so the meter sees full input, expose cache READS as
         # cached_tokens (billed at 0.1x) and cache CREATION as cache_creation_tokens
-        # (G3: billed at 1.25x via ModelPricing.cache_write_price downstream).
+        # (billed at 1.25x via ModelPricing.cache_write_price downstream).
         cache_read = getattr(usage, 'cache_read_input_tokens', 0) or 0
         cache_creation = getattr(usage, 'cache_creation_input_tokens', 0) or 0
         total_input = None if input_tokens is None else input_tokens + cache_read + cache_creation
-        from modules.llm.usage_extract import cache_creation_1h_from  # F4: 1h write slice (2.0x)
+        from modules.llm.usage_extract import cache_creation_1h_from  # 1h write slice (2.0x)
 
         # Calculate total
         total_tokens = None

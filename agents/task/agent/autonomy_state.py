@@ -123,19 +123,23 @@ class AutonomyStateStore:
 
     def record_dispatched(self, *, session_id: str, user_id: str, delegation_id: str,
                           goal: str, profile: str, parent_agent_id: Optional[str],
-                          dispatched_at: float, owner: Optional[str] = None) -> None:
+                          dispatched_at: float, owner: Optional[str] = None) -> bool:
+        """Insert the ``running`` row. False when the id already has a row: a reissued id
+        never replaces an earlier delegation (its result may still wait for delivery)."""
         if owner is None:
             from core.state.proc import process_identity
             owner = process_identity().encode()
-        execute_retry(
+        changed = execute_retry(
             self.db_path,
-            """INSERT OR REPLACE INTO delegations
+            """INSERT INTO delegations
                (session_id, delegation_id, user_id, goal, profile, parent_agent_id,
                 status, dispatched_at, owner)
-               VALUES (?,?,?,?,?,?,'running',?,?)""",
+               VALUES (?,?,?,?,?,?,'running',?,?)
+               ON CONFLICT(session_id, delegation_id) DO NOTHING""",
             (session_id, delegation_id, user_id, goal, profile,
              parent_agent_id, dispatched_at, owner),
         )
+        return bool(changed)
 
     def record_terminal(self, session_id: str, delegation_id: str, *, status: str,
                         completed_at: float, result_text: str = "",

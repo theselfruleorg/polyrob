@@ -219,3 +219,45 @@ def test_stream_error_after_headers_surfaces_in_stream(monkeypatch):
     assert '"error":{"message":"agent turn failed' in resp.text
     assert "[error]" not in resp.text
     assert "data: [DONE]" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_non_streamed_turn_is_cancelled_when_the_client_disconnects(monkeypatch):
+    """EP-10: a closed connection used to leave the whole agent turn running."""
+    import asyncio
+    from fastapi import HTTPException
+    import api.openai_compat.router as r
+
+    monkeypatch.setattr(r, "DISCONNECT_POLL_SEC", 0.01)
+    started, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def _long_turn():
+        started.set()
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        return "late"
+
+    class _Req:
+        async def is_disconnected(self):
+            return started.is_set()
+
+    with pytest.raises(HTTPException) as exc:
+        await asyncio.wait_for(r._run_until_disconnect(_Req(), _long_turn), timeout=5)
+    assert exc.value.status_code == 499
+    assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_non_streamed_turn_returns_while_the_client_stays():
+    import api.openai_compat.router as r
+
+    class _Req:
+        async def is_disconnected(self):
+            return False
+
+    async def _turn():
+        return "hi"
+    assert await r._run_until_disconnect(_Req(), _turn) == "hi"

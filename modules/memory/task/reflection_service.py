@@ -18,7 +18,10 @@ Behaviour contract (matches the historical _llm_consolidate exactly):
 - Returns None when disabled / no model / empty findings / empty LLM response.
 - Returns None on ANY exception from the LLM call (fail-open).
 - Emits ``event=reflection_consolidate`` (INFO) on success.
-- Emits ``event=reflection_fallback`` (INFO on empty response, WARNING on error).
+- Emits ``event=reflection_fallback`` (INFO on empty response, WARNING on error,
+  with the exception type: a timeout has an empty message).
+- Sets ``failed`` when the model was asked and gave nothing, so the caller can keep
+  the findings (``failed_reflection_row``). Disabled or no model is not a failure.
 - Uses ``core.async_bridge.run_coroutine_sync`` for the sync-over-async call,
   bounded to 30 seconds (mirrors the removed inlining in TCM, P4 pattern).
 """
@@ -34,6 +37,34 @@ UNVERIFIED_MARK = "[unverified] "
 # P0-7: strong refs to fire-and-forget metering tasks scheduled onto the loop from
 # its own thread, so they aren't garbage-collected before they run.
 _INFLIGHT_METER_TASKS: set = set()
+
+
+#: How many findings a failed reflection hands to the cross-session store.
+FAILED_REFLECTION_FINDINGS = 5
+
+
+def failed_reflection_row(phase_name: str, findings: List[str], max_chars: int) -> str:
+    """The row that keeps a failed reflection's last good findings: one line, marked
+    ``[unverified]`` because no model checked it. A finding already marked is not
+    good. "" when none is left."""
+    good = [" ".join(str(f).split()) for f in findings
+            if f and UNVERIFIED_MARK.strip() not in str(f)]
+    if not good:
+        return ""
+    body = "; ".join(good[-FAILED_REFLECTION_FINDINGS:])[:max_chars]
+    return f"{UNVERIFIED_MARK}[phase-summary:{phase_name}] {body}"
+
+
+def keep_failed_findings(session_data, phase_name: str, findings: List[str], max_chars: int) -> None:
+    """After a FAILED call (``ReflectionService.failed``), queue the findings for the
+    cross-session drain. A failed call must not lose them; disabled reflection queues
+    nothing, and neither does a summary the threat scan refused."""
+    if not getattr(session_data, "_reflection_failed", False):
+        return
+    row = failed_reflection_row(phase_name, findings, max_chars)
+    if row:
+        session_data._pending_reflection_summaries = [
+            *(getattr(session_data, "_pending_reflection_summaries", None) or []), row]
 
 
 _OFF_LOGGED = False
@@ -72,6 +103,7 @@ class ReflectionService:
         self._enabled = enabled
         self._llm = llm
         self._meter_ctx = meter_ctx or {}
+        self.failed = False
 
     def _meter(self, mc: dict, resp: object, duration_seconds: float) -> None:
         """Bill the aux reflection call, scheduling onto the ORIGINAL loop.
@@ -179,9 +211,12 @@ class ReflectionService:
                 )
                 return text
             logger.info("event=reflection_fallback reason=empty_response")
+            self.failed = True
             return None
         except Exception as e:
+            self.failed = True
             logger.warning(
-                f"event=reflection_fallback reason=error detail={e} (using concat)"
+                f"event=reflection_fallback reason=error type={type(e).__name__} "
+                f"detail={e} (using concat)"
             )
             return None

@@ -247,7 +247,7 @@ function selectVerb(dialog, name, copy) {
   sayReach(dialog, copy);
 }
 
-function bind() {
+export function bind() {
   const dialog = document.getElementById("palette-dialog");
   const input = document.getElementById("palette-input");
   const results = document.getElementById("palette-results");
@@ -303,6 +303,10 @@ function bind() {
 
   const close = document.getElementById("palette-close");
   if (close) close.addEventListener("click", () => dialog.close());
+
+  // 113 W5 (IA-2): the head's Commands button, beside Chats.
+  const button = document.getElementById("palette-open");
+  if (button) button.addEventListener("click", () => open(""));
 
   // ⌘⇧P / Ctrl-⇧-P opens the palette from anywhere. ⌘K is NOT rebound — it is
   // the Chats overlay and stays it.

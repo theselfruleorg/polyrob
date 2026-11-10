@@ -28,11 +28,19 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+_READ_AGE = re.compile(r"\s*\(read [^)]* ago\)")
+
+
+def wallet_read_fact(line: str) -> Optional[str]:
+    """A rendered wallet head with no read age in it. None when *line* holds no such age."""
+    return _READ_AGE.sub("", line) if " ago)" in line and _READ_AGE.search(line) else None
 
 #: Beyond this the snapshot is rendered as STALE rather than as a balance. It is
 #: not a refusal — a six-hour-old number is still evidence — but the agent must

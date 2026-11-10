@@ -52,8 +52,10 @@ async def downgrade(db, db_manager):
 async def verify(db, db_manager):
     try:
         cols = await db.fetch_all("PRAGMA table_info(billing_failures)")
-    except Exception:
-        cols = None
+    except Exception as exc:
+        # Unreadable is not absent: the gate fails rather than pass a store it never read.
+        logger.error("v1.13.0 verify: could not read billing_failures: %s", exc)
+        return False
     if not cols:
         return True
     missing = {"resolution", "resolving_by", "resolving_at"} - {c["name"] for c in cols}

@@ -280,7 +280,8 @@ def edit_cron(service: Any, job: Any, *, user_id: str, field: str, value: str,
     if not value:
         raise ValueError(f"a new {field} is required")
     if field == "schedule":
-        return service.edit(job.id, user_id=user_id, via=via, schedule_spec=value)
+        return service.edit(job.id, user_id=user_id, via=via, schedule_spec=value,
+                            payload_updates={"exact_time": True})
     if field == "grant":
         return service.edit(job.id, user_id=user_id, via=via,
                             payload_updates=grant_payload(value.split()))

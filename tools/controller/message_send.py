@@ -660,21 +660,27 @@ def build_owner_targets(container, user_id: str) -> dict:
 	"""
 	import os as _os
 
-	from core.instance import resolve_owner_email, resolve_owner_telegram_id
+	from core.instance import resolve_owner_email, resolve_owner_principal, resolve_owner_telegram_id
+	from core.surfaces.owner_address import is_owner_tenant
 	targets: dict = {}
-	tid = resolve_owner_telegram_id(_os.environ)
-	if tid:
-		targets["telegram"] = str(tid)
-	oem = resolve_owner_email(_os.environ)
-	if oem:
-		targets["email"] = oem
+	uid = str(user_id or "").strip() or str(resolve_owner_principal() or "")
+	# 110 W0: the instance owner's env addresses belong to the OWNER tenant only. Any
+	# other tenant reaches only its own directory addresses (``owner_address`` below
+	# guards the same way), never the operator's private chat or mailbox.
+	if is_owner_tenant(uid):
+		tid = resolve_owner_telegram_id(_os.environ)
+		if tid:
+			targets["telegram"] = str(tid)
+		oem = resolve_owner_email(_os.environ)
+		if oem:
+			targets["email"] = oem
 	try:
 		from core.surfaces.owner_address import owner_address
 		for _sid in _owner_surface_order():
 			if _sid not in targets:
-				_addr = owner_address(container, _sid, user_id)
+				_addr = owner_address(container, _sid, uid)
 				if _addr:
 					targets[_sid] = str(_addr)
 	except Exception:
-		pass
+		logger.warning("message: owner targets could not be resolved", exc_info=True)
 	return targets

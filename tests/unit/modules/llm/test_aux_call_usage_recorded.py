@@ -45,7 +45,7 @@ async def test_no_tools_path_carries_usage_metadata():
                       "cached_tokens": 1000, "billed_cost_usd": 0.0021})
     a = OpenAIAdapter(client=client, model_name="gpt-x")
     msg = await a.ainvoke([HumanMessage(content="summarise")], tools=None)
-    usage = extract_token_usage(msg, "openai")
+    usage = extract_token_usage(msg)
     assert usage["prompt_tokens"] == 1200 and usage["completion_tokens"] == 80
     assert usage["cached_tokens"] == 1000
     assert usage["billed_cost_usd"] == pytest.approx(0.0021)
@@ -72,21 +72,25 @@ def test_meter_aux_passes_billed_cost_and_cache_discount():
 
 
 def test_meter_aux_records_upstream_but_never_the_step_context():
-    from modules.llm.prefix_stamp import stamp_context
+    from modules.llm.call_scope import begin_call, set_step_context
+    from modules.llm.call_result import call_facts, read_stamps
+    from modules.llm.call_scope import set_step_context
+    from modules.llm.prefix_stamp import context_stamps
     tr = _Tracker()
-    client = SimpleNamespace(last_response={"provider": "DeepInfra", "usage": {}})
-    llm = SimpleNamespace(model_name="m", _client=client)
-    stamp_context(llm, {"slots": {"foundation": 5}, "limit": 100, "pct": 5.0})
-    resp = SimpleNamespace(usage_metadata={"input_tokens": 5, "output_tokens": 1})
+    set_step_context(context_stamps({"slots": {"foundation": 5}, "limit": 100, "pct": 5.0}))
+    try:
+        facts = call_facts({"provider": "DeepInfra", "usage": {}}, None, begin_call())
+    finally:
+        set_step_context(None)
+    resp = SimpleNamespace(usage_metadata={"input_tokens": 5, "output_tokens": 1}, call_facts=facts)
     asyncio.run(meter_aux_llm(usage_tracker=tr, user_id="u1", session_id="s1", agent_id="a1",
-                              llm=llm, response=resp, duration_seconds=0.1,
+                              llm=SimpleNamespace(model_name="m"), response=resp, duration_seconds=0.1,
                               component="judge", purpose="x"))
     meta = tr.calls[0]["metadata"]
     assert meta["upstream"] == "DeepInfra"
     assert not any(k.startswith("ctx_") for k in meta)
-    # the step's context stamp is still there for the step's own billing row
-    from modules.llm.prefix_stamp import read_stamps
-    assert read_stamps(llm)["ctx_foundation"] == 5
+    # the call's context reading stays on its own message for the step's billing row
+    assert read_stamps(resp)["ctx_foundation"] == 5
 
 
 @pytest.mark.asyncio

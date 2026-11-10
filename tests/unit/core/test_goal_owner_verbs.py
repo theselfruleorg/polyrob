@@ -46,6 +46,21 @@ def test_retry_of_a_paused_dependent_waits_for_its_prerequisite(board):
     assert r.ok and board.get(b.id).status == "waiting"
 
 
+def test_retry_refuses_when_the_dependencies_cannot_be_read(board, monkeypatch):
+    # Before: a read error answered "no unfinished deps", so the paused dependent went
+    # to ready and ran before the goal it depends on.
+    a = board.create(user_id="u", title="first thing")
+    b = board.create(user_id="u", title="second thing", depends_on=[a.id])
+    V.pause_goal(board, user_id="u", goal=board.get(b.id))
+
+    def broken(goal_id):
+        raise RuntimeError("database is locked")
+    monkeypatch.setattr(board, "dependencies", broken)
+    r = V.retry_goal(board, user_id="u", goal=board.get(b.id))
+    assert not r.ok and "Could not read" in r.message
+    assert board.get(b.id).status == "paused"
+
+
 def test_retry_of_a_blocked_goal_clears_failures(board):
     g = board.create(user_id="u", title="t2")
     board.update_status(g.id, "blocked")

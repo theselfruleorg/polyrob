@@ -9,7 +9,7 @@ import types
 import pytest
 
 from agents.task.agent.skill_manager import SkillManager
-from modules.skills.writer import PROVENANCE_BACKGROUND
+from modules.skills.writer import PROVENANCE_UNTRUSTED
 
 
 @pytest.fixture(autouse=True)
@@ -56,7 +56,7 @@ def _ctx(tmp_path, args, user_id="u1"):
 def seeded_sm(tmp_path, monkeypatch):
     sm = SkillManager(skills_dir=tmp_path / "skills")
     res = sm.create_skill("draft-skill", _BODY, user_id="u1",
-                          created_by=PROVENANCE_BACKGROUND)
+                          created_by=PROVENANCE_UNTRUSTED)
     assert res.pending
     monkeypatch.setattr("agents.task.agent.skill_manager.get_skill_manager", lambda: sm)
     return sm
@@ -130,7 +130,7 @@ _LONG_BODY = ("# Long Pending Skill\n\n" + ("A reusable step. " * 30)
 def seeded_long_sm(tmp_path, monkeypatch):
     sm = SkillManager(skills_dir=tmp_path / "skills")
     res = sm.create_skill("long-skill", _LONG_BODY, user_id="u1",
-                          created_by=PROVENANCE_BACKGROUND)
+                          created_by=PROVENANCE_UNTRUSTED)
     assert res.pending
     monkeypatch.setattr("agents.task.agent.skill_manager.get_skill_manager", lambda: sm)
     return sm

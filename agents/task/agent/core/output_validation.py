@@ -177,10 +177,11 @@ class OutputValidationMixin:
 			try:
 				# P2-9: await the async provisioning so building the judge client yields
 				# the loop instead of blocking it (run_coroutine_sync) for up to 60s.
-				self._judge_llm = await self._provision_aux_llm_async("judge")
+				# One builder for the slot: a concurrent reviewer or verdict keeps one model.
+				from agents.task.agent.core.llm_slots import cached_judge_llm
+				await cached_judge_llm(self)
 			except Exception as e:
 				self.logger.debug(f"judge aux model provisioning skipped: {e}")
-				self._judge_llm = None
 
 		# UP-10 2.1: route validation through the optional cheap 'judge' aux model when
 		# provisioned (AUX_MODEL_JUDGE / AUX_AUTO); fail-open to the main model. Default

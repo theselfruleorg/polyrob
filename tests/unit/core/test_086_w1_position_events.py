@@ -70,7 +70,7 @@ def test_a_sell_of_nothing_and_a_failed_write_fire_nothing(events, db, monkeypat
     def broken(*a, **k):
         raise OSError("disk")
 
-    monkeypatch.setattr(su, "execute_retry", broken)
+    monkeypatch.setattr(su, "wal_connect", broken)   # the book write's one connection
     apply_delta("u1", PositionDelta("base", MEME, "MEME", 1.0, 1.0), db_path=db)
     assert events == []
 

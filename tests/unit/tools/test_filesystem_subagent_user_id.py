@@ -73,3 +73,21 @@ def test_write_file_routes_to_execution_context_tenant(_pm):
         f"file did not land under tenant; tenant_ws={tenant_ws}")
     assert not (anon_ws / "subtopic_a.md").exists(), (
         "file leaked to _anonymous_ tenant")
+
+
+def test_a_context_without_a_tenant_never_inherits_the_previous_one(_pm):
+    """The shared tool keeps no caller identity: tenant A's call, then a call whose
+    context names a session but no user_id, must not resolve under tenant A."""
+    from agents.task.loop_types.execution_context import ActionExecutionContext
+    from tools.controller.views import WriteFileAction
+
+    tool = _fs_tool_stale_user()
+    asyncio.run(tool.write_file(
+        WriteFileAction(file_path="a.md", content="a\n"),
+        execution_context=ActionExecutionContext(session_id="sess-a", user_id="tenantA")))
+    asyncio.run(tool.write_file(
+        WriteFileAction(file_path="b.md", content="b\n"),
+        execution_context=ActionExecutionContext(session_id="sess-b", user_id=None)))
+
+    assert tool.user_id is None
+    assert not (_pm.get_workspace_dir("sess-b", "tenantA") / "b.md").exists()

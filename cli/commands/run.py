@@ -30,8 +30,10 @@ from cli.toolset import resolve_tool_list as _resolve_tool_list  # noqa: F401
 @click.option("--attach", "attachments", multiple=True, type=click.Path(exists=True, dir_okay=False), help="Attach a local file or image (repeatable).")
 @click.option("--output-format", type=click.Choice(["text", "json", "jsonl"]), default="text", help="Structured formats keep diagnostics on stderr.")
 @click.option("--no-input", is_flag=True, help="Never prompt for setup or interactive approvals.")
-@click.option("--resume", "resume_id", default=None, metavar="SESSION_ID",
-              help="Resume an existing session by id (continue it) instead of starting a new task.")
+@click.option("--continue", "--resume", "resume_id", default=None, metavar="SESSION_ID",
+              help="Continue an existing chat by id. Add a message to say something new; "
+                   "with no message it only runs input that is already waiting. "
+                   "--resume is the old name of --continue.")
 @click.option("--model", "-m", default=None, help="Model name (e.g. gemini-2.5-flash, gpt-5)")
 @click.option("--provider", "-p", default=None, help="Provider (openrouter, anthropic, openai, gemini, nvidia, deepseek, or any provider declared in ~/.polyrob/providers.yaml)")
 @click.option("--tools", "-t", default=None, help="Comma-separated tool list (e.g. browser,mcp,filesystem). Takes precedence over --toolset.")
@@ -56,12 +58,12 @@ def run(
 ):
     """Run a task session locally, streaming output to the terminal.
 
-    Provide a TASK to start a new session, or --resume SESSION_ID to continue an
-    existing one (exactly one of the two).
+    Provide a TASK to start a new chat. With --continue SESSION_ID the TASK is the next
+    message in that chat; --continue alone only runs input that is already waiting.
     """
     if task_file is not None:
         if task is not None or resume_id:
-            raise click.UsageError("--task-file cannot be combined with TASK or --resume.")
+            raise click.UsageError("--task-file cannot be combined with TASK or --continue.")
         task = task_file.read()
         if getattr(task_file, "name", None) == "<stdin>":
             no_input = True
@@ -78,9 +80,9 @@ def run(
         if ctx.get_parameter_source("max_steps") == ParameterSource.COMMANDLINE:
             overrides.append("max-steps")
         if overrides:
-            raise click.UsageError("--resume uses the saved session settings; remove overrides: " + ", ".join(overrides))
-    if bool(task) == bool(resume_id):
-        raise click.UsageError("provide either a TASK or --resume SESSION_ID (exactly one).")
+            raise click.UsageError("--continue uses the saved session settings; remove overrides: " + ", ".join(overrides))
+    if not task and not resume_id:
+        raise click.UsageError("provide a TASK, or --continue SESSION_ID (with or without a message).")
     # Name the terminal tab (otherwise it shows the interpreter's "Python").
     from cli.ui import terminal_title
     from core.env import bool_env
@@ -318,7 +320,14 @@ async def _run_session(
         # Use the session's own model/task for the banner + turn label.
         resolved_model = info.get("model") or resolved_model
         resolved_provider = info.get("provider") or resolved_provider
-        task = info.get("task") or "(resumed session)"
+        if task:
+            # 113 W0 (T-01): the message is the chat's next line. Without it a
+            # completed chat had nothing to run and `--resume` ended at once.
+            from cli.commands._session_control import queue_resume_message
+            await queue_resume_message(task_agent, orch, session_id,
+                                       info.get("user_id") or user_id, task, typed_task)
+        else:
+            task = info.get("task") or "(resumed session)"
     else:
         try:
             with suppress_bootstrap_output():

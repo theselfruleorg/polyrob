@@ -8,9 +8,9 @@ import types
 
 from openai.types.chat import ChatCompletion
 
-from modules.llm.prefix_stamp import (
-    context_stamps, read_stamps, response_stamps, stamp_client, stamp_context,
-)
+from modules.llm.call_scope import begin_call, set_step_context
+from modules.llm.call_result import call_facts, read_stamps, response_stamps
+from modules.llm.prefix_stamp import context_stamps, stamp_request
 
 
 def _openrouter_completion(provider="DeepInfra", reasoning=37):
@@ -47,13 +47,13 @@ def test_garbage_never_raises():
     assert response_stamps({"provider": 3, "usage": "x"}) == {}
 
 
-def test_read_stamps_reads_the_clients_last_response():
-    client = types.SimpleNamespace()
-    stamp_client(client, {"messages": [{"role": "system", "content": "s"}]})
-    client.last_response = _openrouter_completion()
-    out = read_stamps(types.SimpleNamespace(_client=client))
+def test_read_stamps_reads_the_facts_on_the_message():
+    request = begin_call()
+    stamp_request({"messages": [{"role": "system", "content": "s"}]})
+    message = types.SimpleNamespace(call_facts=call_facts(_openrouter_completion(), None, request))
+    out = read_stamps(message)
     assert out["upstream"] == "DeepInfra" and out["reasoning_tokens"] == 37
-    assert "prefix_sha" in out
+    assert "prefix_sha" in out and out["finish_reason"] == "stop"
 
 
 _USAGE = {"total_tokens": 149000, "limit": 200000, "pct": 74.53, "source": "provider_usage",
@@ -69,11 +69,13 @@ def test_context_stamps_flatten_the_one_gauge():
     assert context_stamps(None) == {} and context_stamps({"slots": "x"}) == {}
 
 
-def test_stamped_context_is_read_once():
-    client = types.SimpleNamespace()
-    llm = types.SimpleNamespace(_client=client)
-    stamp_context(llm, _USAGE)
-    assert read_stamps(llm, include_context=False).get("ctx_pct") is None
-    first = read_stamps(llm)
-    assert first["ctx_schemas"] == 55000 and first["ctx_pct"] == 74.5
-    assert "ctx_schemas" not in read_stamps(llm), "a later unstamped call must not inherit it"
+def test_step_context_rides_the_call_and_an_aux_record_omits_it():
+    set_step_context(context_stamps(_USAGE))
+    try:
+        message = types.SimpleNamespace(call_facts=call_facts(None, None, begin_call()))
+    finally:
+        set_step_context(None)
+    assert read_stamps(message, include_context=False).get("ctx_pct") is None
+    assert read_stamps(message)["ctx_schemas"] == 55000 and read_stamps(message)["ctx_pct"] == 74.5
+    later = types.SimpleNamespace(call_facts=call_facts(None, None, begin_call()))
+    assert "ctx_schemas" not in read_stamps(later), "a later unstamped call must not inherit it"

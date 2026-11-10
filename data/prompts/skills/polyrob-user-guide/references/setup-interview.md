@@ -68,7 +68,8 @@ propose writing them as plain files — always go through:
 - **Anything narrative/prose** that doesn't fit a typed preference (general
   operating philosophy, house rules, "always do X before Y") ->
   `owner_doc_manage` (`action="patch"` adds one line; `"update"` is the FULL
-  body — a line you leave out is retired under `## Superseded`).
+  body — a line you leave out is retired under `## Superseded`). A job's state
+  (on/off, schedule, id, progress) never goes here: it lives in the job.
 
 ## After the interview
 

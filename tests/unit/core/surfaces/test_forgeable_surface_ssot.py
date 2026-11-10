@@ -57,7 +57,7 @@ def test_the_pairing_branch_is_gated_on_the_surface():
     code = store.request("u_paired")
     assert store.approve(code) == "u_paired"
 
-    env = {"POLYROB_OWNER_USER_ID": "u_owner"}
+    env = {"POLYROB_OWNER_USER_ID": "u_owner", "POLYROB_REQUIRE_PAIRING": "1"}
     c = _Container()
     assert _is_owner_or_paired(c, "u_paired", env, allow_local=False,
                                allow_pairing=True) is True

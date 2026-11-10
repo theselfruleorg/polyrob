@@ -52,7 +52,6 @@ CORE_VERB_ROWS = {
         # Action cards (2026-09-27): a question with buttons, and a money PROPOSAL whose only
         # action is the verb's quote on the owner's seat. Neither moves anything; both speak to
         # the owner as the agent, so a tainted or room turn reaches neither.
-        "present_choice": dict(effect="none", correspondent_blocked=True, room_denied=True),
         "propose_action": dict(effect="none", correspondent_blocked=True, room_denied=True),
         # 086 W5: the trading mandate's intake card — a draft + ONE owner card; Confirm on
         # the owner's seat writes the mandate. Same reach as propose_action.
@@ -83,6 +82,8 @@ CORE_VERB_ROWS = {
         "load_skill": dict(effect="none"),
         "read_skill_resource": dict(effect="none"),
         "tool_search": dict(effect="none"),
+        # 112 W4: pure functions over its arguments — no I/O, no state, no network.
+        "compute": dict(effect="none"),
         # The group ledger holds the owner's own room lines: the disclosure class of
         # contact_history.
         "room_read": dict(effect="none", correspondent_blocked=True),
@@ -115,10 +116,25 @@ CORE_VERB_ROWS = {
         "browser_screenshot": dict(effect="none"),
         "browser_search_google": dict(effect="none"),
         "browser_switch_tab": dict(effect="none"),
+        "browser_close_tab": dict(effect="none"),
+        "browser_go_forward": dict(effect="none"),
+        "browser_hover_element": dict(effect="none"),
+        "browser_read_element": dict(effect="none"),
+        "browser_wait": dict(effect="none"),
         "browser_click_element": dict(effect="network"),
+        "browser_click_at": dict(effect="network"),
         "browser_input_text": dict(effect="network"),
+        "browser_type_text": dict(effect="network"),
         "browser_send_keys": dict(effect="network"),
         "browser_select_dropdown_option": dict(effect="network"),
+        "browser_set_checked": dict(effect="network"),
+        "browser_drag_and_drop": dict(effect="network"),
+        # Sends workspace files to the page; the paths are confined to the session workspace.
+        "browser_upload_file": dict(effect="network"),
+        # A script can read the page and send anything the page itself can send.
+        "browser_evaluate_js": dict(effect="network"),
+        # Carries the text of a prompt dialog.
+        "browser_handle_dialog": dict(effect="network"),
     },
     "http_request": {
         # 093 F1: an agent-controlled body to a public host. GET rides the same verb
@@ -435,7 +451,6 @@ CORE_VERB_ROWS = {
         # room_denied, deferred execution: a later owner-tenant run would execute what a
         # stranger planted in a room.
         "goal_create": dict(room_denied=True),
-        "goal_ask": dict(room_denied=True),
         "goal_cancel": dict(room_denied=True),
     },
     "hf_deploy": {

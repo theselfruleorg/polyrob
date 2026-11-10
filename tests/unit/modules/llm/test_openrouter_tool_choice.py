@@ -48,18 +48,17 @@ class _Completions:
                                      usage=None, id="gen-1")
 
 
-def _client(completions, label="OpenRouter"):
+def _client(completions, cls=None):
     from modules.llm.openrouter_client import OpenRouterClient
-    c = OpenRouterClient.__new__(OpenRouterClient)
+    cls = cls or OpenRouterClient
+    c = cls.__new__(cls)
     c.model_type = "deepseek/deepseek-v4.1-flash"
     c.max_tokens = 128
     c.temperature = 0.2
     c.last_response = None
     c._initialized = True
-    c._PROVIDER_LABEL = label
     c.logger = types.SimpleNamespace(debug=lambda *a, **k: None, info=lambda *a, **k: None,
                                      warning=lambda *a, **k: None, error=lambda *a, **k: None)
-    c._extract_usage_and_capture_telemetry = lambda *a, **k: None
     c._client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=completions))
     return c
 
@@ -84,7 +83,8 @@ def test_explicit_parameter_wins():
 
 def test_subclass_seat_keeps_auto_unless_asked():
     comp = _Completions()
-    c = _client(comp, label="NVIDIA")
+    from modules.llm.nvidia_client import NvidiaClient
+    c = _client(comp, NvidiaClient)
     _run(c, [READ, DONE])
     _run(c, [READ, DONE], tool_choice="required")
     assert [call["tool_choice"] for call in comp.calls] == ["auto", "required"]
@@ -107,3 +107,14 @@ def test_other_errors_are_not_swallowed():
     with pytest.raises(LLMError):
         _run(_client(comp), [READ, DONE])
     assert len(comp.calls) == 1 and not rt._REQUIRED_REJECTED
+
+
+def test_a_required_refusal_expires(monkeypatch):
+    """A 404 "no endpoints … tool_choice" can mean only that the upstreams that support it
+    are down now: the model goes back to required after the latch window."""
+    now = [1000.0]
+    monkeypatch.setattr(rt.time, "monotonic", lambda: now[0])
+    rt.remember_required_rejected("m")
+    assert rt.resolve_tool_choice([READ, DONE], "m") == "auto"
+    now[0] += rt.LATCH_TTL_SEC + 1
+    assert rt.resolve_tool_choice([READ, DONE], "m") == "required"

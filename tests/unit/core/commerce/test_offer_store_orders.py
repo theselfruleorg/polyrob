@@ -154,3 +154,35 @@ def test_the_live_card_hash_pins_the_contract_resources_too(tmp_path):
     fresh = st.card_hash(st.get(o.id, path=p), path=p)
     assert st.go_live(o.id, "owner", actor=st.OWNER_SEAT, expect_hash=fresh,
                       path=p).state == st.LIVE
+
+
+def test_a_go_live_that_loses_a_race_leaves_no_version_row_and_can_go_live_again(
+        tmp_path, monkeypatch):
+    from core.sqlite_util import execute_retry
+    p = str(tmp_path / "commerce.db")
+    o = st.save_draft("u1", MANIFEST, path=p)
+    h = st.manifest_hash(o.manifest)
+    real = st._move
+
+    def _lost(*a, **k):                 # the agent paused it between read and write
+        raise st.CommerceError("offer custom-art is draft; it cannot become live")
+    monkeypatch.setattr(st, "_move", _lost)
+    with pytest.raises(st.CommerceError):
+        st.go_live("custom-art", "u1", actor=st.OWNER_SEAT, expect_hash=h, path=p)
+    assert execute_retry(p, "SELECT COUNT(*) AS n FROM offer_versions", (),
+                         fetch="one")["n"] == 0
+    monkeypatch.setattr(st, "_move", real)
+    assert st.go_live("custom-art", "u1", actor=st.OWNER_SEAT, expect_hash=h,
+                      path=p).version == 1
+
+
+def test_an_orphan_version_row_never_blocks_a_go_live(tmp_path):
+    from core.sqlite_util import execute_retry
+    p = str(tmp_path / "commerce.db")
+    o = st.save_draft("u1", MANIFEST, path=p)
+    execute_retry(p, "INSERT INTO offer_versions (offer_id, version, manifest, contracts, "
+                     "confirmed_at) VALUES (?,?,?,?,?)", (o.id, 1, "{}", "{}", 1.0))
+    live = st.go_live(o.id, "u1", actor=st.OWNER_SEAT, expect_hash=st.manifest_hash(o.manifest),
+                      path=p)
+    assert live.is_live and live.version == 2
+    assert st.live_version(o.id, path=p).title == "Custom art NFT"

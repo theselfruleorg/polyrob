@@ -7,7 +7,7 @@ whole admin verb list (/wallet, /trade, /deploy, /halt …), and kept showing a
 retired verb long after the build that published it was gone.
 
 These tests pin the two halves of the fix: every broad scope is CLEARED on each
-start, and the verb list is published to the owner seats only.
+start, and the verb list is published to the owner's own chat only.
 """
 import asyncio
 
@@ -76,13 +76,24 @@ def test_published_to_the_owner_chat_with_the_help_ssot(owner_env):
     assert [c.command for c in commands] == [n for n, _ in help_commands()]
 
 
-def test_every_allowlisted_seat_gets_the_menu(monkeypatch):
-    """The verbs are gated by the allowlist, so the menu's audience is it."""
+def test_a_second_allowlisted_seat_gets_no_menu(monkeypatch):
+    """113 W7 F-05: only the owner's own id runs the verbs (``owner_surface_alias``
+    makes ONE id the owner tenant), so only it gets the menu. Two allowlisted ids
+    with no explicit owner name nobody: no menu, the broad scopes still cleared."""
     monkeypatch.delenv("POLYROB_OWNER_TELEGRAM_ID", raising=False)
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "111, 222")
     bot = _FakeBot()
     _publish(bot)
-    assert [scope.chat_id for _c, scope in bot.set_calls] == [111, 222]
+    assert bot.set_calls == []
+    assert len(bot.deleted_scopes) == 3
+
+
+def test_explicit_owner_is_the_only_menu_chat(monkeypatch):
+    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "222")
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "111,222")
+    bot = _FakeBot()
+    _publish(bot)
+    assert [scope.chat_id for _c, scope in bot.set_calls] == [222]
 
 
 def test_no_owner_id_means_cleared_and_not_published(monkeypatch):
@@ -127,20 +138,19 @@ def test_a_failing_publish_is_swallowed(owner_env):
 
 # --- _menu_chat_ids -----------------------------------------------------------
 
-def test_explicit_owner_id_leads_and_dedupes(monkeypatch):
+def test_menu_chat_is_the_owner_id_only(monkeypatch):
     monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "222")
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "111,222")
-    assert _menu_chat_ids() == [222, 111]
+    assert _menu_chat_ids() == [222]
 
 
-def test_non_numeric_ids_are_dropped(monkeypatch):
-    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "alice")
-    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "111,@someone, ,222")
-    assert _menu_chat_ids() == [111, 222]
-
-
-def test_chat_count_is_bounded(monkeypatch):
+def test_a_single_allowlisted_id_is_the_owner(monkeypatch):
     monkeypatch.delenv("POLYROB_OWNER_TELEGRAM_ID", raising=False)
-    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS",
-                       ",".join(str(i) for i in range(100)))
-    assert len(_menu_chat_ids()) == 16
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "111")
+    assert _menu_chat_ids() == [111]
+
+
+def test_non_numeric_owner_id_names_nobody(monkeypatch):
+    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "someone")
+    monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "111,@someone, ,222")
+    assert _menu_chat_ids() == []

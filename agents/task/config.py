@@ -45,11 +45,11 @@ def resolve_session_provider_model(provider=None, model=None, env=None):
     if model and not provider:
         try:
             from agents.task.utils import detect_llm_provider
-            detected = detect_llm_provider(None, model)
-            # NOTE: the registry's final fuzzy fallback means an UNKNOWN model
-            # still detects as 'openai' rather than 'generic' — so in practice
-            # this returns early for any non-empty model. 'generic' is reached
-            # only if the registry import fails.
+            detected = detect_llm_provider(model)
+            # An UNKNOWN model still detects as the registry's conservative row
+            # ('openrouter' for a vendor/model id, else 'openai'), so in practice this
+            # returns early for any non-empty model. 'generic' is reached only if the
+            # registry import fails.
             if detected and detected != 'generic':
                 return detected, model
         except Exception:
@@ -87,7 +87,6 @@ class TaskMode:
                 "max_failures": 2,
                 "max_parse_retries": 1,
                 "telemetry_enabled": False,
-                "loop_detection_threshold": 20,
                 "min_steps_before_done": 2,
                 "confidence_check_before_done": False,
                 "task_verification_required": False,
@@ -96,7 +95,6 @@ class TaskMode:
                 "max_failures": 5,
                 "max_parse_retries": int(os.getenv('MAX_PARSE_RETRIES', '3')),
                 "telemetry_enabled": False,
-                "loop_detection_threshold": int(os.getenv('UNCHANGED_STATE_THRESHOLD', '20')),
                 "min_steps_before_done": int(os.getenv('MIN_STEPS_BEFORE_DONE', '3')),
                 "confidence_check_before_done": _bool_env('CONFIDENCE_CHECK_BEFORE_DONE', True),
                 "task_verification_required": _bool_env('TASK_VERIFICATION_REQUIRED', True),
@@ -105,7 +103,6 @@ class TaskMode:
                 "max_failures": 7,
                 "max_parse_retries": 5,
                 "telemetry_enabled": True,
-                "loop_detection_threshold": 25,
                 "min_steps_before_done": 5,
                 "confidence_check_before_done": True,
                 "task_verification_required": True,
@@ -199,7 +196,6 @@ class OrchestratorConfigModel(BaseModel):
 
     # Loop detection and intervention
     enable_loop_detection: bool = Field(default=True, description="Enable orchestrator loop detection")
-    loop_detection_threshold: int = Field(default=8, ge=3, le=50, description="Action repetitions before intervention")
     enable_loop_intervention: bool = Field(default=True, description="Enable automatic loop breaking interventions")
 
     # System prompt modifications
@@ -235,7 +231,6 @@ class OrchestratorConfigModel(BaseModel):
             # Minimal interventions for fast mode
             return cls(
                 enable_loop_detection=True,
-                loop_detection_threshold=15,
                 enable_loop_intervention=False,
                 enable_system_prompt_injection=False,
                 enable_todo_enforcement=False,
@@ -247,7 +242,6 @@ class OrchestratorConfigModel(BaseModel):
             # Full interventions for thorough mode
             return cls(
                 enable_loop_detection=True,
-                loop_detection_threshold=5,
                 enable_loop_intervention=True,
                 enable_system_prompt_injection=True,
                 enable_todo_enforcement=True,
@@ -259,7 +253,6 @@ class OrchestratorConfigModel(BaseModel):
             # Moderate interventions for balanced mode
             return cls(
                 enable_loop_detection=True,
-                loop_detection_threshold=8,
                 enable_loop_intervention=True,
                 enable_system_prompt_injection=False,
                 enable_todo_enforcement=False,

@@ -93,20 +93,23 @@ def pause_goal(board: Any, *, user_id: str, goal: Any) -> VerbResult:
                       f"{gid} paused by you.{note} Resume it: /goal retry {gid}")
 
 
-def _unfinished_deps(board: Any, goal: Any) -> List[str]:
+def _unfinished_deps(board: Any, goal: Any) -> Optional[List[str]]:
+    """The goal's unfinished dependencies, or None when they cannot be read: an
+    unreadable dependency is not a finished one."""
     try:
         deps = board.dependencies(goal.id) or []
+        rows = [(d, board.get(d)) for d in deps]
     except Exception:
-        return []
-    out = []
-    for d in deps:
-        try:
-            row = board.get(d)
-        except Exception:
-            row = None
-        if row is not None and getattr(row, "status", None) != STATUS_DONE:
-            out.append(d)
-    return out
+        logger.warning("goal %s: dependencies unreadable", getattr(goal, "id", "?"),
+                       exc_info=True)
+        return None
+    return [d for d, row in rows
+            if row is not None and getattr(row, "status", None) != STATUS_DONE]
+
+
+def _deps_unreadable(gid: str, status: str) -> VerbResult:
+    return VerbResult(False, status, f"Could not read the goals {gid} depends on, so it "
+                      f"stays {status}. Try again, or see /goal show {gid}.")
 
 
 def retry_goal(board: Any, *, user_id: str, goal: Any) -> VerbResult:
@@ -117,7 +120,10 @@ def retry_goal(board: Any, *, user_id: str, goal: Any) -> VerbResult:
             return VerbResult(False, status, f"{gid} changed — see /goals.")
         return VerbResult(True, STATUS_READY, f"{gid} → ready (failures cleared).")
     if status == STATUS_PAUSED:
-        target = STATUS_WAITING if _unfinished_deps(board, goal) else STATUS_READY
+        pending = _unfinished_deps(board, goal)
+        if pending is None:
+            return _deps_unreadable(gid, status)
+        target = STATUS_WAITING if pending else STATUS_READY
         if not board.update_status(goal.id, target, reset_failures=True, user_id=user_id,
                                    from_states=(STATUS_PAUSED,)):
             return VerbResult(False, status, f"{gid} changed — see /goals.")
@@ -147,6 +153,8 @@ def retry_goal(board: Any, *, user_id: str, goal: Any) -> VerbResult:
         # 2026-09-08: `waiting` is the ordinary state of a seeded chain. Forcing
         # it would skip the dependency; a bare "no" was a dead end. Explain.
         pending = _unfinished_deps(board, goal)
+        if pending is None:
+            return _deps_unreadable(gid, status)
         if not pending:
             return VerbResult(False, status, (
                 f"{gid} is waiting, but nothing unfinished blocks it — it looks "

@@ -88,22 +88,23 @@ def measure_doc_age(text: str, *, now: Optional[date] = None,
                   newest=newest, oldest=oldest)
 
 
-def render_age_header(title: str, text: str, *, now: Optional[date] = None,
-                      stale_days: int = STALE_DAYS) -> str:
+def render_age_header(title: str, text: str, *, now: Optional[date] = None) -> str:
     """The ``## <title> (…)`` heading for a provenance-stamped document.
 
     With no stamps at all the parenthetical names the undated count rather than
     claiming freshness; with no content lines it degrades to the bare ``## title``
     (byte-identical to the pre-057 heading).
+
+    The heading reads the document only: it rides a cached row, so it must not change
+    while the document does not. The stale count moves with the date, so it rides the
+    tail (:func:`stale_lines_note`).
     """
-    age = measure_doc_age(text, now=now, stale_days=stale_days)
+    age = measure_doc_age(text, now=now)
     if age.total == 0:
         return f"## {title}"
     parts = []
     if age.newest:
         parts.append(f"last write {age.newest}")
-    if age.stale:
-        parts.append(f"{age.stale} line(s) older than {stale_days} days")
     if age.undated:
         parts.append(f"{age.undated} line(s) undated")
     if not parts:
@@ -111,4 +112,23 @@ def render_age_header(title: str, text: str, *, now: Optional[date] = None,
     return f"## {title} ({'; '.join(parts)})"
 
 
-__all__ = ["DocAge", "STALE_DAYS", "measure_doc_age", "render_age_header"]
+#: the self-context blocks that carry provenance stamps, and their reader names.
+_DATED_BLOCKS = {"owner_rules": "Owner facts", "self_doc": "Self notes"}
+
+
+def stale_lines_note(blocks, *, now: Optional[date] = None,
+                     stale_days: int = STALE_DAYS) -> str:
+    """One line per dated block with lines older than *stale_days*. "" when none.
+
+    *blocks* holds ``(block name, text)`` pairs."""
+    lines = []
+    for name, text in blocks:
+        title = _DATED_BLOCKS.get(name)
+        if title:
+            stale = measure_doc_age(text, now=now, stale_days=stale_days).stale
+            if stale:
+                lines.append(f"{title}: {stale} line(s) older than {stale_days} days.")
+    return "\n".join(lines)
+
+
+__all__ = ["DocAge", "STALE_DAYS", "measure_doc_age", "render_age_header", "stale_lines_note"]

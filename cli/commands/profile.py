@@ -19,6 +19,7 @@ from pathlib import Path
 import click
 
 from cli.commands._grouped import GroupedGroup
+from cli.commands._options import json_option, yes_option
 
 _WRAPPER_MARKER = "# polyrob-profile-wrapper:"
 
@@ -259,9 +260,15 @@ def create_profile(name: str, *, from_profile: str = None, from_project: str = N
             _upsert_env_file(home / ".env", lifted)
             copied.extend(sorted(lifted))
         if include_data:
+            from cli.update.snapshot import _sqlite_backup
             for pattern in _DATA_DB_GLOBS:
                 for db in sorted(src_data.glob(pattern)):
-                    shutil.copy2(db, home / "data" / db.name)
+                    with open(db, "rb") as fh:
+                        is_sqlite = fh.read(16) == b"SQLite format 3\x00"
+                    if is_sqlite:  # online backup: a file copy loses rows still in -wal
+                        _sqlite_backup(db, home / "data" / db.name)
+                    else:
+                        shutil.copy2(db, home / "data" / db.name)
                     copied.append(db.name)
             if (src_data / "sessions").is_dir():
                 shutil.copytree(src_data / "sessions", home / "data" / "sessions",
@@ -458,7 +465,7 @@ def create_cmd(name, from_profile, from_project, include_data, description,
 
 
 @profile.command("list")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def list_cmd(as_json):
     """List profiles (active one marked with *)."""
     import json
@@ -605,7 +612,7 @@ def rename_cmd(old, new):
 
 @profile.command("delete")
 @click.argument("name")
-@click.option("--yes", "-y", is_flag=True, default=False, help="Skip the confirmation prompt.")
+@yes_option
 @click.option("--force", is_flag=True, default=False,
               help="Delete even when the profile looks in use.")
 def delete_cmd(name, yes, force):

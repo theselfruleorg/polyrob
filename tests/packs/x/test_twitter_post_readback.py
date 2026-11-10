@@ -18,7 +18,6 @@ from polyrob_x.twitter_tool import TwitterPostAction, TwitterThreadAction, Twitt
 
 def _tool(monkeypatch):
     monkeypatch.setenv("TWITTER_ENABLED", "true")
-    monkeypatch.setenv("TWITTER_REQUIRE_APPROVAL", "false")
     t = object.__new__(TwitterTool)
     t.logger = logging.getLogger("tw-readback")
     t.name = "twitter"
@@ -43,7 +42,7 @@ async def test_post_is_read_back_by_id(monkeypatch):
     got = AsyncMock(return_value={"id": "2103788294454583796", "text": "x"})
     monkeypatch.setattr(t, "get_tweet", got)
     t.client.get_users_tweets = MagicMock(side_effect=AssertionError("no timeline scan"))
-    res = await t.twitter_post(TwitterPostAction(text="hello"))
+    res = await t.twitter_post(TwitterPostAction(text="the release notes shipped"))
     assert res.error is None
     assert "verified" in res.extracted_content and "2103788294454583796" in res.extracted_content
     got.assert_awaited_with("2103788294454583796")
@@ -55,7 +54,7 @@ async def test_lagging_id_is_not_reported_as_failure(monkeypatch):
     monkeypatch.setattr(t, "_compose_tweet", AsyncMock(return_value={"id": "55"}))
     got = AsyncMock(side_effect=[None, RuntimeError("404"), None])
     monkeypatch.setattr(t, "get_tweet", got)
-    res = await t.twitter_post(TwitterPostAction(text="hello"))
+    res = await t.twitter_post(TwitterPostAction(text="the release notes shipped"))
     assert res.error is None                                  # the write succeeded
     assert got.await_count == 3                               # lag-tolerant retries
     text = res.extracted_content

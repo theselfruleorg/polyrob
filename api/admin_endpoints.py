@@ -201,13 +201,43 @@ async def require_admin(request: Request):
     1. role in ADMIN_ROLES (currently 'admin' or 'owner')
     2. wallet address in ADMIN_WALLETS env var
     """
-    admin_status, _role, _wallet = extract_admin_info(request.state)
+    admin_status, role, wallet = extract_admin_info(request.state)
     if not admin_status:
         raise HTTPException(
             status_code=403,
             detail="Admin access required"
         )
+    from core.constants import is_admin_role, is_admin_wallet
+    if role == "owner" or is_admin_wallet(wallet):
+        return True  # owner login / ADMIN_WALLETS: not a database grant
+    # A database-granted role is re-read: a demotion holds at once, not when the
+    # token expires. One primary-key read; an unreadable store refuses (fail closed).
+    try:
+        db = require_service('database_manager', missing="Admin check unavailable")
+        row = await db.fetch_one("SELECT role FROM user_profiles WHERE user_id = ?",
+                                 (getattr(request.state, "user_id", None),))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.warning("require_admin: the user store is unreadable", exc_info=True)
+        raise HTTPException(status_code=503,
+                            detail="Admin check unavailable: the user store could not be read")
+    if not row or not is_admin_role(row["role"]):
+        raise HTTPException(status_code=403, detail="Admin access required")
     return True
+
+
+def _refuse_protected_target(request: Request, user_id: str, user, *, verb: str, act: str) -> None:
+    """The hierarchy every admin write on another account keeps (block, role, tier):
+    never the caller's own account or the owner; an administrator only by the owner."""
+    from core.constants import is_admin
+    from core.instance import resolve_owner_user_id
+    admin_id = getattr(request.state, 'user_id', 'unknown')
+    if user_id in (admin_id, resolve_owner_user_id()) or user.get("role") == "owner":
+        raise HTTPException(status_code=403,
+                            detail=f"The owner and your own account cannot be {verb}")
+    if is_admin(user.get("role"), user.get("wallet_address")) and getattr(request.state, "role", None) != "owner":
+        raise HTTPException(status_code=403, detail=f"Only the owner can {act} an administrator")
 
 
 # Endpoints
@@ -215,8 +245,8 @@ async def require_admin(request: Request):
 @router.get("/users", dependencies=[Depends(require_admin)])
 async def list_users(
     request: Request,
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     tier: Optional[str] = None,
     role: Optional[str] = None
 ) -> List[UserInfo]:
@@ -228,8 +258,7 @@ async def list_users(
         tier: Filter by tier (optional)
         role: Filter by role (optional)
     """
-    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
-    from api.dependencies import require_service
+    # B31: the shared container-fetch + 503 seam (imported once, at the top).
     db = require_service('database_manager', missing="Database unavailable")
 
     # Build query with filters
@@ -296,8 +325,7 @@ async def search_users(
     - Email search is case-insensitive and supports partial match
     - User ID search is exact match prefix
     """
-    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
-    from api.dependencies import require_service
+    # B31: the shared container-fetch + 503 seam (imported once, at the top).
     db = require_service('database_manager', missing="Database unavailable")
 
     # Build search query based on field
@@ -356,8 +384,7 @@ async def search_users(
 @router.get("/users/{user_id}", dependencies=[Depends(require_admin)])
 async def get_user(request: Request, user_id: str) -> UserInfo:
     """Get user details (admin only)."""
-    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
-    from api.dependencies import require_service
+    # B31: the shared container-fetch + 503 seam (imported once, at the top).
     db = require_service('database_manager', missing="Database unavailable")
 
     user = await db.fetch_one("""
@@ -392,6 +419,14 @@ async def get_user(request: Request, user_id: str) -> UserInfo:
     )
 
 
+async def _require_known_user(user_id: str) -> None:
+    """404 for an unknown user id BEFORE a balance read: get_balance creates a
+    user_credits row for any id (a GET that writes; with foreign keys ON a 500)."""
+    db = require_service('database_manager', missing="Database unavailable")
+    if not await db.fetch_one("SELECT 1 FROM user_profiles WHERE user_id = ?", (user_id,)):
+        raise HTTPException(status_code=404, detail="User not found")
+
+
 @router.post("/users/{user_id}/credits/add", dependencies=[Depends(require_admin)])
 async def add_user_credits(
     request: Request,
@@ -400,6 +435,7 @@ async def add_user_credits(
 ):
     """Add credits to user account (admin only)."""
     balance_mgr = require_service("balance_manager", missing="Balance manager unavailable")
+    await _require_known_user(user_id)
 
     admin_id = getattr(request.state, 'user_id', 'unknown')
     client_ip = get_client_ip(request)
@@ -454,6 +490,7 @@ async def deduct_user_credits(
 ):
     """Deduct credits from user account (admin only)."""
     balance_mgr = require_service("balance_manager", missing="Balance manager unavailable")
+    await _require_known_user(user_id)
 
     admin_id = getattr(request.state, 'user_id', 'unknown')
     client_ip = get_client_ip(request)
@@ -501,6 +538,7 @@ async def deduct_user_credits(
 async def get_user_credits(request: Request, user_id: str):
     """Get user's credit balance and history (admin only)."""
     balance_mgr = require_service("balance_manager", missing="Balance manager unavailable")
+    await _require_known_user(user_id)
 
     balance_info = await balance_mgr.get_balance(user_id)
     transactions = await balance_mgr.get_transaction_history(user_id, limit=50)
@@ -540,8 +578,7 @@ async def set_user_role(
     owner-login (webview/owner_auth.py::issue_owner_session_cookie) and must
     never be mintable via admin action.
     """
-    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
-    from api.dependencies import require_service
+    # B31: the shared container-fetch + 503 seam (imported once, at the top).
     db = require_service('database_manager', missing="Database unavailable")
 
     # Validate role using centralized ASSIGNMENT-boundary validation. This is
@@ -554,10 +591,12 @@ async def set_user_role(
 
     # Get current role for audit log and verify user exists
     current_user = await db.fetch_one(
-        "SELECT role FROM user_profiles WHERE user_id = ?", (user_id,)
+        "SELECT role, wallet_address FROM user_profiles WHERE user_id = ?", (user_id,)
     )
     if not current_user:
         raise HTTPException(status_code=404, detail=f"User {user_id} not found")
+    _refuse_protected_target(request, user_id, dict(current_user),
+                             verb="given another role", act="change the role of")
 
     old_role = current_user['role']
 
@@ -607,8 +646,7 @@ async def set_user_tier(
 
     Use 'free_access' to grant someone access for demo/showcase purposes.
     """
-    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
-    from api.dependencies import require_service
+    # B31: the shared container-fetch + 503 seam (imported once, at the top).
     db = require_service('database_manager', missing="Database unavailable")
 
     # Validate tier using centralized validation
@@ -619,10 +657,12 @@ async def set_user_tier(
 
     # Get current tier for audit log and verify user exists
     current_user = await db.fetch_one(
-        "SELECT tier FROM user_profiles WHERE user_id = ?", (user_id,)
+        "SELECT tier, role, wallet_address FROM user_profiles WHERE user_id = ?", (user_id,)
     )
     if not current_user:
         raise HTTPException(status_code=404, detail=f"User {user_id} not found")
+    _refuse_protected_target(request, user_id, dict(current_user),
+                             verb="given another tier", act="change the tier of")
 
     old_tier = current_user['tier']
 
@@ -659,8 +699,7 @@ async def set_user_tier(
 @router.get("/stats", dependencies=[Depends(require_admin)])
 async def get_system_stats(request: Request):
     """Get system statistics (admin only)."""
-    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
-    from api.dependencies import require_service
+    # B31: the shared container-fetch + 503 seam (imported once, at the top).
     db = require_service('database_manager', missing="Database unavailable")
 
     # User stats
@@ -722,8 +761,7 @@ async def get_user_audit_trail(
     offset: int = Query(0, ge=0)
 ) -> List[AuditEvent]:
     """Get audit trail for a specific user."""
-    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
-    from api.dependencies import require_service
+    # B31: the shared container-fetch + 503 seam (imported once, at the top).
     db = require_service('database_manager', missing="Database unavailable")
 
     # Check user exists
@@ -769,8 +807,7 @@ async def get_user_sessions(
     limit: int = Query(50, ge=1, le=200)
 ) -> UserSessionsResponse:
     """Get user's session usage summary."""
-    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
-    from api.dependencies import require_service
+    # B31: the shared container-fetch + 503 seam (imported once, at the top).
     db = require_service('database_manager', missing="Database unavailable")
 
     # Check user exists
@@ -825,8 +862,7 @@ async def block_user(
     block_request: BlockUserRequest
 ):
     """Block a user."""
-    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
-    from api.dependencies import require_service
+    # B31: the shared container-fetch + 503 seam (imported once, at the top).
     db = require_service('database_manager', missing="Database unavailable")
 
     # Check user exists
@@ -837,13 +873,7 @@ async def block_user(
         raise HTTPException(status_code=404, detail="User not found")
 
     admin_id = getattr(request.state, 'user_id', 'unknown')
-
-    from core.constants import is_admin
-    from core.instance import resolve_owner_user_id
-    if user_id in (admin_id, resolve_owner_user_id()) or user.get("role") == "owner":
-        raise HTTPException(status_code=403, detail="The owner and your own account cannot be blocked")
-    if is_admin(user.get("role"), user.get("wallet_address")) and getattr(request.state, "role", None) != "owner":
-        raise HTTPException(status_code=403, detail="Only the owner can block an administrator")
+    _refuse_protected_target(request, user_id, dict(user), verb="blocked", act="block")
 
     # Insert or update blocked_users record
     await db.execute("""
@@ -885,8 +915,7 @@ async def unblock_user(
     user_id: str
 ):
     """Unblock a user."""
-    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
-    from api.dependencies import require_service
+    # B31: the shared container-fetch + 503 seam (imported once, at the top).
     db = require_service('database_manager', missing="Database unavailable")
 
     # Check user exists and is blocked
@@ -932,8 +961,7 @@ async def get_block_status(
     user_id: str
 ) -> BlockStatusResponse:
     """Get user's block status."""
-    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
-    from api.dependencies import require_service
+    # B31: the shared container-fetch + 503 seam (imported once, at the top).
     db = require_service('database_manager', missing="Database unavailable")
 
     # Get block status
@@ -961,8 +989,7 @@ async def get_block_status(
 @router.get("/stats/dashboard", dependencies=[Depends(require_admin)])
 async def get_dashboard_stats(request: Request) -> DashboardStats:
     """Get enhanced dashboard statistics with alerts."""
-    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
-    from api.dependencies import require_service
+    # B31: the shared container-fetch + 503 seam (imported once, at the top).
     db = require_service('database_manager', missing="Database unavailable")
 
     # User stats
@@ -1134,8 +1161,7 @@ async def get_billing_failures(
     Returns list of billing failures where credits could not be deducted.
     Admins can review and resolve these issues.
     """
-    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
-    from api.dependencies import require_service
+    # B31: the shared container-fetch + 503 seam (imported once, at the top).
     db = require_service('database_manager', missing="Database unavailable")
     from modules.credits.billing_failures import reap_open_holds, reap_resolving
     await reap_resolving(db)  # 098 S6: an interrupted resolve finishes from the ledger
@@ -1206,8 +1232,7 @@ async def resolve_billing_failure(
     - written_off: Loss absorbed, user not charged
     - refunded: Credits returned to user (if already charged)
     """
-    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
-    from api.dependencies import require_service
+    # B31: the shared container-fetch + 503 seam (imported once, at the top).
     from modules.credits import billing_failures as bf
     db = require_service('database_manager', missing="Database unavailable")
     admin_id = getattr(request.state, 'user_id', 'unknown')
@@ -1256,8 +1281,7 @@ async def resolve_billing_failure(
 @router.get("/billing-failures/summary", dependencies=[Depends(require_admin)])
 async def get_billing_failures_summary(request: Request):
     """Get summary of billing failures by status."""
-    # B31: the shared container-fetch + 503 seam, not a 16th hand-rolled copy.
-    from api.dependencies import require_service
+    # B31: the shared container-fetch + 503 seam (imported once, at the top).
     db = require_service('database_manager', missing="Database unavailable")
 
     summary = await db.fetch_all("""

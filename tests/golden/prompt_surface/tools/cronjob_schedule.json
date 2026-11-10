@@ -8,7 +8,7 @@
       "properties": {
         "deliver": {
           "default": null,
-          "description": "Optional out-of-band delivery sink for the result: 'telegram' or 'email' (to the owner), or 'twitter' — a PUBLIC post on the agent's X account, when the X pack is enabled. Omit to keep silent.",
+          "description": "Optional out-of-band delivery sink for the result: 'telegram' or 'email' (to the owner), or 'twitter' — a PUBLIC post on the agent's X account, when the X pack is enabled. It copies the run's last send_message; without one it sends nothing. Omit for no copy.",
           "nullable": true,
           "type": "string"
         },
@@ -18,9 +18,30 @@
           "nullable": true,
           "type": "string"
         },
+        "exact_time": {
+          "default": false,
+          "description": "Keep this exact minute. True only when the owner named the minute or the work must start then (a market open, a mint). Otherwise a job that overlaps another moves to the nearest free minute, and the result names the move.",
+          "type": "boolean"
+        },
+        "expect": {
+          "additionalProperties": true,
+          "default": null,
+          "description": "What a run of this job must do, checked by code from the run's own act rows: {'effect': 'social', 'min': 1}, or {'idle_ok': true} when a run with no act is fine. The result is the run's verified field. Unset: no check.",
+          "nullable": true,
+          "properties": {},
+          "type": "object"
+        },
+        "kb_holdout_pct": {
+          "default": null,
+          "description": "OWNER TURN ONLY: the percent of this job's runs (0-100) that skip knowledge-base auto-injection, to measure its value. 0 or absent: none.",
+          "maximum": 100,
+          "minimum": 0,
+          "nullable": true,
+          "type": "integer"
+        },
         "max_duration_seconds": {
           "default": 600,
-          "description": "Hard cap per run (60-1800s; default 600). A money rail that quotes, swaps and reports needs ~15-25 min.",
+          "description": "Hard cap per run (60-1800s; default 600). A money job that quotes, swaps and reports needs ~15-25 min.",
           "maximum": 1800,
           "minimum": 60,
           "type": "integer"
@@ -58,8 +79,16 @@
           "type": "string"
         },
         "schedule": {
-          "description": "When to run: '30m'/'2h'/'1d', 'every monday 09:00', 5-field cron '*/15 * * * *', an ISO timestamp (one-shot), or a fixed N-day cycle 'every 3d from 2026-10-26T18:00Z'.",
+          "description": "When to run: '30m'/'2h'/'1d', 'every monday 09:00', 5-field cron '*/15 * * * *', an ISO timestamp (one-shot), or a fixed N-day cycle 'every 3d from 2026-10-26T18:00Z'. An ISO time with Z is UTC; every other clock time is the server clock.",
           "type": "string"
+        },
+        "script": {
+          "additionalProperties": true,
+          "default": null,
+          "description": "A SCRIPT job — your own file runs on the schedule, no LLM turn per tick: {'path': 'jobs/collect.py', 'args': ['--x', '1'], 'timeout_s': 120, 'deliver_on': 'alert'|'always'|'never'}. The path is a .py or .sh file in the workspace; write and test it with run_code first. It runs in the code sandbox from the workspace root. Exit code 0 = done; any other exit code or a timeout = failed and alerts. A stdout line that starts with ALERT alerts on a clean run. Use it for repeated mechanical work (collect, count, check) that needs no judgment.",
+          "nullable": true,
+          "properties": {},
+          "type": "object"
         },
         "skills": {
           "default": null,
@@ -83,10 +112,37 @@
           "minLength": 10,
           "type": "string"
         },
+        "tier": {
+          "default": null,
+          "description": "Optional model tier for this work's runs — from the owner's chat only: 'heavy' for work that decides money (who is paid, how much, a winner) or is hard to undo; 'light' for bulk reads; 'default' = the normal model. <environment> names each tier's model. Requires 'why'.",
+          "enum": [
+            "default",
+            "heavy",
+            "light"
+          ],
+          "nullable": true,
+          "type": "string"
+        },
+        "tools": {
+          "default": null,
+          "description": "Optional exact tool ids for this job's runs, when no rig fits. They win over the rig. A money tool needs a rig or the owner's /job new.",
+          "items": {
+            "type": "string"
+          },
+          "nullable": true,
+          "type": "array"
+        },
         "wake_agent": {
           "default": true,
           "description": "If false, this tick runs without invoking the LLM (a $0 no-op tick). Default true = normal agent run.",
           "type": "boolean"
+        },
+        "why": {
+          "default": null,
+          "description": "One line: why this tier. Required with 'tier'; shown in /status.",
+          "maxLength": 200,
+          "nullable": true,
+          "type": "string"
         },
         "write_verb": {
           "additionalProperties": true,

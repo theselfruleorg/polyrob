@@ -105,12 +105,10 @@ def test_pending_approval_is_a_critical_delivery_source():
 
 def test_decide_all_promotes_every_pending_item(tmp_path):
     from agents.task.agent.skill_manager import SkillManager
-    import os
-    os.environ["SKILLS_WRITABLE_REQUIRE_REVIEW"] = "true"
     mgr = SkillManager(skills_dir=tmp_path / "skills")
     mgr.create_skill("learned-thing",
                      "# My Skill\n\nWhen X, do Y. A useful reusable procedure with text.\n",
-                     user_id="alice", created_by="agent")
+                     user_id="alice", created_by="untrusted_turn")
     _pending(tmp_path, "Learned: surface blockers to the owner proactively.")
     assert len(_items_all(tmp_path, mgr)) == 2
     se.save_notified_state("alice", se.pending_notify_state(_items_all(tmp_path, mgr)),

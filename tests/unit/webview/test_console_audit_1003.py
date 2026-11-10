@@ -78,13 +78,10 @@ def test_knowledge_lists_broken_backend_is_named(monkeypatch):
     app = FastAPI()
     app.include_router(knowledge.router)
     client = TestClient(app)
-    for path in ("/api/webgate/knowledge/notes", "/api/webgate/knowledge/episodes",
-                 "/api/webgate/knowledge/kb"):
+    for path in ("/api/webgate/knowledge/episodes", "/api/webgate/knowledge/kb"):
         body = client.get(path).json()
         assert body["items"] is None, path
         assert body["error"] and "malformed" in body["error"], path
-    body = client.get("/api/webgate/knowledge/note/1").json()
-    assert body["note"] is None and "malformed" in body["error"]
 
 
 def test_agent_memory_body_broken_backend_is_named(monkeypatch):

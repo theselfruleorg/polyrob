@@ -51,6 +51,8 @@ SOURCE_LABELS: Dict[str, str] = {
     # 11 waiting items over 7 verbs, /inbox showed 4 and said all answered).
     "signer_approvals": "signer approvals",
     "cards": "action cards",
+    # 113 W6 C-12: a stranger who asked to talk to the agent (core.pairing).
+    "pairing": "pairing requests",
 }
 
 #: The views that are FILTERS of the one Inbox (080 WS-3): ``/pending`` is the

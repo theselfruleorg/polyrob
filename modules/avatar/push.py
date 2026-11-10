@@ -185,8 +185,9 @@ def _telegram_call(method: str, fields: Mapping[str, str], files: Mapping[str, t
     if not token:
         raise TelegramCredsMissing("missing TELEGRAM_BOT_TOKEN")
     body, ctype = _multipart(fields, files)
+    from core.surfaces.telegram_api import telegram_api_base
     req = urllib.request.Request(
-        f"https://api.telegram.org/bot{token}/{method}", data=body,
+        f"{telegram_api_base(env)}/bot{token}/{method}", data=body,
         headers={"Content-Type": ctype, "User-Agent": "polyrob-avatar-push"}, method="POST")
     open_fn = opener if opener is not None else (
         lambda r: urllib.request.urlopen(r, timeout=30))

@@ -21,7 +21,7 @@ loop, several front doors — each surface adapts inbound/outbound to the SAME
   session, multiline editing (Shift+Enter), history (Up/Down), auto-save.
   Slash commands include `/help`, `/status`, `/usage`, `/tools`, `/toolset`,
   `/persona`, `/sessions`, `/replay`, `/clear`, `/compact`, `/model`, `/cwd`,
-  `/session`, `/self`, `/memory`, `/verbose`, `/quiet`, `/steps`, `/autonomy`,
+  `/session`, `/self`, `/memory`, `/verbose`, `/brief`, `/steps`, `/autonomy`,
   `/goals`, `/subagents`, `/todos`, `/logs`, `/export`, `/skills`, `/jobs`,
   `/mcp`, `/kb`, `/pending`, `/approve`, `/gates`, `/meter`, `/missed`,
   `/learn`, `/config`. Run `/help` for the live list. ⚠️ `/approve <id>`

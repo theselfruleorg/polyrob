@@ -143,6 +143,7 @@ _CRITICAL_SOURCES = frozenset({
     "approval",          # tools/controller/approval_queue.py — owner-queue decision
     "payment_approval",  # the same lane for a money SPEND verb
     "goal_blocked",      # agents/task/goals/escalation.py — a stopped goal's need
+    "job_stopped",       # cron/scheduler.py — a job that stopped itself or will not repeat
     "payment_unmatched", # modules/x402/settlement_watcher.py — unexpected on-chain
                          # money the owner must reconcile (rare, always owner-actionable)
     # modules/x402/x402_integration.py::mark_payment_refund_due — a machine
@@ -604,6 +605,7 @@ _NOTICE_SUBJECT_BY_SOURCE = {
     "payment_approval": "payment approval needed",
     "pending_approval": "changes waiting for your approval",
     "correspondent_pending": "a new contact waiting for your approval",
+    "correspondent_rebound": "a contact moved to another session",
     "goal_blocked": "a goal is blocked",
     "credit_sentinel": "autonomy stopped (credits)",
     "halt": "autonomy halted",
@@ -1263,7 +1265,7 @@ async def maybe_deliver_autonomous_send(orchestrator: Any, session_id: str, text
     original case — no interactive surface exists at all), and an interactive
     session whose orchestrator has no LIVE chat surface bound in THIS process
     (``_message_router``/``_chat_session_key`` unset). The second case covers
-    ``polyrob run --resume`` and any other recreation path that rebuilds the
+    ``polyrob run --continue`` and any other recreation path that rebuilds the
     orchestrator without rebinding the chat mirror (``_rebind_recreated_chat``
     is best-effort and the in-process ``is_autonomous`` marker never survives
     a process boundary, so a resumed chat session looked "interactive" here

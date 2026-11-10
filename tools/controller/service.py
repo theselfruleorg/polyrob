@@ -201,7 +201,7 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, ToolCa
 		# any toolset — the exit-rail cron loads no `goal` tool). Same escape hatch.
 		from tools.controller.owner_ask_action import register_owner_ask_action
 		register_owner_ask_action(self)
-		# 2026-09-27: action cards from the agent (present_choice / propose_action).
+		# 2026-09-27: action cards from the agent (propose_action).
 		# Same escape hatch as owner_ask.
 		from tools.controller.card_actions import register_card_actions
 		register_card_actions(self)
@@ -214,6 +214,9 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, ToolCa
 		# 093 D1: a setting change as a one-tap owner card (same gates + owner turn).
 		from tools.controller.setting_actions import register_setting_actions
 		register_setting_actions(self)
+		# 112 W4: deterministic compute (hash, the fair draw) with no code exec — pure.
+		from tools.controller.compute_action import register_compute_action
+		register_compute_action(self)
 
 		# NOTE: Backward compat aliases are registered LAZILY after task tool loads
 		# NOT here in __init__ - aliases to non-existent actions cause confusion

@@ -114,6 +114,7 @@ async def test_warm_prefix_flattens_a_tuple_slot(tmp_path):
 	mm.set_self_context_blocks((("soul", "SOUL BLOCK"), ("owner_rules", "OWNER RULES")))
 	assert isinstance(mm._self_context_blocks, tuple)
 	_fill(mm, turns=80)
+	mm.warm_summary_tools = [{"type": "function", "function": {"name": "done"}}]
 	assert await mm.llm_compact_history()
 
 	request = llm.requests[-1]
@@ -199,6 +200,6 @@ def test_override_path_reserves_the_capped_completion_allowance(monkeypatch):
 	cfg = get_model_config("x-ai/grok-4.3")
 	assert cfg and cfg.max_completion_tokens
 	monkeypatch.setenv("TASK_MAX_INPUT_TOKENS", "200000")
-	_mx, _safe, reserve = _Host()._calculate_token_limits(None, None)
+	_mx, _safe, reserve = _Host()._calculate_token_limits(None)
 	assert reserve == TC._capped_reserve(int(cfg.max_completion_tokens))
 	assert reserve != 4096 or int(cfg.max_completion_tokens) == 4096

@@ -19,9 +19,11 @@
  * 2. **It says what came back, verbatim.** A refusal renders the endpoint's own
  *    `detail`; a file that did not reach the server renders the copy layer's
  *    one sentence. A silent failure is exactly what a picker may not do.
- * 3. **It draws no verb it cannot act on.** The control exists only on a bound
- *    session on a writable console — the upload route is session-scoped, so on
- *    the cold open there is no folder to put a file in yet.
+ * 3. **It draws no verb it cannot act on.** The control exists only on a
+ *    writable console. The upload route is session-scoped, so on the start page
+ *    (113 W6, C-02) a picked file is HELD (`held`) until the first line creates
+ *    the chat unstarted; `chat-open.js` then sends it (`sendHeld`) and starts
+ *    the chat with that line. With no model the create is refused first.
  * 4. **Every word comes from the copy layer**, on `#attach-copy`'s data
  *    attributes; no 043 template carries an inline script.
  */
@@ -73,11 +75,33 @@ export async function uploadOne(sessionId, file, copy, opts = {}) {
       return { ok: false, message: body ? serverAnswer(body, fallback) : fallback };
     }
     const where = (body && (body.path || body.filename)) || file.name;
-    return { ok: true, message: format(copy && copy.attach_done, { name: where }) };
+    return { ok: true, path: where, message: format(copy && copy.attach_done, { name: where }) };
   } catch (err) {
     console.error("[attach] the file did not reach the console", err);
     return { ok: false, message: (copy && copy.attach_unreachable) || "" };
   }
+}
+
+/**
+ * The start page's picked files (113 W6). `files` = `{file, line}` not sent
+ * yet; `paths` = what reached the chat folder; `sessionId` = the chat a first
+ * try created, so a retry sends to the same chat instead of making a second.
+ */
+export const held = { files: [], paths: [], sessionId: "" };
+
+/** Send every held file to `sessionId`. Resolves `{ok, paths}`; a file that
+ *  failed stays held with its answer on its line. Never throws. */
+export async function sendHeld(sessionId, copy, opts = {}) {
+  held.sessionId = sessionId;
+  const left = [];
+  for (const item of held.files) {
+    if (item.line) item.line.textContent = format(copy && copy.attach_sending, { name: item.file.name });
+    const res = await uploadOne(sessionId, item.file, copy, opts);
+    if (item.line) { item.line.textContent = res.message; item.line.dataset.ok = res.ok ? "true" : "false"; }
+    if (res.ok) held.paths.push(res.path); else left.push(item);
+  }
+  held.files = left;
+  return { ok: left.length === 0, paths: held.paths.slice() };
 }
 
 // --------------------------------------------------------------------- wiring
@@ -90,12 +114,19 @@ export function mount(root) {
   if (!button || !input) return null;
   const copy = copyFrom(doc.getElementById("attach-copy"));
   const sessionId = copy.session_id || "";
-  if (!sessionId) return null;
 
   button.addEventListener("click", () => input.click());
   input.addEventListener("change", async () => {
     const files = Array.from(input.files || []);
     input.value = ""; // so the same file can be picked again after a refusal
+    if (!sessionId) {   // the start page: hold it for the first line (113 W6)
+      for (const file of files) {
+        const line = el("p", "entry-meta", format(copy.attach_held, { name: file.name }));
+        if (list) list.appendChild(line);
+        held.files.push({ file, line });
+      }
+      return;
+    }
     for (const file of files) {
       const line = el("p", "entry-meta",
         format(copy.attach_sending, { name: file.name }));

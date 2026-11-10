@@ -198,3 +198,65 @@ class TestWiring:
         from modules.llm.responses_client import _usage_from
         assert _usage_from(_Obj()) == {"prompt_tokens": None, "completion_tokens": None,
                                        "total_tokens": None}
+
+
+# ---------------------------------------------------------------------------
+# The client: output cap, status, and the base generate_response signature
+# ---------------------------------------------------------------------------
+def _client(response):
+    import logging
+    from unittest.mock import AsyncMock
+
+    from modules.llm.responses_client import ResponsesCompatClient
+    client = ResponsesCompatClient.__new__(ResponsesCompatClient)
+    client._PROVIDER_LABEL = "Codex"
+    client.logger = logging.getLogger("test.responses")
+    client.model_type = "gpt-5"
+    client.max_tokens = 128000
+    client.last_response = None
+    client._client = _Obj(responses=_Obj(create=AsyncMock(return_value=response)))
+    return client
+
+
+def _done(**kw):
+    return _Obj(output=[], usage=None, **kw)
+
+
+class TestClient:
+    @pytest.mark.asyncio
+    async def test_the_shared_output_cap_binds(self, monkeypatch):
+        monkeypatch.setenv("LLM_MAX_OUTPUT_TOKENS", "500")
+        client = _client(_done())
+        await client.generate_agent_response([{"role": "user", "content": "hi"}], tools=[])
+        assert client._client.responses.create.await_args.kwargs["max_output_tokens"] == 500
+
+    @pytest.mark.asyncio
+    async def test_generate_response_takes_a_prompt(self):
+        client = _client(_done())
+        assert await client.generate_response(prompt="hi", system="be brief") == ""
+        sent = client._client.responses.create.await_args.kwargs
+        assert sent["instructions"] == "be brief"
+        assert sent["input"][0]["content"][0]["text"] == "hi"
+
+    @pytest.mark.asyncio
+    async def test_a_failed_response_raises_typed(self):
+        from core.exceptions import LLMError
+        client = _client(_done(status="failed", error=_Obj(code="server_error", message="boom")))
+        with pytest.raises(LLMError, match="boom"):
+            await client.generate_agent_response([{"role": "user", "content": "hi"}], tools=[])
+
+    @pytest.mark.asyncio
+    async def test_a_filtered_incomplete_response_raises(self):
+        from core.exceptions import LLMRefusalError
+        client = _client(_done(status="incomplete", incomplete_details=_Obj(reason="content_filter")))
+        with pytest.raises(LLMRefusalError, match="content filter"):
+            await client.generate_agent_response([{"role": "user", "content": "hi"}], tools=[])
+
+    @pytest.mark.asyncio
+    async def test_incomplete_at_the_cap_returns_and_reads_as_length(self):
+        from core.stop_reason import normalize_stop
+        from modules.llm.call_result import finish_reason_of
+        response = _done(status="incomplete", incomplete_details=_Obj(reason="max_output_tokens"))
+        client = _client(response)
+        await client.generate_agent_response([{"role": "user", "content": "hi"}], tools=[])
+        assert normalize_stop(finish_reason_of(response)) == "length"

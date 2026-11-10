@@ -17,6 +17,15 @@ import time
 from fastapi.testclient import TestClient
 
 
+@pytest.fixture(autouse=True)
+def _readable_empty_block_list(monkeypatch):
+    """Multitenant auth reads the account block list; a readable, empty one admits."""
+    from types import SimpleNamespace as _NS
+    from unittest.mock import AsyncMock
+    store = _NS(fetch_one=AsyncMock(return_value=None))
+    monkeypatch.setattr("api.dependencies.require_service", lambda *a, **kw: store)
+
+
 @pytest.fixture
 def multitenant_pages_client(monkeypatch):
     monkeypatch.setenv("POLYROB_POSTURE", "multitenant")

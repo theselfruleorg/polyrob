@@ -50,7 +50,8 @@ async def test_billing_context_reaches_child_tasks():
 async def test_existing_adapter_refuses_before_provider_invocation(monkeypatch):
     from modules.llm.adapters import LLMClientAdapter
     from modules.llm.messages import HumanMessage
-    adapter = object.__new__(LLMClientAdapter)
+    adapter = LLMClientAdapter(client=types.SimpleNamespace(model_type="totally-unpriced-model"),
+                               model_name="totally-unpriced-model")
     monkeypatch.setattr("modules.llm.aux_metering._llm_identity", lambda _: ("totally-unpriced-model", "openai"))
     token = mark_billed()
     try:
@@ -59,5 +60,14 @@ async def test_existing_adapter_refuses_before_provider_invocation(monkeypatch):
         with pytest.raises(ValueError, match="explicitly priced"):
             async for _ in adapter._astream_true([HumanMessage(content="run")]):
                 pass
+    finally:
+        reset_billed(token)
+
+
+def test_the_refusal_names_the_model():
+    token = mark_billed()
+    try:
+        with pytest.raises(ValueError, match="totally-unpriced-model"):
+            require_billable_model("totally-unpriced-model", "openai")
     finally:
         reset_billed(token)

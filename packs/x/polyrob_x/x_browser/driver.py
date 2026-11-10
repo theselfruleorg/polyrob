@@ -60,6 +60,11 @@ def _is_x_url(url: str) -> bool:
         host in ("x.com", "twitter.com") or host.endswith((".x.com", ".twitter.com")))
 
 
+class PostUnconfirmed(RuntimeError):
+    """The Post click happened and the composer never closed: X may or may not
+    hold the post. Not a failure and not a success — a retry can post twice."""
+
+
 class XPageDriver:
     def __init__(self, page: Any) -> None:
         self.page = page
@@ -119,25 +124,35 @@ class XPageDriver:
         return await self._await_permalink()
 
     async def _await_permalink(self, timeout: float = 15000) -> str:
-        """Best-effort resolution of the posted tweet's URL.
+        """The posted tweet's URL — only ever the agent's OWN status.
 
-        Waits for the composer to clear (the reliable success signal), then reads
-        the newest ``/status/`` link. Falls back to the profile URL if X did not
-        surface a permalink in time — the caller still knows the post succeeded.
+        The composer closing is the success signal: when it does not close the
+        post is NOT confirmed and :class:`PostUnconfirmed` says so (never "sent",
+        never "failed"). The permalink is read only from a link under the
+        logged-in handle (``/<handle>/status/``) — the first ``/status/`` link on
+        the page can be another account's tweet. With no such link the profile
+        URL comes back (no ``/status/`` in it), and the caller says the
+        permalink was not found.
         """
         try:
             await self.page.wait_for_selector(
                 SELECTORS["compose_box"], state="hidden", timeout=timeout)
-        except Exception:
-            pass
+        except Exception as e:
+            raise PostUnconfirmed(
+                f"the post is NOT confirmed: the composer did not close ({e}). "
+                "X may or may not hold it — check the profile before any retry; "
+                "a retry can post twice.") from e
+        handle = await self.current_handle()
+        if not handle:
+            return HOME_URL
         try:
             href = await self.page.get_attribute(
-                'a[href*="/status/"]', "href")
+                f'a[href*="/{handle}/status/" i]', "href")
             if href:
                 return href if href.startswith("http") else f"https://x.com{href}"
         except Exception as e:
             logger.debug("x permalink read failed: %s", e)
-        return HOME_URL
+        return f"https://x.com/{handle}"
 
     # -- direct messages -------------------------------------------------
 

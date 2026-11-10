@@ -19,6 +19,7 @@ Two honesty rules the rest of the system depends on:
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
@@ -69,6 +70,15 @@ DEFAULT_GAS_LIMIT = 120_000
 #: explicit owner decision, not something an anomaly brake waves through.
 MAX_GAS_LIMIT = 8_000_000
 _ERC20_TRANSFER_SELECTOR = "0xa9059cbb"
+#: An ERC-6551 account call (``execute`` / ``executeBatch``). Such an account (PolyrobAccount,
+#: polyrob-desk SPEC §7.1.6) holds gas BACK after each leg, so the call NEEDS more gas than it
+#: USES: measured on a 4663 fork (polyrob-desk docs/facts.md §13) a 1-leg ETH send needs 120,356
+#: and uses 65,530 (x1.84), the W8 batch needs 403,473 and uses 179,980 (x2.24). gasUsed x1.5
+#: passes the simulation and then REVERTS on chain and burns the fee, so ``size_gas`` sizes such
+#: a call from ``eth_estimateGas`` (the node's binary search on success) instead.
+_ACCOUNT_CALL_SELECTORS = frozenset({"0x51945447", "0x43629a73"})
+#: The margin on an ``eth_estimateGas`` answer: broadcast state differs slightly from the head.
+_ESTIMATE_MARGIN_NUM, _ESTIMATE_MARGIN_DEN = 6, 5
 
 
 #: CR-L01: JSON-RPC error texts that mean the node REFUSED these bytes, so the
@@ -327,15 +337,30 @@ class EvmRail:
         crossings). No measurement → the built default stands. The fee ceiling
         is re-checked against the sized gas — it was only checked against the
         default at build time.
+
+        An ERC-6551 account call (:data:`_ACCOUNT_CALL_SELECTORS`) is sized from
+        ``eth_estimateGas`` x1.2 as well (never below gasUsed x1.5), with or without a
+        measurement: the account holds gas back after each leg. An estimate that fails
+        refuses (the call would revert), never falls back to the built default.
         """
-        if not sim_gas_used or sim_gas_used <= 0:
+        account_call = str(tx.get("data") or "")[:10].lower() in _ACCOUNT_CALL_SELECTORS
+        measured = bool(sim_gas_used) and sim_gas_used > 0
+        if not measured and not account_call:
             return tx
-        if sim_gas_used > MAX_GAS_LIMIT:
+        if measured and sim_gas_used > MAX_GAS_LIMIT:
             raise GasCeilingExceeded(
                 f"simulation used {sim_gas_used} gas, above the {MAX_GAS_LIMIT} "
                 f"gas-limit ceiling — broadcasting with less would out-of-gas "
                 f"revert on-chain and burn the fee; refusing to sign")
-        sized = min(max(sim_gas_used * 3 // 2, 21_000), MAX_GAS_LIMIT)
+        sized = max(sim_gas_used * 3 // 2, 21_000) if measured else 21_000
+        if account_call:
+            need = self.estimate_gas(tx)
+            if need > MAX_GAS_LIMIT:
+                raise GasCeilingExceeded(
+                    f"the account call needs {need} gas (eth_estimateGas), above the "
+                    f"{MAX_GAS_LIMIT} gas-limit ceiling; refusing to sign")
+            sized = max(sized, need * _ESTIMATE_MARGIN_NUM // _ESTIMATE_MARGIN_DEN)
+        sized = min(sized, MAX_GAS_LIMIT)
         max_fee = int(tx.get("maxFeePerGas", 0) or 0)
         total_fee = max_fee * sized
         if total_fee > self._max_fee_wei:
@@ -344,6 +369,24 @@ class EvmRail:
                 f"of {total_fee} wei, above the {self.chain} ceiling "
                 f"{self._max_fee_wei} wei — refusing to sign")
         return {**tx, "gas": sized}
+
+    def estimate_gas(self, tx: dict) -> int:
+        """``eth_estimateGas`` of *tx* from this rail's signer at the head: the least gas
+        with which the call SUCCEEDS (the node's binary search), which for an ERC-6551
+        account call is more than the gas it uses. Raises :class:`BroadcastError` when the
+        node cannot answer or the call reverts — nothing is broadcast then."""
+        call = {"from": self._signer.address, "to": tx.get("to"),
+                "data": tx.get("data") or "0x", "value": hex(int(tx.get("value") or 0))}
+        try:
+            got = _hex_to_int(self._rpc("eth_estimateGas", [call, "latest"]))
+        except Exception as exc:  # noqa: BLE001
+            raise BroadcastError(
+                f"eth_estimateGas refused the account call ({exc}) — it would revert on "
+                f"chain; nothing was broadcast") from exc
+        if not got or got <= 0:
+            raise BroadcastError("eth_estimateGas returned no gas for the account call — "
+                                 "refusing rather than guessing a limit")
+        return int(got)
 
     # -- send / confirm ---------------------------------------------------
     def sign_and_send(self, tx: dict) -> str:
@@ -425,9 +468,16 @@ class EvmRail:
                     f"back ({exc}). It may have broadcast; the submission interlock holds until "
                     f"reconciled (the signer's ledger is authoritative).") from exc
             raise BroadcastError(f"polyrob-signer unreachable: {exc} — nothing was sent") from exc
-        tx_hash = str(result.get("tx_hash") or "")
-        if not tx_hash.startswith("0x"):
-            raise RuntimeError(f"polyrob-signer answered without a transaction hash: {result!r}")
+        tx_hash = str((result or {}).get("tx_hash") or "") if isinstance(result, dict) else ""
+        if not re.fullmatch(r"0x[0-9a-fA-F]{64}", tx_hash):
+            # The signer received the request and answered nonsense: it MAY have
+            # broadcast. Interlock it like a lost answer, never a plain failure
+            # (a "failed" bridge or swap invites a retry that pays twice).
+            submission_journal.prepare_attempt(f"signer:{self.chain}", self._signer.address, 0)
+            raise BroadcastOutcomeUnknown(
+                f"polyrob-signer outcome UNKNOWN — it answered without a transaction hash "
+                f"({result!r}). It may have broadcast; the submission interlock holds until "
+                f"reconciled (the signer's ledger is authoritative).")
         submission_journal.prepare(tx_hash, self.chain, self._signer.address, tx.get("nonce"))
         return tx_hash
 

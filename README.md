@@ -135,7 +135,7 @@ ledger as the CLI. Start it with `polyrob dashboard` and open `http://localhost:
   [Groups](https://github.com/theselfruleorg/polyrob/blob/main/docs/guide/groups.md)
 - **Least-privilege sub-agents.** A delegated worker gets a narrowed toolset — no money, wallet,
   shell, code execution, raw HTTP or self-modification tools — and cannot delegate again.
-- **Self-edits wait for review.** New skills and identity edits go to quarantine first.
+- **Self-edits leave a trail.** New skills go live with a rollback; identity edits and anything from an untrusted session go to quarantine first.
 - **Code execution needs a sandbox on a server.** It is off by default; the local subprocess
   backend is a convenience for your own machine, and a server refuses any backend that is not a
   sandbox (set `CODE_EXEC_BACKEND=docker`). Child processes never inherit your API keys.

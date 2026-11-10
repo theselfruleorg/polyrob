@@ -67,6 +67,9 @@ async def _resolve_provider_and_data_dir():
 def run_export(out_dir: str, since, user: str) -> None:
     """The one vault-export implementation — `kb export` calls this directly."""
     _bootstrap()
+    if not user:   # 113 W0: "local" exported an empty tenant on a bound install
+        from core.admin_data_home import admin_owner_principal
+        user = str(admin_owner_principal())
 
     async def go():
         provider, data_dir = await _resolve_provider_and_data_dir()
@@ -100,8 +103,8 @@ def knowledge():
               help="Vault output directory (opened directly in Obsidian).")
 @click.option("--since", "since", default=None,
               help="Only episodes newer than this (8h / 2d / ISO date).")
-@click.option("--user", "user", default="local", show_default=True,
-              help="Tenant to export.")
+@click.option("--user", "user", default=None,
+              help="Tenant to export (default: this box's owner principal).")
 def export(out_dir: str, since, user: str):
     """Write notes/episodes/skills/identity/goals as a markdown vault.
 

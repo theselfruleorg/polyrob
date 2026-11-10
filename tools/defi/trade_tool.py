@@ -593,8 +593,25 @@ class DefiTradeTool(SolanaRailMixin, WalletHolderMixin, BaseTool):
             lane=decision.lane, cap_used_usd=_used, cap_limit_usd=_limit),
             settled=False)
 
-        # CLI1: the row a cancel during the receipt wait records (no positions —
-        # nothing is measured yet). The same amount rule as the record below.
+        # 043 A35: turn a real swap into open-position deltas so the Money Book
+        # has a cost basis. REACH, not policy — fail-open, never gates a record.
+        # Only `swap` passes a position_ctx; approve/revoke/transfer/wrap pass
+        # nothing. Sized from the guard's balance preview (token-authored
+        # Transfer logs cannot measure balances: a hostile token can emit any
+        # amount), BEFORE the wait: MW-5 stores them on a pending entry too.
+        _sized_positions = None
+        if position_ctx:
+            try:
+                sized = self._swap_sizes_from_simulation(decision, position_ctx)
+                if sized is not None:
+                    from core import open_positions as _op
+                    _sized_positions = _op.classify_swap(cost_usd=decision.amount_usd,
+                                                         qty_source="simulation", **sized) or None
+            except Exception:
+                _sized_positions = None
+        # CLI1: the row a cancel during the receipt wait records — its positions
+        # are deferred to the receipt resolver (MW-5), applied only on a confirmed
+        # receipt. The same amount rule as the record below.
         _interrupted_rec = dict(
             venue="defi", action=venue_action,
             amount_usd=(0.0 if (venue_action in ("approve", "revoke")
@@ -602,7 +619,8 @@ class DefiTradeTool(SolanaRailMixin, WalletHolderMixin, BaseTool):
                         else (decision.amount_usd or 0.0)),
             counterparty=counterparty, idempotency_key=idem,
             result_ref=tx_hash, chain=intent.chain, asset=asset,
-            account=(held.account if held is not None else None))
+            account=(held.account if held is not None else None),
+            deferred_positions=_sized_positions)
         receipt = await self._await_receipt_or_record(
             rail, tx_hash, gate=gate, record_kw=_interrupted_rec,
             execution_context=execution_context,
@@ -624,32 +642,18 @@ class DefiTradeTool(SolanaRailMixin, WalletHolderMixin, BaseTool):
         recorded_usd = (0.0 if (venue_action in ("approve", "revoke")
                                 and not charge_grant)
                         else (decision.amount_usd or 0.0))
-        # 043 A35: turn a real swap into open-position deltas so the Money Book
-        # has a cost basis. REACH, not policy — fail-open, never gates the
-        # record below. Only `swap` passes a position_ctx; approve/revoke/
-        # transfer/wrap pass nothing.
-        # Only a succeeded receipt permits a position write. Token-authored
-        # Transfer logs cannot measure balances: a hostile token can emit any
-        # amount. Use the guard's balance preview and label it as an estimate.
-        _positions = None
+        # Only a succeeded receipt writes a position now; a pending one stores the
+        # deltas for the receipt resolver (MW-5); a revert writes none.
         _measured = None  # A preview is never evidence of the landed fill.
-        if position_ctx and receipt.succeeded:
-            try:
-                sized = self._swap_sizes_from_simulation(decision, position_ctx)
-                if sized is not None:
-                    from core import open_positions as _op
-                    _positions = _op.classify_swap(cost_usd=decision.amount_usd,
-                                                   qty_source="simulation", **sized)
-            except Exception:
-                _positions = None
-        gate.record(venue="defi", action=venue_action,
-                    amount_usd=recorded_usd,
-                    counterparty=counterparty, idempotency_key=idem,
-                    result_ref=tx_hash, chain=intent.chain, asset=asset,
-                    positions=_positions,
-                    account=(held.account if held is not None else None),
-                    receipt_state=(  # 098 TS-23: a timed-out wait resolves later
-                        "pending_receipt" if receipt.status == "pending" else None))
+        from tools.defi.receipt_wait import book_after_receipt
+        book_after_receipt(gate, receipt, venue="defi", action=venue_action,  # 098 TS-23
+                           amount_usd=recorded_usd,
+                           counterparty=counterparty, idempotency_key=idem,
+                           result_ref=tx_hash, chain=intent.chain, asset=asset,
+                           positions=(_sized_positions if receipt.succeeded else None),
+                           deferred_positions=(_sized_positions
+                                               if receipt.status == "pending" else None),
+                           account=(held.account if held is not None else None))
         # 046: a CONFIRMED registration is the only thing that may write the
         # identity record, which is in turn the only thing that earns
         # `trustMode: onchain` + `attestation: verified` in the served file.

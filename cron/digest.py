@@ -54,6 +54,12 @@ def _proposals(user_id: str, since_ts: float, data_dir: Optional[str]) -> List[s
     return curator_proposals(user_id, since_ts, data_dir)
 
 
+def _mechanism_notes(user_id: str, since_ts: float, data_dir: Optional[str]) -> List[str]:
+    """The reviewers' notes for the developer (108 W6): a fault no skill can fix."""
+    from core.recap import mechanism_notes
+    return mechanism_notes(user_id, since_ts, data_dir)
+
+
 def _outward(user_id: str, since_ts: float, data_dir: Optional[str]) -> str:
     """033: what the agent did to the outside world, by effect class — every
     tool, surface and MCP server, not a closed kind list. Seam kept for test
@@ -82,8 +88,9 @@ def _open_asks(user_id: str, data_dir: Optional[str]) -> List[Dict[str, Any]]:
 def _failed_jobs(user_id: str, data_dir: Optional[str]) -> List[Any]:
     """Owner-armed jobs whose LAST run failed or ended partial (routines review
     2026-10-29: the 10-28 announce failure was not on the 10-29 digest's visible
-    lines, below five housekeeping items). Raises on an unreadable store."""
-    from core.cron_outcome import FAILED_OUTCOMES, agent_armed
+    lines, below five housekeeping items), and any job the failure limit paused.
+    Raises on an unreadable store."""
+    from core.cron_outcome import FAILED_OUTCOMES, agent_armed, stopped_by_failures
     from core.runtime_paths import cron_db_path, data_dir_or_home
     from cron.jobs import CronJobStore
     path = cron_db_path(data_dir_or_home(data_dir))
@@ -92,7 +99,9 @@ def _failed_jobs(user_id: str, data_dir: Optional[str]) -> List[Any]:
     out = []
     for job in CronJobStore(path).list(user_id=user_id) or []:
         p = job.payload or {}
-        if job.status == "cancelled" or agent_armed(p) or p.get("digest"):
+        if job.status == "cancelled" or p.get("digest"):
+            continue
+        if agent_armed(p) and not stopped_by_failures(p):
             continue
         if (p.get("last_outcome") or {}).get("outcome") in FAILED_OUTCOMES:
             out.append(job)
@@ -304,6 +313,7 @@ async def compose_digest(user_id: str, *, days: int = 1,
     top_cost = _read(failures, "AI cost records", _top_cost, user_id, data_dir, days)
     failed_jobs = _read(failures, "job store", _failed_jobs, user_id, data_dir)
     proposals = _read(failures, "curator proposals", _proposals, user_id, since_ts, data_dir)
+    mechanism = _read(failures, "reviewer notes", _mechanism_notes, user_id, since_ts, data_dir)
 
     from core.event_kinds import GOAL_COMPLETION, GOAL_RUN, SELF_MODIFICATION
 
@@ -328,6 +338,7 @@ async def compose_digest(user_id: str, *, days: int = 1,
     lines.append(f"• Activity: {sessions} session(s), {_n(n_goals, agg is None)} goal event(s), "
                  f"{_n(n_self_mods, agg is None)} self-change(s)")
     lines.extend(f"• {p}" for p in (proposals or [])[:PROPOSALS_MAX_LINES])
+    lines.extend(f"• For the developer: {n[:200]}" for n in (mechanism or [])[:PROPOSALS_MAX_LINES])
     if failures:
         lines.append("• Could not read: " + "; ".join(failures)
                      + " — a '?' or a missing line here is NOT a zero")

@@ -293,7 +293,8 @@ _ROWS: Dict[str, ChainRow] = {
     # pinned above (same TransparentUpgradeableProxy shape), symbol WETH, 18 decimals — the
     # other verified "WETH" (0x33e4…0B94) is a different contract and is NOT pinned; the
     # ERC-6551 registry is there with the pinned hash; Multicall3 and Permit2 are there;
-    # AccountV3 and the Tokenbound forwarder are NOT deployed yet (the collection's seed replay).
+    # AccountV3 and the Tokenbound forwarder were not deployed then; AccountV3 IS there since
+    # 2026-10-21 (the canonical Tokenbound calldata replay, erc6551.CODE_SHA256).
     "robinhood-testnet": ChainRow(
         name="robinhood-testnet",
         chain_id=46630,
@@ -383,8 +384,9 @@ _ROWS: Dict[str, ChainRow] = {
     # 064 S1 stage R (READ ONLY, 2026-09-23). money_enabled stays False: stage M
     # (arming) is its own order behind 029 section 4's gate AND the owner's D2
     # decision — the train never arms a new chain on its own (default OFF).
-    # route_hints=() and no aggregator_spender until then, so no verb can reach
-    # a route here even with a pinned RPC.
+    # The route fields are pinned (order 0014) but money_capable refuses first,
+    # so no MONEY verb reaches a route until the owner flips money_enabled (read-only
+    # quotes may now price a route here; nothing is sent).
     #
     # Measured 2026-09-23 against TWO public RPCs (mainnet.optimism.io,
     # optimism-rpc.publicnode.com), which agreed on every value: eth_chainId
@@ -409,13 +411,20 @@ _ROWS: Dict[str, ChainRow] = {
                  "fraction of a cent plus a small L1 data fee."),
         usdc="0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85",
         wrapped_native="0x4200000000000000000000000000000000000006",   # WETH, verified
+        # Order 0014 (2026-11-10): route fields filled, money_enabled still False.
+        # eth_getCode on mainnet.optimism.io AND optimism-rpc.publicnode.com agreed
+        # byte-for-byte: SwapRouter02 (48,996 hex chars), QuoterV2 (16,548), the
+        # LI.FI Diamond (10,354 — identical length to the other four chains); and a
+        # USDC->WETH quote on chain 10 named the Diamond as approvalAddress.
+        univ3_router="0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",   # SwapRouter02
+        univ3_quoter="0x61fFE014bA17989E743c5F6cB21bF9697530B21e",   # QuoterV2
+        aggregator_spender=_LIFI_DIAMOND,
         dexscreener_id="optimism",
         geckoterminal_id="optimism",
         goplus_id="10",
         alchemy_slug="opt-mainnet",
         explorer="https://optimistic.etherscan.io",
         blockscout_api="https://explorer.optimism.io/api/v2",
-        route_hints=(),
         money_enabled=False,
         assets_verified=True,
     ),

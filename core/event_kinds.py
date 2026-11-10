@@ -72,9 +72,17 @@ CRON_PAUSED = "cron_paused"
 CRON_RESUMED = "cron_resumed"
 CRON_RUN_NOW = "cron_run_now"
 GOAL_RUN = "goal_run"
+#: The goal board could not read its open asks, so no goal is served (fail-closed).
+#: One row per 10 minutes at most; ``/status`` raises a CRIT while it is fresh and
+#: goals are ready. attrs: error (≤200 chars), ready. Producer:
+#: ``agents/task/goals/board_asks.py``.
+GOAL_HOLD_UNREADABLE = "goal_hold_unreadable"
 GOAL_COMPLETION = "goal_completion"          # consumed by cron/digest rollup
 SELF_WAKE = "self_wake"
 SELF_MODIFICATION = "self_modification"
+#: 108 W6: a reviewer found a fault in a tool, the harness or the setup, which no skill
+#: can fix. ``attrs.note`` is the one line for the developer in the digest.
+REVIEW_MECHANISM_NOTE = "review_mechanism_note"
 DELEGATION_INTERRUPTED = "delegation_interrupted"
 DELEGATION_DELIVERED = "delegation_delivered"   # T1.6: completed-undelivered drain stamp
 RUN_OUTCOME_DEGRADED = "run_outcome_degraded"
@@ -100,6 +108,7 @@ OWNER_NOTICE = "owner_notice"
 OUTBOUND_OPEN_SEND = "outbound_open_send"
 CORRESPONDENT_PENDING = "correspondent_pending"
 CORRESPONDENT_RESUMED = "correspondent_resumed"
+CORRESPONDENT_REBOUND = "correspondent_rebound"
 
 # --- tool governance ------------------------------------------------------------
 TOOL_DENIED = "tool_denied"
@@ -246,6 +255,9 @@ CONSOLE_INVOICE_SETTLE = "console_invoice_settle"
 CONSOLE_INBOX_DECIDE = "console_inbox_decide"
 CONSOLE_TOKEN_DECIDE = "console_token_decide"   # W1: trust/untrust/write-off from Money
 CONSOLE_CARD_PRESS = "console_card_press"       # an action card tapped in the console
+CONSOLE_CHAT_VERB = "console_chat_verb"         # 113: a console chat renamed or closed
+CONSOLE_MODEL_SET = "console_model_set"         # 113 W6: the model for new chats, from Agent › Settings
+CONSOLE_OFFER_VERB = "console_offer_verb"       # 113 W6: an offer paused or resumed from Money
 #: 084: every card one session raised is decided (done/failed/cancelled/expired).
 CARD_GROUP_SETTLED = "card_group_settled"
 CONSOLE_SELF_CONTEXT_WRITE = "console_self_context_write"
@@ -256,6 +268,14 @@ CONSOLE_MEMORY_WRITE = "console_memory_write"
 MEMORY_PROMOTED = "memory_promoted"
 #: Owner CLI scope promotion/purge (distinct from console mutation audit).
 MEMORY_WRITE = "memory_write"
+#: One recall that injected something (``memory_prefetch``). attrs: scope, chars, preview.
+MEMORY_RECALL = "memory_recall"
+#: One recall that injected nothing: the denominator of ``memory_recall``. A kind of its
+#: own, so a count of ``memory_recall`` stays a count of injections. attrs: query,
+#: seen_only (rows matched, and this run had shown them all).
+MEMORY_RECALL_EMPTY = "memory_recall_empty"
+#: One cron run that skipped KB auto-injection under ``payload.kb_holdout_pct``. attrs: job_id.
+MEMORY_KB_HOLDOUT = "memory_kb_holdout"
 #: First X API credit rejection in a credential-verdict episode.
 X_API_REJECTED = "x_api_rejected"
 #: Provider output was cut short; the agent recorded whether it retried.
@@ -277,6 +297,9 @@ LOOP_STOP = "loop_stop"
 MODEL_SWITCHED = "model_switched"
 MODEL_SWITCH_FAILED = "model_switch_failed"
 MODEL_REASONING_SET = "model_reasoning_set"
+#: 112 W2: a run's model tier chosen by the AGENT (or stored on a job/goal by an owner
+#: turn): attrs kind (child|goal|job), tier, model, why. Producer: ``core/model_routing.py``.
+MODEL_ROUTED = "model_routed"
 
 # 098 state machines: owner-visible outcomes of guarded lifecycles
 #: an inbound email failed N times and is quarantined (one owner notice)

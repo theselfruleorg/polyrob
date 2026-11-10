@@ -118,13 +118,58 @@ def test_build_prefetch_lifts_the_cap_for_an_older_date(monkeypatch):
 
     monkeypatch.setattr("modules.memory.registry.memory_prefetch", fake_prefetch)
     reader = {"demote_automation": True, "max_age_days": 7, "drop_unverified": True}
-    asyncio.run(mp.build_prefetch_message("what did we pay on 2020-01-05", session_id="s",
-                                          user_id="u", reader=dict(reader)))
+    asking = "what did we pay on 2020-01-05"
+    asyncio.run(mp.build_prefetch_message(asking, session_id="s", user_id="u",
+                                          reader=dict(reader), owner_text=asking))
     assert "max_age_days" not in seen and seen.get("drop_unverified") is True
     seen.clear()
-    asyncio.run(mp.build_prefetch_message("We did not pay bro", session_id="s",
-                                          user_id="u", reader=dict(reader)))
+    asyncio.run(mp.build_prefetch_message("We did not pay bro", session_id="s", user_id="u",
+                                          reader=dict(reader), owner_text="We did not pay bro"))
     assert seen.get("max_age_days") == 7
+
+
+def test_a_date_the_owner_did_not_write_does_not_lift_the_cap(monkeypatch):
+    """The query also holds the brain's next_goal and a carried subject."""
+    from agents.task.agent.core import memory_prefetch as mp
+    seen = {}
+
+    async def fake_prefetch(query, **kw):
+        seen.update(kw)
+        return ""
+
+    monkeypatch.setattr("modules.memory.registry.memory_prefetch", fake_prefetch)
+    reader = {"max_age_days": 7}
+    query = "yes do it Check the report from 2020-01-05"
+    asyncio.run(mp.build_prefetch_message(query, session_id="s", user_id="u",
+                                          reader=dict(reader), owner_text="yes do it"))
+    assert seen.get("max_age_days") == 7
+    seen.clear()
+    asyncio.run(mp.build_prefetch_message(query, session_id="s", user_id="u", reader=dict(reader)))
+    assert seen.get("max_age_days") == 7
+
+
+def test_the_step_passes_the_owner_message_as_owner_text(monkeypatch):
+    from agents.task.agent.core import memory_prefetch as mp
+    seen = {}
+
+    async def fake_build(query, **kw):
+        seen.update(kw, query=query)
+        return None
+
+    monkeypatch.setattr(mp, "build_prefetch_message", fake_build)
+    agent = mp.MemoryPrefetchMixin()
+    agent.session_id = "rr-owner-text"
+    agent.task = "the first message of the chat"
+    agent.state = SimpleNamespace(n_steps=1)
+    agent.orchestrator = SimpleNamespace()
+    agent.logger = SimpleNamespace(debug=lambda *a, **k: None)
+    asyncio.run(agent._maybe_prefetch_memory())
+    assert seen["owner_text"] == "the first message of the chat"
+    seen.clear()
+    agent._recall_turn_text = "what happened on 2020-01-05"
+    agent._last_brain_state = {"next_goal": "read the 2019-02-03 file"}
+    asyncio.run(agent._maybe_prefetch_memory())
+    assert seen["owner_text"] == "what happened on 2020-01-05"
 
 
 def test_an_unverified_line_inside_a_joined_row_is_dropped(provider):
@@ -137,11 +182,19 @@ def test_an_unverified_line_inside_a_joined_row_is_dropped(provider):
 
 
 FACT = "The treasury wallet address is 0xabc0000000000000000000000000000000000001 on Base."
+NARRATION = "Read the treasury wallet ledger and appended 40 bytes to the bounty payout log."
 
 
-def test_a_durable_old_fact_is_still_recalled_by_the_owner_reader(provider):
-    """Review M5: the 7-day cap is for run accounts, not for facts."""
+def _set_kind(provider, content, kind):
+    execute_retry(provider.db_path,
+                  "UPDATE mem_provenance SET kind = ? WHERE mem_rowid = "
+                  "(SELECT rowid FROM memories WHERE content = ?)", (kind, content))
+
+
+def test_a_row_of_a_durable_kind_has_no_age_limit(provider):
+    """The 7-day cap is for run accounts, not for facts."""
     _write(provider, FACT, days=60)
+    _set_kind(provider, FACT, rr.DURABLE_KINDS[0])
     _write(provider, OLD, days=60)
     out = _recall(provider, "treasury wallet address bounty payout",
                   max_age_days=rr.OWNER_RECALL_MAX_AGE_DAYS, drop_unverified=True)
@@ -149,6 +202,171 @@ def test_a_durable_old_fact_is_still_recalled_by_the_owner_reader(provider):
     assert "33.33 USDC" not in out
 
 
-def test_is_episodic_reads_the_phase_summary_marker():
-    assert rr.is_episodic(OLD) and rr.is_episodic(GUESS)
-    assert not rr.is_episodic(FACT)
+def test_an_old_row_with_no_mark_is_episodic(provider):
+    """9,212 of 9,375 prod rows have no mark. Old narration was read as a fact."""
+    _write(provider, NARRATION, days=60)
+    query = "treasury wallet ledger bounty payout"
+    assert _recall(provider, query, max_age_days=rr.OWNER_RECALL_MAX_AGE_DAYS) == ""
+    assert "appended 40 bytes" in _recall(provider, query)
+
+
+def test_a_recent_row_with_no_mark_is_recalled(provider):
+    _write(provider, NARRATION, days=1)
+    assert "appended 40 bytes" in _recall(provider, "treasury wallet ledger",
+                                          max_age_days=rr.OWNER_RECALL_MAX_AGE_DAYS)
+
+
+def test_no_row_is_deleted_by_the_age_rule(provider):
+    """D5: no purge. The explicit search still reads the old row."""
+    _write(provider, NARRATION, days=60)
+    assert "appended 40 bytes" in asyncio.run(
+        provider.search("treasury wallet ledger", user_id="u"))
+
+
+def test_the_vector_half_applies_the_same_age_rule(tmp_path, monkeypatch):
+    from modules.memory.local_vector_memory_provider import LocalVectorMemoryProvider
+    monkeypatch.setenv("MEMORY_REQUIRE_USER_ID", "false")
+    monkeypatch.setenv("MEMORY_STORE_ANSWER_ONLY", "true")
+    prov = LocalVectorMemoryProvider(str(tmp_path / "m.db"))
+    prov._vec_ok = False
+    _write(prov, NARRATION, days=60)
+    _write(prov, FACT, days=60)
+    _set_kind(prov, FACT, rr.DURABLE_KINDS[0])
+    prov._vec_ok = True
+    monkeypatch.setattr(prov, "_vector_contents", lambda *a, **k: [NARRATION, FACT])
+    # the query shares no keyword, so both rows are vector-only hits
+    out = _recall(prov, "zzqq", max_age_days=rr.OWNER_RECALL_MAX_AGE_DAYS)
+    assert "0xabc0000000000000000000000000000000000001" in out
+    assert "appended 40 bytes" not in out
+
+
+# --- One unverified rule, per line, at every site ------------------------------
+
+def test_strip_reads_the_mark_at_any_place_in_a_line():
+    row = "Checked the ledger. [unverified] The swaps stopped on Monday.\nThe ledger is clean."
+    assert rr.strip_unverified(row) == "The ledger is clean."
+    assert rr.strip_unverified("[unverified] a\n[unverified] b") == ""
+
+
+def test_strip_judges_a_transcript_row_on_its_findings():
+    q = "User: did we pay the winners"
+    assert rr.strip_unverified(f"{q}\nAssistant: [unverified] [phase-summary:x] paid") == ""
+    assert rr.strip_unverified(f"{q}\nAssistant: [unverified] a\n[phase-summary:y] b") == (
+        f"{q}\nAssistant: [phase-summary:y] b")
+    assert rr.strip_unverified(f"{q}\nAssistant: fine") == f"{q}\nAssistant: fine"
+
+
+def test_mark_unverified_marks_each_line_once():
+    assert rr.mark_unverified("a\n\n[unverified] b\nc") == "[unverified] a\n\n[unverified] b\n[unverified] c"
+
+
+def test_a_multi_line_unverified_summary_does_not_leak(provider):
+    row = ("[unverified] [phase-summary:payout] Six round two winners were paid.\n"
+           "The payout cards were sent to round two winners.")
+    assert rr.strip_unverified(rr.mark_unverified(row)) == ""
+    _write(provider, rr.mark_unverified(row), days=1)
+    assert _recall(provider, "round two winners", max_age_days=7, drop_unverified=True) == ""
+
+
+def test_a_verified_line_after_an_unverified_first_line_stays(provider):
+    joined = ("[unverified] [phase-summary:payout] Six round two winners were paid.\n"
+              "[phase-summary:execution] Round two winners were judged and listed.")
+    _write(provider, joined, days=1)
+    out = _recall(provider, "round two winners", max_age_days=7, drop_unverified=True)
+    assert "judged and listed" in out and "were paid" not in out
+
+
+def test_a_mid_line_mark_is_dropped_in_recall(provider):
+    _write(provider, "[phase-summary:x] Round two started. [unverified] Round two winners were paid.",
+           days=1)
+    assert _recall(provider, "round two winners", max_age_days=7, drop_unverified=True) == ""
+
+
+def test_the_vector_half_applies_the_line_rule(tmp_path, monkeypatch):
+    from modules.memory.local_vector_memory_provider import LocalVectorMemoryProvider
+    monkeypatch.setenv("MEMORY_REQUIRE_USER_ID", "false")
+    monkeypatch.setenv("MEMORY_STORE_ANSWER_ONLY", "true")
+    prov = LocalVectorMemoryProvider(str(tmp_path / "m.db"))
+    prov._vec_ok = False
+    joined = "Checked the zzqq ledger.\n[unverified] The zzqq winners were paid."
+    guess = "Listed items. [unverified] All zzqq items shipped."
+    _write(prov, joined, days=1)
+    _write(prov, guess, days=1)
+    prov._vec_ok = True
+    monkeypatch.setattr(prov, "_vector_contents", lambda *a, **k: [joined, guess])
+    out = _recall(prov, "zzqq winners", max_age_days=7, drop_unverified=True)
+    assert out.count("Checked the zzqq ledger") == 1
+    assert "paid" not in out and "shipped" not in out
+
+
+def test_a_server_default_row_is_filtered_and_keeps_its_findings(tmp_path, monkeypatch):
+    """The answer-only flag is off on a plain server: the mark sits after ``Assistant:``."""
+    monkeypatch.setenv("MEMORY_REQUIRE_USER_ID", "false")
+    monkeypatch.setenv("MEMORY_STORE_ANSWER_ONLY", "false")
+    prov = SqliteMemoryProvider(str(tmp_path / "m.db"))
+    finding = "[unverified] [phase-summary:x] The zzqq winners were paid."
+    asyncio.run(prov.sync_turn("zzqq " * 2000, finding, session_id="s-old", user_id="u"))
+    row = execute_retry(prov.db_path, "SELECT content FROM memories", fetch="all")[0]["content"]
+    assert len(row) <= 4000 and row.endswith(finding), "a long task must not push the findings out"
+    assert _recall(prov, "zzqq winners", drop_unverified=True) == ""
+    assert "were paid" in _recall(prov, "zzqq winners")
+
+
+def test_a_short_server_default_row_is_unchanged(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEMORY_STORE_ANSWER_ONLY", "false")
+    assert SqliteMemoryProvider._compose_stored_content("q", "a") == "User: q\nAssistant: a"
+
+
+# --- Explicit search: the unverified rule and the age, no age limit -------------
+
+def _search(provider, query, **kw):
+    return asyncio.run(provider.search(query, user_id="u", **kw))
+
+
+def test_an_explicit_search_applies_the_unverified_rule_when_the_reader_asks(provider):
+    _write(provider, "[phase-summary:x] Checked the zzqq ledger.\n[unverified] The zzqq winners were paid.")
+    assert "paid" in _search(provider, "zzqq winners")
+    out = _search(provider, "zzqq winners", drop_unverified=True)
+    assert "paid" not in out and "Checked the zzqq ledger" in out
+
+
+def test_an_explicit_search_keeps_old_rows_and_shows_their_age(provider):
+    _write(provider, "The zzqq ledger closed.", days=60)
+    line = _search(provider, "zzqq ledger", with_age=True)
+    assert "60d old] The zzqq ledger closed." in line
+    assert "d old" not in _search(provider, "zzqq ledger")
+
+
+def test_a_row_with_no_stamp_says_its_age_is_unknown(provider):
+    execute_retry(provider.db_path,
+                  "INSERT INTO memories (user_id, session_id, content) VALUES (?,?,?)",
+                  ("u", "old", "legacy zzqq row"))
+    assert _search(provider, "zzqq", with_age=True) == "- [age unknown] legacy zzqq row"
+
+
+def test_the_owner_reader_reaches_the_search_without_its_age_cap(provider, monkeypatch):
+    from modules.memory import registry as R
+    monkeypatch.setattr(R, "get_memory_registry",
+                        lambda: SimpleNamespace(active=lambda: provider))
+    _write(provider, "The zzqq ledger closed.", days=60)
+    _write(provider, "[unverified] The zzqq winners were paid.", days=1)
+    out = asyncio.run(R.memory_search("zzqq", user_id="u", with_age=True, max_age_days=7,
+                                      drop_unverified=True))
+    assert "60d old] The zzqq ledger closed." in out and "paid" not in out
+
+
+def test_the_vector_search_applies_both(tmp_path, monkeypatch):
+    from modules.memory.local_vector_memory_provider import LocalVectorMemoryProvider
+    monkeypatch.setenv("MEMORY_REQUIRE_USER_ID", "false")
+    monkeypatch.setenv("MEMORY_STORE_ANSWER_ONLY", "true")
+    prov = LocalVectorMemoryProvider(str(tmp_path / "m.db"))
+    prov._vec_ok = False
+    old = "The aabb ledger closed."
+    guess = "Listed items.\n[unverified] All aabb items shipped."
+    _write(prov, old, days=60)
+    _write(prov, guess, days=1)
+    prov._vec_ok = True
+    monkeypatch.setattr(prov, "_vector_contents", lambda *a, **k: [old, guess])
+    out = _search(prov, "zzqq", drop_unverified=True, with_age=True)
+    assert "60d old] The aabb ledger closed." in out
+    assert "shipped" not in out and "Listed items." in out

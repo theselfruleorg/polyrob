@@ -1,5 +1,6 @@
 import aiosqlite
 import asyncio
+import contextlib
 import logging
 from typing import Optional, List, Any, Dict, Union, Tuple
 import json
@@ -8,7 +9,15 @@ import sqlite3
 import os
 from pathlib import Path
 
+from core.data_perms import apply_birth_mode
 from core.exceptions import DatabaseError
+from core.sqlite_util import _WAL_SIZE_LIMIT_BYTES
+
+#: How long one statement waits on another process's write lock before
+#: "database is locked" (ms). Explicit, not the sqlite3 module default: the
+#: agent, console, API and email units share one bot.db.
+BUSY_TIMEOUT_MS = 5000
+
 
 class DatabaseConnection:
     """Manages SQLite database connection."""
@@ -41,11 +50,15 @@ class DatabaseConnection:
     async def connect(self) -> None:
         """Establish database connection."""
         try:
+            self._birth_private()
             self.connection = sqlite3.connect(
                 self.db_path,
-                check_same_thread=False
+                check_same_thread=False,
+                timeout=BUSY_TIMEOUT_MS / 1000,
             )
             self.connection.row_factory = sqlite3.Row
+            self.connection.execute(f"PRAGMA busy_timeout = {int(BUSY_TIMEOUT_MS)}")
+            self._enable_wal()
 
             # SECURITY FIX: Enable foreign key constraints for data integrity
             # FK constraints ensure referential integrity and prevent orphaned records
@@ -61,6 +74,47 @@ class DatabaseConnection:
             self.logger.error(f"Failed to connect to database: {e}")
             raise DatabaseError(f"Failed to connect to database: {e}")
             
+    def _birth_private(self) -> None:
+        """Create a missing bot.db before SQLite does, under the shared birth rule.
+
+        SQLite births a file 0644 whatever the umask says, and -wal/-shm copy
+        that mode. Create it 0600 with ``O_EXCL`` (as ``wal_connect`` births a
+        sidecar store), then ``core.data_perms.apply_birth_mode`` gives the
+        group read-write, never other users; a setgid data home gives the
+        shared group. An existing file's mode is the operator's and is left.
+        """
+        if str(self.db_path) == ":memory:":
+            return
+        try:
+            fd = os.open(self.db_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                         | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        except FileExistsError:
+            return
+        os.close(fd)
+        apply_birth_mode(self.db_path)
+
+    def _enable_wal(self) -> None:
+        """WAL: readers and the one writer no longer block each other (the agent,
+        the console and the API share this file). The mode is stored in the file;
+        a switch that cannot take its lock now keeps the old mode and the next
+        connect tries again. Backups stay correct: the update snapshot and
+        scripts/backup_database.sh copy through SQLite's own backup.
+
+        Not ``core.sqlite_util.wal_connect``: that one falls back to DELETE on
+        any refusal and opens a thread-bound handle; this connection keeps its
+        mode on a locked switch and is shared across threads. The -wal size
+        limit is the shared one, so the file shrinks after a checkpoint."""
+        if str(self.db_path) == ":memory:":
+            return
+        try:
+            mode = self.connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+            if str(mode).lower() != "wal":
+                self.logger.warning("bot.db stays in journal mode %s (WAL refused)", mode)
+        except sqlite3.OperationalError as e:
+            self.logger.warning("bot.db WAL switch skipped this start: %s", e)
+        self.connection.execute(
+            f"PRAGMA journal_size_limit={int(_WAL_SIZE_LIMIT_BYTES)}")
+
     async def close(self) -> None:
         """Close database connection."""
         if self.connection:
@@ -166,13 +220,19 @@ class DatabaseConnection:
             self._in_transaction = True
             self._txn_owner = asyncio.current_task()
             self._txn_done.clear()
+            if self._txn_owner is not None:
+                # A waiter already parked on this span must not depend on a NEW
+                # caller to clear a dead owner (at shutdown none comes): the
+                # owner's end wakes the waiters, and the woken one rolls back.
+                self._txn_owner.add_done_callback(self._wake_on_owner_end)
             try:
-                await self.execute("BEGIN TRANSACTION")
+                # IMMEDIATE: every span writes, and under WAL a DEFERRED span
+                # that read first fails at once (BUSY_SNAPSHOT, no busy wait)
+                # when another process commits before its first write.
+                await self.execute("BEGIN IMMEDIATE TRANSACTION")
             except Exception:
                 # Rollback state on failure — and release any waiters.
-                self._in_transaction = False
-                self._txn_owner = None
-                self._txn_done.set()
+                self._end_span()
                 raise
 
     async def commit(self) -> None:
@@ -185,9 +245,7 @@ class DatabaseConnection:
             finally:
                 # Always clear flag + release waiters, even on error (the
                 # transaction is no longer active either way).
-                self._in_transaction = False
-                self._txn_owner = None
-                self._txn_done.set()
+                self._end_span()
 
     async def rollback(self) -> None:
         """Rollback the current transaction."""
@@ -198,13 +256,110 @@ class DatabaseConnection:
                 await self.execute("ROLLBACK")
             finally:
                 # Always clear flag + release waiters, even on error
-                self._in_transaction = False
-                self._txn_owner = None
-                self._txn_done.set()
+                self._end_span()
+
+    def _end_span(self) -> None:
+        """Close the span's Python-side state and release every waiter."""
+        owner, self._txn_owner = self._txn_owner, None
+        if owner is not None:
+            owner.remove_done_callback(self._wake_on_owner_end)
+        self._in_transaction = False
+        self._txn_done.set()
+
+    def _wake_on_owner_end(self, task: "asyncio.Task") -> None:
+        """Done-callback of a span owner: wake the waiters if it ended inside its span.
+
+        Only wakes; the woken waiter sees ``owner.done()`` in
+        ``_foreign_span_waiter`` and runs the rollback-and-clear path there.
+        """
+        if self._in_transaction and self._txn_owner is task:
+            self._txn_done.set()
 
     async def in_transaction(self) -> bool:
         """Check if currently in a transaction."""
         return self._in_transaction
+
+    def _foreign_span_waiter(self) -> Optional[asyncio.Event]:
+        """The event to wait on when ANOTHER task owns the open transaction, else None.
+
+        Called with ``self._lock`` held. Every statement — a read too (EP-4: a
+        read used to see another task's uncommitted span, and ``executemany``
+        committed it) — waits for a foreign span; the owning task proceeds.
+
+        A span body must never read or write through a child task,
+        ``asyncio.gather`` or ``asyncio.wait_for``: the child is a DIFFERENT
+        task, so it waits for the span its own parent holds, and the parent
+        waits for the child — for ever. (On Python 3.11 ``wait_for`` wraps the
+        awaited call in a new task.) Await the statement directly.
+        """
+        waiter: Optional[asyncio.Event] = None
+        if (self._in_transaction
+                and self._txn_owner is not None
+                and asyncio.current_task() is not self._txn_owner):
+            # A DIFFERENT task owns the open transaction.
+            if self._txn_owner.done():
+                # Owner task ended without commit/rollback (e.g. an
+                # unhandled cancellation between begin and its first
+                # statement). Never wait forever on an abandoned
+                # transaction — reset the span and proceed.
+                self.logger.warning(
+                    "Transaction owner task ended without commit/"
+                    "rollback — clearing abandoned transaction state "
+                    "to avoid a stuck shared connection")
+                # H8 fix: the dead owner may have left a PARTIAL
+                # write open at the sqlite level (e.g. a balance
+                # UPDATE without its paired ledger INSERT). If we
+                # only clear the Python-side flags below, the next
+                # non-owner execute() sees `_in_transaction=False`
+                # and auto-commits — which commits the ENTIRE
+                # pending sqlite transaction, silently landing the
+                # dead task's partial span too (money fails OPEN).
+                # Discard that span BEFORE clearing state. This is
+                # a direct call on the raw sqlite3.Connection
+                # (self.connection), NOT the async self.rollback()
+                # wrapper — we already hold `self._lock` here and
+                # self.rollback() acquires `_transaction_lock` /
+                # re-enters execute(), which would deadlock.
+                if self.connection is not None:
+                    try:
+                        self.connection.rollback()
+                    except Exception as rollback_exc:
+                        # A failed rollback must not deadlock every
+                        # other waiter on this connection — log
+                        # and still clear state below so the
+                        # escape hatch keeps its no-deadlock
+                        # guarantee.
+                        self.logger.error(
+                            "Failed to roll back abandoned "
+                            "transaction's sqlite-level span: %s",
+                            rollback_exc)
+                self._in_transaction = False
+                self._txn_owner = None
+                self._txn_done.set()
+            else:
+                waiter = self._txn_done
+        return waiter
+
+    @contextlib.asynccontextmanager
+    async def _unshared(self):
+        """Hold ``self._lock`` on a connected handle with no FOREIGN transaction open."""
+        while True:
+            await self._lock.acquire()
+            try:
+                if not self.connection:
+                    await self.connect()
+                waiter = self._foreign_span_waiter()
+            except BaseException:
+                self._lock.release()
+                raise
+            if waiter is None:
+                try:
+                    yield
+                finally:
+                    self._lock.release()
+                return
+            self._lock.release()
+            await waiter.wait()
 
     async def execute(self, query: str, params: Union[tuple, Dict[str, Any]] = ()) -> aiosqlite.Cursor:
         """Execute SQL query.
@@ -227,53 +382,8 @@ class DatabaseConnection:
                     if not self.connection:
                         await self.connect()
 
-                    must_wait = False
-                    if (not is_transaction_control and self._in_transaction
-                            and self._txn_owner is not None
-                            and asyncio.current_task() is not self._txn_owner):
-                        # A DIFFERENT task owns the open transaction.
-                        if self._txn_owner.done():
-                            # Owner task ended without commit/rollback (e.g. an
-                            # unhandled cancellation between begin and its first
-                            # statement). Never wait forever on an abandoned
-                            # transaction — reset the span and proceed.
-                            self.logger.warning(
-                                "Transaction owner task ended without commit/"
-                                "rollback — clearing abandoned transaction state "
-                                "to avoid a stuck shared connection")
-                            # H8 fix: the dead owner may have left a PARTIAL
-                            # write open at the sqlite level (e.g. a balance
-                            # UPDATE without its paired ledger INSERT). If we
-                            # only clear the Python-side flags below, the next
-                            # non-owner execute() sees `_in_transaction=False`
-                            # and auto-commits — which commits the ENTIRE
-                            # pending sqlite transaction, silently landing the
-                            # dead task's partial span too (money fails OPEN).
-                            # Discard that span BEFORE clearing state. This is
-                            # a direct call on the raw sqlite3.Connection
-                            # (self.connection), NOT the async self.rollback()
-                            # wrapper — we already hold `self._lock` here and
-                            # self.rollback() acquires `_transaction_lock` /
-                            # re-enters execute(), which would deadlock.
-                            if self.connection is not None:
-                                try:
-                                    self.connection.rollback()
-                                except Exception as rollback_exc:
-                                    # A failed rollback must not deadlock every
-                                    # other waiter on this connection — log
-                                    # and still clear state below so the
-                                    # escape hatch keeps its no-deadlock
-                                    # guarantee.
-                                    self.logger.error(
-                                        "Failed to roll back abandoned "
-                                        "transaction's sqlite-level span: %s",
-                                        rollback_exc)
-                            self._in_transaction = False
-                            self._txn_owner = None
-                            self._txn_done.set()
-                        else:
-                            must_wait = True
-                            waiter = self._txn_done
+                    waiter = None if is_transaction_control else self._foreign_span_waiter()
+                    must_wait = waiter is not None
 
                     if not must_wait:
                         # Debug logging
@@ -311,9 +421,7 @@ class DatabaseConnection:
     async def fetch_one(self, query: str, params: Union[tuple, Dict[str, Any]] = ()) -> Optional[Dict[str, Any]]:
         """Fetch a single row from the database."""
         try:
-            async with self._lock:
-                if not self.connection:
-                    await self.connect()
+            async with self._unshared():
                     
                 # Debug logging
                 self.logger.debug(f"Fetch one query: {query}")
@@ -369,9 +477,7 @@ class DatabaseConnection:
     async def fetch_all(self, query: str, params: Union[tuple, Dict[str, Any]] = ()) -> List[Dict[str, Any]]:
         """Fetch all rows and return as list of dictionaries."""
         try:
-            async with self._lock:
-                if not self.connection:
-                    await self.connect()
+            async with self._unshared():
                     
                 # Debug logging
                 self.logger.debug(f"Fetch all query: {query}")
@@ -430,16 +536,17 @@ class DatabaseConnection:
                 
                 return result
         except Exception as e:
+            # Raise like fetch_one: "could not read" (a locked or broken store)
+            # must never read as "no rows" (EP-3) — a reaper skipped its work and
+            # a PRAGMA probe answered "table missing" on a locked bot.db.
             self.logger.error(f"Fetch all error: {e} | Query: {query} | Params: {params}")
             self.logger.exception("Detailed error:")
-            return []
+            raise
 
     async def executemany(self, query: str, param_list: List[Union[tuple, Dict[str, Any]]]) -> None:
         """Execute multiple queries with parameter lists."""
         try:
-            async with self._lock:
-                if not self.connection:
-                    await self.connect()
+            async with self._unshared():
                     
                 # Handle JSON serialization in parameters
                 processed_params = []
@@ -453,7 +560,8 @@ class DatabaseConnection:
                     processed_params.append(processed)
                 
                 self.connection.executemany(query, processed_params)
-                self.connection.commit()
+                if not self._in_transaction:  # EP-4: never commit an open span
+                    self.connection.commit()
                 self.logger.debug(f"Executed multiple queries: {query}")
         except Exception as e:
             self.logger.error(f"Executemany error: {e} | Query: {query}")

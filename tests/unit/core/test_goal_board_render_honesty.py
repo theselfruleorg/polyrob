@@ -67,7 +67,8 @@ def test_an_unreadable_board_is_unavailable_not_empty():
 def test_a_genuinely_empty_board_still_says_so():
     """The honest empty state must survive the fix, or the fix is a regression
     for the common case."""
-    assert render_board(_Board(counts={})) == "No goals yet."
+    assert render_board(_Board(counts={})).startswith("No goals yet.")
+    assert "/goal new" in render_board(_Board(counts={}))  # E17: a verb, never a flag
 
 
 def test_unreadable_open_rows_keep_the_counts_and_name_the_fault():

@@ -241,8 +241,8 @@ def load_owner_doc(home_dir: Path | str, user_id: Optional[str],
             return _OWNER_BLOCKED_PLACEHOLDER
     except Exception:
         return _OWNER_BLOCKED_PLACEHOLDER
-    # 060 WS-6: only the ACTIVE rules are injected; the `## Superseded` section
-    # is history (kept, dated, never evicted) and never steers a session.
+    # 060 WS-6: only the ACTIVE rules are injected; the `## Superseded` and
+    # `## History` sections are kept and never steer a session.
     try:
         from core.doc_claims import split_superseded
         text = split_superseded(text)[0].strip()
@@ -470,18 +470,27 @@ def resolve_owner_user_id(env: Optional[Mapping[str, str]] = None) -> str:
 
 
 # Surfaces whose sender ids are platform-AUTHENTICATED and therefore safe to alias
-# to the owner principal. Telegram signs its sender ids; email ``From:`` and WhatsApp
-# are forgeable, so they are deliberately NOT aliased (AGENTS.md keeps owner-by-email
-# OFF in v1 — a forged sender must never become an owner command-turn).
-#: Derived from the catalog's ``alias_owner`` rows (064 F1) — telegram only. F1
-#: deliberately kept this identical: widening it changes WHO is the owner and is
-#: its own reviewed change (a pairing row stays the path on every other surface).
+# to the owner principal: the catalog's ``alias_owner`` rows that are not forgeable
+# (110 W1). Email ``From:`` is forgeable and is never aliased. Read LIVE (a pack may
+# register a surface after import), never as an import-time snapshot.
 def _alias_surfaces() -> FrozenSet[str]:
     from core.surfaces.catalog import alias_owner_ids
     return alias_owner_ids()
 
 
-_OWNER_ALIAS_SURFACES: FrozenSet[str] = _alias_surfaces()
+def configured_owner_id(surface_id: str,
+                        env: Optional[Mapping[str, str]] = None) -> Optional[str]:
+    """The owner's configured sender id on ``surface_id`` (its catalog ``owner_env``),
+    or None. Telegram keeps its own resolver (a single allowlisted id also counts)."""
+    if surface_id == "telegram":
+        return resolve_owner_telegram_id(env)
+    from core.surfaces.catalog import get as _spec
+    spec = _spec(surface_id)
+    if spec is None or not spec.owner_env:
+        return None
+    src = os.environ if env is None else env
+    val = (src.get(spec.owner_env) or "").strip()
+    return val or None
 
 
 def resolve_owner_telegram_id(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
@@ -593,22 +602,22 @@ def owner_surface_alias(
 ) -> Optional[str]:
     """Map an authenticated owner's raw surface id to the OWNER principal uid, or None.
 
-    When ``raw_id`` on ``surface_id`` is the instance owner's authenticated sender id,
-    return the owner principal (:func:`resolve_owner_principal`) so the owner's chat
-    operates under the SAME tenant as autonomy (goals / memory / SELF docs) rather than
-    a surface-hashed ``u_…`` id. Returns None (no aliasing, byte-identical legacy) when:
+    When ``raw_id`` on ``surface_id`` is the owner's CONFIGURED sender id there
+    (:func:`configured_owner_id`: ``POLYROB_OWNER_TELEGRAM_ID``, ``OWNER_SLACK_ID``, …),
+    return the owner principal (:func:`resolve_owner_principal`) so the owner's chat runs
+    under the SAME tenant as autonomy (goals / memory / SELF docs), not a hashed ``u_…``
+    id. Returns None (no aliasing) when:
 
-    - ``surface_id`` is not an authenticated-sender surface (only ``telegram``); a
-      forgeable ``From:``/WhatsApp sender is never aliased;
+    - ``surface_id`` is not an authenticated-sender surface (a catalog ``alias_owner``
+      row that is not forgeable); a forgeable ``From:`` is never aliased;
     - no owner principal is bound (nothing to alias to);
-    - no owner telegram id is configured (cannot identify the owner sender);
-    - ``raw_id`` is blank or is not the owner's id.
+    - no owner id is configured on that surface (cannot identify the owner sender);
+    - ``raw_id`` is blank or is not that id.
 
-    Only the single configured ``POLYROB_OWNER_TELEGRAM_ID`` (or a single-entry
-    ``ALLOWED_TELEGRAM_USER_IDS``) is aliased — a different, equally-authenticated
-    sender keeps its own tenant.
+    ⚠️ This is the ONLY way a network sender becomes the owner tenant: an operator's
+    configuration, never a code someone sent or an approval tap.
     """
-    if surface_id not in _OWNER_ALIAS_SURFACES:
+    if surface_id not in _alias_surfaces():
         return None
     raw = (str(raw_id).strip() if raw_id is not None else "")
     if not raw:
@@ -616,10 +625,11 @@ def owner_surface_alias(
     principal = resolve_owner_principal(env)
     if not principal:
         return None
-    owner_tg = resolve_owner_telegram_id(env)
-    if not owner_tg:
+    owner = configured_owner_id(surface_id, env)
+    if not owner:
         return None
-    return principal if raw == owner_tg else None
+    # A phone id may be written with or without its "+" (WhatsApp sends bare digits).
+    return principal if raw.lstrip("+") == owner.lstrip("+") else None
 
 
 def console_display_name(env: Optional[Mapping[str, str]] = None) -> str:
@@ -732,6 +742,26 @@ def is_owner(user_id: Optional[str], *, owner_principal: Optional[str] = None,
 _LOCAL_OPERATOR_TENANT = "local"
 
 
+def is_owner_uid(user_id: Optional[str], *, allow_local: bool = True) -> bool:
+    """THE owner-tenant check for a user id (110 W1b): the bound owner principal, or —
+    only when ``allow_local`` and local mode is on — the single-user local operator
+    tenant (:func:`is_owner_local_safe`). Every "is this tenant the owner" question in
+    shipped code asks this, never a second ``== resolve_owner_principal()`` copy
+    (``tests/test_owner_tenant_single_predicate_ratchet.py``). Fail-closed: a fault
+    answers False. ``allow_local=False`` is the network rule (a chat surface, money).
+    """
+    try:
+        local = False
+        if allow_local:
+            from core.config_policy import local_mode_enabled
+            local = bool(local_mode_enabled())
+        return is_owner_local_safe(user_id, owner_principal=resolve_owner_principal(),
+                                   local_enabled=local)
+    except Exception:
+        logger.warning("owner check failed (fail-closed)", exc_info=True)
+        return False
+
+
 def is_owner_local_safe(
     user_id: Optional[str], *, owner_principal: Optional[str], local_enabled: bool
 ) -> bool:
@@ -740,7 +770,7 @@ def is_owner_local_safe(
     :func:`is_owner` with ``local=True`` returns True for ANY non-empty uid — correct for
     a trusted local surface, but a hazard at a call site that gates on the *global*
     ``POLYROB_LOCAL`` flag with no ``_LOCAL_OWNER_SURFACES`` filter (unlike
-    ``core.surfaces.access``/``core.pairing``). Under ``POLYROB_LOCAL=true`` with a network
+    ``core.surfaces.access``). Under ``POLYROB_LOCAL=true`` with a network
     surface attached in the same process, that would elevate a forgeable network sender.
 
     This helper closes that gap for such call sites (the ``self_context_manage`` promote

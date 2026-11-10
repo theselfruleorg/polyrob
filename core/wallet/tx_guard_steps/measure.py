@@ -593,7 +593,8 @@ def step_6g_account_nesting(c: GuardContext) -> Optional[Decision]:
     # -- 6g. No token inside an account of its own collection (W2) ---------
     # contracts/SPEC.md §7.2: `transferFrom(alice, accountOf(id), id)` bricks a
     # token and its account forever (AccountV3 refuses its own token only in
-    # onERC721Received, which transferFrom never calls), and two tokens can own
+    # onERC721Received, which transferFrom never calls; a PolyrobAccount reverts
+    # OwnershipCycle there, and its collection refuses it in `_update`), and two tokens can own
     # each other. The contract refuses it in `_update`; this is the mirror for
     # every NFT the guarded wallet moves — measured moves, any verb, any shape.
     _nest = _tg._collection_account_destination_refusal(intent.chain, tx, deltas.holder_nft_out)

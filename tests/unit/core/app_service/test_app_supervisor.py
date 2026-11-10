@@ -509,3 +509,52 @@ def test_remove_is_one_guarded_write_from_the_status_read(rig):
     assert not ok and "changed state" in msg
     reg.get = real_get
     assert reg.request_remove("demo-status", "owner-1") == "queued"
+
+
+def test_a_stuck_removal_is_said_on_the_row_and_once_on_the_events(rig):
+    """A removal whose teardown keeps failing names the failed step on the row the
+    owner reads, and emits app_failed once per new reason — never only a log line."""
+    asyncio.run(rig.sup.tick())
+    assert rig.reg.request_remove("demo-status", "owner-1") == "queued"
+
+    async def failing_rm(args, *, input=None, timeout=None):
+        return (1, "", "Error response from daemon: timeout")
+
+    rig.sup._docker = failing_rm
+    for _ in range(3):
+        asyncio.run(rig.sup.tick())
+    row = rig.reg.get("demo-status", "owner-1")
+    assert "removal waits: the container teardown failed" in row["last_failure_error"]
+    waits = [r for r in rig.events.rows
+             if r[0] == "app_failed" and "removal waits" in str(r[1])]
+    assert len(waits) == 1
+
+
+def test_every_status_write_is_an_edge_of_the_table():
+    """The registry's table names the edges its writers perform: re-requests, the
+    stopped-row clear, a removal flag, a redeploy of a live app."""
+    from core.app_service.registry import APP_MACHINE
+    for frm, to in (("pending", "pending"), ("approved", "approved"), ("live", "approved"),
+                    ("paused", "pending"), ("stopped", "stopped")):
+        assert APP_MACHINE.allowed(frm, to), (frm, to)
+    assert not APP_MACHINE.allowed("deploying", "approved")
+    assert APP_MACHINE.validate() == []
+
+
+def test_set_status_refuses_an_edge_the_table_forbids(rig):
+    from core.state.machine import IllegalTransition, set_strict, strict_mode
+    was = strict_mode()
+    set_strict(False)
+    try:
+        assert rig.reg.set_status("demo-status", "owner-1", "live",
+                                  from_states=("approved",)) is False
+        assert rig.reg.get("demo-status", "owner-1")["status"] == "approved"
+        assert rig.reg.claim("demo-status", "owner-1", "approved", "live") is False
+    finally:
+        set_strict(was)
+    set_strict(True)
+    try:
+        with pytest.raises(IllegalTransition):
+            rig.reg.set_status("demo-status", "owner-1", "live", from_states=("approved",))
+    finally:
+        set_strict(was)

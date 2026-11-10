@@ -68,3 +68,27 @@ def test_terminal_statuses_final():
     op.set_status("alice", "robinhood", FAKE, "retired", reason="proof")
     assert not op.set_status("alice", "robinhood", FAKE, "dust")
     assert _status() == "retired"
+
+
+def test_a_quarantine_written_during_a_buy_survives_it(monkeypatch):
+    """A buy read the row, then wrote it back whole with the status it read: a
+    quarantine set between the read and the write was lost. The read and the write
+    are one write transaction now, so the quarantine lands after the buy and stays."""
+    import threading
+    real = op._status_after_buy
+    done = []
+
+    def _race(row):
+        t = threading.Thread(target=lambda: done.append(op.set_status(
+            "alice", "robinhood", FAKE, op.STATUS_QUARANTINED, reason="raced")))
+        t.start()
+        t.join(timeout=1.0)     # before the fix the quarantine lands here, inside the window
+        _race.thread = t
+        return real(row)
+    monkeypatch.setattr(op, "_status_after_buy", _race)
+    op.apply_delta("alice", op.PositionDelta(chain="robinhood", address=FAKE.lower(),
+                                           symbol="TKN", qty=5.0, cost_usd=2.5))
+    _race.thread.join(timeout=10)
+    pos = op.get_position("alice", "robinhood", FAKE)
+    assert pos.qty == 15.0
+    assert pos.status == "quarantined"

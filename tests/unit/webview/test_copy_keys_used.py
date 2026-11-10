@@ -28,6 +28,8 @@ def _dynamic_families() -> dict:
         "agent.axis_value.": "pages_new.axis_answer",
         "agent.memory_backend.": "agent.html (memory_backend_<id>)",
         "chat.run_head.": "chat_open.first_line_context (run_head.<creator>, 070 W0.12)",
+        # pages.api_preferences: t(f"pref.{key}.label") / .help (113 W5, CP-1).
+        "pref.": "pages.api_preferences (pref.<key>.label/help)",
         # pages_new: t(f"{current}.title") for the five destinations.
         **{f"{d}.title": "pages_new page title" for d in ("new", "inbox", "work", "money", "agent")},
     }
@@ -36,7 +38,8 @@ def _dynamic_families() -> dict:
 def _corpus() -> str:
     parts = []
     for path in sorted(_WEBVIEW.rglob("*.py")):
-        if path == _COPY_FILE or "node_modules" in path.parts:
+        # Every file of the copy package IS the copy (en.py and its parts).
+        if path.parent == _COPY_FILE.parent or "node_modules" in path.parts:
             continue
         parts.append(path.read_text(encoding="utf-8"))
     for path in sorted((_WEBVIEW / "templates").glob("*.html")):

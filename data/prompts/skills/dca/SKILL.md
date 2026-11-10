@@ -36,6 +36,7 @@ job's schedule IS the strategy, and each buy is a `defi_trade.swap` (or
    target_token={…})`; its task text holds the per-buy USD, the total, the
    cadence and the end date. One job only — no second "cancel" job: at the end
    date or the total, the run stops buying and tells the owner to cancel it.
+   The call raises a card: the job exists only after the owner confirms it.
 3. **Tell the owner** the address, the per-buy USD, the cadence, the total and
    the end date, and that `/jobs` shows and stops the job.
 

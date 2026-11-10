@@ -111,7 +111,11 @@ def next_preempting_rail(data_dir: str, now: datetime) -> Optional[Tuple[str, da
 
     Read-only over ``<data_dir>/cron.db`` via ``core.sqlite_util`` (the layering
     ratchet forbids agents -> cron), mirroring ``dispatcher.imminent_cron_job``.
-    An absent or unreadable store answers None: fail-open, dispatch."""
+    An absent or unreadable store answers None: fail-open, dispatch. With cron off
+    no rail will pre-empt anything."""
+    from core.config_policy import AutonomyConfig
+    if not AutonomyConfig.cron_enabled():
+        return None
     db_path = cron_db_path(data_dir)
     if not os.path.exists(db_path):
         return None

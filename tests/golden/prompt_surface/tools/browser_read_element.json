@@ -1,0 +1,25 @@
+{
+  "function": {
+    "description": "Read one element by its index: its kind, state (disabled, read-only, checked), value and text. Use it to check a field after you fill it.",
+    "name": "browser_read_element",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for an action that only names its element.",
+      "properties": {
+        "elementIndex": {
+          "type": "integer"
+        },
+        "xPath": {
+          "default": null,
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "required": [
+        "elementIndex"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

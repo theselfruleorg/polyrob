@@ -188,13 +188,8 @@ def a2a_pricing() -> List[Dict[str, Any]]:
 
 
 def _data_part(params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    for part in ((params or {}).get("message") or {}).get("parts") or ():
-        if isinstance(part, dict) and part.get("kind") == "data" and isinstance(
-                part.get("data"), dict):
-            d = part["data"]
-            if "offer_id" in d or "order_id" in d:
-                return d
-    return None
+    from core.commerce.listing import a2a_order_part
+    return a2a_order_part((params or {}).get("message"))
 
 
 async def a2a_order(params: Dict[str, Any], user_id: str) -> Optional[Dict[str, Any]]:

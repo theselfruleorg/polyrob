@@ -213,3 +213,24 @@ async def test_only_new_lines_ride_a_later_step():
     msg = await build_prefetch_message("rebuy", session_id="s1", seen=seen)
     assert msg is not None
     assert "[m2]" in msg.content and "[m0]" not in msg.content
+
+
+def test_a_long_subject_does_not_spend_the_tail_of_the_query():
+    """The brain's next_goal is the end of the recall query: a long subject must not
+    spend the whole cap, or the live work is never searched."""
+    from modules.memory.fts_terms import MAX_TERMS, TAIL_TERMS, select_terms
+
+    subject = [f"subject{i}" for i in range(30)]
+    next_goal = ["widget", "invoice", "gadget"]
+    picked = select_terms(subject + next_goal)
+    assert len(picked) == MAX_TERMS
+    assert picked[:MAX_TERMS - TAIL_TERMS] == subject[:MAX_TERMS - TAIL_TERMS]
+    assert picked[-3:] == next_goal
+
+
+def test_a_query_under_the_cap_keeps_every_term_in_order():
+    from modules.memory.fts_terms import MAX_TERMS, select_terms
+
+    terms = [f"term{i}" for i in range(MAX_TERMS)]
+    assert select_terms(terms) == terms
+    assert select_terms(terms, limit=2) == terms[:2]

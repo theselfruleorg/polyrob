@@ -44,6 +44,9 @@ from tests.support.prefix_cache import (
 	PrefixCacheProbe,
 	common_prefix_len,
 	serialize_messages,
+	wire_adapter,
+	wire_prefix_len,
+	wire_rows,
 )
 
 
@@ -285,4 +288,74 @@ def test_two_runs_of_one_job_share_the_prefix_through_the_catalogs():
 	a, b = run(1), run(2)
 	shared = common_prefix_len(a, b)
 	assert shared == len(a) - 2, (shared, len(a))  # all but workspace + task
-	assert "catalog" in a[shared - 1]
+	assert "catalog" in "".join(a[:shared])
+
+
+# ---------------------------------------------------------------------------
+# 106 C13: H-MEM, a late tool and a saved reasoning, on the WIRE
+# ---------------------------------------------------------------------------
+
+
+class _ChangingMemory:
+	"""H-MEM text that changes every step, as the real one does."""
+
+	def __init__(self):
+		self.calls = 0
+
+	def get_context_injection(self, session_id):
+		self.calls += 1
+		return f"memory read {self.calls}"
+
+
+def _wire_step(mm, adapter, step, tools):
+	"""One step's request as it reaches the provider."""
+	import asyncio
+	mm.add_state_message(state=_minimal_state(),
+	                     step_info=AgentStepInfo(step_number=step, max_steps=20),
+	                     use_vision=False, include_browser_state=False)
+	asyncio.run(adapter.ainvoke(mm.get_messages_for_llm(), tools=tools))
+	call_id = f"call_{step}"
+	mm.add_tool_call_pair_atomic(
+		ai_content=f"step {step}",
+		tool_calls=[{"id": call_id, "name": "noop", "args": {"i": step}}],
+		tool_responses=[(call_id, f"tool output for step {step}")],
+	)
+	mm.commit_ephemeral_consumption()
+	return adapter.wire_calls()[-1]
+
+
+_DONE = {"type": "function", "function": {"name": "done", "parameters": {}}}
+_LATE = {"type": "function", "function": {"name": "late_echo", "parameters": {}}}
+
+
+def test_h_mem_stays_outside_the_wire_prefix():
+	adapter = wire_adapter()
+	mm = MessageManager(llm=adapter, task="Test task", action_descriptions="a",
+	                    system_prompt_class=SystemPrompt, max_input_tokens=40000,
+	                    session_id="s-hmem", task_context_manager=_ChangingMemory())
+	first = _wire_step(mm, adapter, 0, [_DONE])
+	second = _wire_step(mm, adapter, 1, [_DONE])
+	assert "memory read" in str(first["messages"][-2:]), "the rig did not carry H-MEM"
+	# Only the tail of the first request (H-MEM + the state message) may not repeat.
+	assert wire_prefix_len(first, second) == len(wire_rows(first)) - 2
+
+
+def test_a_late_tool_changes_only_the_tools_row():
+	"""D1 keeps ``grow``: a late tool moves ``tools[]``. No message row moves with it."""
+	adapter = wire_adapter()
+	mm = MessageManager(llm=adapter, task="Test task", action_descriptions="a",
+	                    system_prompt_class=SystemPrompt, max_input_tokens=40000,
+	                    session_id="s-late")
+	first = _wire_step(mm, adapter, 0, [_DONE])
+	second = _wire_step(mm, adapter, 1, [_DONE, _LATE])
+	assert wire_rows(first)[0] != wire_rows(second)[0]
+	assert common_prefix_len(wire_rows(first)[1:], wire_rows(second)[1:]) == len(wire_rows(first)) - 2
+
+
+def test_tools_order_and_bytes_hold_on_the_wire_from_step_to_step():
+	adapter = wire_adapter()
+	mm = MessageManager(llm=adapter, task="Test task", action_descriptions="a",
+	                    system_prompt_class=SystemPrompt, max_input_tokens=40000,
+	                    session_id="s-tools")
+	rows = [wire_rows(_wire_step(mm, adapter, i, [_DONE, _LATE]))[0] for i in range(3)]
+	assert rows[0] == rows[1] == rows[2]

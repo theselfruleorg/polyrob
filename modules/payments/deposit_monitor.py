@@ -196,6 +196,7 @@ class DepositMonitor:
             if eth_balance == 0 or eth_price is not None:
                 deposits.append({
                     'chain': chain_name,
+                    'address': address,  # the sweeper matches it to the signer
                     'block': block_number,  # 098 MO-01: the reading's finalized block
                     'token_symbol': 'ETH',
                     # Price-INDEPENDENT balance reading (wei): the mark in
@@ -221,6 +222,7 @@ class DepositMonitor:
                 # Stablecoins are 1:1 with USD
                 deposits.append({
                     'chain': chain_name,
+                    'address': address,
                     'block': block_number,
                     'token_symbol': token_symbol,
                     'amount': str(balance),
@@ -388,7 +390,7 @@ class DepositMonitor:
                     return
 
                 await self.db.connection.commit()
-            except Exception:
+            except (asyncio.CancelledError, Exception):
                 await self.db.connection.rollback()
                 raise
 

@@ -48,12 +48,12 @@ def test_spec_backed_client_wins_over_model_name_detection():
 def test_falls_back_to_model_name_when_client_has_no_spec():
     # Built-in providers keep their existing behaviour exactly.
     llm = _PlainAdapter()
-    assert resolve_serving_provider(llm, "glm-5") == detect_llm_provider(None, "glm-5")
+    assert resolve_serving_provider(llm, "glm-5") == detect_llm_provider("glm-5")
 
 
 @pytest.mark.parametrize("llm", [None, object()])
 def test_missing_or_foreign_llm_falls_back(llm):
-    assert resolve_serving_provider(llm, "glm-5") == detect_llm_provider(None, "glm-5")
+    assert resolve_serving_provider(llm, "glm-5") == detect_llm_provider("glm-5")
 
 
 def test_subscription_seat_bills_zero_only_when_correctly_attributed():
@@ -158,4 +158,4 @@ def test_a_spec_seat_serving_an_unknown_model_id_still_resolves_the_seat():
                                     "some-future-model") == "zai-coding"
     # Whatever the registry guesses for the id, it is not the serving seat —
     # reconciling against the guess is reconciling the wrong row's capability.
-    assert detect_llm_provider(None, "some-future-model") != "zai-coding"
+    assert detect_llm_provider("some-future-model") != "zai-coding"

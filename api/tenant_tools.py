@@ -30,11 +30,9 @@ def default_session_tools(user_id) -> list:
     any other caller keeps the narrow default."""
     from agents.task.tool_defaults import cli_default_tools, owner_seat_tool_ids
     from core.config_policy import local_mode_enabled
-    from core.instance import is_owner_local_safe, resolve_owner_principal
+    from core.instance import is_owner_uid
     from tools.controller.approval import is_console_process
-    if (is_console_process() and local_mode_enabled()
-            and is_owner_local_safe(user_id, owner_principal=resolve_owner_principal(),
-                                    local_enabled=True)):
+    if is_console_process() and local_mode_enabled() and is_owner_uid(user_id):
         return cli_default_tools()
     return owner_seat_tool_ids(user_id) or ["browser", "filesystem"]
 
@@ -46,4 +44,4 @@ def refuse_terminal_chat(session_info, session_id: str) -> None:
     if is_console_process() and creator == "cli":
         from fastapi import HTTPException
         raise HTTPException(status_code=409, detail=(
-            f"This chat runs in the terminal. To continue it: polyrob run --resume {session_id}."))
+            f'This chat runs in the terminal. To continue it: polyrob run --resume {session_id} "your message".'))

@@ -205,3 +205,19 @@ def test_d6_unverified_summary_is_drained_with_the_marker_first(monkeypatch):
     tcm._trigger_reflection("s6", "discovery")
     drained = tcm.drain_promoted_findings("s6")
     assert "[unverified] [phase-summary:discovery] The file does not exist." in drained
+
+
+def test_a_multi_line_unverified_summary_is_marked_on_each_line(monkeypatch):
+    from core.config import BotConfig
+    from modules.memory.task.task_context_manager import TaskContextManager
+    from modules.memory.recall_rank import strip_unverified
+    tcm = TaskContextManager(name="d6-lines", config=BotConfig())
+    tcm.create_session("s7", task="t")
+    tcm.add_step_memory("s7", 1, {"phase": "p1", "memory": "x"}, "a",
+                        finding="[unverified] file never existed")
+    monkeypatch.setattr(TaskContextManager, "_llm_consolidate",
+                        lambda self, f, session_id="": "[unverified] One.\nTwo.")
+    tcm._trigger_reflection("s7", "discovery")
+    drained = tcm.drain_promoted_findings("s7")
+    assert drained == ["[unverified] [phase-summary:discovery] One.\n[unverified] Two."]
+    assert strip_unverified(drained[0]) == ""

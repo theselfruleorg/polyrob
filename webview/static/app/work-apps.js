@@ -25,14 +25,15 @@
  *    the owner ask); this tab carries only the registry's own lifecycle verbs
  *    (stop, start, remove) and links out to a live app, never a money verb.
  *
- * ⚠️ The artifact ledger reader (`/api/webgate/artifacts`) is SESSION-scoped and
- * the whole-Work view names no session, so the Published and Made tiers read
- * empty here today; they fill on a per-chat view. The sources note says so.
+ * The artifact ledger reader (`/api/webgate/artifacts`) with no session id lists
+ * the tenant's newest files across every chat (113 W0), so the Published and Made
+ * tiers show real rows here; a row has a `name` and no chat-relative `path`.
  * Tabs are wired by work-now.js (the one Work subnav), so this only fills the
  * Apps pane.
  */
-import { postJson, serverAnswer } from "./http.js";
+import { postJson, readJson, serverAnswer } from "./http.js";
 import { onLiveChange } from "./live.js";
+import { stateBlock } from "./state.js";
 
 /** The copy the server handed over, as a plain object. */
 export function copyFrom(node) {
@@ -248,7 +249,7 @@ export function publishedSection(published, artifactsData, copy) {
     const tr = el("tr");
     const what = el("td", "what");
     what.dataset.label = (copy && copy.col_what) || "";
-    what.appendChild(document.createTextNode((a && a.path) || "?"));
+    what.appendChild(document.createTextNode((a && (a.path || a.name)) || "?"));
     if (a && a.kind) what.appendChild(el("span", "why", String(a.kind)));
     tr.appendChild(what);
     const link = el("td");
@@ -299,7 +300,7 @@ export function madeSection(made, artifactsData, copy) {
     const tr = el("tr");
     const file = el("td", "what");
     file.dataset.label = (copy && copy.col_file) || "";
-    file.appendChild(el("span", "val", (a && a.path) || "?"));
+    file.appendChild(el("span", "val", (a && (a.path || a.name)) || "?"));
     tr.appendChild(file);
     const kind = el("td");
     kind.dataset.label = (copy && copy.col_kind) || "";
@@ -318,18 +319,10 @@ export function madeSection(made, artifactsData, copy) {
 /** Nothing built: the one true thing and the one action. Shown ONLY when every
  *  store answered and every store was empty. */
 export function emptyState(copy) {
-  const state = el("div", "state");
-  const glyph = el("div", "state-glyph", "◇");
-  glyph.setAttribute("aria-hidden", "true");
-  state.appendChild(glyph);
-  state.appendChild(el("h2", "state-title", (copy && copy.empty_title) || ""));
-  state.appendChild(el("p", "state-body", (copy && copy.empty_body) || ""));
-  const actions = el("div", "state-actions");
-  const a = el("a", "btn btn-primary", (copy && copy.empty_action) || "");
-  a.href = "/new";
-  actions.appendChild(a);
-  state.appendChild(actions);
-  return state;
+  return stateBlock({
+    glyph: "◇", title: copy && copy.empty_title, body: copy && copy.empty_body,
+    actions: [{ href: "/new", label: (copy && copy.empty_action) || "", primary: true }],
+  });
 }
 
 /**
@@ -378,17 +371,12 @@ export function renderApps(root, appsData, artifactsData, copy, opts = {}) {
 
 // --- reads ------------------------------------------------------------------ #
 
-async function getJson(url, fetcher) {
-  const call = fetcher || fetch;
-  const resp = await call(url, { credentials: "include" });
-  if (!resp.ok) return { error: String(resp.status) };
-  return await resp.json();
-}
+// 113 W5 (C-09): every read goes through http.js::readJson (over getJson).
 
-export const loadApps = (f) => getJson("/api/webgate/apps", f);
-export const loadArtifacts = (f) => getJson("/api/webgate/artifacts", f);
+export const loadApps = (f) => readJson("/api/webgate/apps", f);
+export const loadArtifacts = (f) => readJson("/api/webgate/artifacts", f);
 export const loadAppLogs = (slug, f) =>
-  getJson(`/api/webgate/apps/${encodeURIComponent(slug)}/logs`, f);
+  readJson(`/api/webgate/apps/${encodeURIComponent(slug)}/logs`, f);
 
 // --- mutations -------------------------------------------------------------- #
 // A22. One verb, one existing route, and the row says back exactly what the

@@ -76,10 +76,16 @@ async def test_require_admin_passes_for_owner_role_session():
 
 
 @pytest.mark.asyncio
-async def test_require_admin_passes_for_admin_role_session_no_regression():
+async def test_require_admin_passes_for_admin_role_session_no_regression(monkeypatch):
     """A request authenticated via a path that sets role='admin' must still
-    pass require_admin after the fix (no regression for the existing path)."""
-    request = _FakeRequest(role="admin", wallet_address=None)
+    pass require_admin after the fix (no regression for the existing path).
+    The role is a database grant, so require_admin re-reads it: the store says admin."""
+    from unittest.mock import AsyncMock
+    from core.container import DependencyContainer
+    store = types.SimpleNamespace(fetch_one=AsyncMock(return_value={"role": "admin"}))
+    container = types.SimpleNamespace(get_service={"database_manager": store}.get)
+    monkeypatch.setattr(DependencyContainer, "get_instance", lambda: container)
+    request = _FakeRequest(role="admin", wallet_address=None, user_id="u-admin")
     assert await require_admin(request) is True
 
 

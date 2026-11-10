@@ -113,11 +113,15 @@ invite` administers this. Detail: `references/surfaces.md`.
    injected into your identity context each session as `## Owner facts` (the
    heading may carry the doc's age). `owner_doc_manage` is its one writer;
    the terms of a programme the owner runs as jobs live in that lane's pinned
-   skill instead, which outranks owner.md for those terms. A write you make is
+   skill instead, which outranks owner.md for those terms. A job's on/off state,
+   schedule, id and progress live in the job row, never here: a write that adds a
+   job id or an on/off claim about a job is refused. A write you make is
    always a draft: it is queued in `/pending` on every turn, and the owner
    activates it through `/pending` or the owner CLI. The active text is
    capped at `OWNER_DOC_MAX_CHARS` (24000 characters); a rule a write drops
-   moves under `## Superseded`, dated, and is never silently deleted. An older
+   moves under `## Superseded`, dated, and is never silently deleted;
+   `## History` holds dated narrative. Neither section is injected or capped
+   with the rules. An older
    install may still show a `## Operating contract` section (a legacy
    `contract.md`); no new one is created. If neither heading is in your
    identity context, the owner has no rules doc yet — see
@@ -146,7 +150,7 @@ Where an owner instruction is recorded:
 <!-- BEGIN GENERATED owner-routing (scripts/gen_user_guide_refs.py) -->
 When the owner tells you how to operate, RECORD IT with the tool for its kind:
 - A typed setting (reply length, tone, language, digest, quotas, caps): `preferences` operation='set'; a SAFE key applies from your next step, unless 'list' says next session.
-- A standing rule in prose ("never post to X"): `owner_doc_manage`, a DRAFT until the owner confirms it. A directive that changes a rule replaces it the same turn (replace_rule), not a second rule. Not on/off states or job ids: "stop Z for good" is `cronjob_cancel`/`goal_cancel` forever=true.
+- A standing rule in prose ("never post to X"): `owner_doc_manage`, a DRAFT until the owner confirms it. A directive that changes a rule replaces it the same turn (replace_rule), not a second rule. A job's state (on/off, schedule, id, progress) lives in the job (`cronjob_*`), never here: "stop Z for good" is `cronjob_cancel`/`goal_cancel` forever=true.
 - A programme of several jobs: its terms live ONLY in its pinned skill; a job text names the skill and part. An owner change patches it (`skill_manage` also drafts the retire of the owner.md line; one approval) and the job texts. One goal names the job ids; close it with them.
 - What YOU learned about your work: `self_context_manage`.
 A draft not yet in force is not done: say so; repeat the tool's approval command.
@@ -215,10 +219,10 @@ Skills (like this one) are procedures you load on demand: a compact
 you pull a skill's full body with `load_skill(skill_id=...)` before doing the
 work it covers — this file's `references/` are read the same way, via
 `read_skill_resource`. The owner can teach you a new procedure conversationally
-with `/learn <description>` (REPL) — it lands as a pending skill for their
-review. You yourself can author/patch skills with `skill_manage` when it is
-loaded: every change is a draft the owner promotes. Detail on scopes, the install
-pipeline, and the writable-skill quarantine: `references/skills-and-learning.md`.
+with `/learn <description>` (REPL) — it is live at once. You yourself can
+author/patch skills with `skill_manage` when it is loaded: a change is live at once
+and `rollback` undoes it. Detail on scopes, the install pipeline, and the drafts of an
+untrusted turn: `references/skills-and-learning.md`.
 
 ## Anti-hallucination clause
 

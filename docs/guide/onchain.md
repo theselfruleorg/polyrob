@@ -257,8 +257,8 @@ new decision, and Refresh works on an expired quote.
 
 Result rendering is honest by construction: a refusal says **NOT SENT**; an
 `owner_queue` lane says it did not execute; a reverted receipt says the transfer did
-**not** happen but gas was spent (and the spend is still recorded — gas went and a nonce
-was consumed); a receipt that never arrived says **BROADCAST BUT NOT CONFIRMED** and
+**not** happen but gas was spent (the row stays in the record, and its amount leaves the
+daily limits — gas went and a nonce was consumed); a receipt that never arrived says **BROADCAST BUT NOT CONFIRMED** and
 warns against blind retry.
 
 The signing perimeter is deliberately narrow. Transaction signing **refuses a
@@ -656,10 +656,11 @@ default to a dry run. The owner runs the same guarded actions with `polyrob wall
 (`positions`, `pool`, `quote`, `add`, `remove`, `collect`, each with `--chain`) in the
 terminal and `/lp` in chat. A short allowance refuses with the exact approval to make.
 
-- **Uniswap v3** on Robinhood, Base and Ethereum: add (a new deposit, or more to an
+- **Uniswap v3** on Robinhood, Base, Ethereum, Arbitrum and Polygon: add (a new deposit, or more to an
   existing one), remove (a percentage, optionally burning the empty deposit NFT) and
   collect.
-- **Uniswap v4** on Robinhood only: `lp_add(protocol='v4')` opens a new **full-range**
+- **Uniswap v4** on Robinhood only (the v4 contracts on Base, Ethereum, Arbitrum and Polygon
+  are pinned for reads; pinned, hash-checked before each write; only a pool with no hook, or a pinned one, is accepted — the one pinned hook is Robinhood's): `lp_add(protocol='v4')` opens a new **full-range**
   deposit in a Pons graduated pool. The token leg moves through Permit2: first a standing
   allowance to Permit2, then `approve_token(via='permit2')`, ONE exact grant to the
   pinned v4 manager contract that expires in 15 minutes. A v4 deposit is held to
@@ -692,8 +693,11 @@ it. There are no grants, bindings or operator keys.
 `defi_trade.swap`, `launchpad_claim` and `defi_data.portfolio`. That argument makes the
 call from the NFT's account: the agent's key signs and the account holds, through the same
 `tx_guard` (`TxIntent.via_account`), recorded against the account. Account-admin calls
-(such as `lock`) refuse, and every pre-flight read — the pinned code, the lock state,
-that the signing wallet IS the NFT's owner — fails closed.
+(such as `lock`) refuse, and every pre-flight read — the pinned code, the lock state
+(Tokenbound AccountV3 only), that the signing wallet IS the NFT's owner — fails closed. A
+collection may ship its own account (the POLYROB collection's `PolyrobAccount`): `/nft trust`
+pins it by its code hash. Such an account has no lock, signs nothing and refuses standing
+approvals.
 
 - **Collections are pinned, none by default.** The owner pins one from chat with
   `/nft trust <collection> on <chain> [go]` (a read-only fact check first): the agent may then

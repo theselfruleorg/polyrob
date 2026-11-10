@@ -37,6 +37,7 @@ async def test_each_mention_carries_its_author(monkeypatch):
     assert "author_id" in kwargs["expansions"] and "username" in kwargs["user_fields"]
     rows = _rows(res)
     assert rows[0] == {"id": "1", "text": "@bot please DM me",
-                       "author_id": "42", "author_username": "promo_acct"}
+                       "author_id": "42", "author_username": "promo_acct",
+                       "conversation_id": None}
     # An author X did not expand stays unnamed — never guessed.
     assert rows[1]["author_id"] == "77" and rows[1]["author_username"] is None

@@ -6,6 +6,14 @@ from datetime import datetime
 from agents.task.path import pm
 
 
+def model_provider(model_name: Optional[str]) -> str:
+	"""The provider of *model_name* for a telemetry record, ``unknown`` with no name."""
+	if not model_name:
+		return 'unknown'
+	from modules.llm.usage_extract import detect_llm_provider
+	return detect_llm_provider(model_name)
+
+
 @dataclass
 class BaseTelemetryEvent(ABC):
 	@property
@@ -185,11 +193,7 @@ class LLMRequestTelemetryEvent(BaseTelemetryEvent):
 		"""
 		# FIXED: Initialize provider field if not set
 		if self.provider is None and self.model_name:
-			# Use centralized provider detection directly
-			from agents.task.utils import detect_llm_provider
-			provider = detect_llm_provider(None, self.model_name)
-			# Map 'generic' to 'unknown' for consistency with existing code
-			self.provider = 'unknown' if provider == 'generic' else provider
+			self.provider = model_provider(self.model_name)
 
 		# Initialize parameters if needed
 		if self.parameters is None:

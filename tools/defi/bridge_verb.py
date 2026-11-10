@@ -661,6 +661,11 @@ async def perform_bridge(tool, params, execution_context=None):
             return tool._ar(content=header + "  RESULT: NOT SENT.")
 
     amount_usd = svm_usd if svm_origin else quote.amount_in_usd
+    if (not svm_origin and amount_usd is not None and prepared is not None
+            and getattr(prepared, "amount_usd", None) is not None):
+        # The guard's spend-grade figure when it is higher than Relay's (the
+        # SVM origin books the same max). Over-counting is the safe direction.
+        amount_usd = max(float(prepared.amount_usd), float(amount_usd))
     if amount_usd is None and not params.dry_run:
         # The ledger is the only place every OTHER money verb sees this spend
         # against ITS cap. Booking an unknown as 0.00 would silently widen every
@@ -921,9 +926,24 @@ async def perform_bridge(tool, params, execution_context=None):
                 from core.wallet.broadcast.evm import (
                     broadcast_failure_text, outcome_unknown)
                 _unknown = outcome_unknown(exc)
+                # The signature is derived before the RPC call: stamp it, so the
+                # watcher and the owner can look the one transaction up.
+                _sig = getattr(exc, "signature", None) or None
                 bridge_guard.settle(bid, state=(bridge_guard.STATE_IN_FLIGHT if _unknown
                                                 else bridge_guard.STATE_FAILED),
-                                    detail=broadcast_failure_text(exc))
+                                    detail=broadcast_failure_text(exc), tx_ref=_sig)
+                if _unknown and _sig:
+                    # It may have left: book it on the caps now (over-counting is
+                    # the safe direction). Booked under its signature, so the
+                    # interlock resolves with this charge and no later
+                    # reconcile charges it again.
+                    try:
+                        gate.record(venue="defi", action="bridge",
+                                    amount_usd=float(amount_usd or 0.0),
+                                    counterparty=recipient, idempotency_key=idem,
+                                    result_ref=_sig, chain=params.from_chain)
+                    except Exception:
+                        logger.warning("bridge %s: ledger record failed", bid, exc_info=True)
                 return tool._ar(error=broadcast_failure_text(exc))
         # Stamp the origin tx now, not after phase 2: a crash during the wait
         # must not leave a `pending` row with no tx (the L-6 sweep would close
@@ -931,11 +951,17 @@ async def perform_bridge(tool, params, execution_context=None):
         bridge_guard.mark_sent(bid, signature)
         # Checked above (M10) and recorded here, so every OTHER money verb
         # counts this spend against its caps.
+        # An EVM origin is booked before its receipt is known: the receipt
+        # resolver settles it, so a reverted origin leaves the caps. Never for a
+        # Solana origin — the resolver reads EVM receipts only, and such an
+        # entry would stay pending for ever.
+        _receipt_kw = ({"receipt_state": "pending_receipt"} if prepared is not None else {})
         try:
             gate.record(venue="defi", action="bridge",
                         amount_usd=float(amount_usd or 0.0), counterparty=recipient,
                         idempotency_key=idem, result_ref=signature,
-                        chain=params.from_chain)
+                        chain=(params.from_chain or "").strip().lower() if prepared is not None
+                        else params.from_chain, **_receipt_kw)
         except Exception:
             logger.warning("bridge %s: ledger record failed", bid, exc_info=True)
 

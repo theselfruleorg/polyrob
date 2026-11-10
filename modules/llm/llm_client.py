@@ -1,23 +1,16 @@
 """Base LLM client implementation."""
 
-import asyncio
-import logging
-import os
-from typing import Optional, List, Dict, AsyncGenerator, Any, Union, TYPE_CHECKING, Tuple
-from abc import ABC, abstractmethod
+from typing import Optional, List, Dict, AsyncGenerator, Any, NoReturn, Union, Tuple
+from abc import abstractmethod
 
-if TYPE_CHECKING:
-    from modules.base_module import BaseModule
-    from core.config import BotConfig
-
+from core.credit_sentinel import looks_like_credit_death, looks_like_transient_budget
+from core.llm_limits import llm_request_timeout
 from core.exceptions import (
+    InsufficientCreditsError,
     LLMError,
-    LLMConnectionError,
     LLMResponseError,
-    LLMRateLimitError,
-    LLMAuthenticationError,
+    LLMConnectionError,
     LLMContextLengthError,
-    LLMInvalidRequestError,
     LLMPermanentError,
 )
 
@@ -25,99 +18,90 @@ from core.exceptions import (
 from modules.base_module import BaseModule
 from core.config import BotConfig
 
-# FIXED: Import model registry and token counter for intelligent configuration
+# Import model registry and token counter for intelligent configuration
 from modules.llm.model_registry import get_model_config
-from modules.llm.token_counter import count_tokens, count_messages_tokens
+from modules.llm.token_counter import count_tokens, count_messages_tokens, count_tools_tokens
 from modules.llm.profiles import get_profile
+from modules.llm.billing_guard import fresh_credential
+from core.stop_reason import normalize_stop
+from modules.llm.call_scope import anchored_input_tokens
+from modules.llm.error_rules import (
+    ACCOUNT_RE, DIGITS_RE, NOT_FOUND_RE, ProviderBodyError, class_for_status, class_for_text, filtered_error,
+)
 
 
-def translate_llm_error(error: Exception, context: str = "") -> Exception:
-    """Unified LLM error classifier — single source of truth.
+def _status_code(error: BaseException) -> Optional[int]:
+    """The HTTP status on the exception or on what it wraps: ``status_code`` (openai,
+    anthropic), ``response.status_code`` (httpx), an integer ``code`` (google, a body
+    error). openai's own ``code`` is a string and is not read."""
+    current: Optional[BaseException] = error
+    for _ in range(8):
+        if current is None:
+            return None
+        for value in (getattr(current, "status_code", None),
+                      getattr(getattr(current, "response", None), "status_code", None),
+                      getattr(current, "code", None)):
+            if isinstance(value, int) and not isinstance(value, bool) and 400 <= value <= 599:
+                return int(value)
+        current = current.__cause__ or current.__context__
+    return None
 
-    Maps common error patterns (drawn from the union of all provider-side
-    classifiers) to the appropriate LLMError subclass.  Callers should
-    *raise* the returned exception; this function only constructs it.
 
-    Priority order (earlier wins):
-      1. Permanent / billing  — must NOT be retried (402, insufficient_quota …)
-      2. Rate-limit           — retriable after back-off
-      3. Authentication       — usually permanent but handled separately
-      4. Context-length       — request must be shortened
-      5. Invalid-request      — bad payload
-      6. Connection / timeout — retriable network error
-      7. Generic LLMError     — fallback
+def translate_llm_error(error: BaseException, context: str = "",
+                        *, model: Optional[str] = None) -> BaseException:
+    """The one classifier of a provider error. Callers raise what this returns.
 
-    Token sets are the UNION of llm_client, adapters, openrouter, and gemini
-    classifiers as they existed before this consolidation.
+    An already typed error passes unchanged, and so does a credit-ledger refusal.
+    Otherwise the HTTP status decides, with the body read only where one status has two
+    meanings (a 400 can be an overflow, a 429 can be a dead account). With no status the
+    word-bounded text decides, context length first, because an overflow message holds
+    numbers (``modules/llm/error_rules.py``). ``model`` is named in a not-found error,
+    which is permanent: a retry cannot revive a retired model. A route with no upstream
+    now is not that error: another route may serve the model.
     """
-    error_str = str(error).lower()
+    if isinstance(error, (LLMError, InsufficientCreditsError)):
+        return error
 
-    # 0. OpenRouter's in-flight 402 is funded — back off like a rate limit.
-    from core.credit_sentinel import looks_like_transient_budget
-    if looks_like_transient_budget(error_str):
-        return LLMRateLimitError(f"{context}: {error}" if context else str(error))
-    # 1. Permanent / billing errors — halt, do NOT fall through to rate-limit.
-    #    'limit exhausted' / 'insufficient balance': plan-quota death dressed as a
-    #    429 (z.ai code 1310 "Weekly/Monthly Limit Exhausted", type=rate_limit_error)
-    #    that the old rate-limit classification retried for days (2026-08 storm).
-    if any(x in error_str for x in [
-        'insufficient_quota', 'billing', 'account_deactivated', 'suspended', '402',
-        'limit exhausted', 'insufficient balance',
-    ]):
-        return LLMPermanentError(f"{context}: {error}" if context else str(error))
+    text = str(error) or type(error).__name__
+    low = text.lower()
+    # Digits out: the credit marker also reads a bare 402, and a count is not a status.
+    facts = {
+        "no_credit": looks_like_credit_death(DIGITS_RE.sub(" ", low)) or bool(ACCOUNT_RE.search(low)),
+        "transient_budget": looks_like_transient_budget(low),
+    }
+    status = _status_code(error)
+    if status is not None:
+        cls = class_for_status(status, low, **facts)
+    elif isinstance(error, (TimeoutError, ConnectionError)):
+        cls = LLMConnectionError
+    else:
+        cls = class_for_text(low, **facts)
 
-    # 2. Rate-limit errors
-    #    Union: base had 'rate_limit'/'rate limit'/'too many requests'/'429';
-    #    adapters also had 'quota'; openrouter had 'rate limit'/'429' (bare 'rate'
-    #    dropped — it caused false positives on "moderate", "accurate", etc.);
-    #    gemini validation had 'Resource exhausted'.
-    if any(x in error_str for x in [
-        'rate_limit', 'rate limit', 'too many requests', '429', 'quota',
-        'resource exhausted',
-    ]):
-        return LLMRateLimitError(f"{context}: {error}" if context else str(error))
+    if cls is LLMPermanentError and (status == 404 or (status is None and NOT_FOUND_RE.search(low))):
+        text = f"model {model or '(unknown)'} not found (404), and a retry cannot help: {text}"
+    return cls(f"{context}: {text}" if context else text)
 
-    # 3. Authentication errors
-    #    Union: base had 'authentication'/'auth'/'api_key'/'api key'/'unauthorized'/'401';
-    #    adapters also had 'invalid key'; openrouter had 'key'/'auth'/'401'.
-    if any(x in error_str for x in [
-        'authentication', 'auth', 'unauthorized', '401', 'api_key', 'api key', 'invalid key',
-    ]):
-        return LLMAuthenticationError(f"{context}: {error}" if context else str(error))
 
-    # 4. Context-length errors
-    #    NOTE: bare 'tokens' was removed — it false-matched unrelated messages like
-    #    "insufficient tokens" / "50 tokens remaining" / "invalid tokens in request",
-    #    misrouting them to history-shrink recovery instead of billing/failover.
-    if any(x in error_str for x in [
-        'context_length', 'context length', 'too long', 'maximum context',
-        'token limit', 'maximum tokens', 'too many tokens',
-    ]):
-        return LLMContextLengthError(f"{context}: {error}" if context else str(error))
-
-    # 5. Invalid-request errors
-    if any(x in error_str for x in ['invalid', 'bad request', '400', 'malformed']):
-        return LLMInvalidRequestError(f"{context}: {error}" if context else str(error))
-
-    # 6. Connection / network errors
-    #    Union: base; gemini had 'resource exhausted' (Gemini-specific rate signal handled
-    #    separately in the validation path which returns rather than raises).
-    if any(x in error_str for x in [
-        'connection', 'network', 'timeout', 'unreachable',
-    ]):
-        return LLMConnectionError(f"{context}: {error}" if context else str(error))
-
-    # 7. Generic fallback
-    return LLMError(f"{context}: {error}" if context else str(error))
+def raise_llm_error(error: BaseException, context: str = "",
+                    *, model: Optional[str] = None) -> NoReturn:
+    """Raise the typed form of ``error``, chained to it. An already typed error is
+    raised as it is."""
+    translated = translate_llm_error(error, context, model=model)
+    if translated is error:
+        raise error
+    raise translated from error
 
 
 _DEFAULT_OUTPUT_TOKEN_CAP = 16384
 
+#: Below this much room, a call cannot produce a usable answer and is not sent.
+_MIN_USEFUL_OUTPUT_TOKENS = 256
 
-def _output_token_cap(client=None) -> int:
+
+def _output_token_cap() -> int:
     """Absolute per-request completion-token ceiling (env ``LLM_MAX_OUTPUT_TOKENS``),
     narrowed by this session's ``AUTONOMOUS_MAX_OUTPUT_TOKENS`` budget when one
-    was stamped (057 WS-B — latency is output-bound; see modules/llm/output_budget).
+    was stamped (latency is output-bound; see modules/llm/output_budget).
 
     Models advertise huge completion limits (e.g. GLM-5.2 = 262144). Requesting
     the full ceiling wastes cost and makes credit-metered providers (OpenRouter)
@@ -125,104 +109,89 @@ def _output_token_cap(client=None) -> int:
     can't cover it. Cap every request to a sane default; override per-deployment.
     """
     from modules.llm.output_budget import output_token_cap
-    return output_token_cap(client, _DEFAULT_OUTPUT_TOKEN_CAP)
+    return output_token_cap(_DEFAULT_OUTPUT_TOKEN_CAP)
 
 
 class LLMClient(BaseModule):
     """Base class for LLM clients."""
 
-    # UP-08: resolved prompt-cache strategy, stamped by create_chat_model. "none" until
-    # stamped so any client that bypasses the factory is back-compatible.
+    # Resolved prompt-cache strategy, stamped by create_chat_model. "none" until
+    # stamped so any client that bypasses the factory gets no caching.
     cache_strategy: str = "none"
+    model_type: Optional[str] = None
+    _PROVIDER_LABEL: Optional[str] = None
 
-    # ADDED (Nov 25, 2025): Centralized timeout/retry constants
-    # Use these across all clients and llm_factory for consistency
-    # FIX (Dec 31, 2025): These are now sourced from TimeoutConfig in agents/task/constants.py
-    # The values here serve as fallbacks for compatibility
-    DEFAULT_REQUEST_TIMEOUT = 120  # Canonical source: TimeoutConfig.LLM_REQUEST_TIMEOUT
     DEFAULT_MAX_RETRIES = 3
-
-    # FIXED: Update default parameters to use model registry
-    DEFAULT_MAX_TOKENS = {
-        'default': 8000,  # Conservative default increased from 512
-        'summary': 1000,  # Increased from 256 for better summaries
-        'chat': 2000,     # Increased from 512 for better conversations
-        'analysis': 4000  # Increased from 768 for detailed analysis
-    }
-
-    DEFAULT_TEMPERATURES = {
-        'default': 0.5,
-        'factual': 0.2,
-        'creative': 0.7,
-        'analysis': 0.3
-    }
 
     def __init__(self, config: BotConfig, name: str = "llm_client", container=None):
         """Initialize LLM client."""
         super().__init__(name=name, config=config, container=container)
         self.model_type = None  # Will be set by implementations
+        self.last_response = None
         self._retries = 0
         self._max_retries = config.get('max_retries', 3)
         self._retry_delay = config.get('retry_delay', 1)
         self.api_key = None
         
-        # FIXED: Initialize with intelligent defaults that will be updated by model registry
+        # Initialize with intelligent defaults that will be updated by model registry
         self.temperature = 0.7
         self.max_tokens = 8000  # Conservative default, will be updated by registry
         
         # Validate config if needed
         self._validate_config()
 
-    def _get_model_config(self):
-        """Get model configuration from registry if available."""
-        if self.model_type:
-            return get_model_config(self.model_type)
-        return None
+    def _sdk_limits(self) -> Dict[str, Any]:
+        """``timeout`` and ``max_retries`` for every SDK client constructor. Without them
+        the SDK waits 600 s per attempt. ``LLM_REQUEST_TIMEOUT_SECONDS`` moves the timeout."""
+        return {
+            "timeout": float(llm_request_timeout()),
+            "max_retries": self.DEFAULT_MAX_RETRIES,
+        }
+
+    @property
+    def provider_label(self) -> str:
+        """The provider's name in every log line and error: the spec's display name on a
+        spec-driven client, else the client's own label, else its class name."""
+        spec = getattr(self, "_spec", None)
+        return spec.display_name if spec else (
+            self._PROVIDER_LABEL or type(self).__name__.replace("Client", ""))
+
+    def _first_choice(self, response: Any) -> Any:
+        """The usable choice of a 200 response. An error in the body and a filtered turn
+        raise a typed error here, so neither reaches the agent as an empty action."""
+        label = self.provider_label
+        body_error = getattr(response, "error", None)
+        if body_error and isinstance(body_error, (dict, str)):
+            raise translate_llm_error(ProviderBodyError(body_error), label, model=self.model_type)
+        choices = getattr(response, "choices", None)
+        if not choices:
+            raise LLMResponseError(f"{label}: no choices in the response for model {self.model_type}")
+        choice = choices[0]
+        choice_error = getattr(choice, "error", None)
+        if choice_error and isinstance(choice_error, (dict, str)):
+            raise translate_llm_error(ProviderBodyError(choice_error), label, model=self.model_type)
+        stop = normalize_stop(getattr(choice, "finish_reason", None))
+        if stop == "error":
+            raise LLMResponseError(f"{label}: finish_reason=error for model {self.model_type}")
+        if stop == "filtered":
+            raise filtered_error(label, self.model_type, getattr(choice, "finish_reason", None))
+        return choice
 
     def _configure_from_model_registry(self) -> None:
         """Configure client parameters from model registry."""
-        try:
-            model_config = self._get_model_config()
-            if model_config:
-                # Set max_tokens based on model's actual capabilities
-                if model_config.max_completion_tokens and model_config.max_completion_tokens > 0:
-                    self.max_tokens = model_config.max_completion_tokens
-                    self.logger.info(f"Set max_tokens to {self.max_tokens} from model registry for {self.model_type}")
-                
-                # Log model capabilities for debugging
-                self.logger.debug(f"Model {self.model_type} configured: context={model_config.context_window}, completion={model_config.max_completion_tokens}")
-            else:
-                self.logger.debug(f"Model {self.model_type} not found in registry, using defaults")
-        except Exception as e:
-            self.logger.warning(f"Failed to configure from model registry: {e}")
+        model_config = get_model_config(self.model_type)
+        self.max_tokens = model_config.max_completion_tokens
+        self.logger.debug(f"Model {self.model_type} configured: context={model_config.context_window}, "
+                          f"completion={model_config.max_completion_tokens}")
 
     # ------------------------------------------------------------------
     # Task 2.4: shared helpers de-duplicated from per-provider clients
     # ------------------------------------------------------------------
 
     def _resolve_supports_vision(self, model_type: Optional[str] = None) -> bool:
-        """Resolve whether a model supports vision.
-
-        Consults the model registry; falls back to ``True`` when the model is
-        not registered (matching the behaviour of openai/anthropic/gemini/
-        openrouter clients: "assume vision if not in registry").  Clients whose
-        un-registered fallback should be ``False`` (nvidia) must override this
-        method or skip it and set ``self.supports_vision`` directly.
-
-        Args:
-            model_type: Model name to look up.  Defaults to ``self.model_type``.
-
-        Returns:
-            True when vision is supported (or unknown); False otherwise.
-        """
+        """The registry's answer for *model_type* (default ``self.model_type``)."""
         name = model_type if model_type is not None else self.model_type
-        try:
-            mc = get_model_config(name)
-            if mc is not None:
-                return mc.capabilities.supports_vision
-        except Exception:
-            pass
-        return True  # Assume vision support if not in registry
+        return get_model_config(name).capabilities.supports_vision
 
     def _resolve_profile_base_url(self, provider: str) -> Optional[str]:
         """Return the base_url from the provider's ``ProviderProfile``, or ``None``.
@@ -273,6 +242,7 @@ class LLMClient(BaseModule):
             self._configure_from_model_registry()
 
             if not self._skip_validate:
+                await fresh_credential(self)
                 await self._validate_connection()
             self._initialized = True
             self.logger.info(f"✨ {self.name} initialized with model {self.model_type} (max_tokens: {self.max_tokens})")
@@ -344,24 +314,17 @@ class LLMClient(BaseModule):
         Returns:
             Context window size in tokens
         """
-        model_config = self._get_model_config()
-        if model_config:
-            return model_config.context_window
-        else:
-            return 16000  # Conservative default
+        return get_model_config(self.model_type).context_window
 
     def get_max_completion_tokens(self) -> int:
         """Get the maximum completion tokens for this model from registry.
         
-        REFACTORED (Nov 25, 2025): Single source of truth from model_registry.
+        Single source of truth: model_registry.
         
         Returns:
             Maximum completion tokens for this model
         """
-        model_config = self._get_model_config()
-        if model_config and model_config.max_completion_tokens:
-            return model_config.max_completion_tokens
-        return 8192  # Conservative default
+        return get_model_config(self.model_type).max_completion_tokens
 
     def _adjust_max_tokens(
         self,
@@ -369,6 +332,7 @@ class LLMClient(BaseModule):
         max_tokens: Optional[int] = None,
         *,
         estimated_input_tokens: Optional[int] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
     ) -> int:
         """Clamp max_tokens to stay within model limits.
 
@@ -385,24 +349,37 @@ class LLMClient(BaseModule):
                 only).  Pass this when the call site has already added system-
                 message tokens to the count (Anthropic / Gemini pattern) so
                 the estimate is not double-counted.
+            tools: The request's tool schemas, which the provider bills as input.
 
         Returns:
             Adjusted max_tokens value that fits within both the model's
             per-call completion-token limit and the available context window.
+
+        Raises:
+            LLMContextLengthError: The input leaves no room for a usable answer, so
+                the call is not paid for.
         """
         max_tokens_value = max_tokens if max_tokens is not None else self.max_tokens
 
         # Absolute per-request output cap (cost + credit pre-auth guard). Binds
         # before the model/context clamps so a huge model ceiling never leaks out.
-        cap = _output_token_cap(self)
+        cap = _output_token_cap()
         if max_tokens_value > cap:
             max_tokens_value = cap
 
-        # Determine input token count
-        if estimated_input_tokens is not None:
-            input_tokens = estimated_input_tokens
+        # Determine input token count. The step's provider-anchored count already
+        # holds the tool schemas and everything the provider billed last time.
+        anchored = anchored_input_tokens()
+        if anchored is not None:
+            input_tokens = anchored
         else:
-            input_tokens = count_messages_tokens(messages, self.model_type)
+            if estimated_input_tokens is not None:
+                input_tokens = estimated_input_tokens
+            else:
+                # No tokenizer: this sync clamp runs on the event loop, and the step's
+                # anchor already covers a real step.
+                input_tokens = count_messages_tokens(messages, self.model_type, encode=False)
+            input_tokens += count_tools_tokens(tools)
 
         context_window = self.get_context_window()
         max_completion = self.get_max_completion_tokens()
@@ -416,7 +393,12 @@ class LLMClient(BaseModule):
             max_tokens_value = max_completion
 
         # Then, ensure the total (input + output) stays within the context window
-        adjusted = max(1, min(max_tokens_value, context_window - input_tokens - 100))
+        room = context_window - input_tokens - 100
+        if room < min(max_tokens_value, _MIN_USEFUL_OUTPUT_TOKENS):
+            raise LLMContextLengthError(
+                f"context length: about {input_tokens} input tokens leave {max(room, 0)} of "
+                f"{context_window} for model {self.model_type}")
+        adjusted = min(max_tokens_value, room)
 
         if adjusted < max_tokens_value:
             self.logger.info(
@@ -465,7 +447,7 @@ class LLMClient(BaseModule):
     ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
         """Resolve the polymorphic (prompt, messages) input into one message list.
 
-        Shared normalization previously copy-pasted in every provider client's
+        Shared normalization for every provider client's
         ``generate_response``. Precedence: explicit ``messages`` > list prompt
         (all dicts) > dict prompt with ``'messages'`` > string prompt > default
         ``"Hello"`` user message.
@@ -517,7 +499,6 @@ class LLMClient(BaseModule):
     def update_settings(self, settings: Dict[str, Any]) -> bool:
         """Update client settings.
         
-        REFACTORED (Nov 25, 2025): Consolidated from subclass implementations.
         Handles temperature, max_tokens, model_type, and arbitrary attributes.
         
         Args:
@@ -566,10 +547,8 @@ class LLMClient(BaseModule):
                         # Reconfigure from model registry with new model
                         self._configure_from_model_registry()
                         
-                        # Update supports_vision if model capabilities change
-                        model_config = self._get_model_config()
-                        if model_config and hasattr(self, 'supports_vision'):
-                            self.supports_vision = model_config.capabilities.supports_vision
+                        if hasattr(self, 'supports_vision'):
+                            self.supports_vision = self._resolve_supports_vision()
                             
                 elif hasattr(self, key):
                     # Generic attribute update
@@ -596,51 +575,21 @@ class LLMClient(BaseModule):
         Returns:
             Dictionary of current settings
         """
-        model_config = self._get_model_config()
-        
-        result = {
+        model_config = get_model_config(self.model_type)
+        return {
             'temperature': self.temperature,
             'max_tokens': self.max_tokens,
             'name': self.name,
-            'model': getattr(self, 'model_type', 'unknown')
+            'model': getattr(self, 'model_type', 'unknown'),
+            'context_window': model_config.context_window,
+            'max_completion_tokens': model_config.max_completion_tokens,
+            'provider': model_config.provider.value,
+            'chars_per_token': model_config.chars_per_token,
+            'pricing': {
+                'input_price': model_config.pricing.input_price,
+                'output_price': model_config.pricing.output_price
+            },
         }
-        
-        # Add model registry information if available
-        if model_config:
-            result.update({
-                'context_window': model_config.context_window,
-                'max_completion_tokens': model_config.max_completion_tokens,
-                'provider': model_config.provider.value,
-                'chars_per_token': model_config.chars_per_token,
-                'pricing': {
-                    'input_price': model_config.pricing.input_price,
-                    'output_price': model_config.pricing.output_price
-                }
-            })
-        
-        return result
-
-    # ==========================================================================
-    # ERROR HANDLING METHODS (Nov 25, 2025) - Standardized error translation
-    # These methods provide consistent error handling across all providers.
-    # ==========================================================================
-    
-    def _translate_error(self, error: Exception, context: str = "") -> Exception:
-        """Translate provider-specific errors to standard LLM exceptions.
-
-        Delegates to the module-level ``translate_llm_error`` function which is
-        the single source of truth for error classification across all providers.
-        Override in subclasses only for provider-specific quirks not covered by
-        the base classifier.
-
-        Args:
-            error: The original exception
-            context: Additional context about where the error occurred
-
-        Returns:
-            Appropriate LLMError subclass
-        """
-        return translate_llm_error(error, context)
 
     # ==========================================================================
     # CLIENT VALIDATION METHODS (Jan 4, 2026) - Consolidated from individual clients
@@ -662,7 +611,8 @@ class LLMClient(BaseModule):
             LLMRateLimitError: If rate limit exceeded
             LLMError: For other validation failures
         """
-        provider = self.__class__.__name__.replace('Client', '')
+        await fresh_credential(self)
+        provider = self.provider_label
 
         try:
             response = await self._make_validation_request()
@@ -672,7 +622,7 @@ class LLMClient(BaseModule):
         except LLMError:
             raise  # Already translated
         except Exception as e:
-            translated = self._translate_error(e, f"{provider} validation")
+            translated = translate_llm_error(e, f"{provider} validation", model=self.model_type)
             self.logger.error(f"{provider} validation failed: {e}")
             raise translated
 
@@ -704,7 +654,7 @@ class LLMClient(BaseModule):
         pass
 
     # ==========================================================================
-    # TOOL VALIDATION METHODS (Nov 25, 2025) - Consolidated from individual clients
+    # TOOL VALIDATION METHODS
     # These methods provide consistent tool schema validation across all providers.
     # ==========================================================================
     
@@ -762,195 +712,3 @@ class LLMClient(BaseModule):
             self.logger.error(f"Tool validation error: {e}")
             return False
 
-    # ==========================================================================
-    # TELEMETRY METHODS (Nov 25, 2025) - Consolidated from individual clients
-    # These methods provide consistent telemetry handling across all providers.
-    # ==========================================================================
-
-    def _extract_usage_data(self) -> Dict[str, Optional[int]]:
-        """Extract usage data from last_response.
-        
-        Override in subclasses to handle provider-specific response formats.
-        
-        Returns:
-            Dict with prompt_tokens, completion_tokens, total_tokens.
-            Returns None values if usage data not available.
-        """
-        last_response = getattr(self, 'last_response', None)
-        
-        if not last_response:
-            self.logger.debug("No last_response available for usage extraction")
-            return {'prompt_tokens': None, 'completion_tokens': None, 'total_tokens': None}
-        
-        # Default extraction for OpenAI-compatible responses
-        if isinstance(last_response, dict) and 'usage' in last_response:
-            usage = last_response['usage']
-            prompt_tokens = usage.get('prompt_tokens')
-            completion_tokens = usage.get('completion_tokens')
-            total_tokens = usage.get('total_tokens')
-            
-            # Calculate total if not provided
-            if total_tokens is None and prompt_tokens is not None and completion_tokens is not None:
-                total_tokens = prompt_tokens + completion_tokens
-            
-            return {
-                'prompt_tokens': prompt_tokens,
-                'completion_tokens': completion_tokens,
-                'total_tokens': total_tokens
-            }
-        
-        return {'prompt_tokens': None, 'completion_tokens': None, 'total_tokens': None}
-
-    def _generate_request_id(self, metadata: Optional[Dict[str, Any]] = None) -> str:
-        """Generate unique request ID with consistent format.
-        
-        Args:
-            metadata: Optional metadata containing session/agent info
-            
-        Returns:
-            Unique request ID string
-        """
-        import uuid
-        import time
-        
-        # Include timestamp for uniqueness and debugging
-        timestamp_ms = int(time.time() * 1000)
-        
-        # Include session/agent info if available
-        session_part = ""
-        if metadata:
-            session_id = metadata.get('session_id')
-            agent_id = metadata.get('agent_id')
-            if session_id:
-                session_part = f"_{str(session_id)[:8]}"
-            elif agent_id:
-                session_part = f"_{str(agent_id)[:8]}"
-        
-        return f"llm_{timestamp_ms}{session_part}_{uuid.uuid4().hex[:8]}"
-
-    def _extract_usage_and_capture_telemetry(
-        self, 
-        start_time: float, 
-        success: bool, 
-        error: Optional[str] = None, 
-        metadata: Optional[Dict[str, Any]] = None
-    ) -> None:
-        """Extract token usage and capture telemetry with comprehensive fallback logic.
-        
-        Consolidated implementation (Dec 13, 2025) that handles all fallback scenarios:
-        1. Calculate total from components if missing
-        2. Estimate from response content if no usage data
-        3. Use minimum viable tokens as last resort
-        
-        Subclasses only need to override _extract_usage_data() for provider-specific
-        response parsing - the fallback logic is centralized here.
-        
-        Args:
-            start_time: Request start time (from time.time())
-            success: Whether the request succeeded
-            error: Error message if request failed
-            metadata: Optional request metadata
-        """
-        import time
-        
-        try:
-            duration_seconds = time.time() - start_time
-            
-            # Extract usage data (provider-specific, may return None values)
-            usage_data = self._extract_usage_data()
-            prompt_tokens = usage_data.get('prompt_tokens')
-            completion_tokens = usage_data.get('completion_tokens')
-            total_tokens = usage_data.get('total_tokens')
-            cached_tokens = usage_data.get('cached_tokens', 0)
-            
-            # Fallback 1: Calculate total from components
-            if total_tokens is None and prompt_tokens is not None and completion_tokens is not None:
-                total_tokens = prompt_tokens + completion_tokens
-                self.logger.debug(f"Calculated total_tokens from components: {total_tokens}")
-            
-            # Fallback 2: Estimate from response content
-            if total_tokens is None:
-                estimated_tokens = self._estimate_tokens_from_response()
-                if estimated_tokens > 0:
-                    total_tokens = estimated_tokens
-                    completion_tokens = int(estimated_tokens * 0.3)  # Rough split
-                    prompt_tokens = total_tokens - completion_tokens
-                    self.logger.info(f"Estimated tokens: prompt={prompt_tokens}, completion={completion_tokens}, total={total_tokens}")
-            
-            # Fallback 3: Minimum viable tokens (better than None)
-            if total_tokens is None:
-                total_tokens = 100  # Conservative minimum
-                prompt_tokens = 70
-                completion_tokens = 30
-                self.logger.warning(f"Using minimum token estimate: {total_tokens}")
-            
-            # Extract session/agent info for logging
-            session_id = None
-            agent_id = None
-            if metadata:
-                session_id = metadata.get('session_id')
-                agent_id = metadata.get('agent_id')
-            
-            # Generate request ID
-            request_id = self._generate_request_id(metadata)
-            
-            # Log telemetry with cached token info if present
-            provider = self.__class__.__name__.replace('Client', '')
-            if cached_tokens and cached_tokens > 0:
-                self.logger.debug(
-                    f"{provider} request completed: model={self.model_type}, tokens={total_tokens} "
-                    f"(cached={cached_tokens}), duration={duration_seconds:.2f}s, success={success}"
-                )
-            else:
-                self.logger.debug(
-                    f"{provider} request completed: model={self.model_type}, tokens={total_tokens}, "
-                    f"duration={duration_seconds:.2f}s, success={success}"
-                )
-            
-        except Exception as e:
-            self.logger.debug(f"Error in _extract_usage_and_capture_telemetry: {e}")
-    
-    def _estimate_tokens_from_response(self) -> int:
-        """Estimate tokens from response content when usage data unavailable.
-        
-        Base implementation - subclasses can override for provider-specific
-        response structures.
-        
-        Returns:
-            Estimated token count or 0 if estimation fails
-        """
-        try:
-            from modules.llm.token_counter import count_tokens
-            
-            last_response = getattr(self, 'last_response', None)
-            if not last_response:
-                return 0
-            
-            # Try common response structures
-            content = None
-            
-            # OpenAI-style: response.choices[0].message.content
-            if hasattr(last_response, 'choices') and last_response.choices:
-                choice = last_response.choices[0]
-                if hasattr(choice, 'message') and choice.message:
-                    content = getattr(choice.message, 'content', None)
-            
-            # Anthropic-style: response.content (list of blocks)
-            elif hasattr(last_response, 'content') and isinstance(last_response.content, list):
-                parts = []
-                for block in last_response.content:
-                    if hasattr(block, 'text') and block.text:
-                        parts.append(block.text)
-                content = ' '.join(parts)
-            
-            # Gemini-style: response.text
-            elif hasattr(last_response, 'text') and last_response.text:
-                content = last_response.text
-            
-            if content and content.strip():
-                return count_tokens(content, self.model_type or 'gpt-3.5-turbo')
-                
-        except Exception as e:
-            self.logger.debug(f"Token estimation failed: {e}")
-        
-        return 0

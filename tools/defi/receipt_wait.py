@@ -91,3 +91,33 @@ async def await_receipt_or_record(rail, tx_hash: str, *, gate, record_kw: Dict[s
     with record_on_interrupt(tx_hash, gate=gate, record_kw=record_kw, tool=tool,
                              execution_context=execution_context, notice_kw=notice_kw):
         return await asyncio.to_thread(rail.await_receipt, tx_hash)
+
+
+def book_after_receipt(gate, receipt, **record_kw) -> None:
+    """THE record of a broadcast EVM money verb once its receipt wait ended.
+
+    * success → a plain entry (counts against the rolling caps);
+    * pending (the wait timed out), or no receipt read at all (*receipt* None) →
+      ``pending_receipt``: the receipt resolver (``core/wallet/receipt_resolver.py``)
+      finishes it later — a later revert leaves the caps, no answer in 24 h tells the owner;
+    * failed (status 0) → booked, then resolved ``reverted`` at once, so a revert seen in
+      the wait leaves the caps exactly like one seen later.
+    """
+    status = getattr(receipt, "status", None)
+    kw = dict(record_kw)
+    if status != "success":
+        kw["receipt_state"] = "pending_receipt"
+    gate.record(**kw)
+    if status != "failed":
+        return
+    note = getattr(gate, "note_receipt", None)
+    if note is None:
+        return
+    try:
+        note({"result_ref": kw.get("result_ref"), "venue": kw.get("venue"),
+              "chain": kw.get("chain")}, "reverted",
+             block=getattr(receipt, "block_number", None))
+    except Exception:
+        logger.warning("money verb: revert of %s not noted; it stays pending for the resolver",
+                       kw.get("result_ref"), exc_info=True)
+

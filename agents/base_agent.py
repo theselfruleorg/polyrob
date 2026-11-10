@@ -11,6 +11,7 @@ from core.container import DependencyContainer
 from core.exceptions import AgentError
 from core.version import get_version
 from modules.memory.models import ConversationContext, Message
+from modules.llm.billing_guard import fresh_credential
 from modules.llm.llm_client import LLMClient
 
 if TYPE_CHECKING:
@@ -42,7 +43,7 @@ class BaseAgent(BaseComponent):
         
         # LLM config with character settings if available
         self.llm_config = {
-            'model_type': 'claude-sonnet-4-5',
+            'model_type': 'claude-sonnet-5-5',
             'temperature': 0.7,
             'max_tokens': 4096,
             'top_p': 0.9,
@@ -571,6 +572,7 @@ class BaseAgent(BaseComponent):
             
             # Make the request to the LLM client based on its specific API
             response = None
+            await fresh_credential(self.llm_client)
             
             if 'anthropic' in llm_client_type:
                 # For Anthropic, we need to:
@@ -687,9 +689,6 @@ class BaseAgent(BaseComponent):
             try:
                 if hasattr(response, 'usage'):
                     usage = response.usage
-                    token_info = f"Tokens: {usage.prompt_tokens} prompt + {usage.completion_tokens} completion = {usage.total_tokens} total"
-                elif hasattr(self.llm_client, 'last_response') and hasattr(self.llm_client.last_response, 'usage'):
-                    usage = self.llm_client.last_response.usage
                     token_info = f"Tokens: {usage.prompt_tokens} prompt + {usage.completion_tokens} completion = {usage.total_tokens} total"
             except Exception as e:
                 self.logger.debug(f"Could not extract token usage: {e}")

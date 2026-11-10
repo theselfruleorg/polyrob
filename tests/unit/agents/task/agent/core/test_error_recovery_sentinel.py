@@ -153,28 +153,6 @@ async def test_real_prod_402_as_plain_llmerror_trips_sentinel(spy_trip):
 
 
 @pytest.mark.asyncio
-async def test_provider_exhausted_with_credit_death_trips_sentinel(spy_trip):
-    """The branch a real fallback-exhausted 402 actually lands in.
-
-    `llm_runner.get_next_action` catches generic LLMError and re-raises
-    LLMProviderExhaustedError when fallback fails, so this — not the is_permanent
-    branch — is where a credit-dead prod session ends up. That branch halts and
-    returns early, so a trip nested in any later branch is dead code for it.
-    """
-    agent = _make_agent()
-    err = LLMProviderExhaustedError(
-        f"Primary LLM failed: {_REAL_402_TEXT}. Fallback also failed: {_REAL_402_TEXT}",
-        providers_tried=["openrouter", "openai"],
-    )
-    result = await agent._handle_step_error(err)
-
-    assert spy_trip, "provider-exhausted credit death must trip the credit sentinel"
-    # The trip is a side-effect only — it must not alter which branch handles the error.
-    assert agent.state.stopped is True
-    assert result and "All LLM providers failed" in result[0].error
-
-
-@pytest.mark.asyncio
 async def test_permanent_error_credit_death_still_trips_sentinel(spy_trip):
     """LLMPermanentError keeps tripping — the fix widens reach, never narrows it."""
     agent = _make_agent()
@@ -376,28 +354,6 @@ async def test_background_check_sites_unchanged_interactive_does_not_check(monke
 
 
 @pytest.mark.asyncio
-async def test_rewrapped_402_routes_to_billing_failover(monkeypatch):
-    """A 402 re-wrapped as LLMProviderExhaustedError (no billing text on top) should be
-    seen as billing by _handle_step_error and attempt failover, not fall through."""
-    from core.exceptions import LLMError, LLMProviderExhaustedError
-    agent = _make_agent()  # existing fixture (test_error_recovery_sentinel.py:67)
-    monkeypatch.setenv("BILLING_FAILOVER_ENABLED", "true")
-    attempts = []
-    async def fake_fallback(kind):
-        attempts.append(kind)
-        return True  # pretend a fallback provider exists
-    agent._attempt_llm_fallback_in_handler = fake_fallback
-    agent._get_provider_from_model = lambda m: "openrouter"  # pin (fixture may not)
-
-    inner = LLMError("error code: 402 - requires more credits")
-    outer = LLMProviderExhaustedError("No fallback available after LLMPermanentError")
-    outer.__context__ = inner
-    result = await agent._handle_step_error(outer)
-    assert attempts == ["billing"]      # routed to billing failover via the chain walk
-    assert result == []                  # failover succeeded → retry
-
-
-@pytest.mark.asyncio
 async def test_quota_death_with_stated_reset_passes_release_ts(monkeypatch):
     """2026-08-16: a plan-quota death that states its reset time ("…limit will
     reset at 2026-08-18 18:01:49") must latch until that reset, not re-trip
@@ -418,3 +374,34 @@ async def test_quota_death_with_stated_reset_passes_release_ts(monkeypatch):
     assert calls, "quota-exhaustion credit death must trip the sentinel"
     assert calls[0]["release_ts"] is not None, (
         "the provider-stated reset must reach the latch as release_ts")
+
+
+@pytest.mark.asyncio
+async def test_provider_exhausted_with_credit_death_trips_sentinel(spy_trip):
+    """A fallback that found no funded provider raises this type with the 402 in its text."""
+    agent = _make_agent()
+    err = LLMProviderExhaustedError(
+        f"Primary LLM failed: {_REAL_402_TEXT}. Fallback also failed: {_REAL_402_TEXT}",
+        providers_tried=["openrouter", "openai"],
+    )
+    await agent._handle_step_error(err)
+    assert spy_trip, "provider-exhausted credit death must trip the credit sentinel"
+
+
+@pytest.mark.asyncio
+async def test_a_402_deeper_in_the_chain_routes_to_billing_failover(monkeypatch):
+    agent = _make_agent()
+    monkeypatch.setenv("BILLING_FAILOVER_ENABLED", "true")
+    attempts = []
+
+    async def fake_fallback(kind):
+        attempts.append(kind)
+        return True
+
+    agent._attempt_llm_fallback_in_handler = fake_fallback
+    agent._get_provider_from_model = lambda m: "openrouter"
+    outer = LLMProviderExhaustedError("No fallback available after LLMPermanentError")
+    outer.__context__ = LLMError("error code: 402 - requires more credits")
+    result = await agent._handle_step_error(outer)
+    assert attempts == ["billing"]
+    assert result == []

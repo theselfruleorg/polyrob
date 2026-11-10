@@ -134,7 +134,6 @@ class _Agent:
 
 def test_blocked_escalation_creates_ask(board, monkeypatch):
     from agents.task.goals.dispatcher import GoalDispatcher
-    monkeypatch.setenv("GOAL_BLOCKER_ESCALATION", "true")
     monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "100000001")
     g = board.create(user_id="alice", title="Post the OSS launch announcement thread")
     _block(board, g)
@@ -145,20 +144,15 @@ def test_blocked_escalation_creates_ask(board, monkeypatch):
     assert g.id in (asks[0].payload or {}).get("blocks_goal_ids", [])
 
 
-def test_blocked_escalation_ask_is_durable_even_when_push_flag_off(board, monkeypatch):
-    # T2-03/T4-04: the ask row was gated on the SAME flag as the owner push, so with
-    # the default OFF a blocked goal left NO ask and `owner fulfill` had nothing to
-    # consume (the need evaporated). The durable ask must now be created regardless of
-    # the push flag — only the PUSH is suppressed under the silent posture.
+def test_blocked_escalation_leaves_the_ask_and_no_push_of_its_own(board, monkeypatch):
+    # 107 WS-1: the run leaves the ask; only the stop sweep sends the owner line.
     from agents.task.goals.dispatcher import GoalDispatcher
-    monkeypatch.setenv("GOAL_BLOCKER_ESCALATION", "false")
-    monkeypatch.delenv("AUTONOMY_POSTURE", raising=False)
     sink = _Sink()
     g = board.create(user_id="alice", title="Post the OSS launch announcement thread")
     _block(board, g)
     d = GoalDispatcher(board, _Agent(sink))
     asyncio.run(d._maybe_escalate_blocked(board.get(g.id)))
     asks = board.asks(user_id="alice", status=ASK_OPEN)
-    assert len(asks) == 1, "the ask must survive even when the owner push is off"
+    assert len(asks) == 1
     assert g.id in (asks[0].payload or {}).get("blocks_goal_ids", [])
-    assert sink.sent == [], "the push itself must stay suppressed under the flag/silent posture"
+    assert sink.sent == []

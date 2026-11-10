@@ -1,4 +1,4 @@
-"""LLM credential layer (proposal 024, L1) — store, resolution oracle, health.
+"""LLM credential layer — store, resolution oracle, health.
 
 Owner-only surface: no agent action touches this package (permanent non-goal,
 pinned by tests/unit/core/llm_auth/test_agent_unreachable.py), and the store
@@ -19,11 +19,18 @@ from core.llm_auth.resolve import (
     credential_borrow_enabled,
     resolve_credential,
 )
-from core.llm_auth.store import AuthStore, AuthStoreError, auth_store_path, get_auth_store
+from core.llm_auth.store import (
+    AuthStore,
+    AuthStoreError,
+    AuthStoreUnreadable,
+    auth_store_path,
+    get_auth_store,
+)
 
 __all__ = [
     "AuthStore",
     "AuthStoreError",
+    "AuthStoreUnreadable",
     "Credential",
     "HEALTH_EXHAUSTED",
     "HEALTH_OK",

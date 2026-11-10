@@ -1,6 +1,7 @@
 """081 WS-5.3 (owner Q3): the bundled library is seeded into the data home; an
 update replaces only unmodified copies and names the kept ones; a fix of a bundled
-skill is a pending draft the owner accepts, with no deploy."""
+skill by the owner's agent is accepted into the copy in the same call; an untrusted
+turn's fix is a pending draft the owner accepts. No deploy."""
 import hashlib
 
 import pytest
@@ -93,15 +94,15 @@ def test_a_tenant_skill_under_a_bundled_id_is_untouched_and_named(home):
     assert scopes.resolve("alpha", "alice").scope == "builtin"  # as before seeding
 
 
-def test_agent_fix_is_pending_and_the_owner_accept_writes_the_copy(home, monkeypatch):
+def test_agent_fix_is_accepted_at_once_and_an_untrusted_fix_stays_a_draft(home, monkeypatch):
     from agents.task.agent.skill_manager import SkillManager
     _src, root = home
     seed.seed_bundled_skills()
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
     sm = SkillManager()
     assert sm.skills_dir == root
+    # An untrusted turn: a draft; the served copy is unchanged until the owner accepts.
     res = sm.patch_skill("alpha", user_id="alice", old_string="well", new_string="carefully",
-                         created_by="agent", expected_revision=_sha(ALPHA))
+                         created_by="untrusted_turn", expected_revision=_sha(ALPHA))
     assert res.ok and res.pending, res.errors
     assert (root / "alpha" / "SKILL.md").read_text() == ALPHA       # nothing served changed
     [item] = sm.list_pending_skills("alice")
@@ -112,8 +113,14 @@ def test_agent_fix_is_pending_and_the_owner_accept_writes_the_copy(home, monkeyp
     assert (root / "alpha" / "SKILL.md").read_text() == fixed
     assert "carefully" in sm._load_skill_content("alpha", user_id="alice")
     assert seed.seed_bundled_skills().kept == ["alpha"]   # the next start keeps the fix
-    back = sm.rollback_skill("alpha", user_id="alice", created_by="agent")
-    assert back.ok and back.pending                        # a rollback is a proposal too
+    # The agent's own fix is accepted into the seeded copy in the same call.
+    again = sm.patch_skill("alpha", user_id="alice", old_string="carefully", new_string="calmly",
+                           created_by="agent")
+    assert again.ok and not again.pending, again.errors
+    assert "calmly" in (root / "alpha" / "SKILL.md").read_text()
+    assert sm.list_pending_skills("alice") == []
+    back = sm.rollback_skill("alpha", user_id="alice", created_by="untrusted_turn")
+    assert back.ok and back.pending                        # an untrusted rollback is a proposal
 
 
 def test_a_bundled_skill_is_never_deleted_or_created(home):
@@ -188,10 +195,9 @@ def test_accepting_a_bundled_fix_keeps_a_newer_draft_pending(home, monkeypatch):
     from agents.task.agent.skill_manager import SkillManager
     _src, root = home
     seed.seed_bundled_skills()
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
     sm = SkillManager()
     assert sm.patch_skill("alpha", user_id="alice", old_string="well", new_string="carefully",
-                          created_by="agent", expected_revision=_sha(ALPHA)).pending
+                          created_by="untrusted_turn", expected_revision=_sha(ALPHA)).pending
     pending = sm._user_root("alice") / ".pending" / "alpha" / "SKILL.md"
     newer = ALPHA.replace("well", "with great care")
     real_scan = sm.validate_skill_content
@@ -213,10 +219,9 @@ def test_a_promote_whose_ledger_row_fails_is_refused_not_reverted_later(home, mo
     from agents.task.agent.skill_manager import SkillManager
     _src, root = home
     seed.seed_bundled_skills()
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
     sm = SkillManager()
     assert sm.patch_skill("alpha", user_id="alice", old_string="well", new_string="carefully",
-                          created_by="agent", expected_revision=_sha(ALPHA)).pending
+                          created_by="untrusted_turn", expected_revision=_sha(ALPHA)).pending
     store = get_skill_usage_store()
     real = store.record_change
 
@@ -252,3 +257,18 @@ def test_a_partial_first_seed_keeps_serving_the_package(home, monkeypatch):
     rep = seed.seed_bundled_skills()
     assert not rep.errors
     assert scopes.read_seed_manifest(root) == {"alpha": _sha(ALPHA), "beta": _sha(BETA)}
+
+
+# --- an automatic fix yields to a changed upstream; the owner's fix does not ---------
+
+@pytest.mark.parametrize("actor,kept", [("agent", False), ("background_review", False),
+                                        ("user", True)])
+def test_seed_keeps_only_the_owners_fix_over_a_new_upstream(monkeypatch, actor, kept):
+    from modules.skills import seed
+    rows = [{"action": "promote", "actor": actor, "after_sha": "x"}]
+
+    class _Store:
+        def list_changes(self, *a, **k):
+            return rows
+    monkeypatch.setattr("modules.skills.skill_usage.get_skill_usage_store", lambda: _Store())
+    assert seed._accepted_by_owner("demo") is kept

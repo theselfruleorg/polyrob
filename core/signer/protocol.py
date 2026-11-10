@@ -156,6 +156,30 @@ def _finite_numbers(value):
         for item in value:
             _finite_numbers(item)
 
+def _whole(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _non_negative_amounts(kwargs: Dict[str, Any]) -> None:
+    """Every raw amount of an intent is a non-negative whole number.
+
+    The guard ADDS these to the value the caps judge, so a negative one would
+    cancel the value of the send it rides on."""
+    import math
+    for name, value in kwargs.items():
+        if value is None:
+            continue
+        if name.endswith(("_raw", "_wei")) and not _whole(value):
+            raise ProtocolError(f"intent field {name} is not a non-negative whole number")
+        if name.endswith("_usd") and (isinstance(value, bool) or not isinstance(value, (int, float))
+                                      or not math.isfinite(value) or value < 0):
+            raise ProtocolError(f"intent field {name} is not a non-negative number")
+    for grant in kwargs.get("expected_allowance_grants") or ():
+        if not (isinstance(grant, tuple) and len(grant) == 3 and isinstance(grant[0], str)
+                and isinstance(grant[1], str) and _whole(grant[2])):
+            raise ProtocolError("an allowance grant is not (token, spender, non-negative amount)")
+
+
 def _intent_cls():
     from core.wallet.tx_guard import TxIntent
     return TxIntent
@@ -190,6 +214,7 @@ def intent_from_wire(data: Dict[str, Any]):
     if extra:
         raise ProtocolError(f"unknown intent field(s) {sorted(extra)}")
     kwargs = {k: _tupled(v) for k, v in data.items()}
+    _non_negative_amounts(kwargs)
     try:
         return cls(**kwargs)
     except TypeError as exc:

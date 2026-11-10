@@ -91,8 +91,8 @@ def fork(monkeypatch, tmp_path):
     seller = _fresh()
     for a in (owner, seller.address):
         _rpc("anvil_setBalance", [a, hex(10 ** 18)])
-    _send(owner, erc6551.REGISTRY, erc6551.encode_create_account(4663, parent, token_id))
-    account = erc6551.account_address(4663, parent, token_id)
+    _send(owner, erc6551.REGISTRY, erc6551.encode_create_account(4663, parent, token_id, implementation=erc6551.ACCOUNT_V3_IMPL))
+    account = erc6551.account_address(4663, parent, token_id, implementation=erc6551.ACCOUNT_V3_IMPL)
     _send(owner, parent, abi.encode_call(
         "transferFrom", [{"type": "address"}, {"type": "address"}, {"type": "uint256"}],
         [owner, seller.address, token_id]))

@@ -46,12 +46,17 @@ def bind_chat_surface(
     """
     from core.surfaces.config import SurfaceConfig
 
-    if not SurfaceConfig.singular_chat_enabled():
-        return False
     if container is None or not chat_session_key:
         return False
-    router = container.get_service("message_router")
+    router = (container.get_service("message_router")
+              if SurfaceConfig.singular_chat_enabled() else None)
     if router is None:
+        # 113: the POINTER is not the BUS. A person's direct chat keeps its row (the
+        # chat list, the focus, the name) on a seat that has no outbound router — the
+        # terminal, a local console. A room never gets a row this way.
+        if write_row and getattr(session_source, "chat_type", None) == "dm":
+            _write_chat_pointer(container, session_source, chat_session_key,
+                                session_id, user_id)
         return False
 
     orchestrator._message_router = router
@@ -75,16 +80,21 @@ def bind_chat_surface(
     # Needs the SessionSource (surface_id/chat_id); without it we still bind the
     # mirror but publish will fail-open-drop until a row exists.
     if session_source is not None and write_row:
+        _write_chat_pointer(container, session_source, chat_session_key, session_id, user_id)
+    return True
+
+
+def _write_chat_pointer(container: Any, session_source: Any, chat_session_key: str,
+                        session_id: str, user_id: str) -> None:
+    """Point the chat row at this session. Fail-open: a bind error must not break
+    session create."""
+    try:
         registry = container.get_service("session_chat_registry")
         if registry is not None:
-            try:
-                registry.bind(
-                    chat_session_key, session_id, user_id,
-                    session_source.surface_id, session_source.chat_id,
-                )
-            except Exception as e:  # fail-open: a bind error must not break session create
-                logger.debug("bind_chat_surface registry.bind failed: %s", e)
-    return True
+            registry.bind(chat_session_key, session_id, user_id,
+                          session_source.surface_id, session_source.chat_id)
+    except Exception as e:
+        logger.debug("bind_chat_surface registry.bind failed: %s", e)
 
 
 def _room_identity(container: Any, surface_id: Any, chat_id: str,

@@ -1,9 +1,9 @@
-"""Tests for non-destructive skill writes (archive-on-overwrite + active-overwrite → .pending).
+"""Tests for non-destructive skill writes (archive-on-overwrite).
 
-Task 2 — SKILL_OVERWRITE_PROTECT guard:
-- An agent/background overwrite of an existing ACTIVE skill must be forced to .pending
-  (not silently clobber the curated body).
-- Any overwrite (including owner) archives the prior body to .archived/<skill_id>/.
+- An overwrite of an existing ACTIVE skill by user/agent is live at once; the prior body
+  is archived (one rollback restores it).
+- Only an untrusted turn lands a .pending draft, and it never touches the active body.
+- Any overwrite archives the prior body to .archived/<skill_id>/.
 - BUG 2 fix / D1: a SYSTEM skill id (in skill_rules) is refused for every author.
 - BUG 5 fix: two rapid overwrites of the same skill produce two distinct archive files.
 """
@@ -20,23 +20,27 @@ def _mk(tmp_path):
     return sm
 
 
-def test_agent_cannot_silently_overwrite_active_skill(tmp_path, monkeypatch):
-    monkeypatch.setenv("SKILL_OVERWRITE_PROTECT", "true")
+def test_agent_overwrite_is_active_and_archived_untrusted_turn_stays_a_draft(tmp_path, monkeypatch):
     sm = _mk(tmp_path)
-    # Owner creates an ACTIVE skill.
-    r1 = sm.create_skill("my-skill", GOOD, user_id="u1", created_by=PROVENANCE_USER, pending=False)
+    r1 = sm.create_skill("my-skill", GOOD, user_id="u1", created_by=PROVENANCE_USER)
     assert r1.ok and not r1.pending
     active = tmp_path / "user_u1" / "my-skill" / "SKILL.md"
     assert active.read_text() == GOOD
-    # Agent tries to overwrite with stale content → forced to .pending, active untouched.
-    r2 = sm.create_skill("my-skill", STALE, user_id="u1", created_by=PROVENANCE_AGENT, pending=False)
-    assert r2.ok and r2.pending
-    assert active.read_text() == GOOD  # NOT clobbered
+    # An untrusted turn: a draft; the active body is unchanged.
+    r3 = sm.create_skill("my-skill", STALE, user_id="u1", created_by="untrusted_turn")
+    assert r3.ok and r3.pending
+    assert active.read_text() == GOOD
     assert (tmp_path / "user_u1" / ".pending" / "my-skill" / "SKILL.md").read_text() == STALE
+    # The agent: active at once, prior body archived.
+    agent_body = "# My Skill\nAgent rewrite. " + ("body " * 20)
+    r2 = sm.create_skill("my-skill", agent_body, user_id="u1", created_by=PROVENANCE_AGENT)
+    assert r2.ok and not r2.pending
+    assert active.read_text() == agent_body
+    archived = tmp_path / "user_u1" / ".archived" / "my-skill"
+    assert GOOD in [p.read_text() for p in archived.glob("*-SKILL.md")]
 
 
 def test_owner_overwrite_archives_prior_body(tmp_path, monkeypatch):
-    monkeypatch.setenv("SKILL_OVERWRITE_PROTECT", "true")
     sm = _mk(tmp_path)
     sm.create_skill("my-skill", GOOD, user_id="u1", created_by=PROVENANCE_USER, pending=False)
     sm.create_skill("my-skill", STALE, user_id="u1", created_by=PROVENANCE_USER, pending=False)
@@ -52,7 +56,6 @@ def test_agent_cannot_silently_shadow_system_skill(tmp_path, monkeypatch):
     """BUG 2 / review 2026-09-29 D1: a curated SYSTEM skill id (present in
     skill_rules) is REFUSED outright — not staged to .pending, where a later
     promote would replace the system body, triggers and gate."""
-    monkeypatch.setenv("SKILL_OVERWRITE_PROTECT", "true")
     sm = _mk(tmp_path)
     # Seed skill_rules to simulate a curated system skill — no actual file on disk.
     sm.skill_rules = {"web-research": {"name": "Web Research", "description": "curated"}}
@@ -73,7 +76,6 @@ def test_two_rapid_overwrites_produce_distinct_archives(tmp_path, monkeypatch):
     """BUG 5: if n-SKILL.md already exists (e.g. from a concurrent session), the second
     archive must NOT silently clobber it — it must fall back to a unique name.
     """
-    monkeypatch.setenv("SKILL_OVERWRITE_PROTECT", "false")
     sm = _mk(tmp_path)
     body_v1 = "# Skill\nVersion 1. " + ("x " * 20)
     body_v2 = "# Skill\nVersion 2. " + ("y " * 20)

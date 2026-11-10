@@ -28,11 +28,6 @@ _TRUTH_TABLE = [
     (FailoverReason.CREDIT_DEATH, CREDIT_DEATH_PHRASE),
     (FailoverReason.AUTH_PERMANENT, AUTH_PERMANENT_PHRASE),
     (FailoverReason.PROVIDER_EXHAUSTED, PROVIDER_EXHAUSTED_PHRASE),
-    (FailoverReason.CONTEXT_OVERFLOW, None),
-    (FailoverReason.RATE_LIMIT, None),
-    (FailoverReason.CONNECTION, None),
-    (FailoverReason.VALIDATION, None),
-    (FailoverReason.GENERIC_LLM, None),
     (FailoverReason.UNKNOWN, None),
 ]
 

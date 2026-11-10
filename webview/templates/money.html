@@ -98,6 +98,8 @@
       <div data-pane="cash" hidden>
         <div id="money-cash"></div>
         <p class="state-body" id="money-cash-state" hidden></p>
+        {# 113 W6 (G-3): what the AI use cost — the /usage view, drawn by money-usage.js. #}
+        <section class="section" id="money-usage" aria-label="{{ t('money.usage.title') }}"></section>
       </div>
 
       {# Invoices — who owes the agent money + the A20 machine-income note. Drawn from
@@ -105,6 +107,9 @@
       <div data-pane="invoices" hidden>
         <div id="money-invoices"></div>
         <p class="state-body" id="money-invoices-state" hidden></p>
+        {# 113 W6 (G-2): what the agent sells and its orders — drawn by money-offers.js
+           from /api/webgate/offers. #}
+        <section class="section" id="money-offers" aria-label="{{ t('money.offers.title') }}"></section>
       </div>
 
       {# Limits — today's used/limit from the ledger's caps + a link to Agent. #}
@@ -145,6 +150,7 @@
          data-src_owner_pin="{{ t('money.tokens.src_owner_pin') }}"
          data-src_owner_approved="{{ t('money.tokens.src_owner_approved') }}"
          data-tok_rejected_title="{{ t('money.tokens.rejected_title') }}"
+         data-tok_show="{{ t('money.tokens.show') }}"
          data-tok_unreadable="{{ t('money.tokens.unreadable') }}"
          data-tok_trust="{{ t('money.tokens.trust') }}"
          data-tok_untrust="{{ t('money.tokens.untrust') }}"
@@ -172,6 +178,7 @@
          data-empty_title="{{ t('money.book.empty_title') }}"
          data-empty_body="{{ t('money.book.empty_body') }}"
          data-empty_why="{{ t('money.book.empty_why') }}"
+         data-empty_how="{{ t('money.book.empty_how') }}"
          data-loading="{{ t('money.book.loading') }}"
          data-unreadable="{{ t('money.book.unreadable') }}"
          data-unreadable_why="{{ t('money.book.unreadable_why') }}"
@@ -292,5 +299,47 @@
          data-lim_body="{{ t('money.limits.body') }}"
          data-lim_link="{{ t('money.limits.link') }}"></div>
     <script src="/static/app/money.js" type="module"></script>
+    <div id="money-usage-copy" hidden
+         data-title="{{ t('money.usage.title') }}"
+         data-period="{{ t('money.usage.period') }}"
+         data-days_1="{{ t('money.usage.days_1') }}"
+         data-days_7="{{ t('money.usage.days_7') }}"
+         data-days_30="{{ t('money.usage.days_30') }}"
+         data-loading="{{ t('money.usage.loading') }}"
+         data-unreadable="{{ t('money.usage.unreadable') }}"
+         data-why="{{ t('money.usage.why') }}"></div>
+    <script src="/static/app/money-usage.js" type="module"></script>
+    <div id="money-offers-copy" hidden
+         {% if not read_only %}data-can_write="1"{% endif %}
+         data-unreachable="{{ t('money.offers.unreachable') }}"
+         data-title="{{ t('money.offers.title') }}"
+         data-loading="{{ t('money.offers.loading') }}"
+         data-unreadable="{{ t('money.offers.unreadable') }}"
+         data-why="{{ t('money.offers.why') }}"
+         data-empty="{{ t('money.offers.empty') }}"
+         data-empty_how="{{ t('money.offers.empty_how') }}"
+         data-sold="{{ t('money.offers.sold') }}"
+         data-pause="{{ t('money.offers.pause') }}"
+         data-resume="{{ t('money.offers.resume') }}"
+         data-decide_note="{{ t('money.offers.decide_note') }}"
+         data-orders_title="{{ t('money.offers.orders_title') }}"
+         data-orders_empty="{{ t('money.offers.orders_empty') }}"
+         data-orders_more="{{ t('money.offers.orders_more') }}"
+         data-state_draft="{{ t('money.offers.state_draft') }}"
+         data-state_setup="{{ t('money.offers.state_setup') }}"
+         data-state_live="{{ t('money.offers.state_live') }}"
+         data-state_paused="{{ t('money.offers.state_paused') }}"
+         data-state_retired="{{ t('money.offers.state_retired') }}"
+         data-order_quoted="{{ t('money.offers.order_quoted') }}"
+         data-order_awaiting_payment="{{ t('money.offers.order_awaiting_payment') }}"
+         data-order_paid="{{ t('money.offers.order_paid') }}"
+         data-order_fulfilling="{{ t('money.offers.order_fulfilling') }}"
+         data-order_delivered="{{ t('money.offers.order_delivered') }}"
+         data-order_accepted="{{ t('money.offers.order_accepted') }}"
+         data-order_disputed="{{ t('money.offers.order_disputed') }}"
+         data-order_failed="{{ t('money.offers.order_failed') }}"
+         data-order_expired="{{ t('money.offers.order_expired') }}"
+         data-order_cancelled="{{ t('money.offers.order_cancelled') }}"></div>
+    <script src="/static/app/money-offers.js" type="module"></script>
       {% endif %}
 {% endblock %}

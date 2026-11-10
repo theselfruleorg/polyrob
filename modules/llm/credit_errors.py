@@ -1,12 +1,9 @@
 """A provider that refuses for lack of CREDIT is not rate-limiting you.
 
-Prod 2026-10-09: z.ai answered every call with HTTP 429 ``type=rate_limit_error``
+z.ai answers an unpaid account with HTTP 429 ``type=rate_limit_error``
 ``code=1113 "Insufficient balance or no resource package. Please recharge."``.
-The SDK raised ``anthropic.RateLimitError``; the client wrapped it as a generic
-``ServiceError``/``LLMError``; the step loop read "429" and retried it four times
-as a rate limit (each try = two call shapes x three HTTP attempts) before the
-adapter's classifier finally called it PERMANENT. 102 log lines, no money, no
-answer.
+The SDK raises ``anthropic.RateLimitError``, and a step loop that reads "429"
+would retry it as a rate limit instead of as a permanent billing refusal.
 
 :func:`provider_credit_error` turns such a refusal into ONE
 ``LLMPermanentError`` whose text names the provider and says "no balance", so

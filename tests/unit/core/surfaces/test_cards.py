@@ -281,3 +281,25 @@ def test_two_different_confirm_lines_make_no_card():
     assert cards.confirm_line_in("/swap", typed, f"{own}\n{injected}") is None
     assert cards.confirm_line_in("/swap", typed, f"{injected}\n{own}") is None
     assert cards.confirm_line_in("/swap", typed, f"{own}\n{own}") == typed + ["max", "5.00"]
+
+
+# ── the declared state table (098 S1 census) ─────────────────────────────────
+
+def test_the_card_table_holds_every_edge_the_code_takes_and_refuses_others(tmp_path):
+    from core.state.machine import IllegalTransition, set_strict
+    from core.surfaces.card_states import CARD
+    assert CARD.validate() == []
+    assert CARD.allowed(cards.S_FAILED, cards.S_DONE)          # a late real result (AC2)
+    assert CARD.allowed(cards.S_REPLACED, cards.S_REPLACED)    # note_result
+    st = _store(tmp_path)
+    c = cards.choice_card("owner1", "Which?", ["a", "b"], st=st)
+    assert st.transition(c.card_id, frozenset({cards.S_OPEN}), cards.S_CANCELLED)
+    # A decided card never goes back to open, whatever `expect` a caller passes.
+    with pytest.raises(IllegalTransition):
+        st.transition(c.card_id, frozenset({cards.S_CANCELLED}), cards.S_OPEN)
+    set_strict(False)
+    try:
+        assert st.transition(c.card_id, frozenset({cards.S_CANCELLED}), cards.S_OPEN) is None
+    finally:
+        set_strict(True)
+    assert st.get(c.card_id).state == cards.S_CANCELLED

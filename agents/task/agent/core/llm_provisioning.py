@@ -15,18 +15,9 @@ class LLMProvisioningMixin:
     """LLM-from-config construction + token/tool-method config for Agent."""
 
     def _supports_streaming(self) -> bool:
-        """Check if LLM provider supports streaming.
-
-        WS-2.3: the whitelist is derived from the canonical provider set in
-        model_registry (``STREAMING_PROVIDER_NAMES``) rather than a hand-rolled
-        list, so it can never drift out of sync with ``detect_llm_provider`` again
-        — the original Gemini-streaming bug was exactly that drift ('google' vs
-        the canonical 'gemini'). The legacy 'google' alias is still accepted for
-        defence, since ``provider_name`` is now guaranteed canonical anyway.
-        """
-        from modules.llm.model_registry import STREAMING_PROVIDER_NAMES
-        name = self.provider_name.lower()
-        return name in STREAMING_PROVIDER_NAMES or name == 'google'
+        """Check if LLM provider supports streaming (derived from the provider specs)."""
+        from modules.llm.model_registry import provider_supports_streaming
+        return provider_supports_streaming(self.provider_name)
 
     async def _create_llm_from_config_async(self, llm_config: Dict[str, Any], isolated: bool = False) -> Optional[Any]:
         """Create LLM using canonical LLMManager.get_chat_model() method.
@@ -61,16 +52,9 @@ class LLMProvisioningMixin:
 
             # If no provider specified, detect from model name using model registry
             if not provider:
-                from modules.llm.model_registry import get_registry, canonical_provider_name
-                registry = get_registry()
-                model_config = registry.get_model(model)
-                if model_config:
-                    # WS-2.3: canonical enum→string map is the single source of truth.
-                    provider = canonical_provider_name(model_config.provider, default='openai')
-                    self.logger.info(f"Auto-detected provider '{provider}' for model '{model}'")
-                else:
-                    provider = 'openai'  # Final fallback
-                    self.logger.warning(f"Model '{model}' not found in registry, defaulting to provider 'openai'")
+                from modules.llm.usage_extract import detect_llm_provider
+                provider = detect_llm_provider(model)
+                self.logger.info(f"Auto-detected provider '{provider}' for model '{model}'")
 
             temperature = llm_config.get('temperature', 0.0)
 

@@ -413,7 +413,7 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
                 use_vision=request.get('use_vision', True),
                 session_config=request.get('session_config'),
                 skills=request.get('skills'), **memory_scope_fields(request),
-                money_target=request.get('money_target'), recall_seed=request.get('recall_seed'), mandate=request.get('mandate'),
+                money_target=request.get('money_target'), recall_seed=request.get('recall_seed'), mandate=request.get('mandate'), money_class=bool(request.get('money_class')),  # 112 F2
             )
 
         from agents.task.billed_request import credit_billing_required, validate_billed_request
@@ -461,7 +461,7 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
         # a transport flag.
         orchestrator._public_session = room_session_source(kwargs.get("session_source"))
         orchestrator._rail_skill_ids = list(session_request.skills or [])  # 060 WS-5
-        orchestrator._money_target, orchestrator._recall_seed, orchestrator._mandate, orchestrator._room_admin = (session_request.money_target, session_request.recall_seed, session_request.mandate, session_request.room_admin)  # 068 G2; B1; 086; 101
+        orchestrator._money_target, orchestrator._recall_seed, orchestrator._mandate, orchestrator._room_admin, orchestrator._money_class = (session_request.money_target, session_request.recall_seed, session_request.mandate, session_request.room_admin, bool(session_request.money_class))  # 068 G2; B1; 086; 101; 112 F2
         bind_memory_scope(actual_id, session_request)  # 025: goal/cron memory scope
         # H16: a session created FOR a correspondent (conversation resume) is
         # third-party-facing for life, owner-only state never enters it (restored from `creator` on recreate).
@@ -950,17 +950,15 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
                 temperature=temperature
             )
         except ValueError as e:
-            # Provider not available - try fallback
-            logger.warning(
-                f"⚠️ Requested provider '{provider}' unavailable: {e}. "
-                f"Attempting automatic fallback..."
-            )
-            
+            # Only a provider with no client moves the request: another ValueError is a refusal.
+            if f"{provider}_client" in llm_manager.clients:
+                raise
+            logger.warning(f"⚠️ Requested provider '{provider}' unavailable: {e}. Attempting automatic fallback...")
             # Use the fallback method to get next available provider
             fallback_llm = await llm_manager.get_fallback_chat_model(
                 exclude_providers=[provider],
                 original_model=model,
-                temperature=temperature
+                temperature=temperature, money_run=bool(request.get('money_class')),  # 112 F2b
             )
             
             if fallback_llm:

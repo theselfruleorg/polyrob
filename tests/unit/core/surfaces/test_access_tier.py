@@ -100,11 +100,25 @@ def test_paired_user_is_owner_tier(workdir):
     code = store.request("u_paired")
     assert store.approve(code) == "u_paired"
     c = _Container(workdir)
-    env = {"POLYROB_OWNER_USER_ID": "u_owner"}
+    env = {"POLYROB_OWNER_USER_ID": "u_owner", "POLYROB_REQUIRE_PAIRING": "1"}
     # A pairing row is keyed on the sender address, so it is only evidence on a
     # surface whose address is authenticated (telegram here).
     assert resolve_access_tier(c, _identity("u_paired", surface="telegram"),
                                env=env) == AccessTier.OWNER
+
+
+def test_a_paired_user_loses_access_when_pairing_is_off(workdir):
+    """Pairing OFF is the owner's lock: a stored paired row is no access on any
+    chat app (it used to keep the owner tier everywhere but Telegram)."""
+    from core.pairing import PairingStore
+    store = PairingStore(os.path.join(workdir, "pairing.db"))
+    assert store.approve(store.request("u_paired")) == "u_paired"
+    c = _Container(workdir)
+    for surface in ("telegram", "slack", "discord", "signal", "whatsapp"):
+        for env in ({"POLYROB_OWNER_USER_ID": "u_owner"},
+                    {"POLYROB_OWNER_USER_ID": "u_owner", "POLYROB_REQUIRE_PAIRING": "0"}):
+            assert resolve_access_tier(c, _identity("u_paired", surface=surface),
+                                       env=env) != AccessTier.OWNER, (surface, env)
 
 
 def test_paired_user_is_never_owner_on_a_forgeable_surface(workdir):

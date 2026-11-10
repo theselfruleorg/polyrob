@@ -29,19 +29,20 @@ from agents.task.agent.views import ActionResult, AgentError
 from agents.task.runtime.stop_reason import StopReason
 from agents.task.telemetry.views import ProviderFailureEvent, ProviderFallbackSuccessEvent
 from agents.task.utils import time_execution_async
-from core.credit_sentinel import looks_like_credit_death
+from core.error_classifier import credit_death_in_chain
 from core.env import bool_env as _bool_env
 from core.exceptions import InsufficientCreditsError
 from core.exceptions import (
     RateLimitError,
     LLMError,
-    LLMRateLimitError,
     LLMAuthenticationError,
-    LLMConnectionError,
+    LLMConfigError,
     LLMContextLengthError,
     LLMResponseError,
     LLMPermanentError,
     LLMProviderExhaustedError,
+    LLMRefusalError,
+    REFUSAL_HALT_PREFIX,
 )
 
 
@@ -115,47 +116,14 @@ class ErrorRecoveryMixin:
 		# 8. Log recovery completion
 		self.logger.info("Error recovery completed")
 
-	# Final whole-branch review, Finding 2: the trip used to run on `str(error)`
-	# for EVERY exception reaching `_handle_step_error` — step.py's catch-all
-	# `except Exception` means that is ANY step failure (tool/browser/file/parse
-	# errors included), not just LLM errors, and `_CREDIT_DEATH_MARKERS` matches a
-	# bare "402"/"billing" substring. Type-gating to the LLM exception family
-	# closes that surface: `LLMError` alone covers `LLMPermanentError`/
-	# `LLMAuthenticationError`/`LLMProviderExhaustedError` (all `LLMError`
-	# subclasses per core/exceptions.py); `InsufficientCreditsError` is the one
-	# credit-death shape that is NOT an `LLMError` (it's a `BotError`).
-	# `LLMContextLengthError` is technically also an `LLMError` subclass but never
-	# reaches this method — `_handle_step_error` returns on it earlier (see below).
-	_CREDIT_DEATH_EXCEPTION_TYPES = (LLMError, InsufficientCreditsError)
-
 	async def _trip_sentinel_if_credit_death(self, error: Exception) -> None:
-		"""Trip the provider-credit sentinel iff this error looks like credit death
-		AND is one of the LLM/credit exception types (see
-		``_CREDIT_DEATH_EXCEPTION_TYPES`` above) — a tool/browser/file/parse error
-		can no longer trip just because its text happens to contain "402" or
-		"billing" (a hex request id, a `NameError` naming a `billing_total`
-		variable, and an HTTP 500 on `/v1/items/402` all tripped before this gate).
+		"""Trip the provider-credit sentinel iff this error is credit death by
+		``credit_death_in_chain``, which reads only the LLM and credit error types.
 
 		Pure side-effect (latch + ONE owner notice). Never raises, never decides
 		control flow — the caller's branching is unaffected either way.
 		"""
-		if not isinstance(error, self._CREDIT_DEATH_EXCEPTION_TYPES):
-			return
-		# Walk the cause/context chain, not just the top message: llm_runner
-		# re-wraps the 402 as LLMProviderExhaustedError("No fallback available
-		# after LLMPermanentError") — a message with ZERO billing text — so a
-		# top-string-only check misses the exact prod shape (live finding
-		# 2026-07-18: two deploys, still no trip). Python auto-chains the
-		# original error as __context__ even without `raise ... from`.
-		matched = None
-		seen: set = set()
-		e: Exception | None = error
-		while e is not None and id(e) not in seen and len(seen) < 8:
-			seen.add(id(e))
-			if looks_like_credit_death(str(e)):
-				matched = str(e)
-				break
-			e = e.__cause__ or e.__context__
+		matched = credit_death_in_chain(error)
 		if matched is None:
 			return
 		try:
@@ -180,15 +148,11 @@ class ErrorRecoveryMixin:
 			self.logger.debug("credit sentinel trip failed (fail-open)", exc_info=True)
 
 	async def _handle_step_error(self, error: Exception) -> list[ActionResult]:
-		"""Enhanced error handling with LLM fallback support (Dec 2025).
-
-		UPGRADED: Now triggers LLM fallback for recoverable errors instead of
-		just waiting and retrying with the same broken client.
-		"""
+		"""Decide what a failed step does. A permanent error halts. A transient error tries
+		a fallback, then waits with backoff; the circuit breaker reports it when it stays."""
 		include_trace = self.logger.isEnabledFor(logging.DEBUG)
 		error_msg = AgentError.format_error(error, include_trace=include_trace)
 		prefix = f'❌ Result failed {self.state.consecutive_failures + 1}/{self.max_failures} times:\n '
-		error_str_lower = str(error).lower()
 		error_type = type(error).__name__
 
 		# 098 MO-08: a billed call that raised keeps its credit hold; the admin sees it now.
@@ -213,6 +177,19 @@ class ErrorRecoveryMixin:
 			self.state.consecutive_failures += 1
 			return []  # retry next step with pruned history
 
+		# === REFUSAL / CONTENT FILTER - TELL THE OWNER, NO RETRY, NO FALLBACK ===
+		# The same request gets the same answer, and another provider must not answer
+		# what this model declined. Not an account fault: never "check API configuration".
+		if isinstance(error, LLMRefusalError):
+			text = error.owner_text()
+			self.logger.warning(f"LLM output stopped: {text}: {str(error)[:300]}")
+			self.state.consecutive_failures = self.max_failures
+			self.state.request_stop(StopReason.ERROR)
+			return [ActionResult(
+				error=f"{REFUSAL_HALT_PREFIX}{text}. Nothing was retried on another model.",
+				include_in_memory=True
+			)]
+
 		# === CREDIT-DEATH SENTINEL — ONE universal trip site, BEFORE any branching ===
 		# §6.3/Task 10. error_recovery is on every LLM path (chat, goals, cron,
 		# sub-agents), so tripping here closes the interactive gap that let the
@@ -223,63 +200,28 @@ class ErrorRecoveryMixin:
 		# It MUST live here, above the `is_permanent` branch below, and be gated ONLY
 		# on looks_like_credit_death (plus the exception-type gate in
 		# `_trip_sentinel_if_credit_death` — see Finding 2 above) — never nested under
-		# `is_permanent`. The real prod 402 arrives as a plain `LLMError` ("Failed to
-		# generate agent response: OpenRouter generation failed: Error code: 402 -
-		# ...requires more credits...") whose text matches NONE of the is_permanent
-		# markers (insufficient_quota / billing / invalid_api_key /
-		# account_deactivated), so a nested trip is unreachable for the exact error it
-		# exists to catch. Two independent reasons it is never typed permanent: the
-		# tool-calling generate_agent_response methods re-wrap the provider error as a
-		# generic LLMError without calling translate_llm_error (and the step loop
-		# ALWAYS passes tools=), and llm_runner.get_next_action re-raises
-		# LLMProviderExhaustedError on fallback failure. Tripping here (below the
-		# context-length return, above is_permanent) covers LLMError,
-		# LLMPermanentError, LLMProviderExhaustedError and any future wrapper alike.
+		# `is_permanent`: a billing failover that succeeds returns from that branch.
 		#
-		# Mirrors step.py::_is_fatal_step_error, which likewise classifies credit death
-		# straight off the raw error string (that call site is a separate fatal/retry
-		# control-flow decision, out of scope for Finding 2's type gate). Side-effect
-		# only: fail-open (a broken sentinel must never mask the original error) and
+		# Side-effect only: fail-open (a broken sentinel must never mask the original error) and
 		# idempotent (single call site; the sentinel itself no-ops while the latch holds).
 		await self._trip_sentinel_if_credit_death(error)
 
-		from core.error_classifier import FailoverReason, classify_error
-		classified = classify_error(error)
-
 		# === PERMANENT/CRITICAL ERRORS - HALT IMMEDIATELY ===
 		# These errors indicate account-level issues that won't be resolved by fallback
-		# Type-gate the SUBSTRING arms (the isinstance arms are already safe). Bare
-		# text matching on an arbitrary exception halts the whole session with
-		# "check API configuration" for causes that have nothing to do with the
-		# provider: a sqlite3.OperationalError touching the shipped
-		# `billing_failures` table, a NameError naming a `billing_total` variable,
-		# an HTTP 500 on a path containing /402. This is the SAME false-positive
-		# class `_trip_sentinel_if_credit_death` was type-gated for above — that fix
-		# reached the sentinel latch (a side effect) but not this branch, which is
-		# the one that actually stops the agent.
-		_text_may_decide = isinstance(error, self._CREDIT_DEATH_EXCEPTION_TYPES)
+		credit_death = credit_death_in_chain(error)
 		is_permanent = (
-			isinstance(error, LLMPermanentError) or
-			isinstance(error, LLMAuthenticationError) or
-			(_text_may_decide and (
-				'insufficient_quota' in error_str_lower or
-				'billing' in error_str_lower or
-				'invalid_api_key' in error_str_lower or
-				'account_deactivated' in error_str_lower
-			))
+			isinstance(error, (LLMPermanentError, LLMAuthenticationError, LLMConfigError))
+			or credit_death is not None
 		)
 
 		if is_permanent:
-			# NOTE: the sentinel trip used to be nested here and was unreachable for
-			# the real prod 402 (see _trip_sentinel_if_credit_death above, called before
-			# any branching). This stays purely a failover/halt decision.
-			is_billing = looks_like_credit_death(error_str_lower)
-			if is_billing and _billing_failover_enabled():
+			# Purely a failover/halt decision: the sentinel tripped above.
+			if credit_death is not None and _billing_failover_enabled():
 				self.logger.warning("💳 Billing error with BILLING_FAILOVER_ENABLED — attempting provider fallback")
 				# HIGH-2: record the exhausted provider BEFORE failover so repeated billing
 				# errors accumulate the failed-set (prevents A↔B ping-pong / step-budget burn).
 				# reset_llm_errors() below clears only error-type counts, not this set.
-				self.state.track_llm_error("billing", self._get_provider_from_model(self.model_name))
+				self.state.track_llm_error("billing", self._current_llm_provider(self.model_name))
 				if await self._attempt_llm_fallback_in_handler("billing"):
 					self.logger.info("✅ Billing failover succeeded; continuing on fallback provider")
 					self.state.reset_llm_errors()
@@ -293,33 +235,6 @@ class ErrorRecoveryMixin:
 				include_in_memory=True
 			)]
 		
-		# A 402 that llm_runner re-wrapped as LLMProviderExhaustedError carries no billing
-		# text on its top message, so the is_permanent branch above misses it and it would
-		# halt here without ever trying a still-funded provider. classify_error walked the
-		# __cause__/__context__ chain and found the inner 402 → attempt billing failover
-		# first (P0 taxonomy). Plain-LLMError 402s never reach here (not this isinstance),
-		# so their existing is_llm_error path is unchanged.
-		if (isinstance(error, LLMProviderExhaustedError)
-				and classified.reason is FailoverReason.CREDIT_DEATH
-				and _billing_failover_enabled()):
-			self.logger.warning("💳 Re-wrapped 402 detected via cause chain — attempting provider fallback")
-			self.state.track_llm_error("billing", self._get_provider_from_model(self.model_name))
-			if await self._attempt_llm_fallback_in_handler("billing"):
-				self.state.reset_llm_errors()
-				return []
-			# else: fall through to the exhausted-halt below (no funded provider left)
-
-		# === PROVIDER EXHAUSTED - All fallbacks failed ===
-		if isinstance(error, LLMProviderExhaustedError):
-			self.logger.error(f"❌ ALL LLM PROVIDERS EXHAUSTED: {error}")
-			self.state.consecutive_failures = self.max_failures
-			self.state.request_stop(StopReason.ERROR)
-			providers = getattr(error, 'providers_tried', [])
-			return [ActionResult(
-				error=f"All LLM providers failed. Tried: {providers}. Session halted.",
-				include_in_memory=True
-			)]
-
 		# CRITICAL: State recovery and cleanup (only for non-critical errors)
 		try:
 			await self._recover_from_error(error)
@@ -345,13 +260,9 @@ class ErrorRecoveryMixin:
 				error_msg += f"\n\nTraceback:\n{traceback.format_tb(error.__traceback__)}"
 
 		# === LLM ERRORS - TRY FALLBACK (Dec 2025 upgrade) ===
-		is_llm_error = isinstance(error, (
-			LLMError, LLMRateLimitError, LLMConnectionError, LLMContextLengthError
-		)) or any(x in error_str_lower for x in ['rate_limit', 'rate limit', '429', 'connection', 'timeout', 'llm'])
-
-		if is_llm_error:
+		if isinstance(error, LLMError):
 			# Track error for circuit breaker
-			current_provider = self._get_provider_from_model(self.model_name)
+			current_provider = self._current_llm_provider(self.model_name)
 			circuit_tripped = self.state.track_llm_error(error_type, current_provider)
 
 			if circuit_tripped:
@@ -421,21 +332,11 @@ class ErrorRecoveryMixin:
 			self.state.consecutive_failures += 1
 
 		elif isinstance(error, RateLimitError) or isinstance(error, ResourceExhausted):
-			# IMPORTANT: Rate limits due to quota issues are critical
-			if 'quota' in error_str_lower or 'billing' in error_str_lower:
-				self.logger.error(f"❌ CRITICAL: Rate limit due to quota/billing issue")
-				self.state.consecutive_failures = self.max_failures
-				self.state.request_stop(StopReason.ERROR)
-				return [ActionResult(
-					error=f"CRITICAL: {str(error)[:400]}. Session halted due to quota/billing issue.",
-					include_in_memory=True
-				)]
-
 			# Regular rate limit - can retry with fallback
 			self.logger.warning(f'{prefix}{error_msg}')
 
 			# Track for circuit breaker and try fallback
-			current_provider = self._get_provider_from_model(self.model_name)
+			current_provider = self._current_llm_provider(self.model_name)
 			self.state.track_llm_error('RateLimitError', current_provider)
 
 			if self.state.consecutive_failures >= 1:
@@ -456,11 +357,11 @@ class ErrorRecoveryMixin:
 			await asyncio.sleep(delay)
 			self.state.consecutive_failures += 1
 
-		elif isinstance(error, ConnectionError) or 'connection' in error_msg.lower():
+		elif isinstance(error, ConnectionError):
 			self.logger.warning(f'{prefix}Connection error: {error_msg}')
 
 			# Track for circuit breaker and try fallback
-			current_provider = self._get_provider_from_model(self.model_name)
+			current_provider = self._current_llm_provider(self.model_name)
 			self.state.track_llm_error('ConnectionError', current_provider)
 
 			if self.state.consecutive_failures >= 1:
@@ -521,7 +422,7 @@ class ErrorRecoveryMixin:
 			True if fallback successful, False otherwise
 		"""
 		try:
-			current_provider = self._get_provider_from_model(self.model_name)
+			current_provider = self._current_llm_provider(self.model_name)
 			# dict.fromkeys: dedupe while keeping order — the current provider is
 			# usually already in llm_providers_failed, and the doubled entry
 			# rendered as "excluding: ['openrouter', 'openrouter']" in prod logs.
@@ -536,19 +437,8 @@ class ErrorRecoveryMixin:
 			)
 
 			if fallback_llm:
-				# Store original for telemetry
 				original_model = self.model_name
-
-				# Adopt every runtime view together, including identity and compaction.
-				from modules.llm.usage_extract import resolve_serving_provider
-				fallback_model = getattr(fallback_llm, 'model_name', 'fallback')
-				self.adopt_active_llm(
-					fallback_llm, fallback_model,
-					resolve_serving_provider(fallback_llm, fallback_model))
-				self._refresh_after_model_change(
-					"fallback", original_model, reason=original_error_type)
-
-				self.logger.info(f"✅ Switched LLM: {original_model} → {self.model_name}")
+				await self.adopt_fallback_llm(fallback_llm, original_error_type)
 
 				# Emit telemetry
 				self._emit_fallback_success_telemetry(
@@ -595,7 +485,8 @@ class ErrorRecoveryMixin:
 				return await llm_manager.get_fallback_chat_model(
 					exclude_providers=exclude_providers,
 					original_model=original_model,
-					temperature=0.0
+					temperature=0.0,
+					money_run=self._is_money_run()
 				)
 			else:
 				self.logger.warning("LLMManager does not support get_fallback_chat_model")
@@ -604,6 +495,27 @@ class ErrorRecoveryMixin:
 		except Exception as e:
 			self.logger.error(f"Error getting fallback LLM: {e}")
 			return None
+
+	def _is_money_run(self) -> bool:
+		"""Money-class, by the run, the model or the toolset (112 F2: ONE predicate).
+
+		The run is money-class when the runner stamped it so — ``is_money_class`` of its
+		payload, carried as ``orchestrator._money_class`` — or it is on ``HEAVY_MODEL``,
+		or it is autonomous and holds a money tool. An owner chat keeps its model choice."""
+		try:
+			if getattr(getattr(self, "orchestrator", None), "_money_class", False) is True:
+				return True
+			from agents.task.session_class import is_autonomous_session
+			from core.money.classify import money_action
+			from core.runtime_config import heavy_model_pin
+			heavy = heavy_model_pin()
+			if heavy and heavy == self.model_name:
+				return True
+			return bool(is_autonomous_session(getattr(self, "session_id", None))) and any(
+				money_action(name) for name in self.controller.get_action_names())
+		except Exception as e:
+			self.logger.debug(f"money-run check failed: {e}")
+			return False
 
 	def _emit_provider_failure_telemetry(
 		self,

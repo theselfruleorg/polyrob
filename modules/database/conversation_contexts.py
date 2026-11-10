@@ -195,8 +195,9 @@ class ConversationContexts:
             rows = await self.connection.fetch_all(query)
             return [self._row_to_context(row) for row in rows]
         except Exception as e:
+            # Raise: a store that could not be read is not an empty one.
             self.logger.error(f"Error retrieving all conversation contexts: {e}", exc_info=True)
-            return []
+            raise
 
     def _row_to_context(self, row: Dict[str, Any]) -> ConversationContext:
         """Convert database row to ConversationContext."""

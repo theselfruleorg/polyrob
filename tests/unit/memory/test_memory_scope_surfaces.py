@@ -50,8 +50,8 @@ def test_console_memory_body_is_the_shared_view(home, monkeypatch):
 
 def test_repl_memory_scopes_names_counts_not_findings(home):
     p = _seed(home)
-    from cli.ui.commands.handlers import _memory_scopes_text
-    out = _memory_scopes_text(p, USER)
+    from surfaces.telegram.self_memory_ops import memory_scopes_text
+    out = memory_scopes_text(p, USER)
     assert "goal:abc123" in out and "1 row(s)" in out and "quarantined pricing" not in out
     assert "polyrob owner memory scopes" in out
 

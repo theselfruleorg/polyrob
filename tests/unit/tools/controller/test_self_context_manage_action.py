@@ -51,7 +51,6 @@ async def test_update_is_always_quarantined_even_review_off(monkeypatch, tmp_pat
     # main-agent turn with REQUIRE_REVIEW=false lands in .pending. Activation is the
     # owner-gated `promote`. This closes the self-wake/PROVENANCE_AGENT footgun.
     monkeypatch.setenv("SELF_CONTEXT_WRITABLE", "true")
-    monkeypatch.setenv("SELF_CONTEXT_REQUIRE_REVIEW", "false")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     c = _bare_controller(tmp_path)
     c._register_self_context_manage_action()
@@ -180,7 +179,6 @@ async def test_forged_turn_cannot_promote_even_local(monkeypatch, tmp_path):
 @pytest.mark.asyncio
 async def test_forged_turn_quarantined_even_review_off(monkeypatch, tmp_path):
     monkeypatch.setenv("SELF_CONTEXT_WRITABLE", "true")
-    monkeypatch.setenv("SELF_CONTEXT_REQUIRE_REVIEW", "false")
     c = _bare_controller(tmp_path)
     c._register_self_context_manage_action()
     action = c.registry.registry.actions["self_context_manage"]
@@ -214,7 +212,6 @@ async def test_read_blocks_poisoned_ondisk_doc(monkeypatch, tmp_path):
 @pytest.mark.asyncio
 async def test_identity_subversion_rejected(monkeypatch, tmp_path):
     monkeypatch.setenv("SELF_CONTEXT_WRITABLE", "true")
-    monkeypatch.setenv("SELF_CONTEXT_REQUIRE_REVIEW", "false")
     c = _bare_controller(tmp_path)
     c._register_self_context_manage_action()
     action = c.registry.registry.actions["self_context_manage"]

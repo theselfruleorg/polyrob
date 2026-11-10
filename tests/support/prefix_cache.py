@@ -13,13 +13,20 @@ the measuring instrument the tests use:
   snapshots and reports the hit ratio (shared prefix / previous length), the
   same number a faux provider would report.
 
-Deliberately dependency-free (stdlib only) so it can be imported from any test
-without dragging the agent tier in.
+* :func:`wire_adapter` — the REAL adapter over the REAL client with a fake SDK, so a
+  test reads the request that would go on the wire, ``tools[]`` included.
+* :func:`wire_rows` / :func:`wire_prefix_len` — that request as the provider caches
+  it: the tools come first, then one row per message.
+
+Dependency-free at import (stdlib only), so it can be imported from any test without
+dragging the agent tier in. :func:`wire_adapter` imports the LLM layer when it runs.
 """
 
 from __future__ import annotations
 
 import json
+import logging
+import types
 from typing import Any, List, Optional, Sequence
 
 
@@ -64,6 +71,60 @@ def common_prefix_len(a: Sequence[str], b: Sequence[str]) -> int:
 			break
 		n += 1
 	return n
+
+
+class _FakeCompletions:
+	"""The fake SDK endpoint: records each request and answers with ``text``."""
+
+	def __init__(self, text: str):
+		self.calls: List[dict] = []
+		self.text = text
+
+	async def create(self, **params: Any) -> Any:
+		self.calls.append(params)
+		message = types.SimpleNamespace(content=self.text, tool_calls=None)
+		choice = types.SimpleNamespace(message=message, finish_reason="stop")
+		return types.SimpleNamespace(choices=[choice], usage=None, id="gen-wire")
+
+
+def wire_adapter(model: str = "deepseek/deepseek-v4.1-flash", text: str = "ok") -> Any:
+	"""A real ``OpenRouterAdapter`` over a real ``OpenRouterClient`` with a fake SDK.
+
+	``adapter.wire_calls()`` returns the keyword arguments of each
+	``chat.completions.create``: the request that would reach the provider.
+	"""
+	from modules.llm.adapters import OpenRouterAdapter
+	from modules.llm.openrouter_client import OpenRouterClient
+
+	completions = _FakeCompletions(text)
+	client = OpenRouterClient.__new__(OpenRouterClient)
+	client.model_type = model
+	client.max_tokens = 128
+	client.temperature = 0.2
+	client.supports_vision = False
+	client.last_response = None
+	client._initialized = True
+	client._PROVIDER_LABEL = "OpenRouter"
+	client.logger = logging.getLogger("tests.wire_client")
+	client._client = types.SimpleNamespace(
+		chat=types.SimpleNamespace(completions=completions))
+	client._client.with_options = lambda **_kwargs: client._client
+	adapter = OpenRouterAdapter(client=client, model_name=model)
+	object.__setattr__(adapter, "wire_calls", lambda: completions.calls)
+	return adapter
+
+
+def wire_rows(request: dict) -> List[str]:
+	"""A wire request as the provider caches it: ``tools[]``, then each message."""
+	rows = [json.dumps(_jsonable(request.get("tools") or []), sort_keys=True, ensure_ascii=False)]
+	rows.extend(json.dumps(_jsonable(m), sort_keys=True, ensure_ascii=False)
+	            for m in request.get("messages") or [])
+	return rows
+
+
+def wire_prefix_len(a: dict, b: dict) -> int:
+	"""Leading rows two wire requests share. 0 means the tools differ."""
+	return common_prefix_len(wire_rows(a), wire_rows(b))
 
 
 class PrefixCacheProbe:

@@ -39,22 +39,32 @@ def split_for_surface(surface_id: str, text: str) -> List[str]:
 
 async def route_and_act(container: Any, task_agent: Any, inbound: Any,
                         deliver: Callable, *, spawn: Optional[Callable] = None,
-                        fetch_media: Optional[Callable] = None) -> None:
+                        fetch_media: Optional[Callable] = None,
+                        deliver_dm: Optional[Callable] = None) -> None:
     """route_inbound → act_on_inbound(deliver=, fetch_media=) → deliver the reply.
 
     ``fetch_media`` (064 F3) is the surface's async ``(Media) -> bytes | None``.
     The shared executor decides by TIER what happens to the files: the owner's
     are stored in the session workspace, a correspondent's are only named.
+
+    ``deliver_dm`` is the surface's async ``(address, text)`` to a person's DM.
+    With it, the owner's verb typed in a room is answered in his DM and the room
+    reads one line that says so (113 W7 F-03); without it that reply is dropped.
     """
     from core.surfaces.dispatcher import route_inbound
     from surfaces._actor import InboundResult, act_on_inbound
 
     decision = await route_inbound(container, inbound)
     from core.surfaces.command_reply import admit_inbound_reply, reply_text
+    noted = []   # the room note goes out once per inbound line
 
     async def safe_deliver(reply):
         if admit_inbound_reply(inbound, decision, reply):
-            await deliver(reply_text(reply))
+            if not await _send_with_actions(container, inbound, reply):
+                await deliver(reply_text(reply))
+        elif await _owner_reply_to_dm(container, inbound, decision, reply_text(reply),
+                                      deliver, deliver_dm, noted):
+            return
         else:
             logger.info('Private or rate-limited inbound reply suppressed on %s', inbound.identity.source.surface_id)
     # Only a message WITH files carries a downloader: a text-only turn calls
@@ -67,6 +77,96 @@ async def route_and_act(container: Any, task_agent: Any, inbound: Any,
         # A command may answer with a CommandReply (a room reply, an action
         # card): a text surface delivers its words, which keep every token.
         await safe_deliver(reply)
+
+
+#: The room's one line when the owner's verb was answered in his DM (F-03).
+ANSWERED_IN_DM = "🔒 Answered in your DM."
+#: ... and when his DM could not be reached (no address on this app, or the send
+#: failed): he must not read silence, and the private answer stays out of the room.
+DM_UNREACHABLE = ("🔒 That answer is private, and I could not reach your DM on "
+                  "this app. Ask me again in our private chat.")
+
+
+async def _owner_reply_to_dm(container: Any, inbound: Any, decision: Any, text: str,
+                             deliver: Callable, deliver_dm: Optional[Callable],
+                             noted: list) -> bool:
+    """113 W7 F-03: the owner's verb typed in a ROOM is answered in his DM on the
+    SAME app, through ``core.surfaces.owner_address``. True = handled (sent to the
+    DM, or the room told it could not be); False = not the owner's room verb, the
+    caller drops the reply as before. The reply itself never enters the room."""
+    from core.surfaces.dispatcher import RouteKind
+    src = inbound.identity.source
+    if (decision.kind != RouteKind.COMMAND or src.chat_type == "dm"
+            or deliver_dm is None or not text):
+        return False
+    from core.instance import is_owner_uid
+    if not is_owner_uid(inbound.identity.user_id, allow_local=False):
+        return False
+    from core.surfaces.owner_address import owner_address
+    address = None
+    try:
+        address = owner_address(container, src.surface_id, inbound.identity.user_id)
+    except Exception:
+        logger.warning("owner DM address unresolved on %s", src.surface_id, exc_info=True)
+    sent = False
+    if address:
+        try:
+            await deliver_dm(str(address), text)
+            sent = True
+        except Exception:
+            logger.warning("owner DM send failed on %s", src.surface_id, exc_info=True)
+    if not noted:
+        noted.append(True)
+        await deliver(ANSWERED_IN_DM if sent else DM_UNREACHABLE)
+    return True
+
+
+def _reply_actions(reply) -> list:
+    """The buttons of a carded command reply (``CommandReply.card_id``), none for
+    anything else. Read-only: a missing card store is not created here."""
+    from core.surfaces.command_reply import CommandReply
+    cid = getattr(reply, "card_id", None) if isinstance(reply, CommandReply) else None
+    if not cid:
+        return []
+    try:
+        from core.surfaces import cards
+        st = cards.existing_store()
+        card = st.get(cid) if st is not None else None
+        return cards.card_actions(card) if card is not None else []
+    except Exception:
+        logger.debug("card actions unavailable (the text keeps the commands)", exc_info=True)
+        return []
+
+
+async def _send_with_actions(container: Any, inbound: Any, reply: Any) -> bool:
+    """113 W7 F-09: a carded reply on a surface that ``supports_actions`` goes out
+    through the message router WITH the card's buttons. True = sent; False = the
+    caller delivers the text (it keeps every command, so nothing is lost)."""
+    actions = _reply_actions(reply)
+    if not actions or container is None:
+        return False
+    try:
+        sid = inbound.identity.source.surface_id
+        registry = container.get_service("surface_registry")
+        surface = registry.get(sid) if registry is not None else None
+        caps = getattr(surface, "capabilities", None)
+        if surface is None or not getattr(caps, "supports_actions", False):
+            return False
+        from core.surfaces.command_reply import reply_text
+        from core.surfaces.envelopes import OutboundMessage
+        from core.surfaces.session_chat_registry import build_session_key
+        key = build_session_key(inbound.identity.source, inbound.identity.user_id)
+        # Through the router, the one recorded outbound seam (033): a chat with no
+        # binding yet answers False and the caller sends the text.
+        router = container.get_service("message_router")
+        if router is None:
+            return False
+        return bool(await router.publish(OutboundMessage(
+            session_key=key, text=reply_text(reply), actions=actions)))
+    except Exception:
+        logger.warning("buttons send failed on %s; sending the text",
+                       getattr(inbound.identity.source, "surface_id", "?"), exc_info=True)
+        return False
 
 
 async def _hook(fn, *args) -> None:
@@ -98,6 +198,27 @@ class TextSink:
             logger.warning("%s.send_message failed for %s", self._label, chat_id,
                            exc_info=True)
             return False
+
+
+#: The feedback marks (064 F2): "seen" while the turn runs, "failed" after a
+#: turn that raised. A transport maps them to its own reaction names.
+SEEN_MARK = "👀"
+FAILED_MARK = "❌"
+
+
+def wants_feedback(inbound) -> bool:
+    """Whether a reaction on *inbound* is wanted (113 W7 F-08).
+
+    The hook runs BEFORE routing, so it cannot see the decision. A DM is always
+    addressed to the bot; in a room only a line that names the bot is — a 👀 on
+    every line of room chatter would say the bot reads (and answers) all of it.
+    A synthetic or bot message gets none."""
+    if getattr(inbound, "internal", False) or getattr(inbound, "sender_is_bot", False):
+        return False
+    src = getattr(getattr(inbound, "identity", None), "source", None)
+    if getattr(src, "chat_type", None) == "dm":
+        return True
+    return getattr(inbound, "mentions_bot", None) is True
 
 
 def _storefront_buyer(inbound) -> str:
@@ -137,6 +258,23 @@ class BaseHarness:
     async def _deliver_to(self, target, text: str) -> None:
         """Send *text* back to *target* on this transport."""
         raise NotImplementedError
+
+    #: Optional ``async (address, text)`` to a person's DM, where ``address`` is
+    #: the ``core.surfaces.owner_address`` shape for this surface. None = this
+    #: transport cannot (or must not) open a DM, and an owner's room verb keeps
+    #: its old outcome (the private reply is dropped). Opt-in per transport.
+    _deliver_dm: Optional[Callable] = None
+
+    def _dm_sender(self) -> Optional[Callable]:
+        """``_deliver_dm`` split to the platform limit; raises on a failed chunk."""
+        send = self._deliver_dm
+        if send is None:
+            return None
+
+        async def _send(address: str, text: str) -> None:
+            for chunk in split_for_surface(self.surface_id, text):
+                await send(address, chunk)
+        return _send
 
     async def _before_route(self, target) -> None:
         """Transport hook run before routing (e.g. a typing indicator)."""
@@ -182,7 +320,8 @@ class BaseHarness:
         try:
             if await self._voice_to_text(inbound, _deliver):
                 await route_and_act(self._container, self._task_agent, inbound, _deliver,
-                                    fetch_media=self._media_bytes if inbound.media else None)
+                                    fetch_media=self._media_bytes if inbound.media else None,
+                                    deliver_dm=self._dm_sender())
             ok = True
         finally:
             await _hook(self.on_processing_finish, inbound, ok)
@@ -227,10 +366,12 @@ class BaseHarness:
 
     async def on_processing_start(self, inbound) -> None:
         """064 F2: optional "seen" reaction (👀) when a message is accepted.
-        No-op by default; a transport that can react overrides it."""
+        No-op by default; a transport that can react overrides it, and asks
+        :func:`wants_feedback` first. Slack and Discord do."""
 
     async def on_processing_finish(self, inbound, ok: bool) -> None:
-        """064 F2: optional finish reaction (✅ / ❌). No-op by default."""
+        """064 F2: optional finish mark: the 👀 goes, a failed turn gets ❌ (the
+        reply itself is the success mark). No-op by default."""
 
     async def _fetch_media(self, media) -> Optional[bytes]:
         """Bytes for one inbound attachment (064 F3). A transport overrides it;

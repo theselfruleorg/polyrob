@@ -266,7 +266,7 @@ class MessageBuildersMixin:
 		ai_content: str,
 		tool_calls: List[Dict[str, Any]],
 		tool_responses: List[Tuple[str, str]],
-		reasoning_content: Optional[str] = None,
+		replay_fields: Optional[Dict[str, Any]] = None,
 	) -> None:
 		"""Add AIMessage with tool_calls and all ToolMessages atomically.
 
@@ -277,8 +277,8 @@ class MessageBuildersMixin:
 			ai_content: Content for AIMessage
 			tool_calls: List of tool call dicts with 'id', 'name', 'args'
 			tool_responses: List of (tool_call_id, response_content) tuples
-			reasoning_content: The model's reasoning for this call; a provider
-				that requires it back (DeepSeek thinking + tools) gets it replayed
+			replay_fields: What this call's message keeps for a later request
+				(``modules.llm.call_result.replay_fields``)
 
 		Raises:
 			ValueError: If tool_call_ids don't match response IDs
@@ -304,8 +304,7 @@ class MessageBuildersMixin:
 			try:
 				# Step 1: Add AIMessage with tool_calls
 				ai_msg = AIMessage(content=ai_content, tool_calls=tool_calls)
-				if reasoning_content:
-					ai_msg.additional_kwargs['reasoning_content'] = reasoning_content
+				ai_msg.additional_kwargs.update(replay_fields or {})
 				self._add_message_with_tokens(ai_msg)
 
 				# Step 2: Add ALL ToolMessages immediately after (in order)

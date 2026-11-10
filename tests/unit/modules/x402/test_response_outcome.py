@@ -67,3 +67,39 @@ async def test_broken_paid_json_stream_marks_refund(refund):
     with pytest.raises(RuntimeError, match='downstream'):
         [chunk async for chunk in response.body_iterator]
     refund.assert_awaited_once_with('payment')
+
+
+def _sse(*frames):
+    return "".join(f"data: {f}\n\n" for f in frames).encode()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('size', [1, 5, 4096])
+async def test_streamed_sse_error_frame_is_refundable_without_changing_wire(size, refund):
+    """EP-2: a /v1 turn that fails after its 200 headers sends an `error` frame;
+    the payment used to stay settled with no refund mark."""
+    raw = (b": keep-alive\n\n"
+           + _sse('{"error":{"message":"agent turn failed","code":"agent_turn_failed"}}',
+                  '[DONE]'))
+
+    async def chunks():
+        for i in range(0, len(raw), size):
+            yield raw[i:i + size]
+    response = StreamingResponse(chunks(), media_type='text/event-stream')
+    await observe_paid_response(response, 'payment')
+    wire = b''.join([chunk async for chunk in response.body_iterator])
+    assert wire == raw
+    refund.assert_awaited_once_with('payment')
+
+
+@pytest.mark.asyncio
+async def test_successful_sse_stream_is_not_refunded(refund):
+    raw = _sse('{"id":"c","choices":[{"delta":{"content":"hi"},"finish_reason":null}]}',
+               '{"id":"c","choices":[],"usage":{"total_tokens":3}}', '[DONE]')
+
+    async def chunks():
+        yield raw
+    response = StreamingResponse(chunks(), media_type='text/event-stream')
+    await observe_paid_response(response, 'payment')
+    assert b''.join([chunk async for chunk in response.body_iterator]) == raw
+    assert refund.await_count == 0

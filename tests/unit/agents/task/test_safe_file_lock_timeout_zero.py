@@ -22,9 +22,10 @@ def test_timeout_zero_acquires_free_lock(tmp_path):
 
 def test_timeout_zero_fails_fast_when_contended(tmp_path):
     lock_file = str(tmp_path / "held.lock")
-    # Simulate contention: the lock file already exists (held by another holder).
+    # Simulate contention: the lock file already exists, held by a LIVE process
+    # (the parent of this test process). A dead pid's file is cleared instead.
     with open(lock_file, "w") as fh:
-        fh.write("99999\n")
+        fh.write(f"{os.getppid()}\n")
     lock = SafeFileLock(lock_file, timeout=0)
     lock._use_filelock = False
     with pytest.raises(TimeoutError):

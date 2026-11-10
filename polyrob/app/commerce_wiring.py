@@ -28,11 +28,30 @@ def _board(data_dir: Optional[str]):
     return GoalBoard(goals_db_path(data_dir or get_data_root()))
 
 
+def _stop_earlier_goals(b, order_id: str, user_id: str) -> None:
+    """Cancel every still-open goal an earlier claim of this order wrote. A new claim
+    means none of them is the order's goal any more (a crash between the goal write
+    and the order's ``set_goal`` leaves one behind, which would run its other tools)."""
+    path = getattr(b, "db_path", None)
+    if not path:
+        return
+    from core.sqlite_util import execute_retry
+    rows = execute_retry(path, "SELECT id FROM goals WHERE kind='goal' AND user_id=? AND "
+                               "json_extract(payload, '$.mandate')=? AND status NOT IN "
+                               "('done','cancelled','failed')",
+                         (str(user_id), str(order_id)), fetch="all") or []
+    for r in rows:
+        logger.warning("commerce: goal %s of order %s is not the order's goal; stopped",
+                       r["id"], order_id)
+        b.cancel(r["id"])
+
+
 def make_fulfiller(data_dir: Optional[str] = None, *, board=None):
     def _fulfil(order, manifest, token) -> Optional[str]:
         from core.commerce import store as st
         from modules.commerce.fulfillment import goal_payload, goal_title, task_text
         b = board if board is not None else _board(data_dir)
+        _stop_earlier_goals(b, order.id, order.user_id)
         goal = b.create(user_id=order.user_id, title=goal_title(order, manifest),
                         body=task_text(order, manifest, st.resources(order.offer_id)),
                         payload=goal_payload(order, manifest), actor="owner_seat",

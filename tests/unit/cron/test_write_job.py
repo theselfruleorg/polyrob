@@ -153,6 +153,40 @@ async def test_a_pause_window_skips_a_write_job(runner, monkeypatch):
     assert events[0][:2] == ("skipped", "pause_window") and not called
 
 
+@pytest.mark.asyncio
+async def test_a_failed_write_job_is_a_failed_run(runner, monkeypatch):
+    # Before: the runner answered True, so the run read "done" and a one-shot ended done.
+    run, _ = runner
+
+    async def fake(task_agent, job, **kw):
+        return False, "write_verb_delivered"
+    monkeypatch.setattr(W, "run_write_job", fake)
+    job = _job({"write_verb": SPEC})
+    assert await run(job) is False
+    assert job.run_note["outcome"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_a_write_job_refused_by_the_flag_is_skipped_not_done(runner, monkeypatch):
+    monkeypatch.delenv(W.FLAG, raising=False)
+    run, _ = runner
+    job = _job({"write_verb": SPEC})
+    assert await run(job) is True
+    assert job.run_note["outcome"] == "skipped"
+
+
+@pytest.mark.asyncio
+async def test_a_paused_tick_is_skipped_not_done(runner, tmp_path, monkeypatch):
+    from core import autonomy_control as ac
+    monkeypatch.setenv(W.FLAG, "true")
+    run, _ = runner
+    ac.pause(str(tmp_path), scopes=("cron",), via="test")
+    job = _job({"write_verb": SPEC})
+    assert await run(job) is True
+    assert job.run_note == {"outcome": "skipped", "reason": "the owner paused jobs",
+                            "hold": True}
+
+
 # -- the service and the agent tool -------------------------------------------------
 
 def _svc(tmp_path):

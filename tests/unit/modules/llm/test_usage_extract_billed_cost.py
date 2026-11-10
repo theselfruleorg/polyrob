@@ -24,50 +24,49 @@ def _resp(**usage_fields):
 
 
 def test_billed_cost_and_cache_discount_are_read():
-    out = extract_token_usage(_resp(cost=0.0031, cache_discount=0.0004), "openrouter")
+    out = extract_token_usage(_resp(cost=0.0031, cache_discount=0.0004))
     assert out["billed_cost_usd"] == pytest.approx(0.0031)
     assert out["cache_discount_usd"] == pytest.approx(0.0004)
 
 
 def test_absent_cost_is_none_not_zero():
-    out = extract_token_usage(_resp(), "openrouter")
+    out = extract_token_usage(_resp())
     assert out["billed_cost_usd"] is None
     assert out["cache_discount_usd"] is None
 
 
 def test_a_genuinely_free_call_reports_zero():
     """0.0 IS a report — a free model on OpenRouter — and must survive as 0.0."""
-    out = extract_token_usage(_resp(cost=0.0), "openrouter")
+    out = extract_token_usage(_resp(cost=0.0))
     assert out["billed_cost_usd"] == 0.0
 
 
 def test_money_is_not_coerced_to_an_integer():
     """The token keys go through int(); the money keys must not — a sub-cent
     cost rounded to 0 would silently zero out a real charge."""
-    out = extract_token_usage(_resp(cost=0.0042), "openrouter")
+    out = extract_token_usage(_resp(cost=0.0042))
     assert isinstance(out["billed_cost_usd"], float)
     assert out["billed_cost_usd"] == pytest.approx(0.0042)
 
 
 @pytest.mark.parametrize("bad", ["", "n/a", None, True, float("nan"), -1.0, object()])
 def test_unusable_values_are_none(bad):
-    out = extract_token_usage(_resp(cost=bad), "openrouter")
+    out = extract_token_usage(_resp(cost=bad))
     assert out["billed_cost_usd"] is None
 
 
 def test_dict_shaped_usage_is_read_too():
     out = extract_token_usage({"usage": {"prompt_tokens": 5, "completion_tokens": 1,
-                                         "cost": 0.5, "cache_discount": 0.1}},
-                              "openrouter")
+                                         "cost": 0.5, "cache_discount": 0.1}})
     assert out["billed_cost_usd"] == pytest.approx(0.5)
     assert out["cache_discount_usd"] == pytest.approx(0.1)
 
 
 def test_token_counts_are_unaffected():
-    out = extract_token_usage(_resp(cost=0.01), "openrouter")
+    out = extract_token_usage(_resp(cost=0.01))
     assert out["prompt_tokens"] == 100 and out["completion_tokens"] == 10
 
 
 def test_a_response_with_no_usage_block_is_silent():
-    out = extract_token_usage(N(), "openrouter")
+    out = extract_token_usage(N())
     assert out["billed_cost_usd"] is None and out["cache_discount_usd"] is None

@@ -1,21 +1,18 @@
 """OpenAI LLM client implementation."""
 
 from modules.llm.billing_guard import inference_sdk
-import logging
-from typing import Dict, Any, Optional, List, Union, AsyncGenerator, Tuple
+from typing import Dict, Any, Optional, List, Union, Tuple
 import json
-import os
-import asyncio
-import time
 from openai import AsyncOpenAI # type: ignore 
 
-from .llm_client import LLMClient
-from .prefix_stamp import stamp_client  # F20: request prefix identity
-from .sdk_caps import sdk_supports  # noqa: F401 — re-exported for callers/tests
-from .token_counter import count_messages_tokens
+from .call_scope import call_timeout_param
+from .llm_client import LLMClient, raise_llm_error
+from .prefix_stamp import stamp_request  # request prefix identity
+from .sdk_caps import sdk_supports
 from .retry_log import log_attempt
+from .usage_extract import chat_usage_fields
 from core.config import BotConfig
-from core.exceptions import LLMError, LLMConnectionError, ServiceError
+from core.exceptions import LLMError, LLMConnectionError, LLMInvalidRequestError, ServiceError
 
 
 class OpenAIClient(LLMClient):
@@ -36,19 +33,10 @@ class OpenAIClient(LLMClient):
         self.api_key = openai_config.get('api_key')
         self.organization = openai_config.get('organization')
         self.base_url = openai_config.get('base_url')
-        self.last_response = None  # Store the last response for token usage reporting
-        
+
         # Get defaults from model_registry (single source of truth)
         from modules.llm.model_registry import get_model_config
-        model_config = get_model_config(self.model_type)
-
-        # Get model limits from registry
-        if model_config:
-            model_defaults = model_config.max_completion_tokens or 16384
-        else:
-            model_defaults = 16384  # Conservative fallback
-
-        # Resolve vision support via base helper (falls back to True if not in registry)
+        model_defaults = get_model_config(self.model_type).max_completion_tokens
         self.supports_vision = self._resolve_supports_vision()
 
         # Set default parameters from config or use model-specific defaults
@@ -77,7 +65,7 @@ class OpenAIClient(LLMClient):
                 client_kwargs["base_url"] = self.base_url
                 
             # Initialize client
-            self._client = AsyncOpenAI(**client_kwargs)
+            self._client = AsyncOpenAI(**client_kwargs, **self._sdk_limits())
             self.logger.debug("OpenAI client setup completed")
         except Exception as e:
             raise ServiceError(f"Failed to set up OpenAI client: {e}")
@@ -143,10 +131,6 @@ class OpenAIClient(LLMClient):
         **kwargs
     ) -> str:
         """Generate a response from OpenAI API."""
-        start_time = time.time()
-        success = False
-        error_message = None
-        
         try:
             # Ensure client is initialized
             if not self._initialized:
@@ -192,27 +176,19 @@ class OpenAIClient(LLMClient):
             # Log request details
             self.logger.debug(f"Sending request to OpenAI, model={self.model_type}, temp={temp}, max_tokens={max_tokens_value}")
             
-            # Filter kwargs to only include supported parameters
+            # Only these reach the wire. ``metadata`` and ``store`` never do: ``store=True``
+            # would keep the conversation at the vendor.
             supported_params = {
                 'model', 'messages', 'temperature', 'max_tokens', 
                 'top_p', 'n', 'stop', 'presence_penalty', 'frequency_penalty',
                 'logit_bias', 'user', 'seed', 'response_format'
             }
             
-            # Special handling for metadata - it requires 'store' to be enabled
             filtered_kwargs = {k: v for k, v in kwargs.items() if k in supported_params}
-            
-            # If metadata is in kwargs, ensure store is enabled
-            if 'metadata' in kwargs:
-                # We should have store=True since we set it in generate_response
-                if not kwargs.get('store', False):
-                    self.logger.debug("Setting store=True since metadata is provided")
-                filtered_kwargs['metadata'] = kwargs['metadata']
-                filtered_kwargs['store'] = True
-            
-            # H1: SSOT decision for models that reject a custom temperature (o-series
+
+            # SSOT decision for models that reject a custom temperature (o-series
             # reasoning models + gpt-5). Prefix-based, so o3/o4-mini are covered.
-            from modules.llm.model_registry import openai_omits_temperature
+            from modules.llm.model_types import openai_omits_temperature
             if openai_omits_temperature(self.model_type) and 'temperature' in filtered_kwargs:
                 self.logger.info(f"Removing unsupported parameter 'temperature' for model {self.model_type}")
                 filtered_kwargs.pop('temperature')
@@ -240,40 +216,23 @@ class OpenAIClient(LLMClient):
             # Add other filtered parameters
             request_params.update(filtered_kwargs)
 
-            # P-3: stable cache bucket keyed on the (inline) system prompt, if any.
+            # Stable cache bucket keyed on the (inline) system prompt, if any.
             _system_inline = next((m.get('content') for m in openai_messages if m.get('role') == 'system'), None)
             _cache_key = self._stable_prompt_cache_key(_system_inline)
             if _cache_key and sdk_supports('prompt_cache_key'):
                 request_params['prompt_cache_key'] = _cache_key
 
             # Make the actual API call
-            stamp_client(self, request_params)   # F20: prefix identity
+            stamp_request(request_params)   # prefix identity
+            request_params.update(call_timeout_param())
             self.last_response = await inference_sdk(self).chat.completions.create(**request_params)
-            
-            # Mark as successful
-            success = True
-            
-            # Process response
-            response_text = ""
-            if hasattr(self.last_response, 'choices') and self.last_response.choices:
-                choice = self.last_response.choices[0]
-                if hasattr(choice, 'message') and choice.message:
-                    response_text = choice.message.content or ""
-            
-            # Capture telemetry with actual timing and usage data
-            self._extract_usage_and_capture_telemetry(start_time, success, None, kwargs.get('metadata'))
-            
-            return response_text
-            
+
+            choice = self._first_choice(self.last_response)
+            return (choice.message.content or "") if choice.message else ""
+
         except Exception as e:
-            success = False
-            error_message = str(e)
             log_attempt(self.logger, f"OpenAI API error: {e}")  # A12 round 5: see modules/llm/retry_log.py
-            
-            # Capture telemetry for failed requests too
-            self._extract_usage_and_capture_telemetry(start_time, success, error_message, kwargs.get('metadata'))
-            
-            raise ServiceError(f"OpenAI API error: {e}")
+            raise_llm_error(e, "OpenAI", model=self.model_type)
             
     async def generate_response(
         self,
@@ -296,50 +255,8 @@ class OpenAIClient(LLMClient):
                 if not has_system:
                     formatted_messages.insert(0, {"role": "system", "content": system})
             
-            # Process metadata for OpenAI
-            # OpenAI allows metadata but with specific formatting requirements:
-            # https://platform.openai.com/docs/api-reference/chat/create
-            filtered_kwargs = kwargs.copy()
-            
-            # Ensure metadata is passed through to _generate
-            if metadata:
-                filtered_kwargs['metadata'] = metadata
-            
-            # Filter out metadata that OpenAI API doesn't support in the request
-            # Store it in kwargs so _generate can access it but don't send to API
-            api_metadata = None
-            if metadata:
-                # Extract what OpenAI supports vs. what we use internally
-                api_metadata = {}
-                internal_metadata = {}
-                
-                for key, value in metadata.items():
-                    if key in ['user_id', 'session_id', 'agent_id']:
-                        # These are for our internal tracking
-                        internal_metadata[key] = value
-                    else:
-                        # These might be for OpenAI API
-                        api_metadata[key] = value
-                
-                # Only include API metadata if it has valid content
-                if api_metadata:
-                    # OpenAI has strict requirements for metadata values
-                    clean_api_metadata = {}
-                    for key, value in api_metadata.items():
-                        if isinstance(value, (str, int, float, bool)) and len(str(value)) <= 512:
-                            clean_api_metadata[key] = value
-                    
-                    if clean_api_metadata:
-                        filtered_kwargs['metadata'] = clean_api_metadata
-                        filtered_kwargs['store'] = True  # Required when using metadata
-                    # NOTE: do NOT overwrite filtered_kwargs['metadata'] with the raw
-                    # internal metadata here — filtered_kwargs is sent to the OpenAI API,
-                    # which rejects non-scalar/>512-char values and would receive
-                    # unfiltered internal fields. The raw `metadata` dict stays in scope
-                    # for local telemetry; only the sanitized copy goes to the wire.
-            
-            # H1: models that reject a custom temperature (o-series + gpt-5).
-            from modules.llm.model_registry import openai_omits_temperature
+            # Models that reject a custom temperature (o-series + gpt-5).
+            from modules.llm.model_types import openai_omits_temperature
             if openai_omits_temperature(self.model_type) and temperature is not None:
                 self.logger.info(f"Ignoring temperature parameter for model {self.model_type}")
                 temperature = None
@@ -349,14 +266,14 @@ class OpenAIClient(LLMClient):
                 messages=formatted_messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                **filtered_kwargs
+                **kwargs
             )
             
             return response
             
         except Exception as e:
             log_attempt(self.logger, f"Failed to generate response: {e}")  # A12 round 5: see modules/llm/retry_log.py
-            raise ServiceError(f"Failed to generate response: {e}")
+            raise_llm_error(e, "OpenAI", model=self.model_type)
             
     async def cleanup(self) -> None:
         """Clean up resources."""
@@ -375,9 +292,8 @@ class OpenAIClient(LLMClient):
             messages: List of formatted messages to validate
 
         Raises:
-            LLMError: If validation fails with details about the issue
+            LLMInvalidRequestError: If validation fails with details about the issue
         """
-        from core.exceptions import LLMError
 
         for i, msg in enumerate(messages):
             if msg.get("role") == "assistant" and msg.get("tool_calls"):
@@ -409,7 +325,7 @@ class OpenAIClient(LLMClient):
                                 f"Invalid sequence at message {i}: Assistant message with {len(expected_ids)} "
                                 f"tool_calls is missing tool responses for IDs: {missing}"
                             )
-                            raise LLMError(
+                            raise LLMInvalidRequestError(
                                 f"Invalid message sequence: Assistant message at index {i} with "
                                 f"tool_calls {list(expected_ids)} is missing tool responses for "
                                 f"{list(missing)}. Found a {next_msg.get('role')} message instead."
@@ -434,14 +350,14 @@ class OpenAIClient(LLMClient):
                     self.logger.error(
                         f"Assistant message at index {i} has unmatched tool_calls: {missing}"
                     )
-                    raise LLMError(
+                    raise LLMInvalidRequestError(
                         f"Invalid message sequence: Assistant message at index {i} has "
                         f"{len(missing)} unmatched tool_calls: {list(missing)}. "
                         "Each tool_call must have a corresponding tool response message."
                     )
 
     def _stable_prompt_cache_key(self, system: Optional[str]) -> Optional[str]:
-        """Stable per-session key for OpenAI prompt caching (R3 / P-3).
+        """Stable per-session key for OpenAI prompt caching.
 
         OpenAI caches identical request prefixes server-side automatically, but
         `prompt_cache_key` lets us route same-prefix requests to the same cache
@@ -473,7 +389,7 @@ class OpenAIClient(LLMClient):
         before messages reach this point.
         """
         try:
-            # Param assembly extracted to _build_tool_request_params (019 P5)
+            # Param assembly extracted to _build_tool_request_params
             # so the true-streaming path issues byte-identical requests.
             request_params = self._build_tool_request_params(
                 messages, tools, system, temperature, max_tokens, kwargs
@@ -481,12 +397,13 @@ class OpenAIClient(LLMClient):
 
             # Create completion request with tools
             self.logger.debug(f"Calling OpenAI API with {len(request_params['messages'])} messages")
-            stamp_client(self, request_params)   # F20: prefix identity
+            stamp_request(request_params)   # prefix identity
+            request_params.update(call_timeout_param())
             response = await inference_sdk(self).chat.completions.create(**request_params)
             self.last_response = response  # ✅ Store for telemetry
-            
+
             # Handle response
-            message = response.choices[0].message
+            message = self._first_choice(response).message
 
             # Extract usage data from response
             usage_data = self._extract_usage_data()
@@ -525,7 +442,7 @@ class OpenAIClient(LLMClient):
             
         except Exception as e:
             log_attempt(self.logger, f"OpenAI tool-based generation failed: {str(e)}")  # A12 round 5: see modules/llm/retry_log.py
-            raise LLMError(f"OpenAI generation failed: {str(e)}")
+            raise_llm_error(e, "OpenAI", model=self.model_type)
 
     def _build_tool_request_params(
         self,
@@ -538,7 +455,7 @@ class OpenAIClient(LLMClient):
     ) -> Dict[str, Any]:
         """Assemble the chat.completions.create request params for the tool path.
 
-        Extracted verbatim from _generate_with_tools (019 P5) so the true-
+        Extracted verbatim from _generate_with_tools so the true-
         streaming path (astream_agent_response) issues byte-identical requests:
         wire-format conversion, tool-pair preflight, system injection,
         max_tokens clamping, cache key, and reasoning_effort.
@@ -582,7 +499,7 @@ class OpenAIClient(LLMClient):
         # PREFLIGHT VALIDATION: Ensure tool calls have matching responses
         self._validate_tool_call_pairs(formatted_messages)
 
-        # ✅ FIX: Use explicit parameters instead of burying in kwargs
+        # Use explicit parameters instead of burying in kwargs
         # Use provided parameters or instance defaults
         temp = temperature if temperature is not None else self.temperature
         max_tokens_value = max_tokens if max_tokens is not None else self.max_tokens
@@ -596,7 +513,7 @@ class OpenAIClient(LLMClient):
                 self.logger.debug("Injected system message into messages list")
 
         # Clamp max_tokens to model limits (single canonical logic on base)
-        max_tokens_value = self._adjust_max_tokens(messages=formatted_messages, max_tokens=max_tokens_value)
+        max_tokens_value = self._adjust_max_tokens(messages=formatted_messages, max_tokens=max_tokens_value, tools=tools)
 
         self.logger.info(f"OpenAI API request with tools: model={self.model_type}, tools={len(tools) if tools else 0}, max_tokens={max_tokens_value}, has_system={bool(system)}")
 
@@ -616,19 +533,19 @@ class OpenAIClient(LLMClient):
             'max_completion_tokens': max_tokens_value,
         }
 
-        # Add temperature only for models that support it (H1: o-series + gpt-5 reject it).
-        from modules.llm.model_registry import openai_omits_temperature
+        # Add temperature only for models that support it (o-series + gpt-5 reject it).
+        from modules.llm.model_types import openai_omits_temperature
         if not openai_omits_temperature(self.model_type):
             request_params['temperature'] = temp
 
         request_params.update(filtered_kwargs)
 
-        # P-3: route same-prefix requests to a stable cache bucket.
+        # Route same-prefix requests to a stable cache bucket.
         cache_key = self._stable_prompt_cache_key(system)
         if cache_key and sdk_supports('prompt_cache_key'):
             request_params['prompt_cache_key'] = cache_key
 
-        # UP-07: per-model reasoning_effort from the registry (gated, default OFF).
+        # Per-model reasoning_effort from the registry (gated, default OFF).
         # Inert unless a model entry sets reasoning_effort AND the gate is on.
         if 'reasoning_effort' not in request_params:
             try:
@@ -648,7 +565,7 @@ class OpenAIClient(LLMClient):
         tools: List[Dict[str, Any]],
         **kwargs
     ):
-        """TRUE token streaming (019 P5): yield text deltas, then one final event.
+        """TRUE token streaming: yield text deltas, then one final event.
 
         Async generator yielding ``{"type": "text", "text": str}`` per content
         delta, then exactly one ``{"type": "final", "content", "tool_calls",
@@ -675,13 +592,14 @@ class OpenAIClient(LLMClient):
         request_params['stream'] = True
         request_params['stream_options'] = {'include_usage': True}
 
-        stamp_client(self, request_params)   # F20: prefix identity
+        stamp_request(request_params)   # prefix identity
         stream = await inference_sdk(self).chat.completions.create(**request_params)
 
         content_parts: List[str] = []
         tool_calls_by_index: Dict[int, Dict[str, Any]] = {}
         usage_obj = None
         response_id = None
+        finish_reason = None
 
         async for chunk in stream:
             chunk_id = getattr(chunk, 'id', None)
@@ -690,6 +608,7 @@ class OpenAIClient(LLMClient):
             if getattr(chunk, 'usage', None):
                 usage_obj = chunk.usage
             for choice in (getattr(chunk, 'choices', None) or []):
+                finish_reason = getattr(choice, 'finish_reason', None) or finish_reason
                 delta = getattr(choice, 'delta', None)
                 if delta is None:
                     continue
@@ -714,7 +633,12 @@ class OpenAIClient(LLMClient):
 
         # Reuse the canonical usage extraction over a minimal response holder.
         from types import SimpleNamespace
-        self.last_response = SimpleNamespace(usage=usage_obj, id=response_id)
+        self.last_response = SimpleNamespace(usage=usage_obj, id=response_id,
+                                             choices=[SimpleNamespace(finish_reason=finish_reason)])
+        # The batch rule: a filtered or errored answer raises typed, never an empty action.
+        self._first_choice(self.last_response)
+        if finish_reason is None:  # a stream cut before its last chunk is not an answer
+            raise LLMConnectionError(f"OpenAI: the stream of model {self.model_type} ended with no finish_reason")
         usage_data = self._extract_usage_data()
 
         tool_calls_list = [
@@ -766,7 +690,7 @@ class OpenAIClient(LLMClient):
         try:
             self.logger.info(f"[generate_agent_response] Called with {len(messages)} messages and {len(tools) if tools else 0} tools")
 
-            # ✅ FIX: Extract system message and parameters from kwargs (match Anthropic pattern)
+            # Extract system message and parameters from kwargs (match Anthropic pattern)
             system = kwargs.pop('system', None)
             temperature = kwargs.pop('temperature', None)
             max_tokens = kwargs.pop('max_tokens', None)
@@ -781,55 +705,24 @@ class OpenAIClient(LLMClient):
                 **kwargs
             )
 
-            # Log the result type for debugging
-            if isinstance(result, tuple):
-                if len(result) == 3:
-                    content, tool_calls, usage = result
-                    self.logger.info(f"[generate_agent_response] Returning 3-tuple with {len(tool_calls)} tool calls + usage")
-                else:
-                    # Backward compatibility - shouldn't happen with new code
-                    content, tool_calls = result
-                    self.logger.warning(f"[generate_agent_response] Got 2-tuple (old format) with {len(tool_calls)} tool calls")
-            else:
-                self.logger.info(f"[generate_agent_response] Returning content only (no tool calls)")
-
+            # _generate_with_tools always returns the 3-tuple (content, tool_calls, usage).
+            self.logger.info(f"[generate_agent_response] Returning {len(result[1])} tool calls + usage")
             return result
 
         except LLMError:
             # Re-raise LLM errors as-is
             raise
         except Exception as e:
-            # Wrap other exceptions using core.exceptions pattern
             self.logger.error(f"generate_agent_response failed: {str(e)}", exc_info=True)
-            raise LLMError(f"Failed to generate agent response: {str(e)}")
-
-    def _validate_tool_message_sequence(
-        self,
-        messages: List[Dict[str, Any]]
-    ) -> bool:
-        """Validate that tool messages properly follow tool calls."""
-        tool_call_ids = set()
-
-        for msg in messages:
-            if msg["role"] == "assistant" and "tool_calls" in msg:
-                for tool_call in msg.get("tool_calls", []):
-                    tool_call_ids.add(tool_call["id"])
-            elif msg["role"] == "tool":
-                if "tool_call_id" not in msg:
-                    return False
-                if msg["tool_call_id"] not in tool_call_ids:
-                    return False
-                tool_call_ids.remove(msg["tool_call_id"])
-
-        return True
+            raise_llm_error(e, "OpenAI", model=self.model_type)
 
     async def _make_validation_request(self) -> Any:
-        """Make minimal test request to OpenAI. F20: NOT prefix-stamped — a
+        """Make minimal test request to OpenAI. NOT prefix-stamped — a
         two-token probe carries neither the system prompt nor the tools."""
         return await inference_sdk(self).chat.completions.create(
             model=self.model_type,
             messages=[{"role": "user", "content": "test"}],
-            max_tokens=1
+            max_completion_tokens=1
         )
 
     def _check_validation_response(self, response: Any) -> None:
@@ -838,64 +731,4 @@ class OpenAIClient(LLMClient):
             raise ValueError("Invalid response from OpenAI")
 
     def _extract_usage_data(self) -> Dict[str, Optional[int]]:
-        """Extract usage data from last_response.
-
-        Returns dict with prompt_tokens, completion_tokens, total_tokens, cached_tokens.
-        Returns None values if usage data not available.
-
-        Note: OpenAI may return additional fields:
-        - prompt_tokens_details.cached_tokens (for prompt caching)
-        - completion_tokens_details.reasoning_tokens (for o1/o3 models)
-        """
-        if not self.last_response:
-            self.logger.warning("No last_response available for usage extraction")
-            return {
-                'prompt_tokens': None,
-                'completion_tokens': None,
-                'total_tokens': None,
-                'cached_tokens': None
-            }
-
-        if not hasattr(self.last_response, 'usage') or not self.last_response.usage:
-            self.logger.warning(f"No usage data in response for model {self.model_type}")
-            return {
-                'prompt_tokens': None,
-                'completion_tokens': None,
-                'total_tokens': None,
-                'cached_tokens': None
-            }
-
-        usage = self.last_response.usage
-
-        # Extract basic token counts
-        prompt_tokens = getattr(usage, 'prompt_tokens', None)
-        completion_tokens = getattr(usage, 'completion_tokens', None)
-        total_tokens = getattr(usage, 'total_tokens', None)
-
-        # Extract cached tokens if present (for prompt caching)
-        cached_tokens = None
-        if hasattr(usage, 'prompt_tokens_details'):
-            details = usage.prompt_tokens_details
-            if details and hasattr(details, 'cached_tokens'):
-                cached_tokens = getattr(details, 'cached_tokens', None)
-                if cached_tokens:
-                    self.logger.debug(f"Found cached_tokens: {cached_tokens}")
-
-        # Extract reasoning tokens if present (o1/o3 models)
-        # These are already included in completion_tokens by OpenAI
-        if hasattr(usage, 'completion_tokens_details'):
-            details = usage.completion_tokens_details
-            if details and hasattr(details, 'reasoning_tokens'):
-                reasoning_tokens = getattr(details, 'reasoning_tokens', None)
-                if reasoning_tokens:
-                    self.logger.debug(f"Found reasoning_tokens: {reasoning_tokens} (included in completion_tokens)")
-
-        usage_data = {
-            'prompt_tokens': prompt_tokens,
-            'completion_tokens': completion_tokens,
-            'total_tokens': total_tokens,
-            'cached_tokens': cached_tokens or 0  # Default to 0 if not present
-        }
-
-        self.logger.debug(f"Extracted usage: {usage_data}")
-        return usage_data
+        return chat_usage_fields(self.last_response)

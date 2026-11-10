@@ -10,6 +10,12 @@ from core.surfaces.transcription import VOICE_TIMEOUT_SECONDS
 
 logger = logging.getLogger(__name__)
 
+#: A file at the bot limit (20 MB) can take longer than aiogram's 30-second default.
+DOWNLOAD_TIMEOUT_SECONDS = 120
+#: A local Bot API server fetches the whole file before it answers ``getFile``.
+LOCAL_GET_FILE_TIMEOUT_SECONDS = 900
+PUBLIC_GET_FILE_TIMEOUT_SECONDS = 60
+
 
 def extract_voice_file_id(update: dict) -> Optional[str]:
     """Return the file_id of a voice/audio attachment on the update, or None.
@@ -30,6 +36,31 @@ def extract_voice_file_id(update: dict) -> Optional[str]:
     return None
 
 
+async def _resolve_file(bot: Any, file_id: str) -> Any:
+    from core.surfaces.telegram_api import local_bot_api_url
+    return await bot.get_file(file_id, request_timeout=(
+        LOCAL_GET_FILE_TIMEOUT_SECONDS if local_bot_api_url()
+        else PUBLIC_GET_FILE_TIMEOUT_SECONDS))
+
+
+async def download_file_to_path(bot: Any, file_id: str, dest: str, max_bytes: int) -> bool:
+    """Stream ONE Telegram file to ``dest``, never into memory. Fail-open -> False."""
+    try:
+        f = await _resolve_file(bot, file_id)
+        size = getattr(f, "file_size", None)
+        if isinstance(size, int) and size > max_bytes:
+            logger.warning("telegram file %s is %s bytes, over the %s-byte cap; not downloaded",
+                           file_id, size, max_bytes)
+            return False
+        await bot.download_file(f.file_path, destination=dest,
+                                timeout=DOWNLOAD_TIMEOUT_SECONDS)
+        return True
+    except Exception as e:
+        logger.warning("telegram file download failed for %s: %s: %s",
+                       file_id, type(e).__name__, e)
+        return False
+
+
 async def download_file_bytes(bot: Any, file_id: str) -> Optional[bytes]:
     """Resolve + download ANY Telegram file's bytes via the bot. Fail-open -> None.
 
@@ -38,18 +69,19 @@ async def download_file_bytes(bot: Any, file_id: str) -> Optional[bytes]:
     name so the transcription call sites read as before.
     """
     try:
-        f = await bot.get_file(file_id)
+        f = await _resolve_file(bot, file_id)
         file_path = getattr(f, "file_path", None)
         if file_path is None and isinstance(f, dict):
             file_path = f.get("file_path")
-        data = await bot.download_file(file_path)
+        data = await bot.download_file(file_path, timeout=DOWNLOAD_TIMEOUT_SECONDS)
         if data is None:
             return None
         if hasattr(data, "read"):       # aiogram returns a BinaryIO/BytesIO
             return data.read()
         return bytes(data)
     except Exception as e:
-        logger.debug("telegram file download failed for %s: %s", file_id, e)
+        logger.warning("telegram file download failed for %s: %s: %s",
+                       file_id, type(e).__name__, e)
         return None
 
 

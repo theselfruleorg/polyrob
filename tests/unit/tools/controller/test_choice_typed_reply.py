@@ -1,7 +1,7 @@
-"""A typed reply to an open present_choice card ends the wait at once.
+"""A typed reply to an open owner_ask choice card ends the wait at once.
 
 Prod 2026-10-15 04:09: the owner typed "Judge" instead of tapping; the line was
-queued as a STEER while present_choice blocked until the action timeout. The
+queued as a STEER while the choice blocked until the action timeout. The
 card now closes as "replied in text" — the text is NEVER parsed into a pick —
 and the agent is told to read the queued message as the owner's answer.
 """
@@ -40,8 +40,8 @@ def test_no_session_closes_nothing():
     assert cards.close_choices_for_text("alice", "", "x") == []
 
 
-def test_present_choice_returns_promptly_on_a_typed_reply(_owner):  # noqa: F811
-    fn, model, _ = _actions()["present_choice"]
+def test_owner_ask_options_returns_promptly_on_a_typed_reply(_owner):  # noqa: F811
+    fn, model, _ = _actions()["owner_ask"]
     params = model(question="Which round?", options=["Judge", "Drop"], wait_seconds=60)
 
     def _type_soon():

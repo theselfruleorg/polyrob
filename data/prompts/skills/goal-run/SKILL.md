@@ -19,9 +19,11 @@ owner reads only what you send and what the board records.
   the last failure, what it waits on. Do not redo an attempt that already failed
   the same way.
 - A job: the task text and any `<precheck>` block (use that read; do not read the
-  same number again).
-- `recent_activity(kind="goal")` or `(kind="cron")` shows what the last runs did
-  (when the tool is present).
+  same number again). The `<previous-runs>` block is the job's sheet: its last
+  outcomes, acts, open asks, money and sibling jobs, from the stores. Read no file
+  for these. A section that says "could not read" is unknown, not empty.
+- A goal: `recent_activity(kind="goal")` shows what the last runs did (when the tool
+  is present).
 
 ## 2. Work to the acceptance
 - Plan in a few `task_todo_add` steps. On a long run, one `send_message` with the
@@ -30,17 +32,17 @@ owner reads only what you send and what the board records.
   sent id. A run that cannot verify says "unverified" and why.
 
 ## 3. When you need the owner
-- `goal_ask(what=…, why=…, blocks_goal_ids=[<this goal>])` holds THIS goal until the
-  owner answers. A run may hold only its own goal.
-- Any other decision: `owner_ask(question=…, why=…)`. Never a question in a
-  message: the run cannot wait for a reply.
+- `owner_ask(question=…, why=…)`. Never a question in a message: the run cannot wait
+  for a reply.
+- Add `blocks_goal_ids=[<this goal>]` to hold THIS goal until the owner answers. A run
+  may hold only its own goal.
 - Calling the same ask again refreshes it; it does not make a second one. Then
   keep the conservative reading and do the work that does not depend on it.
 
 ## 4. What a run may not do
 - `goal_update`, `goal_unblock` and `goal_cancel` refuse here. Name the owner's
   verb instead: `/goal retry <id>`, `/goal grant <id> tools=…`, `/goal stop <id>`.
-- `autonomy_control`, `present_choice` and a `forever=true` stop are the owner's.
+- `autonomy_control` and a `forever=true` stop are the owner's.
 - A missing or refused tool: read `agent_status(tool="<id>")`, then follow the
   pinned `harness-manual`. Never route around a gate.
 - New standing work: `goal_create` is allowed; a new job only under the autonomous

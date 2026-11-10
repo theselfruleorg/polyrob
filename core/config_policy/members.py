@@ -61,7 +61,10 @@ COMPUTE_POSTURE_MEMBERS: Dict[str, int] = {
 }
 
 #: Members whose value outside every bundle is ON (the bundle only names them).
-_BASE_ON: FrozenSet[str] = frozenset({"GOAL_COMPLETION_JUDGE"})
+#: ``CONTINUITY_BRIDGE_ENABLED`` (113): a direct chat that starts fresh carries the
+#: summary of the one before it, on a server as on a laptop. No model call
+#: (``CONTINUITY_LLM_SUMMARY`` stays off); a room and a correspondent never get it.
+_BASE_ON: FrozenSet[str] = frozenset({"GOAL_COMPLETION_JUDGE", "CONTINUITY_BRIDGE_ENABLED"})
 
 #: Every member flag: the union of the bundle sets. The doc's "Posture bundles"
 #: table is pinned to this by ``tests/unit/core/test_posture_bundles_doc.py``.

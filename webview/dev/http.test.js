@@ -10,7 +10,7 @@
 // The cookie path is unchanged: `credentials: 'include'` still rides on every
 // call, so the single-tenant console keeps working with no header at all.
 import { describe, it, expect } from "vitest";
-import { jsonHeaders, postJson } from "../static/app/http.js";
+import { getJson, jsonHeaders, postJson, readJson } from "../static/app/http.js";
 
 function recorder(body, { ok = true, status = 200, json } = {}) {
   const calls = [];
@@ -165,5 +165,53 @@ describe("FE10 — only the latest read draws", () => {
     const b = read();
     expect(await a).toEqual({ stale: true });
     await expect(b).rejects.toThrow("e2");
+  });
+});
+
+// 113 W5 item 6 (C-09) — `getJson` is the ONE read helper; the six local copies
+// in agent, money, work-apps, work-now, work-goals and workpane are gone.
+describe("getJson / readJson", () => {
+  const answer = (body, ok = true, status = 200) => {
+    const calls = [];
+    const fetcher = async (url, init) => {
+      calls.push({ url, init });
+      return { ok, status, json: async () => { if (body === undefined) throw new Error("no json"); return body; } };
+    };
+    return { calls, fetcher };
+  };
+
+  it("returns {ok, status, body} with the cookie and no Content-Type", async () => {
+    const { calls, fetcher } = answer({ a: 1 });
+    expect(await getJson("/api/x", { fetcher })).toEqual({ ok: true, status: 200, body: { a: 1 } });
+    expect(calls[0].init.credentials).toBe("include");
+    expect(calls[0].init.headers).toBeUndefined();
+  });
+
+  it("carries a refusal's body and a non-JSON answer as null", async () => {
+    expect(await getJson("/x", answer({ detail: "no" }, false, 403))).toEqual(
+      { ok: false, status: 403, body: { detail: "no" } });
+    expect((await getJson("/x", answer(undefined, false, 502))).body).toBeNull();
+  });
+
+  it("rejects on a network failure, as postJson does", async () => {
+    await expect(getJson("/x", { fetcher: async () => { throw new Error("offline"); } }))
+      .rejects.toThrow("offline");
+  });
+
+  it("readJson: the body, or {error: status}; allow404 keeps a 404 body", async () => {
+    expect(await readJson("/x", answer({ a: 1 }).fetcher)).toEqual({ a: 1 });
+    expect(await readJson("/x", answer({ a: 1 }, false, 500).fetcher)).toEqual({ error: "500" });
+    expect(await readJson("/x", answer({ gone: true }, false, 404).fetcher, { allow404: true }))
+      .toEqual({ gone: true });
+    await expect(readJson("/x", answer(undefined).fetcher)).rejects.toThrow("not JSON");
+  });
+
+  it("no destination module keeps its own copy", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    for (const name of ["agent", "money", "work-apps", "work-now", "work-goals", "workpane"]) {
+      const src = readFileSync(resolve(process.cwd(), "..", "static", "app", `${name}.js`), "utf8");
+      expect(src, name).not.toMatch(/function getJson\(/);
+    }
   });
 });

@@ -312,6 +312,8 @@ def _driver_identity() -> str:
     try:
         return process_identity().encode()
     except Exception:
+        logger.warning("bridge: could not read this process's identity; the "
+                       "driver lease is held without one", exc_info=True)
         return ""
 
 
@@ -383,6 +385,7 @@ def state_of(bid: str, *, db_path: Optional[str] = None) -> Optional[Dict[str, A
                             "SELECT state, detail, balance_after FROM bridges WHERE id=?",
                             (bid,), fetch="one")
     except Exception:
+        logger.warning("bridge %s: could not read its state", bid, exc_info=True)
         return None
     if row is None:
         return None
@@ -466,6 +469,8 @@ def close_stale_unsent(*, status: Optional[Callable[[str], tuple]] = None,
             try:
                 state, _detail = status(str(row.get("request_id") or ""))
             except Exception:
+                logger.warning("bridge %s: provider status unreadable during the "
+                               "never-sent sweep", row.get("id"), exc_info=True)
                 state = "unknown"
             if state == "success":
                 continue
@@ -718,16 +723,23 @@ def own_bridge_arrival(*, dest_chain_id: int, recipient: str,
     return None
 
 
-def mark_escalated(bid: str, *, at: Optional[float] = None,
-                   db_path: Optional[str] = None) -> None:
-    """Stamp that the owner has been told. Fail-open."""
+def mark_escalated(bid: str, *, expected: Optional[float], at: Optional[float] = None,
+                   db_path: Optional[str] = None) -> bool:
+    """Stamp that the owner is being told: a compare-and-set on the
+    ``escalated_at`` the caller read (None = never), so of two watchers with
+    the same read only one wins and notifies. False = lost the race, or the
+    store could not be written (then nobody is told twice either)."""
     from core.sqlite_util import execute_retry
     try:
-        execute_retry(db_path or bridges_db_path(),
-                      "UPDATE bridges SET escalated_at=? WHERE id=?",
-                      (at if at is not None else time.time(), bid))
+        n = execute_retry(db_path or bridges_db_path(),
+                          "UPDATE bridges SET escalated_at=? WHERE id=? "
+                          "AND COALESCE(escalated_at, 0)=?",
+                          (at if at is not None else time.time(), bid,
+                           float(expected or 0.0)))
+        return n == 1
     except Exception:
         logger.warning("bridge %s: could not stamp escalation", bid, exc_info=True)
+        return False
 
 
 def open_bridges(user_id: str, *, db_path: Optional[str] = None) -> list:
@@ -881,6 +893,50 @@ def evm_tx_inflow(tx_hash: str, recipient: str, currency_out: Optional[str],
         return None
 
 
+def evm_block_rise(tx_hash: str, recipient: str, currency_out: Optional[str],
+                   chain_name: str, *, rpc: Optional[Callable] = None
+                   ) -> Optional[tuple]:
+    """``(block number, rise)``: how much ``recipient``'s balance of
+    ``currency_out`` rose across the block of ONE destination transaction
+    (balance at n minus n-1), or None when it cannot be read.
+
+    The second check of an EVM arrival (B-2). It is measured AT the delivering
+    block, never against the live balance: the wallet may spend the arrived
+    asset before the watcher's next pass, and a proven arrival must stay
+    proven."""
+    from core.wallet.onchain import _hex_int, _rpc, rpc_url_for_chain
+    try:
+        url = rpc_url_for_chain(chain_name)
+        if not url:
+            return None
+
+        def call(method, params):
+            return (rpc(method, params) if rpc is not None
+                    else _rpc(url, method, params, 6.0))
+        receipt = call("eth_getTransactionReceipt", [tx_hash])
+        if not isinstance(receipt, dict) or _hex_int(receipt.get("status")) != 1:
+            return None
+        n = _hex_int(receipt.get("blockNumber"))
+        if n is None or n <= 0:
+            return None
+        if not currency_out or str(currency_out).lower() == _NATIVE_EVM:
+            def balance(tag):
+                return _hex_int(call("eth_getBalance", [recipient, tag]))
+        else:
+            data = "0x70a08231" + str(recipient).lower().replace("0x", "").rjust(64, "0")
+
+            def balance(tag):
+                return _hex_int(call("eth_call", [{"to": currency_out, "data": data}, tag]))
+        after, before = balance(hex(n)), balance(hex(n - 1))
+        if after is None or before is None:
+            return None
+        return int(n), int(after) - int(before)
+    except Exception:
+        logger.debug("bridge: destination block rise read failed on %s", chain_name,
+                     exc_info=True)
+        return None
+
+
 class ArrivalProof:
     """``() -> raw inflow | None``: what the DELIVERING transactions Relay names
     paid ``recipient``, bound to THIS bridge (B-1).
@@ -894,9 +950,16 @@ class ArrivalProof:
     When the counted sum clears ``min_out_raw`` the hashes are claimed for this
     row in one transaction; a lost race reads as unproven (None).
 
-    ``requires_delta``: on an EVM chain the measured balance rise is kept as a
-    second check (B-2). On Solana it is not — the lab trades on the same
-    wallet, so a balance rise there proves nothing.
+    ``requires_delta``: on an EVM chain the caller reads the live balance, for
+    the balance-only fallback below. On Solana it does not — the lab trades on
+    the same wallet, so a balance rise there proves nothing. With hashes, the
+    EVM second check (B-2) is the balance rise AT the delivering blocks
+    (:func:`evm_block_rise`), never the live delta: a wallet that spends the
+    arrived asset before the next pass must not un-prove the arrival.
+
+    ``measured`` after a call: the counted sum when every named hash was read
+    (0 for an empty list), else None — so "the read shows no arrival" is told
+    apart from "could not read".
 
     ``basis`` after a call: ``"tx"`` when hashes were read, or
     :data:`BASIS_BALANCE_ONLY` when Relay answered with NO destination hash on
@@ -922,6 +985,18 @@ class ArrivalProof:
         self.min_out_raw = min_out_raw
         self.db_path = db_path
         self.basis: Optional[str] = None
+        self.measured: Optional[int] = None
+
+    def _rise(self, used) -> Optional[int]:
+        """The summed balance rise across the delivering blocks (each block
+        once), or None when any block cannot be read."""
+        rises: Dict[int, int] = {}
+        for h in used:
+            got = evm_block_rise(h, self.recipient, self.currency_out, self.chain_name)
+            if got is None:
+                return None
+            rises[int(got[0])] = int(got[1])
+        return sum(rises.values())
 
     def _measure(self, tx_hash: str) -> Optional[tuple]:
         if self.svm:
@@ -935,7 +1010,10 @@ class ArrivalProof:
     def __call__(self) -> Optional[int]:
         from core.wallet import bridge_status
         self.basis = None
+        self.measured = None
         hashes = bridge_status.read_out_txs(self.request_id)
+        if hashes is not None and not hashes:
+            self.measured = 0
         if hashes is not None and not hashes and not self.svm:
             self.basis = BASIS_BALANCE_ONLY
             return None
@@ -969,6 +1047,15 @@ class ArrivalProof:
                 continue
             total += int(amount)
             used.append(h)
+        self.measured = total
+        if (not self.svm and used and self.min_out_raw is not None
+                and total >= int(self.min_out_raw)):
+            rise = self._rise(used)
+            if rise is None or rise < int(self.min_out_raw):
+                logger.warning("bridge %s: the balance rise at the delivering block "
+                               "is %s, below the floor %s; not proven", self.bridge_id,
+                               "unreadable" if rise is None else rise, self.min_out_raw)
+                return None
         if (self.bridge_id and self.min_out_raw is not None
                 and total >= int(self.min_out_raw)):
             if not claim_proof(self.bridge_id, self.dest_chain_id, used,
@@ -1027,7 +1114,6 @@ def await_arrival(*, provider, request_id: str, recipient: str, chain_name: str,
     last_detail = "no status read yet"
     provider_failed = False
 
-    needs_delta = bool(getattr(prove, "requires_delta", False))
     while True:
         after = reader(recipient, chain_name)
         delta_now = (None if (after is None or balance_before is None)
@@ -1040,12 +1126,11 @@ def await_arrival(*, provider, request_id: str, recipient: str, chain_name: str,
 
         state, detail = provider.status(request_id)
         last_detail = detail or state
-        delta_ok = (not needs_delta) or (
-            delta_now is not None and delta_now >= int(min_out_raw))
-        if prove is not None and state == "success" and delta_ok:
+        if prove is not None and state == "success":
             # The delivering transaction's own transfer is the proof (B-1/B-2).
-            # On EVM the measured balance rise must ALSO clear the floor (the
-            # second check); on Solana it is not asked (the lab trades here).
+            # On EVM the balance rise AT the delivering block must ALSO clear
+            # the floor (the second check, inside the proof); on Solana it is
+            # not asked (the lab trades here).
             proven = prove()
             if proven is not None and proven >= int(min_out_raw):
                 return ArrivalOutcome(
@@ -1077,8 +1162,9 @@ def await_arrival(*, provider, request_id: str, recipient: str, chain_name: str,
     if provider_failed:
         # A provider-declared failure with NO measured inflow is the one case we
         # can call failed: the order was refunded or expired and the money did
-        # not move to the destination.
-        if delta is None or delta < int(min_out_raw):
+        # not move to the destination. FAILED is terminal, so it needs a READ
+        # that shows no arrival — an unreadable one stays in_flight.
+        if failure_shows_no_arrival(prove, delta, int(min_out_raw)):
             return ArrivalOutcome(
                 STATE_FAILED,
                 f"relay reports failure/refund ({last_detail}); measured delta "
@@ -1094,6 +1180,22 @@ def await_arrival(*, provider, request_id: str, recipient: str, chain_name: str,
          f"NOT re-send; a re-sent bridge pays twice. Check "
          f"`polyrob wallet bridges` or the relay request id."),
         balance_after=after, measured_delta=delta)
+
+
+def failure_shows_no_arrival(prove, delta: Optional[int], min_out_raw: int) -> bool:
+    """True only when a provider-declared failure is backed by a READ showing
+    no arrival: on EVM the measured delta is known and below the floor; into
+    Solana (no balance proof — the lab trades there) the delivering-tx read
+    completed and shows less than the floor. Unknown is never failed."""
+    if prove is not None and not getattr(prove, "requires_delta", True):
+        try:
+            prove()
+        except Exception:
+            logger.debug("bridge: failure-path proof read failed", exc_info=True)
+            return False
+        measured = getattr(prove, "measured", None)
+        return measured is not None and int(measured) < int(min_out_raw)
+    return delta is not None and int(delta) < int(min_out_raw)
 
 
 def _same(a, b) -> bool:

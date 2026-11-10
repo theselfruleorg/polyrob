@@ -152,26 +152,26 @@ def _pinned(monkeypatch, **kw):
 
 
 def test_the_offline_set_is_the_registry_math():
-    s = erc6551.collection_account_addresses(4663, PINNED_A, SUPPLY)
+    s = erc6551.collection_account_addresses(4663, PINNED_A, SUPPLY, implementation=erc6551.ACCOUNT_V3_IMPL)
     assert len(s) == SUPPLY + 1
     for k in (1, 2, 100, SUPPLY):
-        assert erc6551.account_address(4663, PINNED_A, k).lower() in s
-    assert erc6551.account_address(46630, PINNED_A, 1).lower() not in s
+        assert erc6551.account_address(4663, PINNED_A, k, implementation=erc6551.ACCOUNT_V3_IMPL).lower() in s
+    assert erc6551.account_address(46630, PINNED_A, 1, implementation=erc6551.ACCOUNT_V3_IMPL).lower() not in s
     assert erc6551.collection_account_addresses(
-        4663, PINNED_A.upper().replace("0X", "0x"), SUPPLY) is s  # cached
+        4663, PINNED_A.upper().replace("0X", "0x"), SUPPLY, implementation=erc6551.ACCOUNT_V3_IMPL) is s  # cached
 
 
 def test_the_offline_set_follows_the_profiles_max_supply(monkeypatch):
     _pinned(monkeypatch, max_supply=10)
-    inside = erc6551.account_address(4663, PINNED_A, 10)
-    beyond = erc6551.account_address(4663, PINNED_A, 11)
+    inside = erc6551.account_address(4663, PINNED_A, 10, implementation=erc6551.ACCOUNT_V3_IMPL)
+    beyond = erc6551.account_address(4663, PINNED_A, 11, implementation=erc6551.ACCOUNT_V3_IMPL)
     assert _run(PINNED_A, inside, CodeRpc("0x")).allowed is False
     assert _run(PINNED_A, beyond, CodeRpc("0x")).allowed is True
 
 
 def test_a_pinned_token_into_an_undeployed_account_of_its_collection_refuses(monkeypatch):
     _pinned(monkeypatch)
-    future = erc6551.account_address(4663, PINNED_A, 4242)
+    future = erc6551.account_address(4663, PINNED_A, 4242, implementation=erc6551.ACCOUNT_V3_IMPL)
     rpc = CodeRpc("0x")                                   # no code there yet
     d = _run(PINNED_A, future, rpc)
     assert d.allowed is False and "deployed or not" in d.reason, d.reason
@@ -182,7 +182,7 @@ def test_an_ordinary_nft_into_the_account_of_an_unminted_pinned_token_refuses(mo
     """C5: whoever mints #4242 later owns what sits in its account — any asset, an ordinary NFT
     too (``ownerOf`` cannot be read here, which also refuses)."""
     _pinned(monkeypatch)
-    d = _run(NFT, erc6551.account_address(4663, PINNED_A, 4242), CodeRpc("0x"))
+    d = _run(NFT, erc6551.account_address(4663, PINNED_A, 4242, implementation=erc6551.ACCOUNT_V3_IMPL), CodeRpc("0x"))
     assert d.allowed is False and "not minted yet" in d.reason, d.reason
 
 
@@ -210,7 +210,7 @@ def _mint_to(to_addr):
 def test_a_mint_to_a_pinned_account_address_refuses(monkeypatch):
     """A mint to someone else is not a holder move, so no delta names it — the calldata does."""
     _pinned(monkeypatch)
-    d = _mint_to(erc6551.account_address(4663, PINNED_A, 7))
+    d = _mint_to(erc6551.account_address(4663, PINNED_A, 7, implementation=erc6551.ACCOUNT_V3_IMPL))
     assert d.allowed is False and "a call to the pinned collection" in d.reason, d.reason
     assert _mint_to(HOLDER).allowed is True
 

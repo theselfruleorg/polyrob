@@ -1,8 +1,7 @@
 """OpenAI ``image_url`` → Anthropic ``image`` block conversion.
 
-One pure function, lifted out of ``modules/llm/adapters.py`` (2026-09-21) so the
-adapter file stays under its god-file ceiling. Behaviour is unchanged: every
-failure degrades to a ``text`` block naming WHY the image is missing rather than
+One pure function, lifted out of ``modules/llm/adapters.py`` so the adapter file stays
+under its ceiling. Every failure degrades to a ``text`` block naming WHY the image is missing rather than
 dropping it silently, because a vision turn that quietly loses its picture reads
 to the model as a turn that never had one.
 """
@@ -12,6 +11,9 @@ import logging
 from typing import Any, Dict, Optional
 
 _DEFAULT_MEDIA_TYPE = "image/png"
+
+#: The media types the API accepts; anything else is a 400 on the whole request.
+ALLOWED_MEDIA_TYPES = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
 
 
 def convert_image_to_anthropic_format(
@@ -41,9 +43,12 @@ def convert_image_to_anthropic_format(
             media_type = _DEFAULT_MEDIA_TYPE
             header_content = header[5:] if header.startswith("data:") else ""
             if ";" in header_content:
-                media_type = header_content.split(";")[0]
+                media_type = header_content.split(";")[0].lower()
             elif header_content:
-                media_type = header_content
+                media_type = header_content.lower()
+            if media_type not in ALLOWED_MEDIA_TYPES or ";base64" not in header.lower():
+                log.warning(f"Refused image data URL with header {header[:40]}")
+                return {"type": "text", "text": f"[IMAGE: Unsupported type {media_type[:40]}]"}
             return {"type": "image",
                     "source": {"type": "base64", "media_type": media_type,
                                "data": base64_data}}

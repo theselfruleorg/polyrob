@@ -20,6 +20,38 @@
       "aliases": []
     },
     {
+      "name": "/new",
+      "group": "talk",
+      "help": "Open a separate chat beside the main one",
+      "aliases": []
+    },
+    {
+      "name": "/chats",
+      "group": "talk",
+      "help": "Your chats: the main one and each separate one",
+      "aliases": [
+        "/sessions"
+      ]
+    },
+    {
+      "name": "/chat",
+      "group": "talk",
+      "help": "Switch to another of your chats",
+      "aliases": []
+    },
+    {
+      "name": "/rename",
+      "group": "talk",
+      "help": "Name the chat you are in",
+      "aliases": []
+    },
+    {
+      "name": "/close",
+      "group": "talk",
+      "help": "Close a separate chat and go back to the main one",
+      "aliases": []
+    },
+    {
       "name": "/inbox",
       "group": "needs you",
       "help": "Everything waiting on a decision from you, blocking first; /inbox all lists every item",
@@ -80,16 +112,12 @@
       "aliases": []
     },
     {
-      "name": "/jobs",
-      "group": "work",
-      "help": "Scheduled jobs: next run, last outcome, and who wrote each",
-      "aliases": []
-    },
-    {
       "name": "/job",
       "group": "work",
-      "help": "Add, change, grant, pause, resume, run, or stop one scheduled job",
-      "aliases": []
+      "help": "Scheduled jobs: the list, or add, change, grant, pause, resume, run, or stop one",
+      "aliases": [
+        "/jobs"
+      ]
     },
     {
       "name": "/apps",
@@ -100,7 +128,7 @@
     {
       "name": "/skills",
       "group": "work",
-      "help": "The skills I can load, and what each one does; /skills <id> shows one skill's text",
+      "help": "The skills I can load, and what each one does; /skills <id> shows one skill's text. You install or approve a skill in the terminal",
       "aliases": []
     },
     {
@@ -227,24 +255,22 @@
       "name": "/cancel",
       "group": "control",
       "help": "Stop the task I am running now",
-      "aliases": []
+      "aliases": [
+        "/stop"
+      ]
     },
     {
       "name": "/pause",
       "group": "control",
       "help": "Stop autonomous work now, all of it or one scope",
-      "aliases": []
+      "aliases": [
+        "/halt"
+      ]
     },
     {
       "name": "/resume",
       "group": "control",
       "help": "Lift the pause",
-      "aliases": []
-    },
-    {
-      "name": "/halt",
-      "group": "control",
-      "help": "Stop all autonomous work now",
       "aliases": []
     },
     {
@@ -278,12 +304,6 @@
       "aliases": []
     },
     {
-      "name": "/recap",
-      "group": "remember",
-      "help": "The same as /journey",
-      "aliases": []
-    },
-    {
       "name": "/thread",
       "group": "remember",
       "help": "Our conversation across every session and rail, newest last",
@@ -293,7 +313,9 @@
       "name": "/journey",
       "group": "remember",
       "help": "What I have done over a recent window",
-      "aliases": []
+      "aliases": [
+        "/recap"
+      ]
     },
     {
       "name": "/rules",
@@ -306,6 +328,20 @@
       "group": "remember",
       "help": "Search and list my knowledge base",
       "aliases": []
+    },
+    {
+      "name": "/memory",
+      "group": "remember",
+      "help": "Recall across sessions and inspect memory scopes",
+      "aliases": []
+    },
+    {
+      "name": "/self",
+      "group": "remember",
+      "help": "My identity documents, read-only",
+      "aliases": [
+        "/soul"
+      ]
     },
     {
       "name": "/more",
@@ -370,6 +406,12 @@
       "aliases": []
     },
     {
+      "name": "/pair",
+      "group": "set up",
+      "help": "Strangers who asked to talk to me: list, approve or revoke",
+      "aliases": []
+    },
+    {
       "name": "/groups",
       "group": "set up",
       "help": "Room presence admin: allow, deny, mode, roles, and more",
@@ -409,7 +451,9 @@
       "name": "/prefs",
       "group": "set up",
       "help": "The preferences you have set",
-      "aliases": []
+      "aliases": [
+        "/settings"
+      ]
     },
     {
       "name": "/mcp",

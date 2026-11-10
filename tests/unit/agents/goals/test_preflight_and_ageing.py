@@ -18,6 +18,12 @@ from agents.task.goals.preflight import (UNMEASURED_RUN_STEPS, crossing_rail,
                                          expected_run_seconds, next_preempting_rail,
                                          p95)
 
+@pytest.fixture(autouse=True)
+def _cron_on(monkeypatch):
+    # 107 WS-7: with cron off no tick runs a job, so a job holds no goal.
+    monkeypatch.setenv("CRON_ENABLED", "true")
+
+
 NOW = datetime(2026, 9, 20, 13, 0, 0)
 
 

@@ -33,4 +33,5 @@ def test_goals_reply_counts_every_row_and_lists_open_newest_first(tmp_path):
 
 def test_goals_reply_empty_board(tmp_path):
     board = GoalBoard(str(tmp_path / "goals.db"))
-    assert _goals_reply("alice", str(tmp_path), board=board) == "No goals yet."
+    from core.goal_board_render import NO_GOALS_YET
+    assert _goals_reply("alice", str(tmp_path), board=board) == NO_GOALS_YET

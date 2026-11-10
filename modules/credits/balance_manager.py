@@ -132,8 +132,9 @@ class CreditBalanceManager:
         await self.get_balance(user_id)
 
         try:
-            # Start transaction for atomic operation
-            await self.db.connection.begin_transaction()
+            # Start transaction for atomic operation; wait while another task
+            # holds one (a bare begin_transaction raised).
+            await _begin_own_transaction(self.db.connection)
 
             try:
                 # SECURITY FIX: Atomic UPDATE with balance check in WHERE clause

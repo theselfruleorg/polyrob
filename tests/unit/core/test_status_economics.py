@@ -1,5 +1,7 @@
 """057 WS-I: the economics section reads usage_records and never guesses."""
 import json
+
+import pytest
 import os
 import sqlite3
 import time
@@ -55,6 +57,16 @@ def test_compute_is_pure_and_honest():
     assert e["truncated"] == 1 and e["timeouts"] == 1
     assert e["latency_p50"] == 30.0 and e["latency_p90"] == 80.0
     assert round(e["cost_per_day_usd"], 2) == 0.10
+
+
+@pytest.mark.parametrize("reason,counted", [
+    ("length", 1), ("max_tokens", 1), ("MAX_TOKENS", 1), ("max_output_tokens", 1),
+    ("stop", 0), ("end_turn", 0), (None, 0),
+])
+def test_a_cut_call_counts_under_each_provider_stop_reason(reason, counted):
+    rows = [{"session_id": "s1", "input_tokens": 10, "cached_tokens": 0, "output_tokens": 1,
+             "api_cost_usd": 0.0, "metadata": json.dumps({"finish_reason": reason})}]
+    assert compute_economics(rows, 86400)["truncated"] == counted
 
 
 def test_section_is_tenant_scoped_and_renders_cache_ratio(tmp_path):
@@ -182,3 +194,58 @@ def test_loops_section_renders_rail_verdicts_with_a_since_clock(tmp_path, monkey
     snap = build_status_snapshot("alice", data_dir=str(tmp_path), include_money=False)
     keys = {h.key for h in snap.health}
     assert {"email_auth_rejected", "x_api_rejected"} <= keys and not any(k.startswith("missing_key") for k in keys)
+
+
+def test_economics_splits_by_upstream_and_counts_cold_causes():
+    rows = [
+        {"input_tokens": 100, "cached_tokens": 90, "output_tokens": 1, "api_cost_usd": 0.1,
+         "session_id": "s", "timestamp": "2026-11-07", "metadata": json.dumps({"upstream": "UpA"})},
+        {"input_tokens": 100, "cached_tokens": 0, "output_tokens": 1, "api_cost_usd": 0.2,
+         "session_id": "s", "timestamp": "2026-11-07",
+         "metadata": json.dumps({"upstream": "UpB", "cold_cause": "upstream_moved"})},
+        {"input_tokens": 100, "cached_tokens": 0, "output_tokens": 1, "api_cost_usd": 0.0,
+         "session_id": "s", "timestamp": "2026-11-07", "metadata": "{}"},
+    ]
+    out = compute_economics(rows, 86400)
+    by = {b["key"]: b for b in out["by_upstream"]}
+    assert by["UpA"]["cache_ratio"] == 0.9 and by["UpB"]["cache_ratio"] == 0
+    assert by["unknown"]["calls"] == 1
+    assert out["cold_causes"] == {"upstream_moved": 1}
+
+
+def test_a_catalog_figure_is_not_a_billed_row():
+    rows = [{"input_tokens": 1, "cached_tokens": 0, "output_tokens": 1, "api_cost_usd": 0.1,
+             "session_id": "s", "timestamp": "2026-11-07",
+             "metadata": json.dumps({"billed_cost_usd": 0.1, "billed_source": "estimate"})}]
+    assert compute_economics(rows, 86400)["billed_share"] == 0
+
+
+def _ratio_db(path, rows):
+    import sqlite3
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE usage_records (resource_type TEXT, timestamp TEXT, "
+                "input_tokens INT, cached_tokens INT)")
+    for days_ago, inp, cached, count in rows:
+        for _ in range(count):
+            con.execute("INSERT INTO usage_records VALUES ('llm_call', datetime('now', ?), ?, ?)",
+                        (f"-{days_ago} days", inp, cached))
+    con.commit()
+    con.close()
+    return str(path)
+
+
+def test_the_doctor_warns_when_the_hit_ratio_falls_under_the_median(tmp_path):
+    from core.status_economics import cache_ratio_warning
+    week = [(d, 100, 80, 5) for d in (2, 3, 4, 5)]
+    fell = _ratio_db(tmp_path / "fell.db", week + [(0, 100, 40, 25)])
+    assert cache_ratio_warning(fell).startswith("! cache hit ratio")
+    held = _ratio_db(tmp_path / "held.db", week + [(0, 100, 75, 25)])
+    assert cache_ratio_warning(held) is None
+    few = _ratio_db(tmp_path / "few.db", week + [(0, 100, 40, 3)])
+    assert cache_ratio_warning(few) is None, "too few calls say nothing"
+    short = _ratio_db(tmp_path / "short.db", [(2, 100, 80, 5), (0, 100, 40, 25)])
+    assert cache_ratio_warning(short) is None, "too few days say nothing"
+    assert cache_ratio_warning(str(tmp_path / "absent.db")) is None
+    broken = tmp_path / "broken.db"
+    broken.write_text("not a database")
+    assert "unreadable" in cache_ratio_warning(str(broken))

@@ -71,3 +71,16 @@ def build_child_env(
         env[k] = str(v)
     env = {k: v for k, v in env.items() if not SECRET_PAT.search(k)}
     return dict(mark_agent_child(env))
+
+
+#: What the docker CLI itself needs beyond ``SAFE_ALLOWLIST``: where its daemon is.
+#: Without these the CLI falls back to the default rootful socket whatever the
+#: operator configured (a rootless or remote daemon was probed but never used).
+DOCKER_CLI_ALLOWLIST = ("DOCKER_HOST", "DOCKER_CONTEXT", "CONTAINER_HOST")
+
+
+def docker_cli_env() -> Dict[str, str]:
+    """The scrubbed env of the ``docker`` (or ``podman``) CLI process — never the
+    container's env. ``build_child_env`` plus the daemon address."""
+    return build_child_env({}, extra_allowlist=DOCKER_CLI_ALLOWLIST)
+

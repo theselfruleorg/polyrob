@@ -139,6 +139,13 @@ def test_block_is_capped(home):
                                    scope="title", value=f"Stop {i}")
     lines = _block(home).splitlines()
     assert len(lines) <= 25
+    from datetime import datetime, timezone
+    from core import host_jobs
+    for i in range(9):   # 112: host jobs add at most 5 lines (heading, 3, "+N more")
+        host_jobs.write_status(home, f"job{i}", purpose="p", ok=False, max_age_h=3,
+                               errors=["e"], now=datetime.now(timezone.utc))
+    with_host = _block(home).splitlines()
+    assert len(with_host) <= 30 and "- +6 more, see /status" in with_host
     text = "\n".join(lines)
     assert "+14 more, see /jobs" in text
     assert "+14 more, see /goals" in text

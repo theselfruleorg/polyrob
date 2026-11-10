@@ -262,28 +262,6 @@ def h_cancel(ctx) -> None:
     ctx.emit(f"Task cancelled. {CANCEL_REACH}", title="cancel")
 
 
-def h_new(ctx) -> None:
-    """Start fresh: cancel anything running, then clear this conversation.
-
-    ⚠️ Honest scope. On a chat surface ``/new`` drops the chat→session binding
-    so the next message routes cold. A REPL has ONE session for the life of the
-    process, so this clears the conversation and says so rather than claiming a
-    new session id it did not create.
-    """
-    from cli.ui.commands.handlers import _h_clear
-
-    ctrl = current_turn_controller()
-    if ctrl is not None and getattr(ctrl, "busy", False):
-        try:
-            ctrl.interrupt()
-        except Exception:
-            pass
-    _h_clear(ctx)
-    ctx.emit(f"{candy.GUTTER}Started fresh — history cleared. The session id is "
-             f"still {ctx.session_id or '—'}; leave and re-run `polyrob` for a "
-             f"new one.", title="new")
-
-
 def h_start(ctx) -> None:
     """A welcome and a short tour of what I can do."""
     from cli.ui.first_run_notice import _resolve_context, build_first_run_notice
@@ -340,15 +318,6 @@ HELP_CANCEL = (
     "`/cancel` on Telegram.",
 )
 
-HELP_NEW = (
-    "  Start fresh: anything running stops and this conversation's history is\n"
-    "  cleared, keeping my instructions.\n"
-    "\n"
-    "  The session ID does not change here — one terminal run is one session.\n"
-    "  Leave and start me again for a genuinely new one.",
-    "`/new` on Telegram, where it also drops the chat's session binding.",
-)
-
 HELP_START = (
     "  A welcome: whether I act on my own, where my data and config live, and\n"
     "  which tools are on. The same notice a first run prints.",
@@ -390,10 +359,8 @@ def register(reg, Command) -> None:
         "cancel", h_cancel, "Stop the task I am running now", group="control",
         help_long=HELP_CANCEL[0], elsewhere=HELP_CANCEL[1],
     ))
-    reg.register(Command(
-        "new", h_new, "Start fresh: stop the turn and clear this conversation",
-        group="talk", help_long=HELP_NEW[0], elsewhere=HELP_NEW[1],
-    ))
+    from cli.ui.commands import h_chats   # 113: /new and the four other chat verbs
+    h_chats.register(reg, Command)
     reg.register(Command(
         "start", h_start, "A welcome and a short tour of what I can do",
         group="talk", help_long=HELP_START[0], elsewhere=HELP_START[1],

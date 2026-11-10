@@ -188,3 +188,64 @@ def test_surface_gc_tick_purges_expired_pairing_rows(tmp_path):
     prune_surface_stores(types.SimpleNamespace(db_path=str(tmp_path / "surfaces.db")))
     assert execute_retry(s.db_path, "SELECT COUNT(*) AS n FROM paired_users",
                          (), fetch="one")["n"] == 0
+
+
+# --- 110: approve <surface> <code>, list, revoke <surface> <id>, tell limit)
+
+def test_approve_with_a_surface_needs_the_code_from_that_surface(tmp_path):
+    s = PairingStore(str(tmp_path / "p.db"))
+    code = s.request("u_a", surface="slack", raw_id="U0A")
+    assert s.approve(code, surface="discord") is None     # read out on another app
+    assert s.approve(code, surface="slack") == "u_a"
+    assert s.is_paired("u_a")
+
+
+def test_revoke_by_surface_and_platform_id(tmp_path):
+    s = PairingStore(str(tmp_path / "p.db"))
+    s.approve(s.request("u_a", surface="telegram", raw_id="111"))
+    assert s.revoke("111", surface="slack") == 0
+    assert s.revoke("111", surface="telegram") == 1
+    assert not s.is_paired("u_a")
+
+
+def test_list_all_names_the_app_and_id(tmp_path):
+    s = PairingStore(str(tmp_path / "p.db"))
+    s.approve(s.request("u_a", surface="telegram", raw_id="111"))
+    s.request("u_b", surface="slack", raw_id="U0B")
+    rows = s.list_all()
+    assert [(r["user_id"], r["paired"], r["surface"], r["raw_id"]) for r in rows] == [
+        ("u_a", 1, "telegram", "111"), ("u_b", 0, "slack", "U0B")]
+
+
+def test_the_code_is_told_once_per_window(tmp_path):
+    s = PairingStore(str(tmp_path / "p.db"))
+    first = evaluate_access("u_x", store=s, owner_principal="u_owner", required=True)
+    again = evaluate_access("u_x", store=s, owner_principal="u_owner", required=True)
+    assert first.pairing_code and not first.allowed
+    assert again.pairing_code is None and not again.allowed       # silent, still denied
+    assert s.should_tell("u_x", now=10**12) is True               # the window passed
+
+
+def test_an_old_pairing_db_gains_the_new_columns(tmp_path):
+    import sqlite3
+    path = str(tmp_path / "old.db")
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE paired_users (user_id TEXT PRIMARY KEY, code TEXT, "
+                 "paired INTEGER NOT NULL DEFAULT 0, created_at REAL)")
+    conn.execute("INSERT INTO paired_users VALUES ('u_old', NULL, 1, 0)")
+    conn.commit()
+    conn.close()
+    s = PairingStore(path)
+    assert s.is_paired("u_old")
+    assert s.revoke("u_old") == 1
+
+
+def test_pair_list_with_pairing_off_says_a_paired_sender_has_no_access(tmp_path, monkeypatch):
+    # Before: with pairing off the list read "paired" and implied access, while a
+    # paired sender is refused on every chat app.
+    from core.pairing import pair_verb
+    monkeypatch.setenv("POLYROB_REQUIRE_PAIRING", "false")
+    s = _store(tmp_path)
+    s.approve(s.request("u1"))
+    out = pair_verb([], store=s)
+    assert "a paired sender has no access until pairing is on" in out

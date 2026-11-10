@@ -12,15 +12,10 @@ from modules.llm.messages import (
     SystemMessage,
     ToolMessage,
 )
-from modules.llm.adapters import BaseChatModel
 
-# LLM module availability flag + token counters (mirrors service.py module-level setup)
-try:
-    from modules.llm.model_registry import get_model_config
-    from modules.llm import count_tokens, count_messages_tokens
-    LLM_MODULE_AVAILABLE = True
-except ImportError:
-    LLM_MODULE_AVAILABLE = False
+from modules.llm.model_registry import get_model_config
+from modules.llm import count_tokens, count_messages_tokens
+from modules.llm.call_result import replayed_reasoning
 
 logger = logging.getLogger(__name__)
 
@@ -99,8 +94,7 @@ class TokenCounterMixin:
 	# this comment was false for as long as it had been written.
 	__slots__ = ()
 
-	def _calculate_token_limits(self, llm: BaseChatModel,
-	                            max_input_override: Optional[int]) -> tuple:
+	def _calculate_token_limits(self, max_input_override: Optional[int]) -> tuple:
 		"""Token limits for this session (SINGLE SOURCE OF TRUTH).
 
 		Two layers, in this order:
@@ -119,7 +113,7 @@ class TokenCounterMixin:
 		Returns:
 			(max_input_tokens, safe_input_tokens, completion_reserve)
 		"""
-		max_input, safe_input, reserve = self._model_token_limits(llm, max_input_override)
+		max_input, safe_input, reserve = self._model_token_limits(max_input_override)
 		self._history_budget_tokens = 0
 		from agents.task.session_class import budget_class_autonomous
 		autonomous = budget_class_autonomous(getattr(self, "session_id", None))
@@ -146,8 +140,7 @@ class TokenCounterMixin:
 					f"(compaction gauge; safe_input stays {safe_input})")
 		return max_input, safe_input, reserve
 
-	def _model_token_limits(self, llm: BaseChatModel,
-	                        max_input_override: Optional[int]) -> tuple:
+	def _model_token_limits(self, max_input_override: Optional[int]) -> tuple:
 		"""The MODEL-derived limits (or an explicit override).
 
 		``TASK_MAX_INPUT_TOKENS`` is an operational ceiling on the input budget
@@ -190,31 +183,24 @@ class TokenCounterMixin:
 		model_name = self._model_name
 		model_config = get_model_config(model_name)
 
-		if model_config and model_config.context_window:
-			# 95% of context window minus the CAPPED completion reserve (P1: the
-			# full max_completion_tokens is an output ceiling, not a per-request
-			# need — subtracting it whole starved big-output models of input).
-			context_95pct = int(model_config.context_window * 0.95)
-			completion_reserve = _capped_reserve(model_config.max_completion_tokens)
-			max_input = max(1000, context_95pct - completion_reserve)
+		# 95% of context window minus the CAPPED completion reserve (P1: the
+		# full max_completion_tokens is an output ceiling, not a per-request
+		# need — subtracting it whole starved big-output models of input).
+		context_95pct = int(model_config.context_window * 0.95)
+		completion_reserve = _capped_reserve(model_config.max_completion_tokens)
+		max_input = max(1000, context_95pct - completion_reserve)
 
-			# Apply safety margin (default 5%)
-			safe_input = int(max_input * (1 - RobustParseConfig.SAFETY_MARGIN_PERCENT))
+		# Apply safety margin (default 5%)
+		safe_input = int(max_input * (1 - RobustParseConfig.SAFETY_MARGIN_PERCENT))
 
-			self.logger.info(
-				f"Calculated token limits for {model_name}: "
-				f"context={model_config.context_window}, "
-				f"max_input={max_input}, safe_input={safe_input}, "
-				f"completion_reserve={completion_reserve}"
-			)
+		self.logger.info(
+			f"Calculated token limits for {model_name}: "
+			f"context={model_config.context_window}, "
+			f"max_input={max_input}, safe_input={safe_input}, "
+			f"completion_reserve={completion_reserve}"
+		)
 
-			return max_input, safe_input, completion_reserve
-		else:
-			# Fallback defaults
-			self.logger.warning(f"No model config found for {model_name}, using fallback limits")
-			max_input = 120000
-			safe_input = int(max_input * 0.95)
-			return max_input, safe_input, 4096
+		return max_input, safe_input, completion_reserve
 
 	def _count_message_tokens(self, message: BaseMessage) -> int:
 		"""Count tokens for a single message using modules.llm.
@@ -225,10 +211,6 @@ class TokenCounterMixin:
 		Returns:
 			Token count
 		"""
-		if not LLM_MODULE_AVAILABLE:
-			text = str(message.content if hasattr(message, 'content') else message)
-			return max(1, len(text) // 4) if text else 0
-
 		try:
 			# Convert to dict format for modules.llm
 			message_dict = {
@@ -240,11 +222,15 @@ class TokenCounterMixin:
 			tool_calls = getattr(message, "tool_calls", None)
 			if tool_calls:
 				message_dict["tool_calls"] = tool_calls
+			# Replayed reasoning is also a real prompt byte on the next request.
+			reasoning = replayed_reasoning(message)
+			if reasoning:
+				message_dict["reasoning_content"] = reasoning
 			return count_messages_tokens([message_dict], self.model_name)
 		except Exception as e:
 			self.logger.debug(f"Token counting failed: {e}, using fallback")
 			text = str(message.content if hasattr(message, 'content') else message)
-			fallback_len = len(text)
+			fallback_len = len(text) + len(replayed_reasoning(message))
 			tool_calls = getattr(message, "tool_calls", None)
 			if tool_calls:
 				import json
@@ -295,11 +281,6 @@ class TokenCounterMixin:
 		Returns:
 			Total estimated token count for all messages
 		"""
-		if not LLM_MODULE_AVAILABLE:
-			# Fallback: estimate 4 chars per token
-			total_chars = sum(len(str(m.content)) for m in messages if hasattr(m, 'content'))
-			return max(1, total_chars // 4)
-
 		try:
 			# Convert to message dicts for modules.llm
 			message_dicts = []
@@ -329,18 +310,10 @@ class TokenCounterMixin:
 		Returns:
 			Tuple of (context_window, max_completion_tokens)
 		"""
-		from modules.llm.model_registry import get_model_config
 		model_name = self.model_name
-
-		# Use centralized model registry
 		config = get_model_config(model_name)
-		if config:
-			context_window = config.context_window
-			completion_tokens = config.max_completion_tokens
-		else:
-			# Conservative fallback
-			context_window = 128000
-			completion_tokens = 16384
+		context_window = config.context_window
+		completion_tokens = config.max_completion_tokens
 		self.logger.info(f"Got limits for {model_name}: context={context_window}, completion={completion_tokens}")
 		return context_window, completion_tokens
 
@@ -750,34 +723,6 @@ class TokenCounterMixin:
 			'usage_percent': usage_percent
 		}
 
-	def _get_min_safe_tokens(self, model_name: str) -> int:
-		"""Get minimum safe token limit for a model.
-
-		This ensures we don't reduce tokens below a reasonable threshold for each model.
-		"""
-		# Try to get config from the centralized LLM module
-		if LLM_MODULE_AVAILABLE:
-			try:
-				config = get_model_config(model_name)
-				if config:
-					return config.min_safe_tokens
-			except Exception as e:
-				self.logger.debug(f"Error getting min safe tokens from LLM module: {e}")
-
-		# Fallback to hardcoded logic
-		# For high-context models, use a larger minimum
-		if any(name in model_name for name in ["gpt-4", "claude", "o1"]):
-			# These models work well with at least 16k tokens
-			return 16000
-		elif "gpt-3.5" in model_name:
-			# GPT-3.5 can handle at least 8k
-			return 8000
-		elif "llama" in model_name:
-			# Llama models typically have smaller contexts
-			return 4000
-		else:
-			# Conservative default for unknown models
-			return 4000
 
 	def get_context_usage_percent(self) -> float:
 		"""Current context usage as a percentage (0-100).

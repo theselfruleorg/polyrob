@@ -208,7 +208,7 @@ def test_allowlist_is_tenant_scoped(tmp_path, monkeypatch):
     ctx2, rec2 = _ctx(user_id="other")
     h_allowlist(ctx2)
     assert "a@x.com" not in rec2.text
-    assert "no allowlist entries" in rec2.text
+    assert "No allowlist entries." in rec2.text
 
 
 def test_deny_revokes_and_reports_missing(tmp_path, monkeypatch):
@@ -283,6 +283,30 @@ def test_invoices_lists_seeded_row(_invoice_db):
     assert "/settle" in rec.text  # tells the owner how to act
 
 
+def test_invoices_terminal_text_is_the_chat_text(_invoice_db, monkeypatch):
+    """113 W4 item 3: the REPL emits the chat seat's own `/invoices` reply over
+    the same rows — one verb, one text."""
+    import os
+
+    from cli.ui.commands.h_owner import h_invoices
+    from surfaces.telegram.owner_ops import invoices_reply
+    monkeypatch.setattr("cli.ui.commands.h_owner._tenant", lambda ctx: "u1")
+
+    async def chat():
+        from modules.database.connection import DatabaseConnection
+        db = DatabaseConnection(os.environ["DB_PATH"])
+        await db.connect()
+        try:
+            return await invoices_reply("u1", [], db=db)
+        finally:
+            await db.close()
+
+    ctx, rec = _ctx(user_id="u1")
+    h_invoices(ctx)
+    assert "widget" in rec.text
+    assert rec.text == asyncio.run(chat())
+
+
 def test_invoices_flag_off_note_is_honest(_invoice_db):
     """X402_INVOICE_ENABLED off: rows list fine, but the same honest
     feature-off + remedy note the CLI prints must appear (no stack trace)."""
@@ -290,8 +314,8 @@ def test_invoices_flag_off_note_is_honest(_invoice_db):
 
     ctx, rec = _ctx(user_id="u1")
     h_invoices(ctx)
+    # 113 W4 item 3: the chat seat's own reply, so the same one note.
     assert "X402_INVOICE_ENABLED is off" in rec.text
-    assert "polyrob config set X402_INVOICE_ENABLED true" in rec.text
 
 
 def test_invoices_rejects_unknown_status(_invoice_db):
@@ -299,7 +323,7 @@ def test_invoices_rejects_unknown_status(_invoice_db):
 
     ctx, rec = _ctx(args=["bogus"], user_id="u1")
     h_invoices(ctx)
-    assert "usage: /invoices" in rec.text
+    assert "Usage: /invoices" in rec.text
 
 
 def test_settle_fake_invoice_errors_honestly(_invoice_db):
@@ -359,7 +383,7 @@ def test_missed_empty_is_honest(tmp_path, monkeypatch):
     TelemetryEventLog(str(tmp_path / "telemetry_events.db"))
     ctx, rec = _ctx(user_id="u1")
     h_missed(ctx)
-    assert "no missed messages" in rec.text.lower()
+    assert "no undelivered messages on record" in rec.text.lower()
 
 
 def test_missed_bad_arg_is_honest(tmp_path, monkeypatch):
@@ -368,7 +392,7 @@ def test_missed_bad_arg_is_honest(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     ctx, rec = _ctx(args=["abc"], user_id="u1")
     h_missed(ctx)
-    assert "usage: /missed" in rec.text
+    assert "usage: /missed" in rec.text.lower()
 
 
 def test_missed_wraps_long_text_without_clipping(tmp_path, monkeypatch):
@@ -395,7 +419,7 @@ def test_missed_wraps_long_text_without_clipping(tmp_path, monkeypatch):
     assert all(len(line) <= 80 for line in lines)  # (a) every line fits 80 cols
 
     stamp = time.strftime("%m-%d %H:%M", time.gmtime(ts))
-    prefix = f"  {stamp}Z — [undelivered] "
+    prefix = f"• {stamp}Z — [undelivered] "   # the chat seat's reply, one text
     indent = " " * len(prefix)
     chunks = []
     for line in lines:

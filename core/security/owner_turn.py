@@ -87,11 +87,9 @@ def is_autonomous_session(execution_context: Any, controller_self: Any = None) -
 
 
 def is_owner_tenant(execution_context: Any) -> bool:
-    from core.config_policy import local_mode_enabled
-    from core.instance import is_owner_local_safe, resolve_owner_principal
-    return is_owner_local_safe(getattr(execution_context, "user_id", None),
-                               owner_principal=resolve_owner_principal(),
-                               local_enabled=local_mode_enabled())
+    """The turn's tenant is the owner (``core.instance.is_owner_uid``)."""
+    from core.instance import is_owner_uid
+    return is_owner_uid(getattr(execution_context, "user_id", None))
 
 
 def is_forged_or_autonomous(execution_context: Any, controller_self: Any = None) -> bool:
@@ -122,6 +120,57 @@ def is_autonomous_goal_turn(execution_context: Any, controller_self: Any = None)
     except Exception:
         logger.debug("is_autonomous_goal_turn: autonomy-marker probe raised — "
                      "answering False (fail-closed)", exc_info=True)
+        return False
+
+
+def is_owner_standing_run(execution_context: Any) -> bool:
+    """The MAIN run of a standing cron job or goal, recorded by its runner, on the owner
+    tenant, with no room, forged re-entry or correspondent's message. What it writes is
+    the owner's standing decision. Fail closed."""
+    if execution_context is None:
+        return False
+    try:
+        from core.autonomy_marker import job_task_for_session
+        from core.security.taints import turn_tainted
+        if is_leaf(execution_context) or forged_kind(execution_context) \
+                or is_room_turn(execution_context):
+            return False
+        if not isinstance(getattr(execution_context, "metadata", None), dict) \
+                or turn_tainted(execution_context):
+            return False
+        if not job_task_for_session(getattr(execution_context, "session_id", None)):
+            return False
+        return is_owner_tenant(execution_context)
+    except Exception:
+        logger.debug("is_owner_standing_run: probe failed (not an owner job)", exc_info=True)
+        return False
+
+
+def is_owner_typing(execution_context: Any, controller_self: Any = None) -> bool:
+    """The owner typing now with no correspondent's message in the session. A standing job
+    is NOT this: a check that stops the job's own repeat needs this half of
+    :func:`is_owner_driven`, because the whole predicate passes the job. Fail closed."""
+    if execution_context is None:
+        return False
+    try:
+        from core.security.taints import turn_tainted
+        return (is_genuine_owner_turn(execution_context, controller_self)
+                and not turn_tainted(execution_context))
+    except Exception:
+        return False
+
+
+def is_owner_driven(execution_context: Any, controller_self: Any = None) -> bool:
+    """The ONE answer to "does this act need a tap": False. The owner typing now with no
+    correspondent's message in the session, or a standing job's main run. Every act that
+    is not money, a secret or the host goes on this answer. Fail closed."""
+    if execution_context is None:
+        return False
+    try:
+        if is_owner_standing_run(execution_context):
+            return True
+        return is_owner_typing(execution_context, controller_self)
+    except Exception:
         return False
 
 
@@ -183,5 +232,7 @@ def is_genuine_owner_turn(execution_context: Any, controller_self: Any = None) -
 
 __all__ = ["TOP_ROLES", "ROOM_TURN_KIND", "is_top_role", "is_leaf", "forged_kind",
            "is_room_turn", "is_autonomous_session", "is_owner_tenant",
-           "is_forged_or_autonomous", "is_autonomous_goal_turn", "owner_turn_refusal",
+           "is_forged_or_autonomous", "is_autonomous_goal_turn", "is_owner_standing_run",
+           "is_owner_driven", "is_owner_typing",
+           "owner_turn_refusal",
            "compute_turn_allows", "is_leaf_or_forged", "is_genuine_owner_turn"]

@@ -70,8 +70,8 @@ def test_skill_manage_create_emits_event(log, monkeypatch, tmp_path):
     a = rows[0]["attrs"]
     assert a["kind"] == "skill" and a["action"] == "create"
     assert a["item_id"] == "draft-skill"
-    assert a["pending"] is True  # forged/leaf turn => quarantined
-    assert a["created_by"] == "background_review"
+    assert a["pending"] is True  # not the owner's tenant => quarantined
+    assert a["created_by"] == "untrusted_turn"
 
 
 def test_self_evolution_promote_emits_owner_review_event(log, monkeypatch, tmp_path):

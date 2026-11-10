@@ -10,7 +10,6 @@ V2 = "# My Skill\n\nWhen X, do Z instead. A reusable procedure with enough words
 
 @pytest.fixture
 def sm(tmp_path, monkeypatch):
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
     from modules.skills import skill_usage as su
     store = su.SkillUsageStore(str(tmp_path / "skill_usage.db"))
     monkeypatch.setattr(su, "get_skill_usage_store", lambda *a, **k: store)

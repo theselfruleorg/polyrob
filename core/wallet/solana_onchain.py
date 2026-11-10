@@ -44,6 +44,21 @@ def rpc_url() -> str:
     return row.public_rpc if row else ""
 
 
+class SolanaRpcError(RuntimeError):
+    """A JSON-RPC error RESPONSE: the node answered and refused. It carries the
+    node's ``code`` so a caller can tell a definite refusal (the bytes were not
+    forwarded) from a lost reply, which never raises this type."""
+
+    def __init__(self, code, message, data=None, *, method: str = ""):
+        self.code = code
+        self.message = str(message or "")
+        self.data = data
+        error = {"code": code, "message": self.message}
+        if data is not None:
+            error["data"] = data
+        super().__init__(f"{method}: {error}")
+
+
 def _rpc(method: str, params: list, timeout: float = 8.0):
     import time
     from core.wallet.rpc_response import read_response
@@ -55,7 +70,11 @@ def _rpc(method: str, params: list, timeout: float = 8.0):
     with urllib.request.urlopen(req, timeout=timeout) as r:
         payload = read_response(r, deadline=deadline)
     if isinstance(payload, dict) and payload.get("error") is not None:
-        raise RuntimeError(f"{method}: {payload['error']}")
+        error = payload["error"]
+        if isinstance(error, dict):
+            raise SolanaRpcError(error.get("code"), error.get("message"),
+                                 error.get("data"), method=method)
+        raise SolanaRpcError(None, error, method=method)
     return (payload or {}).get("result")
 
 

@@ -32,7 +32,6 @@ _AUTONOMY_FLAG_READERS = (
     ("SELF_CONTEXT_WRITABLE", constants.AutonomyConfig.self_context_writable),
     ("OWNER_DOC_WRITABLE", constants.AutonomyConfig.owner_doc_writable),
     ("SELF_EVOLUTION_TRANSPARENCY", constants.AutonomyConfig.self_evolution_transparency),
-    ("CONTINUITY_BRIDGE_ENABLED", constants.AutonomyConfig.continuity_bridge_enabled),
     ("DELIVERABLES_ATTACH_ENABLED", constants.AutonomyConfig.deliverables_attach_enabled),
 )
 
@@ -121,6 +120,15 @@ def test_explicit_off_overrides_local(monkeypatch):
     monkeypatch.setenv("AUTONOMY_ENABLED", "1")
     monkeypatch.setenv("GOALS_ENABLED", "off")
     assert constants.AutonomyConfig.goals_enabled() is False
+
+
+def test_continuity_bridge_is_on_everywhere_and_an_override_turns_it_off(monkeypatch):
+    # 113: a direct chat that starts fresh carries the last summary on a server too.
+    monkeypatch.delenv("POLYROB_LOCAL", raising=False)
+    _clear(monkeypatch, "AUTONOMY_ENABLED", "AUTONOMY_POSTURE", "AUTONOMY_MODE", "POLYROB_OVERRIDES")
+    assert constants.AutonomyConfig.continuity_bridge_enabled() is True
+    monkeypatch.setenv("POLYROB_OVERRIDES", "CONTINUITY_BRIDGE_ENABLED=false")
+    assert constants.AutonomyConfig.continuity_bridge_enabled() is False
 
 
 def test_server_both_buckets_off(monkeypatch):

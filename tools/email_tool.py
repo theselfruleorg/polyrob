@@ -36,8 +36,23 @@ IMAP_TIMEOUT_S = 30
 SMTP_TIMEOUT_S = 30
 
 
-def _send_marking_data(conn: Any, msg: Any, reached_data: list) -> None:
-    """``conn.send_message(msg)`` that notes when the DATA step starts (worker thread)."""
+class SentMessageId(str):
+    """The minted Message-ID of a sent mail (a ``str``), plus ``refused``: the
+    recipients the server refused while it accepted the others
+    (``{address: (code, reply)}``, empty when every one was accepted). A refused
+    address did NOT get the mail."""
+
+    refused: Dict[str, Any]
+
+    def __new__(cls, mid: str, refused: Optional[Dict[str, Any]] = None):
+        obj = super().__new__(cls, mid)
+        obj.refused = dict(refused or {})
+        return obj
+
+
+def _send_marking_data(conn: Any, msg: Any, reached_data: list) -> Dict[str, Any]:
+    """``conn.send_message(msg)`` that notes when the DATA step starts (worker thread).
+    Returns the refused recipients ``send_message`` reports."""
     real_data = getattr(conn, "data", None)
     if real_data is None:
         reached_data.append(True)  # no DATA step to see: never assume it was not reached
@@ -46,9 +61,10 @@ def _send_marking_data(conn: Any, msg: Any, reached_data: list) -> None:
             reached_data.append(True)
             return real_data(*args, **kwargs)
         conn.data = _data
-    conn.send_message(msg)
+    refused = conn.send_message(msg)
     if real_data is not None:
         conn.data = real_data
+    return refused if isinstance(refused, dict) else {}
 
 
 def _delivery_unknown(exc: BaseException, reached_data: list) -> bool:
@@ -485,7 +501,7 @@ class EmailTool(EmailMailboxMixin, BaseTool):
         async with held[1]:
             return await asyncio.to_thread(fn, *args)
 
-    async def _send_smtp(self, msg: Any, message_id: str) -> None:
+    async def _send_smtp(self, msg: Any, message_id: str) -> Dict[str, Any]:
         """Send once; reconnect and retry once only when nothing can have gone out.
 
         A previously-live connection can go stale (e.g. the server closes it after a
@@ -498,8 +514,7 @@ class EmailTool(EmailMailboxMixin, BaseTool):
                 await self._connect_smtp()
             conn, reached_data = self.smtp_connection, []
             try:
-                await self.run_smtp(_send_marking_data, conn, msg, reached_data)
-                return
+                return await self.run_smtp(_send_marking_data, conn, msg, reached_data)
             except asyncio.CancelledError:
                 self.smtp_connection = None  # the worker thread still owns the socket
                 raise
@@ -746,10 +761,12 @@ class EmailTool(EmailMailboxMixin, BaseTool):
                 else:
                     all_recipients.append(bcc)
 
-            await self._send_smtp(msg, message_id)
-
+            refused = await self._send_smtp(msg, message_id)
+            if refused:
+                self.logger.warning(f"Email {message_id}: the server refused "
+                                    f"{', '.join(map(str, refused))}")
             self.logger.info(f"Email sent successfully to {msg['To']}")
-            return message_id
+            return SentMessageId(message_id, refused)
 
         except DeliveryUnknownError as e:
             self.logger.error(f"Email to {msg['To']}: {e}")
@@ -980,6 +997,16 @@ class EmailTool(EmailMailboxMixin, BaseTool):
         except Exception as e:
             return ActionResult(error=f"send failed: {e}", include_in_memory=True)
 
+        # A recipient the server refused did not get the mail: no transcript row, no
+        # thread anchor, no first-contact notice, and the result names it.
+        refused = {str(a).strip().lower(): v
+                   for a, v in (getattr(message_id, "refused", None) or {}).items()}
+        not_delivered = [a for a in recipients if a.strip().lower() in refused]
+        if not_delivered:
+            recipients = [a for a in recipients if a not in not_delivered]
+            non_owner = [a for a in non_owner if a not in not_delivered]
+            first_contacts = [a for a in first_contacts if a not in not_delivered]
+
         if self.container is not None:
             try:
                 if store is None:
@@ -1020,6 +1047,8 @@ class EmailTool(EmailMailboxMixin, BaseTool):
             extracted_content=(f"email[{tier}] -> {', '.join(recipients)} OK "
                                f"(message-id {message_id})"
                                + (f"; attached: {', '.join(attached)}" if attached else "")
+                               + (f"; NOT delivered to: {', '.join(not_delivered)} (the mail "
+                                  "server refused them)" if not_delivered else "")
                                + (f"\n{_proof}" if _proof else "")),
             include_in_memory=True)
 

@@ -1,0 +1,21 @@
+{
+  "function": {
+    "description": "Run JavaScript in the current page and return its result (an expression or an arrow function). Use it to read data the page state does not show, or to drive a widget no other action reaches.",
+    "name": "browser_evaluate_js",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for running JavaScript in the page.",
+      "properties": {
+        "script": {
+          "description": "An expression, or an arrow function: () => document.title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "script"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

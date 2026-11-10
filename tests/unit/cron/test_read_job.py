@@ -186,6 +186,19 @@ async def test_the_runner_routes_a_read_job_without_the_agent(runner, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_a_failed_read_job_is_a_failed_run(runner, monkeypatch):
+    # Before: the runner answered True, so a failing read job never reached the failure limit.
+    run, _ = runner
+
+    async def fake(task_agent, job, **kw):
+        return False, "read_verb"
+    monkeypatch.setattr(R, "run_read_job", fake)
+    job = _job({"read_verb": SPEC})
+    assert await run(job) is False
+    assert job.run_note["outcome"] == "failed"
+
+
+@pytest.mark.asyncio
 async def test_the_owner_pause_holds_a_read_job(runner, tmp_path):
     from core import autonomy_control as ac
     run, events = runner

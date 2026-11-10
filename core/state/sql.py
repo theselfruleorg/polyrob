@@ -61,8 +61,12 @@ def _json_path(k: str) -> str:
 
 
 def _froms(machine: StateMachine, to: str, from_states: Optional[Iterable[str]], ctx) -> tuple:
+    """The stored values the WHERE accepts: every allowed from-state plus each
+    legacy alias that normalizes to one (a row still holding ``approved`` for
+    ``pending`` must move like ``pending``, not CAS-miss for ever)."""
     froms = machine.require_sources(to, from_states, ctx=ctx)
-    return froms
+    legacy = sorted(a for a, s in machine.aliases.items() if s in froms and a not in froms)
+    return tuple(froms) + tuple(legacy)
 
 
 def cas_transition(db_path: str, table: str, *, key: str, key_params: tuple,

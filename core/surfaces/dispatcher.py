@@ -42,16 +42,19 @@ logger = logging.getLogger(__name__)
 # tests/unit/surfaces/telegram/test_owner_control_plane.py::
 # test_every_owner_verb_is_routable.
 _COMMANDS = ("/task", "/cancel", "/new", "/help",
+             "/chats", "/chat", "/rename", "/close",   # 113: a person's own chats
              "/inbox",   # 043 D1: the one list of what needs the owner; /pending stays
              "/book",    # 043 D1: the ledger against every money chain
              "/pending", "/approve", "/reject", "/asks", "/fulfill",
              "/cards",   # 2026-09-27: action cards; /card_<id>_<act> taps map here
              "/allow", "/deny", "/allowlist",
+             "/pair",    # DM pairing: list / approve <surface> <code> / revoke
+             "/self", "/memory",  # 113 W6 G-6: owner reads (identity docs, recall)
              "/groups", "/mute",  # 044 T18: room presence admin (owner or that room's admin)
              "/paid",             # 046: paid room actions (owner or room admin)
              "/ban", "/unban", "/unmute",   # 046 phase 2: the rest of the catalog
-             "/halt", "/resume", "/pause",  # owner pause record (031; /halt = alias of /pause)
-             "/jobs", "/job",  # 080 WS-2: scheduled jobs (list; new/show/edit/pause/resume/run/stop)
+             "/resume", "/pause",  # owner pause record (031; /halt is an alias row of /pause)
+             "/job",  # 080 WS-2: scheduled jobs (bare or /jobs = the list; new/show/edit/…)
              "/goal", "/wallet", "/invoices", "/settle",  # G13 write verbs
              "/trade", "/offer",  # trading mandate (086); offers + orders (099)
              "/bridge",  # 037 cross-chain move; owner-only, approval-gated
@@ -68,7 +71,7 @@ _COMMANDS = ("/task", "/cancel", "/new", "/help",
              "/contacts",  # E10: who replied, and the transcript with one of them
              "/why",       # O10: the last gate refusals, verbatim (read-only)
              "/thread",    # 061: the ONE owner transcript, every rail and seat
-             "/status", "/avatar", "/mode", "/recap", "/journey", "/goals", "/prefs", "/config",
+             "/status", "/avatar", "/mode", "/journey", "/goals", "/prefs", "/config",
              "/cwd",   # C67: where I am working right now (read-only)
              "/missed",
              "/more", "/rules",  # 096 W5: the rest of a cut; the owner rules (reads)
@@ -225,6 +228,10 @@ class RouteDecision:
     #: it and every unit test passed it — the one PRODUCTION call site never
     #: did, so the column was always NULL in prod.
     tier: Optional[str] = None
+    #: 113 W0: set when a DM chat starts fresh because it was idle — the seconds
+    #: since its last activity. The surface tells the person ONCE; without it the
+    #: chat lost its history with no word.
+    fresh_gap_s: Optional[float] = None
 
 
 #: The denial VOCABULARY the owner reads. Short, lowercase, stable — a rename
@@ -243,7 +250,33 @@ DENIAL_REASONS = (
     "tier_fault",              # tier model raised -> fail CLOSED
     "forgeable_sender",        # email with the correspondent model off
     "bot_pair_guard",          # 064 F4: a (surface, bot) pair past its loop budget
+    "other_bot_command",       # a command addressed to another bot (/cmd@otherbot)
+    "local_owner_required",    # a non-owner DM on a local-only surface
 )
+
+
+def _pairing_applies(container: Any, inbound: Any) -> bool:
+    """Whether the pairing gate judges this inbound: a person's DM on a surface whose
+    sender id the platform signs, from someone who is not a bound correspondent.
+    Fail CLOSED toward the gate (any doubt answers True)."""
+    src = inbound.identity.source
+    if getattr(inbound, "internal", False) or getattr(inbound, "sender_is_bot", False):
+        return False
+    if (getattr(src, "chat_type", "dm") or "dm") != "dm":
+        return False
+    surface = getattr(src, "surface_id", "") or ""
+    if is_forgeable_surface(surface):
+        return False
+    registry = container.get_service("correspondent_registry") if container else None
+    if registry is None:
+        return True
+    try:
+        address = getattr(inbound.identity, "raw_user_id", None) or inbound.identity.user_id
+        return registry.resolve(surface=surface, address=address,
+                                thread_id=getattr(src, "thread_id", None)) is None
+    except Exception:
+        logger.debug("pairing gate: correspondent probe failed (gate applies)", exc_info=True)
+        return True
 
 
 async def route_inbound(
@@ -452,13 +485,22 @@ async def _route_inbound_impl(
 
     # 0) ACCESS GATE (polyrob D3) — when POLYROB_REQUIRE_PAIRING is on, an unpaired
     #    non-owner is denied (and issued a pairing code). Store failures deny access.
+    #    It gates a PERSON's DM on a signed surface only (`_pairing_applies`): a room
+    #    has its own allowlist and roles, a forgeable sender is correspondent-or-denied,
+    #    and a correspondent the agent contacted is DATA — none of them takes a code,
+    #    and none of them may grow pairing.db.
     try:
         from core.pairing import guard_inbound
         surface_id = getattr(inbound.identity.source, "surface_id", None)
-        denial = guard_inbound(container, user_id, surface_id=surface_id)
+        denial = (guard_inbound(container, user_id, surface_id=surface_id,
+                                raw_id=getattr(inbound.identity, "raw_user_id", None))
+                  if _pairing_applies(container, inbound) else None)
         if denial is not None:
+            # The code goes out once per PairingStore.TELL_EVERY_SEC; between, the
+            # deny is silent (no reply per message to a waiting stranger).
             return RouteDecision(RouteKind.DENIED, session_key,
                                  pairing_code=denial.pairing_code,
+                                 silent=not denial.pairing_code,
                                  reason="pairing_required")
     except Exception as e:
         logger.warning("route_inbound pairing gate unavailable: %s", type(e).__name__)
@@ -834,6 +876,14 @@ async def _route_inbound_impl(
     try:
         registry = container.get_service("session_chat_registry") if container else None
         if registry is not None:
+            # 113: a direct chat's line goes into the person's FOCUSED chat (main
+            # unless they opened and chose another). A room keeps its one key.
+            if getattr(inbound.identity.source, "chat_type", "dm") == "dm":
+                try:   # a focus fault must never drop the line: main is used
+                    session_key = registry.focused_key(session_key, inbound.identity.user_id)
+                except Exception:
+                    logger.warning("route_inbound: focus read failed (main is used)",
+                                   exc_info=True)
             row = registry.resolve(session_key)
     except Exception as e:
         logger.debug("route_inbound resolve failed: %s", e)
@@ -860,17 +910,20 @@ async def _route_inbound_impl(
         # STEER). Fail-open: any policy error keeps STEER, never spuriously wiping a chat.
         try:
             import time as _time
-            from core.surfaces.session_policy import should_start_fresh, with_agent_activity
+            from core.surfaces.session_policy import (
+                idle_gap_seconds, should_start_fresh, with_agent_activity)
             from core.surfaces.config import SurfaceConfig
             # C3: the agent's own question to the owner counts as activity.
+            _row, _now = with_agent_activity(row, container), _time.time()
             fresh, _reason = should_start_fresh(
-                with_agent_activity(row, container), now=_time.time(),
+                _row, now=_now,
                 idle_minutes=SurfaceConfig.session_idle_minutes(),
                 daily_hour=SurfaceConfig.session_reset_hour(),
                 mode=SurfaceConfig.session_reset_mode(),
             )
             if fresh:
-                return RouteDecision(RouteKind.TASK_AGENT, session_key)
+                return RouteDecision(RouteKind.TASK_AGENT, session_key,
+                                     fresh_gap_s=idle_gap_seconds(_row, now=_now))
         except Exception as e:
             logger.debug("route_inbound boundary policy skipped: %s", e)
         # NOTE: last-activity (updated_at) is bumped on the DELIVERY-success path

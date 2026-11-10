@@ -46,7 +46,7 @@ def test_session_help_epilog_points_at_run_resume():
     from cli.commands.session import session
     res = _run(session, ["--help"])
     assert res.exit_code == 0
-    assert "run --resume" in res.output
+    assert "run --continue" in res.output
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +134,8 @@ def test_kb_export_runs_the_same_impl_without_deprecation(monkeypatch):
         lambda out_dir, since, user: calls.append((out_dir, since, user)))
     res = _run(kb, ["export", "--out", "vault"])
     assert res.exit_code == 0, res.output
-    assert calls == [("vault", None, "local")]
+    # 113 W0: no --user = the owner tenant, resolved inside run_export (not "local")
+    assert calls == [("vault", None, None)]
     assert "deprecated" not in (res.stdout + res.stderr)
 
 

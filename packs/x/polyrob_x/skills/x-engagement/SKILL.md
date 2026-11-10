@@ -51,6 +51,8 @@ X restricts automated accounts. Choose the route by relationship, not preference
   conversationally where someone engaged you first. A reply already threads to its
   author, so do not open it with an `@handle`. Name a person only from the
   `author_username` the read returned; when the read gives no author, name nobody.
+- **Order lines under an offer announcement** (`/buy …`, `/order …`) are answered by
+  code, in the thread. A mention marked `answered_by: storefront` is not yours to answer.
 - **A stranger's thread you were NOT invited into** → BOTH cold `twitter_reply` AND cold
   `twitter_quote` are rejected for automated accounts (403: "you have not been mentioned or
   are not part of the conversation thread"). Do not burn calls re-trying either. To engage
@@ -117,19 +119,21 @@ Every `twitter_*` write passes these checks, in this order. A refusal names its 
    `twitter_thread` within `TWITTER_POST_COOLDOWN_SEC` (default 1 h) of the last
    autonomous post is refused, whatever its text. A NEW fact: defer it with the one-shot
    ISO `cronjob_schedule` that the refusal names. A repeat: skip it.
-4. **Approval** — on a genuine owner turn, or the main run of a standing cron job or
-   goal, the write goes out (with `TWITTER_REQUIRE_APPROVAL` on and a human approval
-   provider, the owner gets one confirm tap). On a room, correspondent-tainted, forged,
+4. **Approval** — a genuine owner turn or the main run of a standing cron job or goal
+   posts with no tap, whoever created the job; only an operator's
+   `APPROVAL_PROVIDER=deny` stops it. On a room, correspondent-tainted, forged,
    delegated or non-owner turn, the write waits for the owner's tap on the owner queue
    (Telegram card / `/pending`). A "waiting for the owner's approval" result is NOT done:
    report it as waiting. If the owner approves later, exactly that post goes out once.
 5. **Hourly cap** — a shared hourly budget for writes and a separate one for DMs.
 
-The browser writes (`x_browser_x_post`, `x_browser_x_reply`, `x_browser_x_dm`) are not
-gated at compute posture 0–1 unless the owner lists them; from posture 2 they are gated
-and wait for the owner (owner-queued even under autonomous mode). `/gates` (REPL) shows
-the live set. Never tell anyone a browser post "will be approved first" unless the gate
-is set. The browser rail is blocked in delegated/forged turns.
+The browser post and reply (`x_browser_x_post`, `x_browser_x_reply`) follow the same rule:
+no tap on a genuine owner turn or a standing job's main run. `x_browser_x_dm` is not gated
+at compute posture 0–1 unless the owner lists it; from posture 2 it waits for the owner.
+`/gates` (REPL) shows the live set. The browser rail is blocked in delegated/forged turns.
+A rule about what to post, or that the owner wants to see a post first, belongs in the
+owner rules (`owner_doc_manage`); it is not a setting. Never tell the owner a job "may be
+held" or that a job must be made theirs: no such state exists. A refusal names its gate.
 
 ## Proving completion (non-negotiable)
 

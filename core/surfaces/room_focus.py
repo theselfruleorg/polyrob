@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
@@ -46,18 +47,38 @@ def _safe_key(user_id: Any) -> str:
     return "".join(c for c in key if c.isalnum() or c in "-_.@")[:128]
 
 
-def _read(home_dir: str) -> dict:
+def _read(home_dir: str, *, for_write: bool = False) -> Optional[dict]:
+    """Every principal's pointer. A missing file is empty. A corrupt one reads as
+    empty; for a write it is moved aside as ``<path>.corrupt-<epoch>`` (its pointers
+    kept for a person to read) and the write starts from empty. A file that cannot
+    be READ (OSError) is None for a write: it is never moved or rewritten."""
     path = _path(home_dir)
     if not path.is_file():
         return {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            raise ValueError("not a JSON object")
+        return data
+    except OSError as e:
+        logger.warning("room focus: %s unreadable (%s) — %s", path.name, e,
+                       "not rewritten" if for_write else "reading as unset")
+        return None if for_write else {}
     except Exception as e:
-        # A pointer we cannot read is NO pointer — `here` then says so rather
+        # A pointer we cannot parse is NO pointer — `here` then says so rather
         # than resolving to a room nobody selected.
-        logger.warning("room focus: %s unreadable (%s) — reading as unset",
-                       path.name, e)
+        if not for_write:
+            logger.warning("room focus: %s corrupt (%s) — reading as unset", path.name, e)
+            return {}
+        aside = f"{path}.corrupt-{int(time.time())}"
+        try:
+            os.replace(path, aside)
+        except OSError as move_err:
+            logger.warning("room focus: %s corrupt (%s) and not moved aside (%s) — "
+                           "not rewritten", path.name, e, move_err)
+            return None
+        logger.warning("room focus: %s corrupt (%s) — kept as %s; a new file is written",
+                       path.name, e, aside)
         return {}
 
 
@@ -66,7 +87,7 @@ def get(home_dir: str, user_id: Any) -> Optional[Tuple[str, str]]:
     key = _safe_key(user_id)
     if not key:
         return None
-    row = _read(home_dir).get(key)
+    row = (_read(home_dir) or {}).get(key)
     if not isinstance(row, dict):
         return None
     surface = str(row.get("surface") or "").strip()
@@ -83,7 +104,9 @@ def set(home_dir: str, user_id: Any, surface: str, chat_id: str) -> bool:
     chat_id = str(chat_id or "").strip()
     if not key or not surface or not chat_id:
         return False
-    data = _read(home_dir)
+    data = _read(home_dir, for_write=True)
+    if data is None:
+        return False
     data[key] = {"surface": surface, "chat_id": chat_id}
     return _write(home_dir, data)
 
@@ -92,7 +115,9 @@ def clear(home_dir: str, user_id: Any) -> bool:
     key = _safe_key(user_id)
     if not key:
         return False
-    data = _read(home_dir)
+    data = _read(home_dir, for_write=True)
+    if data is None:
+        return False
     if key not in data:
         return True
     data.pop(key, None)

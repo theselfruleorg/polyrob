@@ -21,3 +21,12 @@ def no_model(agent) -> bool:
     except Exception:
         logger.debug("no_model probe failed; not refusing", exc_info=True)
         return False
+
+
+def refuse_no_model(agent) -> None:
+    """113 W0 (C-02): a message to an idle chat resumed it in a process with no model;
+    the turn then failed with no word. The same 503 ``no_model`` the create route gives."""
+    if no_model(agent):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail={
+            "code": "no_model", "message": "no language model in this process"})

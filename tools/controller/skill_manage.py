@@ -9,6 +9,7 @@ Read-before-write without session state: ``patch``, ``edit`` and ``delete`` carr
 agent read. A missing one refuses; a stale one refuses and names the current one.
 ``create`` never overwrites: an existing id is edited, not re-created.
 """
+from types import SimpleNamespace
 from typing import Literal, Optional
 
 from pydantic import BaseModel
@@ -19,16 +20,15 @@ from core.prompt_text import owner_route
 SKILL_MANAGE_DESCRIPTION = (
 	"Author your own durable SKILLS (procedures you can reload in future sessions). "
 	"create: a new SKILL.md (markdown, a # heading) plus when = the index line that "
-	"says when to load it (<= 60 chars). patch: exact-string replace, or `when` "
-	"alone to change an existing skill's index line. "
+	"says when to load it (<= 60 chars). patch: exact-string replace, old_string and "
+	"new_string in one call, or `when` alone to change an existing skill's index line. "
 	"edit: replace the whole body. delete: archive. patch/edit/delete need "
 	"expected_sha256 = the sha256 load_skill returned for the body you read. "
 	"rollback: restore an archived revision (to_sha, default the one the last change "
 	"replaced). A background delete names absorbed_into. create/patch/edit need "
 	"reason = one sentence for the owner: why this change (what went wrong or right). "
-	"promote is owner-only. New and "
-	"edited skills wait for review before they activate; a bundled skill's fix waits "
-	"for the owner. " + owner_route("programme")
+	"promote is owner-only. A write is live at once, a bundled skill's fix too; "
+	"rollback undoes it. " + owner_route("programme")
 )
 
 
@@ -109,12 +109,53 @@ def _set_when(skill_id: str, current: str, when: str) -> str:
 	return _with_when(skill_id, current, when, "")
 
 
+def _patch_example(skill_id: str, sha: Optional[str]) -> str:
+	return (f"skill_manage(action='patch', skill_id='{skill_id}', "
+	        f"expected_sha256='{sha or '<the sha256 from load_skill>'}', "
+	        f"old_string='<text copied exactly from the skill body>', "
+	        f"new_string='<that text with your change>', reason='<one sentence: why>')")
+
+
+def _patch_needs_strings(params: SkillManageAction) -> str:
+	"""Prod: the refused call held `reason` and no strings, and the same call came back
+	until the retry limit. The refusal says what the call lacks and shows a correct one."""
+	missing = [k for k in ("old_string", "new_string") if getattr(params, k) is None]
+	unread = " `content` is for create and edit; patch does not read it." if params.content else ""
+	return (f"patch needs `old_string` and `new_string` in the same call; this call has no "
+	        f"{' and no '.join(f'`{k}`' for k in missing)}.{unread} Nothing was written; do not "
+	        f"repeat this call. A correct call: {_patch_example(params.skill_id, params.expected_sha256)}. "
+	        f"To change only the index line, pass `when` alone.")
+
+
 def _refusal(res) -> str:
 	text = f"Skill rejected: {'; '.join(res.errors)}"
 	if res.revision and any("revision conflict" in e for e in res.errors):
 		text += (f". The current sha256 is {res.revision}: load_skill it again, "
 		         f"rebuild the change from that body, and pass that sha256.")
+	if any("old_string not found" in e for e in res.errors):
+		text += (". old_string must be text copied exactly from the body you read. "
+		         f"A correct call: {_patch_example(res.skill_id, None)}")
 	return text
+
+
+def _review_reason(reason: str, scope: str) -> str:
+	"""A reviewer's change names the run and the signal it answers (108 W6)."""
+	return f"{scope}: {reason}" if scope and scope not in reason else reason
+
+
+def _untrusted_author(execution_context, controller) -> bool:
+	"""A correspondent's message in the session, a room, or another tenant. Their text
+	must not become instructions a later owner session follows. Fail closed."""
+	try:
+		from core.security.owner_turn import is_owner_tenant, is_room_turn
+		from core.security.taints import correspondent_tainted, turn_tainted
+		ctx = execution_context
+		if ctx is None:
+			ctx = SimpleNamespace(user_id=getattr(controller, "user_id", None), metadata={})
+		return (turn_tainted(ctx) or is_room_turn(ctx) or not is_owner_tenant(ctx)
+		        or correspondent_tainted(getattr(controller, "orchestrator", None)))
+	except Exception:
+		return True
 
 
 async def run_skill_manage(controller, params: SkillManageAction, execution_context=None) -> ActionResult:
@@ -128,11 +169,14 @@ async def run_skill_manage(controller, params: SkillManageAction, execution_cont
 	# T4-06: every effected skill mutation records a first-class self_modification event.
 	_self_mod_ev = self_mod_emitter(execution_context, controller, user_id, kind="skill",
 	                                source="skill_manage", item_id=params.skill_id, created_by="")
-	# A sub-agent/leaf/forged/autonomous author is background_review: ALWAYS quarantined
-	# (SK-F10, C7); a normal interactive turn is agent (follows SKILLS_WRITABLE_REQUIRE_REVIEW).
-	from modules.skills.writer import PROVENANCE_AGENT, PROVENANCE_BACKGROUND
+	# The owner's agent, its runs and its reviewer write live skills; a turn that is not
+	# the owner's stays a draft. The provenance names who wrote it (the curator reads it).
+	from modules.skills.writer import (PROVENANCE_AGENT, PROVENANCE_BACKGROUND,
+	                                   PROVENANCE_UNTRUSTED, REVIEW_SCOPE, REVIEWING_FAILED_RUN)
 	is_forged = _ar._is_forged_or_autonomous_turn(execution_context, controller)
-	created_by = PROVENANCE_BACKGROUND if is_forged else PROVENANCE_AGENT
+	created_by = (PROVENANCE_UNTRUSTED if (REVIEWING_FAILED_RUN.get()
+	                                       or _untrusted_author(execution_context, controller))
+	              else PROVENANCE_BACKGROUND if is_forged else PROVENANCE_AGENT)
 	if params.action == "promote":
 		return ActionResult(
 			error="Promotion requires the owner to review the draft through /pending; a model tool call cannot approve it.",
@@ -142,20 +186,25 @@ async def run_skill_manage(controller, params: SkillManageAction, execution_cont
 			error=(f"{params.action} needs expected_sha256: call load_skill('{params.skill_id}') "
 			       f"and pass the sha256 it returns for the body you read."),
 			include_in_memory=True)
-	if (not is_forged and params.action in _NEEDS_REASON
+	review_scope = REVIEW_SCOPE.get()
+	if ((review_scope or not is_forged) and params.action in _NEEDS_REASON
 	        and not (params.reason or "").strip()):
-		# 096 D3: the owner decides from the reason, so an owner-turn draft needs one.
+		# 096 D3: the reason is the owner's record of why the skill changed.
 		return ActionResult(
 			error=(f"{params.action} needs `reason`: one sentence for the owner on why "
 			       f"this change (what went wrong or right). Nothing was written."),
 			include_in_memory=True)
+	reason = _review_reason((params.reason or "").strip(), review_scope)
 	new_terms = params.new_string or ""  # patch: the changed span
 	try:
 		from agents.task.agent.skill_manager import get_skill_manager
 		sm = get_skill_manager()
 		if params.action == "create":
 			if not params.content:
-				return ActionResult(error="create requires `content`.", include_in_memory=True)
+				return ActionResult(error=(
+					"create needs `content`: the full SKILL.md (a # heading, when to use, steps) "
+					"in this same call. Nothing was written; do not repeat this call."),
+					include_in_memory=True)
 			try:
 				content = _with_when(params.skill_id, params.content, params.when,
 				                     params.description)
@@ -185,9 +234,7 @@ async def run_skill_manage(controller, params: SkillManageAction, execution_cont
 			                        params.skill_id, cur, when))
 		elif params.action == "patch":
 			if params.old_string is None or params.new_string is None:
-				return ActionResult(error=(
-					"patch requires `old_string` and `new_string` — or `when` alone to "
-					"change the skill's index line."), include_in_memory=True)
+				return ActionResult(error=_patch_needs_strings(params), include_in_memory=True)
 			res = sm.patch_skill(params.skill_id, user_id=user_id,
 			                     old_string=params.old_string, new_string=params.new_string,
 			                     replace_all=params.replace_all, created_by=created_by,
@@ -221,29 +268,30 @@ async def run_skill_manage(controller, params: SkillManageAction, execution_cont
 	if not res.ok:
 		return ActionResult(error=_refusal(res), include_in_memory=True)
 	where = "pending review" if res.pending else "active"
-	if res.pending and (params.reason or "").strip():
+	if res.pending and reason:
 		# 096 W1: recorded BEFORE the owner is notified, so the notice says why.
 		try:
 			from core import pending_reasons
 			from core.instance import resolve_instance_id as _rii0
 			from core.runtime_paths import data_dir_or_home as _ddh0
 			_cfg0 = getattr(getattr(controller, 'container', None), 'config', None)
-			pending_reasons.record(user_id, "skill", params.skill_id, params.reason,
+			pending_reasons.record(user_id, "skill", params.skill_id, reason,
 			                       by=created_by, home_dir=_ddh0(getattr(_cfg0, 'data_dir', None)),
 			                       instance_id=_rii0())
 		except Exception as _e:
 			controller.logger.debug(f"skill reason not recorded: {_e}")
 	# The body just changed: let the next `load_skill` re-emit it.
 	forget_activated_skill(controller, params.skill_id)
-	_self_mod_ev(params.action, pending=bool(res.pending), created_by=created_by)
+	_self_mod_ev(params.action, pending=bool(res.pending), created_by=created_by, note=reason)
 	superseded = ""
 	if not is_forged and params.action in ("patch", "edit") and new_terms.strip():
 		# 095 W10 (R8): a lane's programme terms changed — retire the owner.md line
 		# on the same subject in a linked draft (before the owner is notified).
-		from tools.controller.doc_authoring import draft_owner_supersede
-		superseded = draft_owner_supersede(controller, params.skill_id, new_terms,
-		                                   user_id=user_id, created_by=created_by,
-		                                   link=bool(res.pending))
+		from tools.controller.doc_authoring import _owner_turn_is_clean, draft_owner_supersede
+		superseded = draft_owner_supersede(
+			controller, params.skill_id, new_terms, user_id=user_id, created_by=created_by,
+			link=bool(res.pending),
+			name_only=not res.pending and _owner_turn_is_clean(controller, execution_context))
 	if res.pending:  # §7.1: notify the owner (fail-open, gated)
 		try:
 			from core import self_evolution as _se

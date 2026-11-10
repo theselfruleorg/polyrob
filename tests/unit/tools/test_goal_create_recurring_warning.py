@@ -28,3 +28,13 @@ def test_a_one_shot_goal_is_not_flagged():
                                    "http_ok on the URL") is None
     assert _recurring_work_warning("Bridge 2 ETH to Ethereum",
                                    "Quote, bridge, confirm arrival within the day.", "") is None
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("text", ["post every monday", "a nightly check", "the monthly report",
+                                  "twice a day", "each weekday morning"])
+def test_more_cadence_words_warn(text):
+    from tools.goal_tools import _recurring_work_warning
+    assert _recurring_work_warning(text, "", "") is not None

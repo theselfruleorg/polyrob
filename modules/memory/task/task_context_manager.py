@@ -839,6 +839,9 @@ class TaskContextManager(BaseComponent):
 
             # Prefer LLM synthesis (H-MEM §3.3) when enabled; else concatenate.
             new_summary = self._llm_consolidate(recent_findings, session_id=session_id)
+            if new_summary is None:
+                from .reflection_service import keep_failed_findings
+                keep_failed_findings(session_data, phase_name, recent_findings, _REFLECTION_SUMMARY_MAX_CHARS)
             if new_summary is not None:
                 # P2-11: the aux-LLM summary is unbounded model output that lands
                 # verbatim as a durable phase summary AND a promoted cross-session
@@ -863,17 +866,17 @@ class TaskContextManager(BaseComponent):
                 # end (only raw findings synced cross-session) — the aux-LLM call
                 # paid for insight the store never saw. Queue it for the SAME
                 # promoted-findings drain the memory_writer sync path consumes.
-                # The concat fallback below is NOT queued: it adds nothing over
-                # the raw findings that already sync.
                 pending = getattr(session_data, '_pending_reflection_summaries', None)
                 if pending is None:
                     pending = []
                     session_data._pending_reflection_summaries = pending
-                # D6: an unverified summary keeps the marker FIRST, where the
-                # writer's count, the write filter and recall all look for it.
+                # D6: an unverified summary keeps the marker FIRST, where the writer's
+                # count looks for it, and on each line, where recall filters.
                 _mark = "[unverified] "
                 if new_summary.startswith(_mark):
-                    pending.append(f"{_mark}[phase-summary:{phase_name}] {new_summary[len(_mark):]}")
+                    from modules.memory.recall_rank import mark_unverified
+                    pending.append(mark_unverified(
+                        f"[phase-summary:{phase_name}] {new_summary[len(_mark):]}"))
                 else:
                     pending.append(f"[phase-summary:{phase_name}] {new_summary}")
             if new_summary is None:
@@ -943,7 +946,10 @@ class TaskContextManager(BaseComponent):
             llm=scoped.get("llm", self.reflection_llm),
             meter_ctx=scoped.get("meter_ctx", getattr(self, "reflection_meter_ctx", None)),
         )
-        return svc.consolidate(findings)
+        summary = svc.consolidate(findings)
+        if (session_data := self._sessions.get(session_id or "")) is not None:
+            session_data._reflection_failed = svc.failed
+        return summary
 
     def drain_promoted_findings(self, session_id: str) -> List[str]:
         """Return the reflection summaries (LLM-consolidated phase summaries) not

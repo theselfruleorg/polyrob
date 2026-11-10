@@ -1214,7 +1214,7 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 		# Reflection LLM: its own aux slot (B5). When AUX_MODEL_REFLECTION is unset it
 		# inherits compaction's model+provider pair if one is configured; when no aux
 		# model resolves at all (e.g. openrouter + deepseek, which has no
-		# OPENROUTER_AUX_FAMILY_MAP row) it runs on an isolated copy of the session's
+		# aux_family_map row) it runs on an isolated copy of the session's
 		# MAIN model (2026-10-14 review B-2; before that, reflection was silently off)
 		# — see constants.resolve_aux_chain(). Operators can set AUX_MODEL_REFLECTION /
 		# AUX_FALLBACK_REFLECTION independently. UP-09: default ON via

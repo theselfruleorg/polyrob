@@ -564,11 +564,15 @@ class TaskAgentChatMixin:
 
         if not session_id:
             from agents.task.constants import CHAT_MAX_STEPS
-            # Provider/model via the one shared resolver (Seam 2): CHAT_/DEFAULT_ env
-            # pins win; else the historical openai/gpt-5 default if OpenAI is keyed;
-            # else the first keyed provider (fixes only-one-key chat). Model always
-            # matches the resolved provider.
-            _provider, _model = _resolve_chat_runtime()
+            # 112 W6: the ONE chat ladder — the owner's /model default > the operator
+            # pin > the first keyed provider; the model matches the provider.
+            _provider, _model = _resolve_chat_runtime(user_id=user_id)
+            # A billed request never starts on an owner default with no catalog price:
+            # it runs on the operator's model, as with_chat_pin does (112 review).
+            from core.billing_context import is_billed
+            from agents.task.model_pin_state import stored_pin_refusal
+            if is_billed() and stored_pin_refusal(_provider, _model):
+                _provider, _model = _resolve_chat_runtime()
             # B3: a per-request model override for a BRAND-NEW session has no
             # live agent yet to swap_model() (that's created later, inside
             # run_session) — bake it into the SessionRequest instead, the

@@ -50,10 +50,12 @@ def test_phase_after_done_is_illegal(tmp_path):
         j.done()
 
 
-def test_torn_file_reads_as_no_op(tmp_path):
+def test_torn_file_is_unreadable_not_no_op(tmp_path):
+    from core.state.files import UnreadableStateFile
     path = tmp_path / "op.json"
     path.write_text("{not json")
-    assert PhaseJournal(str(path)).pending() is None
+    with pytest.raises(UnreadableStateFile):
+        PhaseJournal(str(path)).pending()
 
 
 def test_clear(tmp_path):
@@ -79,3 +81,27 @@ def test_done_records_the_last_phase_in_one_write(tmp_path, monkeypatch):
     assert len(writes) == 1
     assert (writes[0]["state"], writes[0]["phase"]) == ("done", "applied")
     assert j.pending() is None
+
+
+def test_an_unreadable_journal_raises_and_is_never_overwritten(tmp_path):
+    """ST-17: an unreadable journal read as "nothing pending", so begin() wrote over
+    an unfinished operation and the boot recovery never saw it."""
+    from core.state.files import UnreadableStateFile
+    path = tmp_path / "op.json"
+    path.write_text('{"op": "update", "state": "running", "phase": "inst')
+    j = PhaseJournal(str(path))
+    for call in (j.read, j.pending, lambda: j.begin("update", owner="y"),
+                 lambda: j.phase("x"), lambda: j.claim("a", "b")):
+        with pytest.raises(UnreadableStateFile):
+            call()
+    assert path.read_text().endswith('"inst')
+    assert PhaseJournal(str(tmp_path / "missing.json")).pending() is None
+
+
+def test_claim_takes_over_a_running_operation_once(tmp_path):
+    path = str(tmp_path / "op.json")
+    PhaseJournal(path).begin("update", owner="dead")
+    assert PhaseJournal(path).claim("dead", "me")["owner"] == "me"
+    assert PhaseJournal(path).claim("dead", "other") is None
+    PhaseJournal(path).done()
+    assert PhaseJournal(path).claim("me", "other") is None

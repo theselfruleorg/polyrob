@@ -338,6 +338,12 @@ def _missing_table(exc: BaseException) -> bool:
     return isinstance(exc, sqlite3.OperationalError) and "no such table" in str(exc)
 
 
+# The live tail answers [] on a store error and retries next tick; it still SAYS
+# so, once per (db, table) per period, so a stuck store is not a silent one.
+_QUIET_WARN_PERIOD_S = 300.0
+_QUIET_WARNED: Dict[Tuple[str, str], float] = {}
+
+
 class SqliteTail:
     """Id-cursor tail over an append-only SQLite table (read-only, WAL-safe).
 
@@ -412,8 +418,17 @@ class SqliteTail:
             return self._quiet(exc, strict)
 
     def _quiet(self, exc: BaseException, strict: bool) -> List[Dict[str, Any]]:
-        if strict and not self._absent(exc):
+        if self._absent(exc):
+            return []
+        if strict:
             raise exc
+        key, now = (self.db_path, self.table), time.monotonic()
+        last = _QUIET_WARNED.get(key)
+        if last is None or now - last >= _QUIET_WARN_PERIOD_S:
+            _QUIET_WARNED[key] = now
+            logger.warning("activity tail %s unreadable (%s); the live stream retries "
+                           "each tick and says this once per %d s", self.table, exc,
+                           int(_QUIET_WARN_PERIOD_S))
         return []
 
     def poll(self, limit: int = 500) -> List[Dict[str, Any]]:

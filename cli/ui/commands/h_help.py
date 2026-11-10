@@ -317,8 +317,8 @@ HELP_TEXT: Dict[str, Tuple[str, str]] = {
     "status": (
         "  The whole agent, not this turn: what is wrong first, then running\n"
         "  or paused, what needs you, the goals, the loops and the wallet.\n"
-        "  The same snapshot /doctor shows.",
-        "`/status` on Telegram, `polyrob doctor`, and the console's Agent.",
+        "  It is the same on Telegram and the console; /doctor is the health report.",
+        "`/status` on Telegram and the console's Agent.",
     ),
     "doctor": (
         "  What is wrong first, then what I am: the ranked health lines, then\n"

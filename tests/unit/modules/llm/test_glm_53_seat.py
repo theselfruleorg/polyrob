@@ -19,7 +19,7 @@ class TestCatalogRows:
         cfg = get_model_config_exact("glm-5.3")
         assert cfg is not None, "bare 'glm-5.3' must resolve (it is the id the seat serves)"
         assert cfg.name == "z-ai/glm-5.3"
-        assert cfg.context_window == 1310720
+        assert cfg.context_window == 1048576
         # z.ai rejects max_tokens>131072 with code 1210 on this endpoint.
         assert cfg.max_completion_tokens == 131072
         assert cfg.capabilities.supports_tools
@@ -33,7 +33,7 @@ class TestCatalogRows:
         cfg = get_model_config_exact("glm-5.3-flash")
         assert cfg is not None
         assert cfg.name == "z-ai/glm-5.3-flash"
-        assert cfg.context_window == 1310720
+        assert cfg.context_window == 1048576
         assert cfg.max_completion_tokens == 131072
         assert cfg.capabilities.supports_tools
         # The ONE multimodal model a GLM-Coding-Plan deployment has.

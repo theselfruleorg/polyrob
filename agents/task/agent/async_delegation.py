@@ -54,6 +54,8 @@ def _frame_delegation_payload(result_text: str) -> str:
 
 # Keep at most this many finished records so the dict doesn't grow unbounded.
 _MAX_RETAINED_COMPLETED = 50
+#: Ids tried at a dispatch when an earlier row already holds the next one.
+_ID_ATTEMPTS = 50
 
 
 @dataclass
@@ -176,11 +178,14 @@ class AsyncDelegationRegistry:
         async with self._lock:
             if not self._counter_seeded:
                 try:
-                    self._counter = max(self._counter,
-                                        self._store.max_counter(self._session_id))
+                    if self._store is not None:
+                        self._counter = max(self._counter,
+                                            self._store.max_counter(self._session_id))
+                    self._counter_seeded = True
                 except Exception:
+                    # Not seeded: the next dispatch reads again, and the insert below
+                    # never replaces an existing id either way.
                     logger.warning("delegation counter seed failed", exc_info=True)
-                self._counter_seeded = True
             if self.active_count() >= cap:
                 return {
                     "status": "rejected",
@@ -190,24 +195,32 @@ class AsyncDelegationRegistry:
                     ),
                 }
             delegation_id = self._next_id()
+            dispatched_at = self._clock()
+            if self._store is not None:
+                try:
+                    # An id that already has a row (an unseeded counter) takes the next
+                    # one: the earlier row may hold a result not yet delivered.
+                    for _ in range(_ID_ATTEMPTS):
+                        if self._store.record_dispatched(
+                                session_id=self._session_id, user_id=self._user_id,
+                                delegation_id=delegation_id, goal=goal, profile=profile,
+                                parent_agent_id=parent_agent_id,
+                                dispatched_at=dispatched_at):
+                            break
+                        delegation_id = self._next_id()
+                    else:
+                        logger.warning("delegation durable write skipped: no free id "
+                                       "after %d tries", _ID_ATTEMPTS)
+                except Exception:
+                    logger.warning("delegation durable write failed", exc_info=True)
             rec = DelegationRecord(
                 delegation_id=delegation_id,
                 goal=goal,
                 profile=profile,
                 parent_agent_id=parent_agent_id,
-                dispatched_at=self._clock(),
+                dispatched_at=dispatched_at,
             )
             self._records[delegation_id] = rec
-            if self._store is not None:
-                try:
-                    self._store.record_dispatched(
-                        session_id=self._session_id, user_id=self._user_id,
-                        delegation_id=delegation_id, goal=goal, profile=profile,
-                        parent_agent_id=parent_agent_id,
-                        dispatched_at=rec.dispatched_at,
-                    )
-                except Exception:
-                    logger.warning("delegation durable write failed", exc_info=True)
             rec.task = asyncio.create_task(
                 self._run_and_deliver(
                     rec, goal=goal, profile=profile,

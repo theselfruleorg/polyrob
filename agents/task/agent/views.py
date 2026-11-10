@@ -41,9 +41,6 @@ class AgentBrain(BaseModel):
 	thinking: Optional[str] = None  # OPTIMIZATION: For chain-of-thought models (Task 5 - Nov 14, 2025)
 
 	# Enhanced tracking fields for intelligent completion
-	acceptance_criteria: Optional[List[str]] = None  # What must be done to complete the task
-	working_memory: Optional[Dict[str, Any]] = None  # Key-value pairs to track
-	confidence_level: Optional[float] = None  # 0-1 confidence in current approach
 	blockers: Optional[List[str]] = None  # Current blockers or issues
 	# Minimal hierarchical reasoning (keep lightweight)
 	phase: Optional[str] = None  # discovery | collection | processing | documentation

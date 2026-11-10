@@ -13,7 +13,7 @@ from agents.task.agent.service import Agent
 def _agent(chunks):
     agent = Agent.__new__(Agent)
 
-    async def astream(_messages):
+    async def astream(_messages, **kwargs):
         for c in chunks:
             yield c
 

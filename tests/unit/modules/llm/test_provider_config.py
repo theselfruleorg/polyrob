@@ -3,8 +3,8 @@
 Covers:
 1. Every provider in PROVIDER_CONFIG maps to the expected client class (by name).
 2. Unknown provider → create_chat_model raises ValueError (no silent fallback).
-3. deepseek IS in PROVIDER_CONFIG and has fallback_eligible=False.
-4. deepseek is NOT in FALLBACK_HIERARCHY (intentional disablement preserved).
+3. deepseek IS in PROVIDER_CONFIG and has fallback_eligible=True.
+4. deepseek is in FALLBACK_HIERARCHY, directly after openrouter.
 5. GUARD: every entry in FALLBACK_HIERARCHY maps to a provider that is
    fallback_eligible=True in PROVIDER_CONFIG.
 6. GUARD: every fallback_eligible=True provider appears in FALLBACK_HIERARCHY.
@@ -111,7 +111,7 @@ def test_create_chat_model_empty_provider_raises():
 
 
 # ---------------------------------------------------------------------------
-# 3. deepseek IS in PROVIDER_CONFIG and has fallback_eligible=False
+# 3. deepseek IS in PROVIDER_CONFIG and may serve the fallback ladder
 # ---------------------------------------------------------------------------
 
 def test_deepseek_in_provider_config():
@@ -119,27 +119,19 @@ def test_deepseek_in_provider_config():
     assert "deepseek" in PROVIDER_CONFIG, "deepseek missing from PROVIDER_CONFIG"
 
 
-def test_deepseek_fallback_eligible_false():
-    """deepseek.fallback_eligible must be False — direct client has broken tool calling."""
-    entry = PROVIDER_CONFIG["deepseek"]
-    assert entry.fallback_eligible is False, (
-        "deepseek.fallback_eligible is True — this is a regression. The deepseek direct "
-        "client is INTENTIONALLY excluded from the fallback hierarchy because its tool "
-        "calling is broken. Use OpenRouter's DeepSeek endpoint instead."
-    )
+def test_deepseek_fallback_eligible():
+    """The native client's tool calls work (live verified, see deepseek_client.py)."""
+    assert PROVIDER_CONFIG["deepseek"].fallback_eligible is True
 
 
 # ---------------------------------------------------------------------------
-# 4. deepseek is NOT in FALLBACK_HIERARCHY
+# 4. deepseek ranks directly after openrouter in FALLBACK_HIERARCHY
 # ---------------------------------------------------------------------------
 
-def test_deepseek_not_in_fallback_hierarchy():
-    """deepseek must NOT appear in LLMManager.FALLBACK_HIERARCHY."""
-    fallback_providers = _fallback_hierarchy_providers()
-    assert "deepseek" not in fallback_providers, (
-        "deepseek appeared in FALLBACK_HIERARCHY — this reverses the intentional "
-        "disablement documented in the hierarchy comment ('tool calling broken')."
-    )
+def test_deepseek_ranks_after_openrouter():
+    from modules.llm.llm_manager import LLMManager
+    names = [name for name, _ in LLMManager._build_fallback_hierarchy()]
+    assert names.index("deepseek_client") == names.index("openrouter_client") + 1
 
 
 # ---------------------------------------------------------------------------

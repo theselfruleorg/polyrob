@@ -169,6 +169,14 @@ def _recap_reply(user_id: str, data_dir: str, args: list) -> str:
                                  more_tenant=user_id)
 
 
+async def journey_reply(user_id: str, data_dir: str, task_agent: Any, args: list) -> str:
+    """`/journey [window]` on every seat (113 W4 item 3, D-2): the health
+    header, then the recap. The chat apps and the terminal both call this, so
+    one verb gives one text."""
+    header = await _health_header(user_id, data_dir, task_agent, limit=3)
+    return "\n".join(header) + "\n" + _recap_reply(user_id, data_dir, args)
+
+
 def _goals_reply(user_id: str, data_dir: str, board: Optional[Any] = None) -> str:
     """owner-UX P4 T2: goal board summary — counts by status + up to 5 most
     recent open/running goals.

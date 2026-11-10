@@ -1,13 +1,12 @@
-"""`/learn <description>` — distill a described procedure into a quarantined skill.
+"""`/learn <description>` — distill a described procedure into a live skill.
 
 The owner describes a procedure in prose; the agent distills it into a SKILL.md
-body and lands it in ``.pending/`` via ``SkillManager.create_skill`` (created_by=
-user: the owner taught it, so the curator never auto-archives it), so the existing
-quarantine + identity-scan + owner-promote flow applies unchanged. No new safety machinery — this is a thin front-door onto SkillWriterMixin.
+body and activates it via ``SkillManager.create_skill`` (created_by=user: the owner
+taught it, so the curator never auto-archives it). No new safety machinery — this is a thin front-door onto SkillWriterMixin.
 
 The distillation is deterministic by default (a structured template wrapping the
 description); a model turn is not required, so /learn never blocks on or costs an
-LLM call. The owner promotes the result with `/pending promote skill <id>`.
+LLM call. An id that already has a skill is refused: the template must not replace it.
 """
 import re
 from typing import Optional, Tuple
@@ -50,7 +49,7 @@ def h_learn(ctx) -> None:
     """REPL handler: /learn <freeform description of a procedure>."""
     description = " ".join(getattr(ctx, "args", None) or []).strip()
     if not description:
-        ctx.emit("usage: /learn <describe a procedure to distill into a pending skill>",
+        ctx.emit("usage: /learn <describe a procedure to save as a skill>",
                   title="learn")
         return
     uid = (getattr(ctx, "user_id", "") or "").strip() or "local"
@@ -65,9 +64,7 @@ def h_learn(ctx) -> None:
         return
 
     skill_id, content = _distill(description)
-    # Format-validate the derived id (create_skill re-validates + owns any
-    # same-id overwrite, archiving the prior body). We don't pre-check existence:
-    # re-learning the same description intentionally refines the same pending draft.
+    # Format-validate the derived id (create_skill re-validates).
     try:
         ok, _errs = mgr.validate_skill_id(skill_id)
         if not ok:
@@ -77,14 +74,17 @@ def h_learn(ctx) -> None:
     except Exception:
         pass
 
+    active = getattr(mgr, "active_skill_text", None)
+    if callable(active) and active(skill_id, user_id=uid):
+        ctx.emit(f"/learn: the skill '{skill_id}' exists. Ask me to change it, or describe "
+                 f"the new procedure in other words.", title="learn")
+        return
     try:
-        # pending=True FORCES quarantine regardless of SKILLS_WRITABLE_REQUIRE_REVIEW:
-        # a described procedure is always owner-reviewed before it can auto-trigger.
-        # The owner taught it: record the owner as the author (promote keeps it).
+        # The owner taught it: it is live at once, with the owner as the author.
         from modules.skills.writer import PROVENANCE_USER
         res = mgr.create_skill(
             skill_id, content, user_id=uid,
-            description=(description[:200]), created_by=PROVENANCE_USER, pending=True)
+            description=(description[:200]), created_by=PROVENANCE_USER)
     except Exception as e:
         ctx.emit(f"(/learn failed to write skill: {e})", title="learn")
         return

@@ -90,7 +90,7 @@ async def test_fallback_carries_real_usage_end_to_end():
 @pytest.mark.asyncio
 async def test_fallback_usage_reaches_bill_llm_response_extraction():
     """The consumer-side contract this bug broke: `agents/task`'s
-    `extract_token_usage(response, provider)` reads prompt_tokens/
+    `extract_token_usage(response)` reads prompt_tokens/
     completion_tokens off whatever `_generate_with_tools` returns as usage.
     Prove the fallback's usage dict is directly usable by that extraction
     shape (dict with the standard key names), not requiring a special case."""

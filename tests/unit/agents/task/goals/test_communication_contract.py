@@ -192,17 +192,15 @@ def test_fallback_completion_push_when_agent_silent(monkeypatch):
 # §3.4 — blocker-escalation push only when the agent didn't report the block
 # ---------------------------------------------------------------------------
 
-def test_no_escalation_push_when_agent_reported_blocker(monkeypatch):
-    monkeypatch.setenv("GOAL_BLOCKER_ESCALATION", "true")
+def test_stop_sweep_stays_quiet_when_agent_reported_blocker(monkeypatch):
     monkeypatch.setenv("GOAL_COMPLETION_JUDGE", "false")
     escalated = []
 
-    async def _esc(*a, **k):
+    def _esc(*a, **k):
         escalated.append(1)
-        return True
 
     import agents.task.goals.escalation as esc_mod
-    monkeypatch.setattr(esc_mod, "maybe_escalate_blocked", _esc)
+    monkeypatch.setattr(esc_mod, "mark_stop_told", _esc)
 
     ta = _ta([_send_step("blocker: x402 store unavailable — need database service"),
               _done_step("OUTCOME: BLOCKED — x402 store unavailable")])
@@ -221,21 +219,19 @@ def test_no_escalation_push_when_agent_reported_blocker(monkeypatch):
     # gate's own early-exit calls _maybe_escalate_blocked() with agent_reported defaulted to
     # False, short-circuiting the run.blocked/user_messages path this test means to exercise.
     asyncio.run(disp._run_goal(Goal(id="g3", user_id="u1", title="process task")))
-    assert escalated == [], ("the agent's own blocker report reached the user — "
-                             "no duplicate framework escalation push")
+    assert escalated, ("the agent's own blocker report reached the user — "
+                       "the stop sweep is told to stay quiet")
 
 
-def test_escalation_push_when_agent_silent_about_block(monkeypatch):
-    monkeypatch.setenv("GOAL_BLOCKER_ESCALATION", "true")
+def test_stop_sweep_still_tells_when_agent_silent_about_block(monkeypatch):
     monkeypatch.setenv("GOAL_COMPLETION_JUDGE", "false")
     escalated = []
 
-    async def _esc(*a, **k):
+    def _esc(*a, **k):
         escalated.append(1)
-        return True
 
     import agents.task.goals.escalation as esc_mod
-    monkeypatch.setattr(esc_mod, "maybe_escalate_blocked", _esc)
+    monkeypatch.setattr(esc_mod, "mark_stop_told", _esc)
 
     ta = _ta([_done_step("OUTCOME: BLOCKED — x402 store unavailable")])  # silent
     board = _Board()
@@ -248,4 +244,52 @@ def test_escalation_push_when_agent_silent_about_block(monkeypatch):
     disp = GoalDispatcher(board, ta)
     # Same title fix as g3 above — avoid accidental money-tool keyword inference.
     asyncio.run(disp._run_goal(Goal(id="g4", user_id="u1", title="process task")))
-    assert escalated, "agent said nothing about the block — safety net fires"
+    assert escalated == [], "agent said nothing about the block — the stop sweep still tells it"
+
+
+# ---------------------------------------------------------------------------
+# 107 WS-5: a done that nothing verified is told whatever the done setting says
+# ---------------------------------------------------------------------------
+
+def _unverified_run(monkeypatch, *, notify, steps):
+    monkeypatch.setenv("GOAL_NOTIFY_ON_DONE", "true" if notify else "false")
+    monkeypatch.setenv("GOAL_COMPLETION_JUDGE", "true")
+    import agents.task.goals.completion_judge as cj
+    import agents.task.goals.escalation as esc
+
+    async def _judge(*a, **k):
+        return (cj.VERDICT_UNCLEAR, "judge error (fail-open): timeout")
+
+    monkeypatch.setattr(cj, "judge_run_outcome", _judge)
+    done_kw, lines = [], []
+
+    async def _push(goal, session_id, final, **kw):
+        done_kw.append(kw)
+
+    async def _line(agent, goal, reason):
+        lines.append(reason)
+
+    monkeypatch.setattr(esc, "tell_unverified", _line)
+    disp = GoalDispatcher(_Board(), _ta(steps))
+    monkeypatch.setattr(disp, "_notify_owner_done", _push)
+    asyncio.run(disp._run_goal(Goal(id="g5", user_id="u1", title="process task")))
+    return done_kw, lines
+
+
+def test_an_unverified_done_is_told_with_the_done_setting_off(monkeypatch):
+    done_kw, lines = _unverified_run(monkeypatch, notify=False,
+                                     steps=[_done_step("OUTCOME: ok")])
+    assert done_kw == [] and lines == ["judge error (fail-open): timeout"]
+
+
+def test_an_unverified_done_is_told_after_the_agent_spoke(monkeypatch):
+    _, lines = _unverified_run(monkeypatch, notify=True,
+                               steps=[_send_step("done, all good"), _done_step("OUTCOME: ok")])
+    assert lines == ["judge error (fail-open): timeout"]
+
+
+def test_the_done_notice_carries_the_reason_and_no_second_line(monkeypatch):
+    done_kw, lines = _unverified_run(monkeypatch, notify=True,
+                                     steps=[_done_step("OUTCOME: ok")])
+    assert done_kw[0]["verify_reason"] == "judge error (fail-open): timeout"
+    assert lines == []

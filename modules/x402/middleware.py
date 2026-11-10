@@ -223,7 +223,8 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
             return False
         if not isinstance(body, dict):
             return False
-        if path == "/a2a/rpc":
+        rpc = path == "/a2a/rpc"
+        if rpc:
             if body.get("method") != "message/send":
                 return False
             params = body.get("params")
@@ -233,6 +234,13 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
             # The endpoint refuses a message/send without a message; nothing
             # to bill.
             return False
+        # 110 W0: on the RPC route an order data part is answered as an ORDER (its own
+        # invoice), never as a compute task, so it is not billed as one. Only there:
+        # the stream route has no order path and still makes a billed task of it.
+        if rpc:
+            from core.commerce.listing import a2a_order_part
+            if a2a_order_part(message) is not None:
+                return False
         return not message.get("taskId")
 
     def _init_facilitator(self):

@@ -68,13 +68,10 @@ LINE_KINDS = frozenset({KIND_JOB, KIND_SETTING})
 ORIGIN_SYSTEM = "system"
 ORIGIN_AGENT = "agent"
 
-S_OPEN = "open"
-S_CONFIRMED = "confirmed"   # the confirm line is running
-S_DONE = "done"
-S_FAILED = "failed"
-S_CANCELLED = "cancelled"
-S_EXPIRED = "expired"
-S_REPLACED = "replaced"     # a refresh (or a proposal's quote) superseded it
+#: The states and their one edge table: ``core.surfaces.card_states.CARD``.
+from core.surfaces.card_states import (  # noqa: E402
+    CARD, OUTCOME_UNKNOWN, S_CANCELLED, S_CONFIRMED, S_DONE, S_EXPIRED, S_FAILED, S_OPEN,
+    S_REPLACED, outcome_of)
 
 #: How long a quote card may be confirmed. The send re-simulates and is bound
 #: by the caps either way; past this the owner refreshes the price first.
@@ -210,6 +207,7 @@ class Card:
     #: came from (``parent_id``) through :func:`lineage`.
     group_id: Optional[str] = None
     parent_id: Optional[str] = None
+    outcome: str = ""   # a finished money card: sent | not_sent | unknown (card_states)
     created_at: float = 0.0
     expires_at: float = 0.0
     updated_at: float = 0.0
@@ -386,7 +384,7 @@ CREATE TABLE IF NOT EXISTS card_refs (
 """
 
 _DOC_KEYS = ("title", "body", "verb", "args", "options", "answer", "result", "session_id",
-             "draft", "typed", "group_id", "parent_id")
+             "draft", "typed", "group_id", "parent_id", "outcome")
 
 
 class CardStore:
@@ -416,7 +414,7 @@ class CardStore:
                     session_id=doc.get("session_id"), draft=dict(doc.get("draft") or {}),
                     typed=list(doc.get("typed") or []),
                     group_id=doc.get("group_id"), parent_id=doc.get("parent_id"),
-                    created_at=r["created_at"], expires_at=r["expires_at"],
+                    outcome=doc.get("outcome") or "", created_at=r["created_at"], expires_at=r["expires_at"],
                     updated_at=r["updated_at"])
 
     @staticmethod
@@ -456,7 +454,8 @@ class CardStore:
             conn.execute("BEGIN IMMEDIATE")
             r = conn.execute("SELECT * FROM cards WHERE card_id=?", (card_id,)).fetchone()
             if r is None or r["state"] not in expect or (
-                    expect_updated_at is not None and r["updated_at"] != expect_updated_at):
+                    expect_updated_at is not None and r["updated_at"] != expect_updated_at) \
+                    or not CARD.check(r["state"], new_state, ctx={"card": card_id}):
                 conn.rollback()
                 return None
             card = self._row(r)
@@ -499,7 +498,7 @@ class CardStore:
         out = []
         for r in rows:
             c = self.transition(r["card_id"], frozenset({S_CONFIRMED}), S_FAILED,
-                                result=_NO_RESULT)
+                                result=_NO_RESULT, outcome=OUTCOME_UNKNOWN)
             if c is not None:
                 out.append(c)
         return out
@@ -615,31 +614,11 @@ class CardStore:
         return out
 
     def recent_sends(self, user_id: str, since: float, verb: str = "/send",
-                     limit: int = 300) -> List[Tuple[str, str, float, List[str]]]:
-        """``(to, token word, finished_at, args)`` of this owner's rail-confirmed cards for
-        ``verb`` since ``since`` (epoch seconds), and of those whose confirm line runs now."""
-        conn = self._conn()
-        try:
-            rows = conn.execute(
-                "SELECT doc, state, updated_at FROM cards WHERE user_id=? AND kind=? AND state IN (?,?) "
-                "AND updated_at>=? ORDER BY updated_at DESC LIMIT ?",
-                (user_id, KIND_QUOTE, S_DONE, S_CONFIRMED, float(since), int(limit))).fetchall()
-        finally:
-            conn.close()
-        out: List[Tuple[str, str, float]] = []
-        for r in rows:
-            doc = json.loads(r["doc"] or "{}")
-            if doc.get("verb") != verb:
-                continue
-            res = str(doc.get("result") or "")
-            if r["state"] == S_DONE and (not any(m in res for m in _SENT_MARKS) or failed_result(res)):
-                continue
-            args = [str(a) for a in doc.get("args") or []]
-            low = [a.lower() for a in args]
-            if "to" not in low or low.index("to") + 1 >= len(args) or len(args) < 2:
-                continue
-            out.append((args[low.index("to") + 1], args[1], float(r["updated_at"]), args))
-        return out
+                     limit: int = 300) -> List[Tuple[str, str, float, List[str], str]]:
+        """``core.surfaces.card_states.recent_sends`` on this store."""
+        from core.surfaces.card_states import recent_sends
+        return recent_sends(self, user_id, since, verb, limit, kind=KIND_QUOTE,
+                            sent_marks=_SENT_MARKS, failed_result=failed_result)
 
 
 _STORE: Optional[CardStore] = None
@@ -1135,8 +1114,8 @@ def _refuse_send_ticker(args: List[str]) -> None:
 
 
 def choice_card(user_id: str, question: str, options: List[str], *,
-                session_id: Optional[str] = None, ttl: float = CHOICE_TTL_S,
-                st: Optional[CardStore] = None) -> Card:
+                body: str = "", session_id: Optional[str] = None,
+                ttl: float = CHOICE_TTL_S, st: Optional[CardStore] = None) -> Card:
     """An agent's question with 2–6 options. Raises ValueError on a bad shape."""
     opts = [" ".join(str(o).split()) for o in (options or []) if str(o).strip()]
     if not (2 <= len(opts) <= MAX_OPTIONS):
@@ -1146,7 +1125,7 @@ def choice_card(user_id: str, question: str, options: List[str], *,
     q = " ".join(str(question or "").split())
     if not q:
         raise ValueError("a choice needs a question")
-    return _new(user_id, KIND_CHOICE, ORIGIN_AGENT, q,
+    return _new(user_id, KIND_CHOICE, ORIGIN_AGENT, q, body=body,
                 options=opts, session_id=session_id, ttl=ttl, st=st)
 
 
@@ -1325,8 +1304,9 @@ def finish(card_id: str, result_text: str, *, st: Optional[CardStore] = None) ->
     st = st or store()
     text = (result_text or "").strip() or _NO_RESULT
     new_state = S_FAILED if failed_result(text) else S_DONE
+    outcome = outcome_of(text, new_state == S_FAILED)
     done = st.transition(card_id, frozenset({S_CONFIRMED}), new_state,
-                         result=_short_block(text, 1500))
+                         result=_short_block(text, 1500), outcome=outcome)
     if done is None and text != _NO_RESULT:
         # AC2: ``sweep_stuck`` closes a card that reported nothing for 30 min
         # as "no result" — but a `/bridge … go` that waited on the owner's
@@ -1336,7 +1316,7 @@ def finish(card_id: str, result_text: str, *, st: Optional[CardStore] = None) ->
         if cur is not None and cur.state == S_FAILED and cur.result == _NO_RESULT:
             done = st.transition(card_id, frozenset({S_FAILED}), new_state,
                                  expect_updated_at=cur.updated_at,
-                                 result=_short_block(text, 1500))
+                                 result=_short_block(text, 1500), outcome=outcome)
     if done:
         _notify(done)
     return done
@@ -1395,7 +1375,7 @@ TEXT_REPLY_RESULT = "owner replied in text: "
 def close_choices_for_text(user_id: str, session_id: str, text: str, *,
                            st: Optional[CardStore] = None) -> List[Card]:
     """A typed line into a session with an OPEN choice card closes that card,
-    so ``present_choice`` stops waiting and the agent reads the line. The text
+    so ``owner_ask`` stops waiting and the agent reads the line. The text
     is never parsed into a pick (prod 2026-10-15: "Judge" sat 2.5 min)."""
     if not session_id:
         return []
@@ -1451,17 +1431,20 @@ async def push(container: Any, user_id: str, card: Card, *,
 def _note_held_push(container: Any, user_id: str) -> None:
     held = _HELD_PUSHES.setdefault(user_id, {"n": 0, "pending": False, "last": 0.0})
     held["n"] += 1
-    if held["pending"] or time.time() - held["last"] < HELD_PUSH_WINDOW_S:
+    if held["pending"]:
         return
+    # Inside the window the line is not dropped: it waits for the window's end.
+    wait = max(HELD_PUSH_DELAY_S, held["last"] + HELD_PUSH_WINDOW_S - time.time())
     held["pending"] = True
     from core.async_bridge import spawn_retained
-    spawn_retained(_send_held_line(container, user_id, held))
+    spawn_retained(_send_held_line(container, user_id, held, wait))
 
 
-async def _send_held_line(container: Any, user_id: str, held: dict) -> None:
+async def _send_held_line(container: Any, user_id: str, held: dict,
+                          wait: float = HELD_PUSH_DELAY_S) -> None:
     import asyncio
     try:
-        await asyncio.sleep(HELD_PUSH_DELAY_S)       # the rest of the burst joins
+        await asyncio.sleep(wait)       # the rest of the burst (or of the window) joins
         n, held["n"] = held["n"], 0
         noun = "card waits" if n == 1 else "cards wait"
         from core.surfaces.user_delivery import PRIORITY_EXEMPT, deliver_user_message

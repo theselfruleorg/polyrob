@@ -22,7 +22,7 @@ NOW = datetime(2026, 9, 19, 6, 0, 0)
 
 def _job(**kw):
     base = dict(id="exit0001", task="EXIT RAIL", schedule_spec="0 * * * *", user_id="alice",
-                next_run_at=datetime(2026, 9, 19, 5, 0, 0), max_duration_seconds=60,
+                next_run_at=datetime(2026, 9, 19, 5, 30, 0), max_duration_seconds=60,
                 payload={"priority": "money"})
     base.update(kw)
     return CronJob(**base)

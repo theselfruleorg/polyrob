@@ -56,6 +56,8 @@ added later is owner-only until it is named a read.
 polyrob                 # or: polyrob chat
 polyrob --plain
 polyrob -p anthropic -m <model>
+polyrob --new           # start in a new separate chat
+polyrob --chat 2        # start in one of your chats (a number or a name from /chats)
 ```
 
 A persistent agent session. Type your goal and press Enter; the agent acts step
@@ -69,6 +71,15 @@ conversation is kept in the editor until the turn finishes; it is never silently
 discarded. Interactive approval prompts accept their displayed decision words
 through this same input box. History persists within the active profile;
 credential-shaped inputs and credential setup commands are omitted.
+
+The terminal has one **main chat** and the separate chats you open beside it. One
+terminal run stays in the chat it started
+in: `polyrob` starts in the chat you chose last (the main chat by default) and gets the
+summary of the last run in that chat. `/new [name]`, `/chat <number or name>` and
+`/close` move you to another chat: the terminal ends this run and starts again in
+that chat (with piped input it applies to your next start). `/chats` lists your chats
+(`/sessions` is its old name) and `/rename <name>` names the chat you are in. `/clear`
+empties this run's context and keeps the chat.
 
 Use `/attach "path to image.png"` to stage local files for the next agent step.
 The command prints the saved paths. If the conversation is idle, type a message
@@ -91,18 +102,19 @@ as `0 %`**, when the seat does not report cached tokens, so a blank there means
 ```bash
 polyrob run "summarize https://example.com"
 polyrob run "scrape these pages into a CSV" --toolset research --max-steps 80
-polyrob run --resume abc123
+polyrob run --continue abc123 "now add the tests"
 polyrob run --task-file task.txt --output-format json
 cat task.txt | polyrob run - --no-input --output-format jsonl
 polyrob run "describe this image" --attach diagram.png
 ```
 
-Give a task **or** `--resume SESSION_ID`, not both. The agent runs until the task
-is done or it hits a step or budget limit.
+Give a task to start a new chat. With `--continue SESSION_ID` the text is the next message in
+that chat; `--continue` alone only runs input that is already waiting, so a finished chat needs a
+message. `--resume` is the old name of `--continue` and still works. The agent runs until it is done or it hits a step or budget limit.
 
 | Option | Description |
 |---|---|
-| `--resume SESSION_ID` | Continue using saved settings; model/provider/tool/step-budget overrides are rejected |
+| `--continue SESSION_ID` | Continue a chat with its saved settings (add a message to say something new); model/provider/tool/step-budget overrides are rejected |
 | `--task-file PATH` | Read a UTF-8 task file; `-` reads stdin. A positional task of `-` also reads stdin |
 | `--attach PATH` | Stage a local file/image in the session workspace; repeat for multiple files |
 | `--output-format text\|json\|jsonl` | Human transcript, one structured result, or normalized events followed by a result |
@@ -177,7 +189,10 @@ The economics section of the snapshot is where you check whether prompt caching
 is paying: it names the share of input tokens served from cache, the tokens
 written *into* cache (a write costs more than an ordinary input token, so a
 prefix rewritten fifty times and one written once read very differently), the
-first-call cache hit rate, and the median uncached tokens per call.
+first-call cache hit rate, the median uncached tokens per call, and the split per
+upstream. It counts cold calls by cause and warns when the hit rate falls under its 7-day
+median. `polyrob doctor` also names any configured model with no exact catalog row, and
+the limits and cost that model then gets.
 
 ### `polyrob auth` — provider credentials
 
@@ -341,7 +356,13 @@ Each surface is a long-running process. Every one takes `-v/--verbose`.
 polyrob surfaces list [--probe]    # every surface: enabled flag, credentials, probe state
 polyrob surfaces add <surface>     # ask for its credentials and write them (never echoed), then probe
 polyrob surfaces probe <surface>   # prove a credential with a read (`all` = every surface)
+polyrob surfaces state [--status] [--json]   # paused or not; --status adds health
+polyrob surfaces pause <surface>   # stop sending on it until resume
+polyrob surfaces resume <surface>
 ```
+
+`state`, `pause` and `resume` are the circuit breakers of each chat app, kept across restarts.
+`polyrob surface` is the old name of these three and still works; it is hidden from the help.
 
 `surfaces add` writes `~/.polyrob/.env`, or
 `/etc/polyrob/polyrob.env` on a deployed box; `--env-file` names another file,
@@ -351,8 +372,8 @@ The agent reads and sends X direct messages with its tools, not with a surface
 process: [x-twitter.md](x-twitter.md).
 
 Signal identifies a sender by the account UUID (`sourceUuid`) that signal-cli
-supplies, and refuses a message that carries only a phone number. Pair the owner
-and approve contacts by their UUIDs.
+supplies, and refuses a message that carries only a phone number. Set
+`OWNER_SIGNAL_ID` to the owner's UUID and approve contacts by their UUIDs.
 Group chats have their own setup and rules: [groups.md](groups.md).
 
 ---
@@ -367,7 +388,7 @@ polyrob autonomy on [--mode supervised|autonomous]
 polyrob autonomy off
 polyrob autonomy pause [WORD…] [--for 6h]
 polyrob autonomy resume [WORD…]
-polyrob autonomy halt                   # alias of pause with no words
+polyrob autonomy halt                   # old name of pause with no words (hidden from the help)
 ```
 
 `on`/`off` write `AUTONOMY_ENABLED` to `~/.polyrob/.env` (the active config
@@ -447,6 +468,20 @@ occur once) and can change the schedule, cap, rig, delivery or pinned skills.
 It never rewrites the whole task, so rules elsewhere in the task survive the
 edit.
 
+**A script job.** A job can run a file the agent wrote, with no model call:
+`script: {"path": "jobs/collect.py", "args": [], "timeout_s": 120}`. The file is a
+`.py` or `.sh` file among the agent's working files, and it runs in the code sandbox. Exit code 0
+is a good run. Another exit code or a timeout is a failed run, and the owner gets
+the error text. An output line that starts with `ALERT` also reaches the owner. This
+needs code execution and one shared place for the agent's working files
+(`POLYROB_PROJECT_DIR`).
+
+**What a run must do.** A job can state it with `expect`: `{"effect": "social",
+"min": 1}` needs at least one public post in the run, and `{"idle_ok": true}` says
+a run with no act is fine. Code compares it with the run's own act records and
+stores the result as the run's `verified` field, which the next run of the job reads.
+`cronjob_show` prints the `expect`. A job with no `expect` has no such check.
+
 **What a job may do.** Every job carries the same standing authority: its rig and
 tools are used as written, it may post on X without a per-run approval, and it may
 moderate a room its task names. A job the agent schedules from an autonomous run may
@@ -475,6 +510,15 @@ polyrob session export <id> [-o FILE] [--format json|txt|raw|sharegpt|openai]
 polyrob session prune [--days N] [--max N] [--dry-run] [--yes]
 ```
 
+`list` shows the live ones, newest first, each with a title (the first line of its job,
+else the name of its chat) and the chat it is in. `--all` adds the finished, paused and
+failed ones; the list says how many it left out. A store it cannot read is named on stderr,
+never shown as an empty list.
+
+Every verb here reads the data home the running agent writes (the deployed one on a
+server), so `list` in an SSH shell shows the agent's work, not an empty local tree.
+`cancel`, `pause` and `resume` need the full id.
+
 `prune` deletes the directory trees older than `SESSION_RETENTION_DAYS` (or `--days`).
 It keeps a tree of any age that holds a registered file, that a live goal
 names, or that a helper still owns, and it refuses the whole sweep when it cannot
@@ -482,7 +526,7 @@ read the goal board or the registry of produced files.
 
 `tail --follow` lets a second terminal watch any running session, including a
 goal or cron run. `raw`, `sharegpt` and `openai` are training-corpus formats. To
-continue a session's execution, use `polyrob run --resume <id>`.
+continue a chat, use `polyrob run --continue <id> "your message"`.
 
 Pause/cancel/resume controls need no provider key. Live controls request a change
 through the session's durable control mailbox and wait briefly for acknowledgement.
@@ -518,19 +562,20 @@ nothing.
 privilege the agent never has. Setting it up:
 [deployment-postures.md](deployment-postures.md).
 
-### `polyrob skills` and `polyrob skill`
+### `polyrob skills`
 
-- `polyrob skills` — read and authoring: `list`, `validate`, `export`.
-- `polyrob skill` — the install pipeline: `install <spec>`, `approve`, `list`, `info`, `remove`, `update`, `search`, and `tap add|list|remove`.
+`polyrob skills` holds the whole set: `list`, `validate` and `export` read and author;
+`install <spec>`, `approve`, `status`, `info`, `remove`, `update`, `search` and `tap add|list|remove` are the install pipeline.
+`status` is every skill with its scope and state. `polyrob skill` is the old name of the install verbs (its `list` is `skills status`); it still works and is hidden from the help.
 
 ```bash
 polyrob skills list
 polyrob skills validate [id]
-polyrob skill install acme/repo/pdf     # folder, owner/repo, git URL, or SKILL.md URL (--ref, --trust local|prompt)
-polyrob skill approve pdf               # activate a quarantined install
-polyrob skill update [name]             # re-fetch from the source and re-apply the trust rules
-polyrob skill search pdf [--refresh]    # search the taps by name or description
-polyrob skill tap add acme/skills       # a GitHub repo that publishes skills (owner/repo[/subdir])
+polyrob skills install acme/repo/pdf     # folder, owner/repo, git URL, or SKILL.md URL (--ref, --trust local|prompt)
+polyrob skills approve pdf               # activate a quarantined install
+polyrob skills update [name]             # re-fetch from the source and re-apply the trust rules
+polyrob skills search pdf [--refresh]    # search the taps by name or description
+polyrob skills tap add acme/skills       # a GitHub repo that publishes skills (owner/repo[/subdir])
 ```
 
 A compliant skill folder dropped into `~/.agents/skills/` (or a repo's
@@ -579,11 +624,6 @@ a deliberate owner grant, and the spend caps and approval lane are the other
 half of it. A high-impact tool is enabled with a warning naming the gates that
 stay closed anyway — a sub-agent, a self-wake turn and a correspondent-tainted
 session still cannot reach it.
-
-### `polyrob surface`
-
-`list`, `pause <surface>`, `resume <surface>` — the per-surface circuit
-breakers, persisted across restarts.
 
 ### `polyrob subagents`
 
@@ -636,7 +676,16 @@ polyrob wallet pin-token <chain> <address> <SYMBOL> [--note TEXT]
 polyrob wallet unpin-token <chain> <address>
 polyrob wallet submissions [--json]             # unresolved sends and the chain evidence for each
 polyrob wallet release-submission <ref> --charge-usd N | --never-sent --reason TEXT
+polyrob wallet send <amount|'$usd'> <native|token> to <address> on <chain> [go]   # a quote; `go` sends
+polyrob wallet swap <amount> <in> to <out> on <chain> [go]                         # a quote; `go` swaps
+polyrob wallet check <address|ticker>           # a wallet's holdings or a token's report
 ```
+
+`wallet send`, `wallet swap` and `wallet check` take the words of chat `/send`, `/swap`
+and `/check` and run the same handler: without the word `go` they quote and move nothing,
+and every limit and refusal is the chat verb's own. Put a `$` amount in quotes (`'$22'`)
+so the shell keeps it. A refusal exits 1. The agent cannot run `send` or `swap` from its
+own shell.
 
 There is no default network: a verb that acts on one network needs `--chain`.
 
@@ -702,24 +751,27 @@ Who may command the agent, and who it may talk to.
 polyrob owner show                              # the bound owner and per-surface posture
 polyrob owner correspondents                    # third parties the agent is bound to
 polyrob owner invite <surface> <address> <session_id>   # register a correspondent of a session
-polyrob owner approve …                         # approve a pending correspondent (--all [surface])
+polyrob owner invite … --rebind                 # move a bound contact, and tell the owner
+polyrob owner person-approve <surface> <address>   # approve a pending correspondent (--all [surface])
 polyrob owner allow <surface> <target>          # outbound send permission
 polyrob owner deny <surface> <target>
 polyrob owner allowlist
-polyrob owner pair pending|approve <code>|revoke <user>
+polyrob owner pair list|pending|approve <surface> <code>|revoke <surface> <id>
 polyrob owner groups allow|deny|list|mode|set|role|roles|tools|audit|admins|tail|service …
 polyrob owner correspondents --history <surface> <address>   # the stored transcript
 ```
 
-⚠️ **A paired sender is treated as you, the owner, on that surface.** Pairing is
-issued by you: an unknown sender DMs the bot and receives a code, and you run
-`polyrob owner pair approve <code>`. Approve only a code that your own account
-received, never a code that somebody else gives you. Codes expire after 15
-minutes and work once. A paired sender gets full owner routing, but no host
-execution (`run_code`, `run_tests`) in local mode. Remove a pairing with
-`polyrob owner pair revoke <user_id>`.
+⚠️ **A paired sender may command the agent on that chat app with their own memory and work. They never reach your wallet, money, approvals, owner commands or your memory, and in local mode they run no code on your host.** Pairing is issued by you:
+a sender in a private chat receives a code, and you run
+`polyrob owner pair approve <surface> <code>` (the command prints who you paired), or
+send `/pair approve <surface> <code>` from your own chat (both need the chat app
+name).
+Approve only a code you expected. Codes expire after 15 minutes and work once.
+Pairing gates private chats only: a room keeps its own allowlist, and a
+correspondent the agent contacted is never asked for a code. Remove a pairing with
+`polyrob owner pair revoke <surface> <id>`.
 
-`owner correspondents`, `owner approve --all` and `owner invoices` are scoped to
+`owner correspondents`, `owner person-approve --all` and `owner invoices` are scoped to
 this instance's owner tenant; pass `--all-tenants` to see every bucket on the
 box. `owner groups roles <surface> <chat>` lists the ROLES POLYROB recorded for
 a room — the platform's own admin list needs a live connection to that surface
@@ -731,12 +783,18 @@ a room — the platform's own admin list needs a live connection to that surface
 polyrob owner inbox [-n N]        # everything waiting on a decision, blocking first
 polyrob owner pending             # self-evolution proposals
 polyrob owner show-pending <kind> <id>
+polyrob owner approve <id> | all  # approve one item of any kind, or all of them
 polyrob owner promote <kind> <id> / polyrob owner reject <kind> <id>
 polyrob owner asks [--json]       # what the agent needs from you to unblock work
 polyrob owner fulfill <id> [answer…]   # the words after the id are your answer
 polyrob owner missed [-n N]       # notices the delivery rail could not send live
 polyrob owner memory scopes list|show|promote|purge <label>   # quarantined goal/cron findings
 ```
+
+`owner approve <id>` approves one item of any kind by the id `owner pending` shows (also
+`kind:id`), and `owner approve all` approves all of them, as `/approve` does in chat.
+`owner promote <kind> <id>` is the same decision with the kind named. The old person form
+`owner approve <surface> <address>` and `owner approve --all` still work and say so.
 
 An identity draft (`self_context`, `owner_doc`, `contract`) is decided as
 `<id>@<rev>`, the revision `owner pending` printed. If the draft changed since, or
@@ -775,7 +833,8 @@ every wallet send until `wallet release-submission` or `wallet book` closes it.
 **Control**
 
 ```bash
-polyrob owner halt / polyrob owner resume            # aliases of autonomy pause / resume
+polyrob owner resume                                 # lift every pause (as autonomy resume)
+polyrob owner halt                                   # old name of autonomy pause (hidden from the help)
 polyrob owner pause-entries / resume-entries         # no NEW treasury positions; exits still run
 ```
 
@@ -864,7 +923,7 @@ config path` prints them for the process you are running.
 
 ## Tips
 
-- `polyrob run` is stateless — every call starts a new session. Use `--resume <id>` to continue one, or the REPL for a memory-carrying conversation.
+- `polyrob run` is stateless — every call starts a new session. Use `--continue <id> "message"` to continue one, or the REPL for a memory-carrying conversation.
 - `polyrob session tail <id> --follow` in a second terminal shows what a goal or cron run is doing right now.
 - To run a second bot on one machine, use a profile (`polyrob -P scout …`) rather than editing the global config.
 

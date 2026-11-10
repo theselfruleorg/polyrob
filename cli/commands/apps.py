@@ -12,6 +12,7 @@ import os
 import click
 
 from cli._admin_home import as_root_option
+from cli.commands._options import json_option, yes_option
 
 
 @click.group("apps")
@@ -121,7 +122,7 @@ def _print_lines(lines):
 
 @apps.command("list")
 @click.option("--user", default=None, help="Tenant user_id (default: bound owner / 'local')")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def list_cmd(user, as_json):
     """List this tenant's apps with status, URL and last health."""
     from core.app_service.owner_ops import CLI_APPROVE_HINTS, list_lines, row_json
@@ -204,7 +205,7 @@ def start_cmd(slug, user):
 @apps.command("remove")
 @click.argument("slug")
 @click.option("--user", default=None)
-@click.option("--yes", is_flag=True, help="Do not ask for confirmation.")
+@yes_option(help="Do not ask for confirmation.")
 @as_root_option
 def remove_cmd(slug, user, yes):
     """Remove an app for good: container, snapshots, logs, record and its address."""

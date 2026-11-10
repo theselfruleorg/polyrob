@@ -1,10 +1,10 @@
 """``AnthropicCompatClient`` — any Anthropic-``/v1/messages``-compatible endpoint
 reached with a non-Anthropic credential (z.ai GLM Coding Plan; later a Claude
-subscription OAuth bearer). Rides ``AnthropicClient`` (proposal 024, L0).
+subscription OAuth bearer). Rides ``AnthropicClient``.
 
-Split out of ``compat_clients.py`` (058 T7.2): ``AnthropicClient`` imports the
-``anthropic`` SDK at module level, and since T1.4 that SDK is an extra. Keeping
-this class beside ``OpenAICompatClient`` made every OpenAI-compatible provider
+This class lives apart from ``compat_clients.py``: ``AnthropicClient`` imports the
+``anthropic`` SDK at module level, and that SDK is an extra. Keeping
+this class beside ``OpenAICompatClient`` would make every OpenAI-compatible provider
 (Ollama, Groq, LM Studio, …) drag the Anthropic SDK in. ``create_llm_client``
 calls ``core.lazy_deps.ensure_provider("provider.anthropic")`` before importing
 this module.
@@ -12,6 +12,7 @@ this module.
 from __future__ import annotations
 
 from typing import Optional
+from urllib.parse import urlparse
 
 from modules.llm.anthropic_client import AnthropicClient
 from modules.llm.compat_clients import _NO_KEY_SENTINEL, _resolve_key, _spec_for
@@ -26,15 +27,21 @@ from core.exceptions import ServiceError
 class AnthropicCompatClient(AnthropicClient):
     """Anthropic-messages-compatible client driven by a ProviderSpec."""
 
-    # F4: never send a ``cache_control.ttl`` to a third-party /v1/messages
+    # Never send a ``cache_control.ttl`` to a third-party /v1/messages
     # validator — an unknown key there is a 4xx on the request itself, not a
     # lost optimisation (same class as the 422 in usage_extract.py:48-50).
     _SUPPORTS_CACHE_TTL = False
 
-    # F9: same reasoning for `defer_loading` / `tool_addition` — a third-party
+    # Same reasoning for `defer_loading` / `tool_addition` — a third-party
     # /v1/messages validator does not know the mid-conversation-tool-changes
     # beta, and an unknown key there is a 4xx on the request itself.
     _SUPPORTS_DEFERRED_TOOLS = False
+
+    # The same for `output_config`, `block_binding` and a replayed thinking block.
+    _SUPPORTS_THINKING_CONTROLS = False
+
+    # A third-party endpoint still reads the sampling params (anthropic_sampling).
+    _COMPAT_SEAT = True
 
     def __init__(self, config: BotConfig, name: str):
         # Skip AnthropicClient.__init__ (it reads the 'anthropic' config block);
@@ -42,31 +49,17 @@ class AnthropicCompatClient(AnthropicClient):
         LLMClient.__init__(self, config=config, name=name)
         self._client = None
         self._spec = _spec_for(name)
-        self._PROVIDER_LABEL = self._spec.display_name
 
         cfg = config.get_llm_config().get(self._spec.name, {}) or {}
         self.api_key = _resolve_key(self._spec, cfg)
         self._credential_source = cfg.get("credential_source", "env")
         self.model_type = cfg.get("model") or get_default_model(self._spec.name)
-        self.last_response = None
 
-        model_config = get_model_config(self.model_type)
-        if model_config:
-            self.max_tokens = model_config.max_completion_tokens or 8192
-        else:
-            self.max_tokens = 8192
-            self.logger.info(
-                f"Model '{self.model_type}' not in registry — using defaults "
-                f"(declare it under 'models:' in providers.yaml to list it)"
-            )
+        self.max_tokens = get_model_config(self.model_type).max_completion_tokens or 8192
         self.supports_vision = self._resolve_supports_vision()
         self.temperature = 0.7
-
-    def _resolve_supports_vision(self, model_type: Optional[str] = None) -> bool:
-        mc = get_model_config(model_type or self.model_type)
-        if mc:
-            return mc.capabilities.supports_vision
-        return self._spec.supports_vision
+        # A subscription seat on the real API refuses sampling params like any other call there.
+        self._COMPAT_SEAT = urlparse(self._profile_base_url() or "").hostname != "api.anthropic.com"
 
     def _profile_base_url(self) -> Optional[str]:
         # api_key is passed so a key-prefix rule can redirect the host
@@ -100,7 +93,7 @@ class AnthropicCompatClient(AnthropicClient):
             from modules.llm.credit_errors import no_retry_on_credit_refusal
             kwargs["http_client"] = anthropic.DefaultAsyncHttpxClient(
                 event_hooks={"response": [no_retry_on_credit_refusal]})
-            self._client = anthropic.AsyncAnthropic(**kwargs)
+            self._client = anthropic.AsyncAnthropic(**kwargs, **self._sdk_limits())
             self.logger.debug(f"{self._spec.display_name} client setup completed")
         except Exception as e:
             raise ServiceError(f"Failed to set up {self._spec.display_name} client: {e}")

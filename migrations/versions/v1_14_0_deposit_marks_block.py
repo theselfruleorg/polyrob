@@ -44,8 +44,10 @@ async def downgrade(db, db_manager):
 async def verify(db, db_manager):
     try:
         cols = await db.fetch_all("PRAGMA table_info(deposit_balance_marks)")
-    except Exception:
-        cols = None
+    except Exception as exc:
+        # Unreadable is not absent: the gate fails rather than pass a store it never read.
+        logger.error("v1.14.0 verify: could not read deposit_balance_marks: %s", exc)
+        return False
     if not cols:
         return True   # runtime-created by the monitor on first use
     if "as_of_block" not in {c["name"] for c in cols}:

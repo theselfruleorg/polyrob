@@ -263,4 +263,7 @@ _ALCHEMY_HOSTS = {
     "arbitrum": "arb-mainnet.g.alchemy.com",
     "optimism": "opt-mainnet.g.alchemy.com",
     "polygon": "polygon-mainnet.g.alchemy.com",
+    # E-S1-12: getNFTsForOwner answered on this host (2026-11-08) with a contract
+    # that has code on the Robinhood public RPC (eth_getCode, chain 4663).
+    "robinhood": "robinhood-mainnet.g.alchemy.com",
 }

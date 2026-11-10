@@ -125,11 +125,15 @@ def test_forgeable_set_is_exactly_the_forgeable_rows():
     assert set(FORGEABLE_NETWORK_SURFACES) == {s.id for s in catalog.SURFACES if s.forgeable}
 
 
-def test_owner_alias_set_is_unchanged_telegram_only():
-    """F1 step 6 decision: data only, behaviour identical. Widening who is OWNER
-    is a separate, reviewed change."""
-    from core.instance import _OWNER_ALIAS_SURFACES
-    assert set(_OWNER_ALIAS_SURFACES) == set(catalog.alias_owner_ids()) == {"telegram"}
+def test_owner_alias_surfaces_are_the_signed_owner_seats():
+    """110: every owner seat whose sender id the platform signs aliases its CONFIGURED
+    owner id to the owner principal; a forgeable surface (email) never does."""
+    from core.instance import _alias_surfaces
+    assert set(_alias_surfaces()) == set(catalog.alias_owner_ids()) == {
+        "telegram", "slack", "discord", "signal", "whatsapp", "feishu", "dingtalk"}
+    assert not (set(catalog.alias_owner_ids()) & set(catalog.forgeable_ids()))
+    for sid in catalog.alias_owner_ids():
+        assert catalog.get(sid).owner_env, sid
 
 
 def test_owner_chat_surfaces_derive_from_the_catalog():

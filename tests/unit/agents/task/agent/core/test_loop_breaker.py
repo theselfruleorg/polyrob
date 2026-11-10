@@ -292,3 +292,79 @@ def test_a_cycle_broken_by_a_new_call_clears_the_escalation():
     assert ran is True
     _, ran = _run_step(a, A(), result_text="a")
     assert ran is True
+
+
+# --- a run of reworded sends to one recipient (prod 2026-11-06) --------------
+
+def _send(n, target="owner", **extra):
+    return _Output(_Action("message", surface="telegram", target=target,
+                           text=f"reworded line {n}", action="send", **extra))
+
+
+def _send_run(agent, count, target="owner"):
+    return [_run_step(agent, _send(i, target), result_text=f"sent id {i}") for i in range(count)]
+
+
+def test_reworded_sends_warn_then_refuse_then_end_the_run():
+    agent = _Agent()
+    outcomes = _send_run(agent, 4)
+    assert all(ran for _, ran in outcomes)
+    assert any("3 messages to this recipient" in m.content for m in agent.message_manager.added)
+
+    results, ran = _run_step(agent, _send(4), result_text="sent")
+    assert ran is False and "MESSAGE NOT SENT" in results[0].error
+    assert agent._take_loop_stop() is None
+
+    results, ran = _run_step(agent, _send(5), result_text="sent")
+    assert ran is False and "RUN ENDED" in results[0].error
+    assert agent._take_loop_stop()
+    assert agent.state.stop_reason is not None
+
+
+def test_a_send_refused_as_a_duplicate_still_counts():
+    agent = _Agent()
+    for i in range(4):
+        _run_step(agent, _send(i), error="message NOT sent: This exact text already reached")
+    results, ran = _run_step(agent, _send(9), result_text="sent")
+    assert ran is False and "MESSAGE NOT SENT" in results[0].error
+
+
+def test_send_message_and_message_to_owner_are_one_run():
+    agent = _Agent()
+    for i in range(2):
+        _run_step(agent, _Output(_Action("send_message", text=f"a{i}")), result_text=f"s{i}")
+        _run_step(agent, _send(i), result_text=f"t{i}")
+    _, ran = _run_step(agent, _send(7), result_text="sent")
+    assert ran is False
+
+
+def test_a_work_step_restarts_the_count():
+    agent = _Agent()
+    _send_run(agent, 4)
+    _run_step(agent, _Output(_Action("filesystem_append_file", file_path="a", content="b")),
+              result_text="ok")
+    outcomes = _send_run(agent, 4)
+    assert all(ran for _, ran in outcomes)
+
+
+def test_another_recipient_is_not_the_same_run():
+    agent = _Agent()
+    _send_run(agent, 4, target="@channel")
+    outcomes = _send_run(agent, 2, target="-100room")
+    assert all(ran for _, ran in outcomes)
+
+
+def test_a_message_read_is_not_a_send():
+    agent = _Agent()
+    for i in range(8):
+        output = _Output(_Action("message", action="posts", last=i))
+        _, ran = _run_step(agent, output, result_text=f"posts {i}")
+        assert ran is True
+
+
+def test_a_new_run_clears_the_count():
+    agent = _Agent()
+    _send_run(agent, 4)
+    agent._reset_loop_guard()
+    _, ran = _run_step(agent, _send(0), result_text="sent")
+    assert ran is True

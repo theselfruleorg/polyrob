@@ -153,18 +153,15 @@ def test_recalibration_failure_does_not_abort_the_switch():
     assert a.message_manager.llm == "anthropic-client"
 
 
-def test_both_fallback_handlers_use_the_shared_adopter():
-    """Structural: guards against a future edit re-introducing a two-attribute switch
-    in either handler."""
+def test_the_fallback_handler_uses_the_shared_adopter():
+    """Structural: guards against a future edit re-introducing a two-attribute switch."""
     import inspect
 
     from agents.task.agent.core import llm_runner
 
     src = inspect.getsource(llm_runner)
-    assert src.count("self.adopt_active_llm(") >= 4, (
-        "expected both fallback handlers to adopt on success AND restore on failure "
-        "through the shared adopter"
-    )
+    assert src.count("self.adopt_fallback_llm(") == 1
+    assert src.count("self.restore_first_llm(") == 1
     assert "self.llm = fallback_llm" not in src, (
         "a fallback handler is setting self.llm directly again — that skips "
         "llm_provider and message_manager.llm"
@@ -201,19 +198,17 @@ def test_fallback_never_says_owner_switched():
     assert 'The owner switched you to it from "m1"' in mm._runtime_identity_message.content
 
 
-def test_fallback_callers_share_the_refresh():
-    """Every fallback site calls the shared refresh with cause=fallback, and each
-    restore after a failed fallback refreshes too."""
+def test_fallback_callers_share_the_move():
+    """Every fallback site moves through adopt_fallback_llm, which holds the one refresh."""
     import inspect
-    from agents.task.agent.core import error_recovery, llm_runner
+    from agents.task.agent.core import error_recovery, llm_runner, model_swap
     from agents.task.session import execution
-    runner = inspect.getsource(llm_runner)
-    assert runner.count('_refresh_after_model_change("fallback"') == 1
-    assert runner.count('_refresh_after_model_change(\n\t\t\t\t\t\t"fallback"') == 1
-    assert runner.count('_refresh_after_model_change("restore")') == 2
-    assert "_get_provider_from_model(fallback_model)" not in runner
-    assert '"fallback", original_model, reason=original_error_type' in inspect.getsource(error_recovery)
-    assert 'agent._refresh_after_model_change(' in inspect.getsource(execution)
+    for module in (llm_runner, error_recovery):
+        assert "self.adopt_fallback_llm(" in inspect.getsource(module)
+    assert "agent.adopt_fallback_llm(" in inspect.getsource(execution)
+    adopter = inspect.getsource(model_swap.ModelSwapMixin.adopt_fallback_llm)
+    assert 'cause="fallback"' in adopter
+    assert 'cause="restore"' in inspect.getsource(model_swap.ModelSwapMixin.restore_first_llm)
 
 
 def test_one_identity_write_per_swap():

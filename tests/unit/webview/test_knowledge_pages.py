@@ -73,27 +73,6 @@ def seam(monkeypatch):
     return client, knowledge, prov
 
 
-def test_notes_endpoint_reuses_note_list(seam):
-    client, _, prov = seam
-    r = client.get("/api/webgate/knowledge/notes")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["count"] == 1
-    assert body["items"][0]["title"] == "prod deploys"
-    assert body["items"][0]["updated_day"]  # server-side day formatting
-    assert prov.calls["note_list"] == dict(user_id="owner-1", status="active", tag=None)
-
-
-def test_note_detail_404_when_missing(seam):
-    client, _, prov = seam
-    assert client.get("/api/webgate/knowledge/note/999").status_code == 404
-    r = client.get("/api/webgate/knowledge/note/1")
-    assert r.status_code == 200
-    assert r.json()["note"]["id"] == 1
-    # READ-ONLY page: a passive web view must not bump the agent-reuse counter.
-    assert prov.calls["note_get"]["bump_access"] is False
-
-
 def test_episodes_endpoint_reuses_recall(seam):
     client, _, prov = seam
     r = client.get("/api/webgate/knowledge/episodes", params={"since_hours": 8, "kind": "goal"})
@@ -117,30 +96,10 @@ def test_no_provider_degrades_to_empty(monkeypatch):
     client, knowledge = _client()
     monkeypatch.setattr(knowledge, "_memory_provider_status", lambda: (None, None))
     monkeypatch.setattr(knowledge, "_effective_user_id", lambda request: "owner-1")
-    for url in ("/api/webgate/knowledge/notes", "/api/webgate/knowledge/episodes",
-                "/api/webgate/knowledge/kb"):
+    for url in ("/api/webgate/knowledge/episodes", "/api/webgate/knowledge/kb"):
         r = client.get(url)
         assert r.status_code == 200
         assert r.json()["items"] == []
-
-
-def test_changes_endpoint_queries_event_log(seam, monkeypatch):
-    client, knowledge, _ = seam
-    import core.event_log as ev_mod
-
-    class _Log:
-        def query(self, *, since_ts=None, kind=None, user_id=None, limit=500):
-            assert user_id == "owner-1"
-            if kind == "self_modification":
-                return [{"ts": 1752200000, "kind": kind, "source": "memory_tool",
-                         "attrs": {"action": "create", "item_id": "1"}}]
-            return []
-
-    monkeypatch.setattr(ev_mod, "get_event_log", lambda db_path=None: _Log())
-    r = client.get("/api/webgate/knowledge/changes")
-    assert r.status_code == 200
-    items = r.json()["items"]
-    assert items and items[0]["attrs"]["action"] == "create"
 
 
 def test_skills_endpoint_failopen(monkeypatch):
@@ -202,8 +161,7 @@ def test_skills_endpoint_reports_no_error_on_success(monkeypatch):
 
 # --- 2026-09-21 revalidation: "not configured" is not "unreadable" ----------- #
 
-@pytest.mark.parametrize("path", ["/api/webgate/knowledge/notes",
-                                  "/api/webgate/knowledge/episodes",
+@pytest.mark.parametrize("path", ["/api/webgate/knowledge/episodes",
                                   "/api/webgate/knowledge/kb"])
 def test_no_provider_is_an_empty_answer_with_a_reason_not_an_error(monkeypatch,
                                                                    path):
@@ -239,3 +197,11 @@ def test_a_provider_that_raises_is_still_an_error_with_null_items(monkeypatch):
     body = client.get("/api/webgate/knowledge/kb").json()
     assert body["items"] is None and body["count"] is None
     assert "memory.db is locked" in body["error"]
+
+
+def test_the_uncalled_readers_are_gone():
+    """113 W5 (C-14): notes, one note and changes had no console caller."""
+    client, _ = _client()
+    for path in ("/api/webgate/knowledge/notes", "/api/webgate/knowledge/note/1",
+                 "/api/webgate/knowledge/changes"):
+        assert client.get(path).status_code == 404, path

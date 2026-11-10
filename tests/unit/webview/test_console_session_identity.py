@@ -65,6 +65,11 @@ def test_multitenant_still_accepts_customer_identity(console, monkeypatch):
     from webview import webgate
     server, client = console
     monkeypatch.setenv("POLYROB_POSTURE", "multitenant")
+    # Multitenant reads the account block list; a readable, empty one admits.
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    store = SimpleNamespace(fetch_one=AsyncMock(return_value=None))
+    monkeypatch.setattr("api.dependencies.require_service", lambda *a, **kw: store)
     token = _token("customer")
     response = client.get("/api/webgate/wallet", headers={"Authorization": "Bearer " + token})
     assert response.status_code == 200

@@ -39,6 +39,8 @@ import os
 
 import click
 
+from cli.commands._options import json_option, yes_option
+
 
 def _fmt_expiry(epoch) -> str:
     """Relative expiry — an owner needs "does this need reconnecting soon",
@@ -64,8 +66,7 @@ def auth():
 
 
 @auth.command("status")
-@click.option("--json", "as_json", is_flag=True,
-              help="Emit every provider's credential state as JSON.")
+@json_option(help="Emit every provider's credential state as JSON.")
 def status_cmd(as_json: bool):
     """Show every provider's credential: source, health, expiry.
 
@@ -419,7 +420,7 @@ def add_cmd(provider, validate_opt):
 
 @auth.command("remove")
 @click.argument("provider")
-@click.option("--yes", "-y", is_flag=True, default=False, help="Skip the confirmation.")
+@yes_option(help="Skip the confirmation.")
 def remove_cmd(provider, yes):
     """Forget PROVIDER's stored credential (does NOT revoke it upstream)."""
     from core.llm_auth.flows import disconnect

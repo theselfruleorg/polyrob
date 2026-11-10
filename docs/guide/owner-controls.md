@@ -54,6 +54,10 @@ plain word does not cover: `all`, `trading`, `cron`,
 silently widens to "everything". Durations are `90m`, `6h`, `2d`. The CLI form
 is `polyrob autonomy pause trading --for 6h`.
 
+A one-time job (a reminder, for example) that comes due while jobs are paused is not
+lost: it keeps its slot and runs at the first tick after `/resume`. A job's own
+pause window holds it the same way.
+
 In prose, a scoped ask ("stop trading for 6 hours") goes to the agent, which
 narrows it through its owner-only `autonomy_control` action and quotes the
 result. Nothing acts on the sentence before the agent reads it.
@@ -279,29 +283,37 @@ A chat surface starts locked. On Telegram:
   `polyrob config set ALLOWED_TELEGRAM_USER_IDS <id>` line. The agent does not
   run on that message, and each sender gets that reply once per process.
 - **Allowlist set.** A private message from an id that is not on the list gets
-  no answer at all. A single id on the list is your owner seat.
-- **Pairing on** (`POLYROB_REQUIRE_PAIRING=true`). A sender who passes the
-  allowlist but is not the owner and not paired gets
-  `🔒 I'm not allowed to talk to you yet.` with a pairing code. On the box,
-  `polyrob owner pair pending` lists the waiting codes and
-  `polyrob owner pair approve <code>` approves one.
+  no answer at all (pairing off). A single id on the list is your owner seat.
+- **Pairing on** (`POLYROB_REQUIRE_PAIRING=true`). A private sender who is not
+  the owner and not paired, on the list or not, gets
+  `🔒 I'm not allowed to talk to you yet.` with a pairing code. A paired sender
+  passes the allowlist. Send `/pair` to
+  see the waiting codes and the paired users, and `/pair approve <surface> <code>`
+  to approve one (a code without its chat app name is refused; on the box: `polyrob owner pair list|approve`). The code is sent at
+  most once per 10 minutes; between, the bot stays silent. The first time a new
+  person asks, you get one message, and the request waits in `/inbox` until you
+  decide. Neither shows the code: ask the person for it. When you turn pairing
+  off, every paired sender loses access on every chat app; the list is kept, so
+  they are back when you turn it on again.
 
-⚠️ A paired sender is treated as you, the owner, on that surface. Approve only a
-code that your own account received. A code expires after 15 minutes and works
-once; `polyrob owner pair revoke <user_id>` removes a pairing.
+⚠️ A paired sender may command the agent on that chat app with their own memory and work. They never reach your wallet, money, approvals, owner commands or your memory, and in local mode they run no code on your host. Approve only a code you expected. A code expires after 15 minutes and works
+once; `/pair revoke <surface> <id>` removes a pairing. Only you can run `/pair`:
+a paired sender gets "Owner only".
 
 Email has no owner seat: a mail from an address the agent wrote to first is a
 correspondent reply, delivered to that session as data, never as instructions.
-Every other mail is refused. Feishu and DingTalk use pairing for the owner
-([feishu-dingtalk.md](feishu-dingtalk.md)); group rooms have their own allowlist
+Every other mail is refused. On every other chat app the owner is the id you
+configure for it (`OWNER_SLACK_ID`, `OWNER_FEISHU_ID`, …;
+[feishu-dingtalk.md](feishu-dingtalk.md)); group rooms have their own allowlist
 ([groups.md](groups.md)).
 
 ## Approving what the agent proposes
 
-The agent quarantines what it learns. A new skill, an identity note, an owner
-rule, a queued spend approval, a new contact — none of it takes effect until you
-decide. One list holds everything that waits on you: `/inbox` reads these
-approvals, open asks, decisions waiting for a tap, and signer approvals. `/pending`, `/asks` and `/cards` show parts of the same
+Your own turn and your scheduled jobs need no tap for anything that is not money, a secret
+or the host. A queued spend approval, a new person, and whatever a chat that holds someone
+else's message, or a group, writes take no effect until you decide. So does an identity note
+or an owner rule that a job writes, or that a chat writes after it read a web page. One list holds everything that waits on you: `/inbox` reads these
+approvals, open asks, decisions waiting for a tap, signer approvals, and pairing requests. `/pending`, `/asks` and `/cards` show parts of the same
 list.
 
 ```
@@ -405,7 +417,7 @@ the quote shows them before you type `go`.
 /claim <token> [go]                 # collect the creator fees a launchpad owes me
 /check <address|ticker> [chain]     # look at any wallet or token, read-only
 /nft                                # the agent NFTs I own, their accounts and holdings
-/nft list|info|transfer|revoke … on <chain> [go]   # what I hold, send one, retire an approval
+/nft list|info|account|transfer|revoke … on <chain> [go]   # what I hold, an NFT account, send one, retire an approval
 /nft trust|untrust|send … on <chain> [go]          # use, stop using, or give away an agent NFT
 /dapp list|revoke <id>              # web pages my wallet is armed for
 /identity register|set-uri on <chain> [go]   # my own ERC-8004 registration
@@ -432,7 +444,7 @@ decided card loses its buttons. In the console, Money › Moves › *Make a move
 send or swap from pickers (chain, a token I trust, a recent recipient) and answers with
 the same card. The agent uses cards too: `propose_action` puts a
 money verb to you whose only button gets the real quote (the agent never writes a
-confirm), and `present_choice` asks you to pick one of a few options and waits for
+confirm), and `owner_ask` asks you to pick one of a few options and waits for
 the tap. When the agent lacks something you can fix, `propose_setting` puts the fix
 behind a Confirm button — `/mcp add`, a safe `/config set`, or a grant without
 money — and Confirm runs that line as if you typed it; a change only the operator can

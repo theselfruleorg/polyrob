@@ -24,8 +24,10 @@ if TYPE_CHECKING:
 	# nearly all of agents.task.agent).
 	from tools.browser.context import BrowserContext
 	from agents.task.loop_types.execution_context import ActionExecutionContext
+from tools.controller.registry.tool_order import emit_rank
 from tools.controller.registry.schema_generators import (
 	get_schema_generator,
+	supports_native_tools,
 	ToolSchemaGenerator,
 )
 
@@ -1170,15 +1172,12 @@ class Registry:
 			self.logger.debug(f"No actions available for provider {provider}")
 			return []
 
-		# 057 WS-A (stable tool bytes): emit in a deterministic order. The schema
-		# list is part of the prompt's cached prefix, and its order here is dict
-		# INSERTION order — i.e. the order tools happened to register in, which
-		# differs between a cron session, a goal session and a chat session that
-		# hold the SAME tools. A different prefix is a cold cache at 50x the
-		# cached input price. Sorting by action name makes two registries with
-		# the same ids emit identical bytes (the 2026-09-22 harness/cache review
-		# found every new process was a cold prefix on ~58 K schema tokens).
-		all_actions.sort(key=lambda a: getattr(a, "name", "") or "")
+		# 057 WS-A (stable tool bytes): emit in a deterministic order, not dict
+		# INSERTION order, which differs between a cron, a goal and a chat session
+		# that hold the SAME tools. A different prefix is a cold cache at 50x the
+		# cached input price. Same ids => same bytes; common tools come first, so
+		# two rigs share the longest prefix (registry/tool_order.py).
+		all_actions.sort(key=lambda a: emit_rank(getattr(a, "name", "") or ""))
 
 		# F13 (restart continuity): a restored session emits the order it emitted
 		# BEFORE the restart, so the tools block — the largest cached bytes in the
@@ -1330,23 +1329,7 @@ class Registry:
 		Returns:
 			True if the provider has native tool support
 		"""
-		provider_lower = provider.lower()
-
-		# Proposal 024 (L0): the ProviderSpec registry is the SSOT for this
-		# capability — exact-name/alias match answers FIRST (the legacy substring
-		# list below used to shadow it and contradicted the spec for deepseek,
-		# whose spec declares supports_native_tools=False).
-		try:
-			from modules.llm.provider_spec import get_spec
-			spec = get_spec(provider_lower)
-			if spec is not None:
-				return bool(spec.supports_native_tools)
-		except Exception:
-			pass
-
-		# Legacy fallback for names with no spec row (substring match preserved).
-		native_providers = ["openai", "anthropic", "gemini", "google", "deepseek", "openrouter", "nvidia"]
-		return any(p in provider_lower for p in native_providers)
+		return supports_native_tools(provider)
 
 	def tool_call_to_action(self, tool_name: str, args: Dict[str, Any]) -> ActionModel:
 		"""Convert a single tool call to an ActionModel (simplified single validation path)

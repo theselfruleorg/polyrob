@@ -98,7 +98,7 @@ def install_lines(data_home: Optional[str] = None) -> List[str]:
     try:
         # The version of the code that RUNS, not the one `polyrob setup` saw.
         from core.version import changelog_path, running_version_line
-        line = f"Running version: {running_version_line()}."
+        line = f"Running version: {running_version_line(with_sha=False)}."
         if changelog_path() is not None:
             line += (" What shipped in a release comes from the CHANGELOG.md shipped "
                      "with your code — read it with agent_status(release_notes="

@@ -183,3 +183,10 @@ def test_listing_bridges_never_creates_the_store(tmp_path):
     db = str(tmp_path / "bridges.db")
     assert bg.open_bridges("alice", db_path=db) == []
     assert not os.path.exists(db), "a read created the store"
+
+
+def test_a_provider_refund_with_an_unreadable_balance_is_in_flight_not_failed():
+    """FAILED is terminal; an unreadable destination stays in flight."""
+    ticks = iter([0.0, 1.0, 999.0])
+    out = _await(_Provider([("failure", "refunded")]), [None], now=lambda: next(ticks))
+    assert out.state == bg.STATE_IN_FLIGHT

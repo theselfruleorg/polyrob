@@ -48,6 +48,15 @@ def _read_boot_id() -> str:
     except OSError:
         pass
     if sys.platform == "darwin":
+        # ⚠️ Not kern.boottime first: XNU moves it when the clock is stepped (an NTP
+        # step after a wake), and every live lease owner then read as a past boot.
+        try:
+            out = subprocess.run(["sysctl", "-n", "kern.bootsessionuuid"], capture_output=True,
+                                 text=True, timeout=5).stdout.strip()
+            if out:
+                return f"boot-{out}"
+        except Exception:
+            pass
         try:
             out = subprocess.run(["sysctl", "-n", "kern.boottime"], capture_output=True,
                                  text=True, timeout=5).stdout

@@ -176,6 +176,68 @@ def _order_run(execution_context) -> bool:
     return isinstance(meta, dict) and str(meta.get("mandate") or "").startswith("ord_")
 
 
+def _split_types(inner: str) -> list:
+    out, depth, cur = [], 0, ""
+    for ch in inner:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0:
+            out.append(cur.strip())
+            cur = ""
+        else:
+            cur += ch
+    if cur.strip():
+        out.append(cur.strip())
+    return out
+
+
+def _coerce(kind: str, value):
+    if kind.endswith("]") or kind.startswith("("):
+        return value                       # arrays and tuples: eth_abi validates them
+    if kind.startswith(("uint", "int")):
+        if isinstance(value, bool):
+            raise ValueError(f"{kind} needs a number, not {value!r}")
+        if isinstance(value, float) and not (value.is_integer() and abs(value) < 2 ** 53):
+            # A JSON float is not an exact integer: int() would truncate 1.5 to 1 and
+            # round 1234567890123456789.0 — an argument nobody wrote.
+            raise ValueError(f"{kind} needs an exact integer, not {value!r} (pass large or "
+                             f"exact amounts as decimal strings)")
+        return int(str(value), 0) if isinstance(value, str) else int(value)
+    if kind == "bool":
+        if isinstance(value, str):
+            from core.env import parse_bool
+            return parse_bool(value, False, strict=True)
+        return bool(value)
+    if kind.startswith("bytes"):
+        return bytes.fromhex(str(value).removeprefix("0x"))
+    if kind == "address":
+        from eth_utils import to_checksum_address
+        return to_checksum_address(str(value))
+    return value
+
+
+def encode_call(signature: str, args: list) -> str:
+    """``0x`` + selector + ABI-encoded *args* for *signature* (109 W5). A run that
+    calls a pinned resource names the function; it never hand-encodes bytes."""
+    import re
+    from eth_abi import encode
+    from eth_utils import keccak
+    sig = str(signature or "").replace(" ", "")
+    m = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)\((.*)\)", sig)
+    if not m:
+        raise ValueError(f"{signature!r} is not a function signature like mint(address,string)")
+    types = _split_types(m.group(2))
+    if len(types) != len(args):
+        raise ValueError(f"{sig} takes {len(types)} argument(s); {len(args)} given")
+    try:
+        body = encode(types, [_coerce(t, a) for t, a in zip(types, args)])
+    except Exception as exc:
+        raise ValueError(f"the arguments do not fit {sig} ({str(exc)[:160]})") from None
+    return "0x" + keccak(text=sig).hex()[:8] + body.hex()
+
+
 async def perform_call(tool, params, execution_context=None):
     from core.wallet import tx_guard, tx_notify
     from core.wallet.broadcast.evm import EvmRail
@@ -200,6 +262,13 @@ async def perform_call(tool, params, execution_context=None):
             return tool._ar(error=paused + " RESULT: NOT SENT.")
 
     data = (params.calldata or "").strip()
+    if getattr(params, "function", None):
+        if data and data != "0x":
+            return tool._ar(error="refused: give calldata OR function + args, not both")
+        try:
+            data = encode_call(params.function, list(params.args or []))
+        except ValueError as exc:
+            return tool._ar(error=f"refused: {exc}. Nothing was broadcast.")
     if not data.startswith("0x"):
         data = "0x" + data
     try:
@@ -349,6 +418,12 @@ async def perform_call(tool, params, execution_context=None):
         # kernel's offer step decide whether `to` really is one of the offer's resources.
         is_resource_call=_order_run(execution_context) and not value_wei and not spend_token
         and not receive_token and not grants)
+    if intent.is_resource_call:
+        # The recipient travels with the intent so polyrob-signer can re-check the receipt.
+        import dataclasses
+        from core.money.hooks import offer_recipient
+        intent = dataclasses.replace(intent, resource_recipient=offer_recipient(
+            str(execution_context.metadata.get("mandate"))))
 
     authorize = tool._guard_fn or tx_guard.authorize
     async with gate.reserve():
@@ -418,8 +493,8 @@ async def perform_call(tool, params, execution_context=None):
             notice_kw=dict(verb="call", route=f"{params.chain}:{to_addr}",
                            chain=params.chain, amount_in=data[:10],
                            usd=decision.amount_usd))
-        gate.record(**_rec, receipt_state=(  # 098 TS-23: a timed-out wait resolves later
-            "pending_receipt" if receipt.status == "pending" else None))
+        from tools.defi.receipt_wait import book_after_receipt
+        book_after_receipt(gate, receipt, **_rec)  # 098 TS-23: pending/reverted leave the caps
         tool._notify_tx(execution_context, tx_notify.TxNotice(
             verb="call", route=f"{params.chain}:{to_addr}", chain=params.chain,
             amount_in=data[:10],

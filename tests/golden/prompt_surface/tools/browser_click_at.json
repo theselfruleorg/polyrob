@@ -1,0 +1,41 @@
+{
+  "function": {
+    "description": "Click a point of the viewport by its pixel coordinates (a canvas, a map, a control with no index).",
+    "name": "browser_click_at",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for clicking a point of the viewport.",
+      "properties": {
+        "button": {
+          "default": null,
+          "enum": [
+            "left",
+            "middle",
+            "right"
+          ],
+          "nullable": true,
+          "type": "string"
+        },
+        "double": {
+          "default": null,
+          "nullable": true,
+          "type": "boolean"
+        },
+        "x": {
+          "description": "Pixels from the left edge of the viewport",
+          "type": "integer"
+        },
+        "y": {
+          "description": "Pixels from the top edge of the viewport",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

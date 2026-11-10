@@ -400,39 +400,33 @@ class SessionExecutionMixin:
                     if is_llm_error and hasattr(agent, 'state') and not agent.state.should_halt_for_llm_error():
                         self.logger.warning(f"Agent {agent_id} failed with LLM error, checking for fallback...")
 
-                        # Try to get fallback LLM from container
+                        # The agent's own ladder walk: failed providers excluded, price
+                        # and family rules applied, the first model kept for the return.
                         try:
-                            if self.container:
-                                llm_manager = self.container.get_service('llm')
-                                if llm_manager and hasattr(llm_manager, 'get_fallback_chat_model'):
-                                    fallback_llm = await llm_manager.get_fallback_chat_model(
-                                        exclude_providers=getattr(agent.state, 'llm_providers_failed', [])
-                                    )
+                            fallback_llm = await agent._get_fallback_llm(
+                                exclude_providers=list(dict.fromkeys(
+                                    list(agent.state.llm_providers_failed)
+                                    + [agent._current_llm_provider(agent.model_name)])),
+                                original_model=agent.model_name,
+                            )
 
-                                    if fallback_llm:
-                                        self.logger.info(f"🔄 Retrying agent {agent_id} with fallback LLM")
-                                        from modules.llm.usage_extract import resolve_serving_provider
-                                        fallback_model = getattr(fallback_llm, 'model_name', 'fallback')
-                                        _failed_model = getattr(agent, 'model_name', None)
-                                        agent.adopt_active_llm(
-                                            fallback_llm, fallback_model,
-                                            resolve_serving_provider(fallback_llm, fallback_model))
-                                        agent._refresh_after_model_change(
-                                            "fallback", _failed_model, reason=type(e).__name__)
+                            if fallback_llm:
+                                self.logger.info(f"🔄 Retrying agent {agent_id} with fallback LLM")
+                                await agent.adopt_fallback_llm(fallback_llm, type(e).__name__)
 
-                                        # Retry execution
-                                        retry_start = time.time()
-                                        result = await agent.run(max_steps=max_steps)
-                                        retry_end = time.time()
+                                # Retry execution
+                                retry_start = time.time()
+                                result = await agent.run(max_steps=max_steps)
+                                retry_end = time.time()
 
-                                        results[agent_id] = {
-                                            "status": _result_session_status(result),
-                                            "result": result,
-                                            "execution_time": retry_end - start_time,
-                                            "fallback_used": True
-                                        }
-                                        self.logger.info(f"✅ Agent {agent_id} succeeded with fallback LLM")
-                                        continue  # Skip to next agent
+                                results[agent_id] = {
+                                    "status": _result_session_status(result),
+                                    "result": result,
+                                    "execution_time": retry_end - start_time,
+                                    "fallback_used": True
+                                }
+                                self.logger.info(f"✅ Agent {agent_id} succeeded with fallback LLM")
+                                continue  # Skip to next agent
                         except LLMProviderExhaustedError:
                             self.logger.error(f"Fallback retry exhausted all providers for {agent_id}")
                         except Exception as fallback_error:

@@ -106,10 +106,8 @@ def is_console_process() -> bool:
 
 
 def _is_owner(user_id: Optional[str]) -> bool:
-    from core.config_policy import local_mode_enabled
-    from core.instance import is_owner_local_safe, resolve_owner_principal
-    return is_owner_local_safe(user_id, owner_principal=resolve_owner_principal(),
-                               local_enabled=local_mode_enabled())
+    from core.instance import is_owner_uid
+    return is_owner_uid(user_id)
 
 
 def resolve_gated_actions() -> tuple:
@@ -506,6 +504,30 @@ def _stamp_owner_grant(context, params: Dict[str, Any]) -> None:
         metadata[OWNER_GRANT_KEY] = {"approved": True, "max_spend_usd": float(declared)}
     except Exception:
         logger.debug("owner grant stamp skipped", exc_info=True)
+
+
+def operator_denies_approvals() -> bool:
+    """``APPROVAL_PROVIDER=deny`` (or an unknown name, which resolves to deny): the
+    operator's standing stop, which no owner-turn rule passes. Fail closed."""
+    try:
+        return isinstance(get_approval_provider_or_deny(os.getenv("APPROVAL_PROVIDER")),
+                          DenyByDefaultApprover)
+    except Exception:
+        return True
+
+
+def owner_social_write_exemption(action_name: str, params: Dict[str, Any],
+                                 context: Any = None) -> Optional[str]:
+    """A public social write on the owner's own turn or standing job waits for no tap:
+    the gate stays for a forged, room, delegated or correspondent-tainted turn. Takes
+    the context, so it never exempts a call it cannot place. Pure read."""
+    if context is None or action_name not in _verb_ids_where(effect="social", outbound="write"):
+        return None
+    from core.security.owner_turn import is_owner_driven
+    return "the owner's own turn or standing job" if is_owner_driven(context) else None
+
+
+owner_social_write_exemption.takes_context = True
 
 
 def make_approval_hook(

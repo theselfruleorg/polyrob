@@ -242,3 +242,56 @@ def test_proc_read_error_never_falls_back_to_ps(monkeypatch, tmp_path):
     monkeypatch.setattr(proc.subprocess, "run", lambda *a, **k: called.append(a))
     assert proc.start_time(1) is None
     assert called == []
+
+
+def test_darwin_boot_id_is_the_boot_session_uuid_not_boottime(monkeypatch):
+    """ST-13: kern.boottime moves when the clock is stepped, so it is no boot id."""
+    import types
+    from core.state import proc
+    asked = []
+
+    def _run(cmd, **k):
+        asked.append(cmd[-1])
+        out = {"kern.bootsessionuuid": "0A1B2C3D-0000-4000-8000-00000000000A\n",
+               "kern.boottime": "{ sec = 1730000000, usec = 1 } Mon"}[cmd[-1]]
+        return types.SimpleNamespace(stdout=out)
+
+    real_open = open
+
+    def _open(path, *a, **k):
+        if str(path) == "/proc/sys/kernel/random/boot_id":
+            raise FileNotFoundError(path)
+        return real_open(path, *a, **k)
+    monkeypatch.setattr("builtins.open", _open)
+    monkeypatch.setattr(proc.sys, "platform", "darwin")
+    monkeypatch.setattr(proc.subprocess, "run", _run)
+    assert proc._read_boot_id() == "boot-0A1B2C3D-0000-4000-8000-00000000000A"
+    assert asked == ["kern.bootsessionuuid"]
+
+
+def test_cas_moves_a_row_that_holds_a_legacy_alias(db):
+    """ST-14: the alias ``error`` -> ``failed`` is a from-state in the WHERE too."""
+    c = sqlite3.connect(db)
+    c.execute("UPDATE jobs SET status='error' WHERE id='j1'")
+    c.commit()
+    c.close()
+    kw = dict(key="id=?", key_params=("j1",), machine=M)
+    assert cas_transition(db, "jobs", to="queued", **kw)
+    assert _row(db)[0] == "queued"
+    c = sqlite3.connect(db)
+    c.execute("UPDATE jobs SET status='error' WHERE id='j1'")
+    c.commit()
+    c.close()
+    assert cas_transition(db, "jobs", to="queued", from_states=["failed"], **kw)
+    assert _row(db)[0] == "queued"
+
+
+def test_locked_update_never_overwrites_an_unreadable_file(tmp_path):
+    """ST-17: a torn file read as the default, and the update wrote over it."""
+    from core.state.files import UnreadableStateFile, read_json_strict
+    p = tmp_path / "s.json"
+    p.write_text('{"keep": ')
+    with pytest.raises(UnreadableStateFile):
+        locked_update_json(str(p), lambda d: d.__setitem__("n", 1), default=dict)
+    assert p.read_text() == '{"keep": '
+    assert read_json_strict(str(tmp_path / "missing.json"), {"d": 1}) == {"d": 1}

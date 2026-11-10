@@ -42,17 +42,16 @@
       </div>
       <p class="composer-note">{{ t('chat.terminal.note', id=session_id) }}</p>
 {%- else %}
-      <form class="composer" id="chat-composer" data-unreachable="{{ t('chat.action_unavailable') }}" data-no_model="{{ t(no_model_key or 'chat.open.no_model') }}">
+      <form class="composer" id="chat-composer" data-unreachable="{{ t('chat.action_unavailable') }}" data-no_model="{{ t(no_model_key or 'chat.open.no_model') }}" data-no_model_link="{{ t('chat.no_model_link') }}" data-no_model_href="/agent#settings">
         <textarea class="composer-input" id="chat-input" rows="1"
                   aria-label="{{ t('chat.composer.label') }}"
-                  placeholder="{{ t('chat.composer.placeholder') if is_new else t('chat.composer.placeholder_busy') }}"></textarea>
-{%- if not is_new %}
+                  placeholder="{{ t('chat.composer.placeholder') }}"></textarea>
         {# A24: the file picker the README has always described. The `accept=`
            is rendered from the ONE upload allowlist
            (core.surfaces.inbound_attachments), never hand-written here; the
            per-file cap and the MIME sniff are the endpoint's. It exists only
-           on a BOUND session, because the upload route is session-scoped —
-           the cold open has no folder to put a file in yet. #}
+           on a bound chat and on the start page (113 W6): there the file is
+           held until the first line creates the chat (file-attach.js). #}
         {# ⚠️ `upload_accept` is a Jinja global installed by
            webview/template_globals.py::register, which `pages_new`'s OWN
            environment does not currently call — so the attribute is emitted
@@ -63,16 +62,15 @@
         <input type="file" id="chat-file"{% if upload_accept %} accept="{{ upload_accept }}"{% endif %} multiple hidden>
         <button class="btn btn-quiet" id="chat-attach" type="button"
                 aria-label="{{ t('chat.attach') }}">{{ t('chat.attach') }}</button>
-{%- endif %}
         <button class="send" id="chat-send-btn" type="submit"
                 aria-label="{{ t('chat.send') }}">&#8593;</button>
       </form>
     <p id="chat-create-status" class="note" role="status"></p>
       <div id="chat-attached"></div>
       <p class="composer-note">{{ t('chat.composer.hint') }}</p>
-{%- if not is_new %}
     <div id="attach-copy" hidden
-         data-session_id="{{ session_id }}"
+         data-session_id="{{ '' if is_new else session_id }}"
+         data-attach_held="{{ t('chat.attach_held') }}"
          data-attach="{{ t('chat.attach') }}"
          data-attach_sending="{{ t('chat.attach_sending') }}"
          data-attach_done="{{ t('chat.attach_done') }}"
@@ -80,9 +78,15 @@
          data-attach_unreachable="{{ t('chat.attach_unreachable') }}"></div>
     <script src="/static/app/file-attach.js" type="module"></script>
 {%- endif %}
-{%- endif %}
     </div>
 {%- endmacro %}
+    {# 113 W6 (W2 item 6, IA-1): the Chat destination is a frame of two parts at
+       1024 px and wider — this chat (or the start page) and, on its left, the
+       column of your chats (chat-column.js). Below 1024 px `.chat-frame` and
+       `.chat-frame-main` are `display:contents` and the column is not drawn, so
+       the page is what it was; the Chats overlay stays the way in. #}
+    <div class="chat-frame">
+    <div class="chat-frame-main">
 {%- if is_new %}
     <div class="open">
       <div class="face open-face" aria-hidden="true"></div>
@@ -99,6 +103,9 @@
       </div>
 {%- endif %}
     </div>
+    {# 113 W5 (C-06, CH-3): a verb answer and the no-model answer on the cold open
+       are Transcript notes here, as in a chat. #}
+    <div class="thread" id="chat-open-notes" role="log" aria-live="polite" aria-label="{{ t('chat.log_label') }}"></div>
 {{ composer() }}
 {%- elif ownership_unknown %}
     {# ⚠️ The ownership PROBE failed — that is not "this session does not
@@ -132,7 +139,9 @@
 {%- endif %}
         </div>
 {%- endif %}
-        <div class="thread" id="chat-messages"></div>
+        {# 113 W5 (CH-4): a log region; transcript.js marks it busy while a turn
+           works, so the finished answer is what a screen reader announces. #}
+        <div class="thread" id="chat-messages" role="log" aria-live="polite" aria-relevant="additions" aria-label="{{ t('chat.log_label') }}"></div>
 {{ composer() }}
       </div>
       <aside class="work-pane" id="work-pane">
@@ -154,37 +163,15 @@
           <p class="state-body" id="workpane-timeline-state" hidden></p>
           <p class="entry-meta">{{ t('workpane.timeline_note') }}</p>
         </div>
+        {# 113 W6 (C-11): what the browser showed last in this chat (workpane-shot.js). #}
+        <div class="section">
+          <div class="section-head">
+            <h2 class="section-title">{{ t('workpane.shot_title') }}</h2>
+          </div>
+          <div id="workpane-shot"><p class="state-body">{{ t('workpane.shot_loading') }}</p></div>
+        </div>
       </aside>
     </div>
-    {# The words the running transcript says, crossing from the copy layer into
-       transcript.js the same way chats.js reads #chats-copy — no 043 template
-       carries an inline script. ⚠️ The names carry an UNDERSCORE, not a hyphen:
-       `dataset` camel-cases a hyphen away, and the JS keys them as written. #}
-    <div id="transcript-copy" data-history_unavailable="{{ t('chat.history_unavailable') }}" data-live_unavailable="{{ t('chat.live_unavailable') }}" data-live_busy="{{ t('shell.live_busy') }}" data-action_unavailable="{{ t('chat.action_unavailable') }}" hidden
-         data-stop="{{ t('chat.stop') }}"
-         data-card_ok="{{ t('chat.card.ok') }}"
-         data-card_re="{{ t('chat.card.re') }}"
-         data-card_no="{{ t('chat.card.no') }}"
-         data-card_pick="{{ t('chat.card.pick') }}"
-         data-steer="{{ t('chat.steer') }}"
-         data-receipt_working="{{ t('chat.receipt.working') }}"
-         data-receipt_done="{{ t('chat.receipt.done') }}"
-         data-receipt_stopped="{{ t('chat.receipt.stopped') }}"
-         data-cost_unknown="{{ t('chat.receipt.cost_unknown') }}"
-         data-receipt_so_far="{{ t('chat.receipt.so_far') }}"
-         data-receipt_waiting="{{ t('chat.receipt.waiting') }}"
-         data-receipt_waiting_inbox="{{ t('chat.receipt.waiting_inbox') }}"
-         data-receipt_failed="{{ t('chat.receipt.failed') }}"
-         data-receipt_ended="{{ t('chat.receipt.ended') }}"
-         data-turn_failed="{{ t('chat.turn_failed') }}"
-         data-turn_key_refused="{{ t('chat.turn_key_refused') }}"
-         data-steps_none="{{ t('chat.receipt.steps_none') }}"
-         data-steps_one="{{ t('chat.receipt.steps_one') }}"
-         data-steps_many="{{ t('chat.receipt.steps_many') }}"
-         data-cost_known="{{ t('chat.receipt.cost_known') }}"
-         data-act_did_work="{{ t('chat.act.did_work') }}"
-         data-act_failed="{{ t('chat.act.failed') }}"
-         data-live_at_agent="{{ t('chat.live_at_agent') }}"></div>
     {# The words the Work pane says, crossing from the copy layer into
        workpane.js the same way. ⚠️ Underscore, not hyphen: `dataset` camel-cases
        a hyphen away, and workpane.js keys them as written. The narrator's own
@@ -214,8 +201,57 @@
          data-timeline_count="{{ t('workpane.timeline_count') }}"
          data-timeline_count_one="{{ t('workpane.timeline_count_one') }}"></div>
     <script src="/static/app/workpane.js" type="module"></script>
+    <div id="workpane-shot-copy" hidden
+         data-none="{{ t('workpane.shot_none') }}"
+         data-unreadable="{{ t('workpane.shot_unreadable') }}"
+         data-alt="{{ t('workpane.shot_alt') }}"></div>
+    <script src="/static/app/workpane-shot.js" type="module"></script>
 {%- endif %}
+    </div>
+    <aside class="chat-column" id="chat-column" aria-labelledby="chat-column-title">
+      <h2 class="section-title" id="chat-column-title">{{ t('chats.title') }}</h2>
+      <ul class="chat-column-list" id="chat-column-list"></ul>
+      <p class="state-body" id="chat-column-state">{{ t('chats.loading') }}</p>
+{%- if not read_only %}
+      <a class="btn btn-quiet" href="/?new=1">{{ t('chats.new') }}</a>
+{%- endif %}
+    </aside>
+    </div>
+    <script src="/static/app/chat-column.js" type="module"></script>
 
+    {# 113 W5 (CH-2, C-06): on the cold open too — a verb answer there is drawn by
+       the same Transcript note and card buttons as in a chat.
+       The words the running transcript says, crossing from the copy layer into
+       transcript.js the same way chats.js reads #chats-copy — no 043 template
+       carries an inline script. ⚠️ The names carry an UNDERSCORE, not a hyphen:
+       `dataset` camel-cases a hyphen away, and the JS keys them as written. #}
+    <div id="transcript-copy" data-history_unavailable="{{ t('chat.history_unavailable') }}" data-live_unavailable="{{ t('chat.live_unavailable') }}" data-live_busy="{{ t('shell.live_busy') }}" data-action_unavailable="{{ t('chat.action_unavailable') }}" hidden
+         data-stop="{{ t('chat.stop') }}"
+         data-load_older="{{ t('chat.load_older') }}"
+         data-load_older_failed="{{ t('chat.load_older_failed') }}"
+         data-card_ok="{{ t('chat.card.ok') }}"
+         data-card_re="{{ t('chat.card.re') }}"
+         data-card_no="{{ t('chat.card.no') }}"
+         data-card_pick="{{ t('chat.card.pick') }}"
+         data-steer="{{ t('chat.steer') }}"
+         data-receipt_working="{{ t('chat.receipt.working') }}"
+         data-receipt_done="{{ t('chat.receipt.done') }}"
+         data-receipt_stopped="{{ t('chat.receipt.stopped') }}"
+         data-cost_unknown="{{ t('chat.receipt.cost_unknown') }}"
+         data-receipt_so_far="{{ t('chat.receipt.so_far') }}"
+         data-receipt_waiting="{{ t('chat.receipt.waiting') }}"
+         data-receipt_waiting_inbox="{{ t('chat.receipt.waiting_inbox') }}"
+         data-receipt_failed="{{ t('chat.receipt.failed') }}"
+         data-receipt_ended="{{ t('chat.receipt.ended') }}"
+         data-turn_failed="{{ t('chat.turn_failed') }}"
+         data-turn_key_refused="{{ t('chat.turn_key_refused') }}"
+         data-steps_none="{{ t('chat.receipt.steps_none') }}"
+         data-steps_one="{{ t('chat.receipt.steps_one') }}"
+         data-steps_many="{{ t('chat.receipt.steps_many') }}"
+         data-cost_known="{{ t('chat.receipt.cost_known') }}"
+         data-act_did_work="{{ t('chat.act.did_work') }}"
+         data-act_failed="{{ t('chat.act.failed') }}"
+         data-live_at_agent="{{ t('chat.live_at_agent') }}"></div>
     {# Loaded on EVERY posture. The thread is a READ, and gating the script on
        read-only left /c/{id} permanently blank on the one posture prod runs —
        the composer is already absent above, and `data-read-only` is what keeps

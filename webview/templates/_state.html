@@ -1,0 +1,31 @@
+{#
+  THE empty state (113 W5, ST-2). One shape for "there is nothing here" on every
+  destination: an optional glyph, a title, body lines, and the one action.
+  `static/app/state.js::stateBlock` builds the SAME markup for a state that a
+  module draws after a read, so a server-rendered and a script-drawn empty state
+  look alike. Every word is passed in already resolved through the copy layer.
+
+  Use:  {% from "_state.html" import state %}
+        {{ state(title=t('inbox.empty.title'), body=[t('inbox.empty.body')],
+                 glyph=page_glyph, actions=[{'href': '/work', 'label': t('inbox.empty.see_work')}]) }}
+#}
+{% macro state(title=None, body=(), glyph=None, actions=()) -%}
+<div class="state">
+{%- if glyph %}
+  <div class="state-glyph" aria-hidden="true">{{ glyph }}</div>
+{%- endif %}
+{%- if title %}
+  <h2 class="state-title">{{ title }}</h2>
+{%- endif %}
+{%- for line in body %}
+  <p class="state-body">{{ line }}</p>
+{%- endfor %}
+{%- if actions %}
+  <div class="state-actions">
+{%- for action in actions %}
+    <a class="btn{% if action.primary %} btn-primary{% endif %}" href="{{ action.href }}">{{ action.label }}</a>
+{%- endfor %}
+  </div>
+{%- endif %}
+</div>
+{%- endmacro %}

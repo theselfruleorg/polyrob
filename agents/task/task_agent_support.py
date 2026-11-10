@@ -88,6 +88,10 @@ class SessionRequest:
     #: B1: the run's own text for memory recall (the cron job / goal text, minus
     #: the overlays the runner prepends to ``task``). None = recall from ``task``.
     recall_seed: Optional[str] = None
+    #: 112 F2: the run is money-class (``core.money.classify.is_money_class`` of its
+    #: payload), minted by the cron runner / goal dispatcher. The fallback ladder reads
+    #: it so a money run never drops to a non-money model. False = not a money run.
+    money_class: bool = False
 
     def __post_init__(self):
         if self.tools is None:
@@ -98,32 +102,17 @@ class SessionRequest:
             )
         from agents.task.billed_request import validate_billed_request
         validate_billed_request(self)
-def _resolve_chat_runtime(env=None):
-    """Resolve (provider, model) for chat_once via the shared core resolver (Seam 2).
-
-    Precedence: DEFAULT_PROVIDER/DEFAULT_MODEL pin >
-    the historical openai/gpt-5 default (used only if an OpenAI key is present) >
-    first keyed provider (canonical order) > openai/gpt-5 last resort. The model is
-    always filled to match the resolved provider, so a first-keyed/anthropic-pinned
-    provider never inherits SessionRequest's gpt-5 default.
+def _resolve_chat_runtime(env=None, user_id=None):
+    """(provider, model) for a chat with no live session — the ONE chat ladder (112 W6):
+    ``core.model_pins.chat_runtime_for`` = the owner's ``/model … default`` (when *user_id*
+    is given) > the operator pin > the first keyed provider > openai. The model is filled
+    from the provider's registry default. No ``openai/gpt-5`` preference of its own: the
+    session path, ``chat_once`` and a recreated session now agree (they diverged before).
     """
-    import os as _os
-    from core.runtime_config import (operator_model_pin, operator_provider_pin,
-                                     resolve_runtime_config)
+    from core.model_pins import chat_runtime_for
     from modules.llm.llm_client_registry import get_default_model
-
-    env = _os.environ if env is None else env
-    pinned_provider = operator_provider_pin(env)
-    pinned_model = operator_model_pin(env)
-    provider, model = resolve_runtime_config(
-        None,
-        None,
-        env=env,
-        pinned_provider=pinned_provider,
-        pinned_model=pinned_model,
-        cli_store_default=("openai", "gpt-5"),
-        last_resort=("openai", "gpt-5"),
-    )
+    provider, model, _reasoning, _source = chat_runtime_for(user_id, env)
+    provider = provider or "openai"
     if not model:
         model = get_default_model(provider)
     return provider, model
@@ -143,6 +132,18 @@ def operator_pin_stamp(provider, model, env=None):
     except Exception:
         logger.debug("operator pin stamp failed", exc_info=True)
     return None
+
+
+def refused_stored_pin(session_info) -> str:
+    """Why a RECREATED billed session may not load its stored model, naming it (``""`` =
+    it may). The caller rebuilds it on the default model."""
+    info = session_info or {}
+    if info.get("billing_limited") is not True:
+        return ""
+    from agents.task.model_pin_state import stored_pin_refusal
+    req, cfg = info.get("request") or {}, info.get("config") or {}
+    return stored_pin_refusal(req.get("provider") or cfg.get("provider"),
+                              req.get("model") or cfg.get("model"))
 
 
 def refresh_pinned_model(session_info, env=None):

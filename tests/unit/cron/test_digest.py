@@ -21,6 +21,7 @@ def _hermetic_top_cost(monkeypatch):
     monkeypatch.setattr(digest, "_failed_jobs", lambda uid, data_dir: [])
     # 095 W12b: the curator proposals seam reads the home's event log.
     monkeypatch.setattr(digest, "_proposals", lambda uid, since, data_dir: [])
+    monkeypatch.setattr(digest, "_mechanism_notes", lambda uid, since, data_dir: [])
 
 
 def _split_ledger(**over):
@@ -542,3 +543,16 @@ async def test_digest_unreadable_proposals_are_named(monkeypatch):
     monkeypatch.setattr(digest, "_proposals", _boom)
     text = await compose_digest("alice", days=1)
     assert "curator proposals" in text
+
+
+@pytest.mark.asyncio
+async def test_a_reviewer_note_for_the_developer_is_one_digest_line(monkeypatch):
+    monkeypatch.setattr(digest, "_mechanism_notes",
+                        lambda uid, since, data_dir: ["the fetch tool times out"])
+    monkeypatch.setattr(digest, "_ledger", lambda uid, days: {})
+    monkeypatch.setattr(digest, "_event_aggregate", lambda uid, since: {})
+    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir: [])
+    monkeypatch.setattr(digest, "_episodes", lambda uid, since: [])
+    monkeypatch.setattr(digest, "_outward", lambda uid, since, data_dir: "none")
+    text = await digest.compose_digest("u1", days=1)
+    assert text.count("For the developer: the fetch tool times out") == 1

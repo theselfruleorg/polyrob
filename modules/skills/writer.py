@@ -22,18 +22,19 @@ Safety is designed in, not bolted on — a self-authored skill is a prompt-injec
    trusted scope, i.e. builtin, is exempt via ``scopes.scan_exempt``, but
    `create_skill` only ever targets the writable user scope, so this is
    effectively still unconditional; not gated on the memory flag).
-5. **Quarantined** — when ``SKILLS_WRITABLE_REQUIRE_REVIEW`` (default true) OR the
-   author was a non-user-initiated turn (self-wake / background review), the skill
-   lands in ``user_{uid}/.pending/`` **inert** (NOT in rules.json), so a forged turn
-   can never auto-activate a skill.
+5. **Live at once, except an untrusted turn** — the owner's agent, its standing runs and
+   its reviewer activate what they write (the prior body is archived and one
+   ``rollback`` restores it). A write from a turn that is not the owner's
+   (``PROVENANCE_UNTRUSTED``: a correspondent's message in the session, a room, another
+   tenant) lands in ``user_{uid}/.pending/`` **inert** (NOT in rules.json).
 6. **Atomic** — temp-file + ``os.replace`` so a crash never leaves a half-written
    ``SKILL.md``.
 7. **Archive-never-delete** — deletes and overwrites keep the prior body in
    ``user_{uid}/.archived/<id>/<sha256>-SKILL.md`` (content-addressed, recoverable).
-8. **Bundled skills are proposals** (081 WS-5.3): once the bundled library is
-   seeded (``modules/skills/seed.py``), a patch/edit/rollback of a bundled id
-   lands as a ``.pending/`` draft in the author's tenant; only the owner's
-   ``promote`` writes the seeded copy (no deploy). A bundled id is never deleted.
+8. **Bundled skills** (081 WS-5.3): once the bundled library is seeded
+   (``modules/skills/seed.py``), a patch/edit/rollback of a bundled id goes through a
+   ``.pending/`` draft, accepted into the seeded copy in the same call unless the author
+   is untrusted (no deploy). A bundled id is never deleted.
 9. **Ledgered** (081 WS-5.2) — every mutation appends one ``skill_provenance_log``
    row (action, actor, before/after sha, archive path, ``absorbed_into``);
    :meth:`rollback_skill` restores an archived revision through the same gate.
@@ -43,6 +44,7 @@ do nothing until called.
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import hashlib
 import logging
@@ -59,11 +61,21 @@ logger = logging.getLogger(__name__)
 PROVENANCE_USER = "user"
 PROVENANCE_AGENT = "agent"
 PROVENANCE_BACKGROUND = "background_review"
+#: Set while a reviewer reads a run that failed: its false conclusions must not
+#: go live with no owner look (prod 2026-11-06: a review patched a skill from a run
+#: that wrongly said its tools were missing). The write stays a draft.
+REVIEWING_FAILED_RUN: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
+    "skill_review_of_failed_run", default=False)
+#: Set while a reviewer works: ``run=<rail> signal=<signal>``, the run and the signal its
+#: change answers. ``skill_manage`` puts it on the change's ``reason`` (108 W6).
+REVIEW_SCOPE: "contextvars.ContextVar[str]" = contextvars.ContextVar(
+    "skill_review_scope", default="")
 PROVENANCE_CURATOR = "curator"
-# Authors whose writes must NEVER auto-activate, regardless of REQUIRE_REVIEW: a
-# forged (self-wake / background-review) turn. A normal interactive `agent` turn is
-# user-initiated, so it follows the REQUIRE_REVIEW flag like any other.
-_NON_USER_AUTHORS = frozenset({PROVENANCE_BACKGROUND})
+#: A turn that is not the owner's: a correspondent's message in the session, a room,
+#: another tenant. A skill is read as instructions next session, so this author's
+#: write stays an inert draft for the owner.
+PROVENANCE_UNTRUSTED = "untrusted_turn"
+_NON_USER_AUTHORS = frozenset({PROVENANCE_UNTRUSTED})
 #: Authors whose delete is a CONSOLIDATION and must name the skill that absorbed
 #: the procedure (review C-8 scope: never a foreground owner/agent delete). The
 #: curator's age archive is a usage transition, not a consolidation (``aged``).
@@ -193,23 +205,10 @@ class SkillWriterMixin:
                                              "content_sha256": revision}, indent=2))
         return revision
 
-    def _resolve_pending(self, created_by: str, pending: Optional[bool],
-                         *, overwriting_active: bool = False) -> bool:
-        from core.config_policy import AutonomyConfig
-        # Protect curated ACTIVE skills: a non-owner author (agent or background) may
-        # never silently replace one — force a .pending proposal (owner promotes).
-        if (overwriting_active and created_by != PROVENANCE_USER
-                and AutonomyConfig.skill_overwrite_protect()):
-            return True
-        if pending is not None:
-            base = pending
-        else:
-            base = AutonomyConfig.skills_writable_require_review()
-        # Hard rule: a non-user author can NEVER auto-activate — force quarantine even
-        # if review is globally disabled.
-        if created_by in _NON_USER_AUTHORS:
-            return True
-        return base
+    @staticmethod
+    def _resolve_pending(created_by: str, pending: Optional[bool]) -> bool:
+        """An untrusted author always lands a draft; anyone else only when asked to."""
+        return created_by in _NON_USER_AUTHORS or bool(pending)
 
     def _reserved_id_error(self, skill_id: str) -> Optional[str]:
         """D1: the refusal for a builtin/pack skill id (``SkillManager``
@@ -318,9 +317,8 @@ class SkillWriterMixin:
         try:
             with self._skill_write_lock(uid):
                 active_file = self._user_root(uid) / skill_id / "SKILL.md"
-                overwriting_active = active_file.exists() or (skill_id in getattr(self, "skill_rules", {}))
-                quarantine = bundled or self._resolve_pending(
-                    created_by, pending, overwriting_active=overwriting_active)
+                had_active = active_file.exists()
+                quarantine = bundled or self._resolve_pending(created_by, pending)
                 base = self._user_root(uid) / (".pending" if quarantine else "")
                 skill_dir = base / skill_id
                 skill_file = skill_dir / "SKILL.md"
@@ -357,18 +355,49 @@ class SkillWriterMixin:
                     # The commit point: until the revision is recorded, a
                     # hash-verifying loader refuses this body.
                     self._commit_revision(uid, skill_id, revision, created_by)
+                    if action != "promote":
+                        warnings = warnings + self._retire_stale_draft(uid, skill_id)
                 self._invalidate_skill_cache(uid, skill_id)
-            self._record_provenance(skill_id, uid, created_by)
+            trusted = created_by not in _NON_USER_AUTHORS
+            # The row says who owns a tenant skill (the curator reads it): a bundled fix owns
+            # no tenant skill, and an untrusted draft does not change who owns the active one.
+            if not (bundled and trusted) and not (quarantine and not bundled and had_active):
+                self._record_provenance(skill_id, uid, created_by)
             self._ledger(skill_id, uid, action=action, actor=created_by, before_sha=before_sha,
                          after_sha=revision, archive_path=archive_path, pending=quarantine)
             logger.info("authored skill %s/%s (%s)", uid, skill_id,
                         "pending" if quarantine else "active")
+            if bundled and trusted:
+                accepted = self._promote_bundled(uid, skill_id, revision, actor=created_by)
+                if accepted.ok:
+                    accepted.warnings = warnings
+                    return accepted
+                warnings = warnings + [f"the fix stays a draft: {'; '.join(accepted.errors)}"]
             return SkillWriteResult(skill_id, True, pending=quarantine,
                                     warnings=warnings, path=str(skill_file),
                                     revision=revision)
         except Exception as e:
             logger.error("skill write failed for %s/%s: %s", uid, skill_id, e, exc_info=True)
             return SkillWriteResult(skill_id, False, errors=[f"write failed: {e}"])
+
+    def _retire_stale_draft(self, uid: str, skill_id: str) -> List[str]:
+        """A live write makes an open draft of this id stale: promoting it later would
+        overwrite the newer body. Archive it. The caller holds the skill write lock."""
+        draft = self._user_root(uid) / ".pending" / skill_id / "SKILL.md"
+        if not draft.exists():
+            return []
+        from core.security.confined_write import unlink_confined
+        self._archive_prior_body(uid, skill_id, draft)
+        for f in (draft, self._pending_revision_path(uid, skill_id)):
+            try:
+                unlink_confined(f, self._user_dirs_root())
+            except OSError:
+                pass
+        try:
+            unlink_confined(draft.parent, self._user_dirs_root(), directory=True)
+        except OSError:
+            pass
+        return [f"an older draft of {skill_id} was archived: this write replaced it"]
 
     def patch_skill(self, skill_id: str, *, user_id: str, old_string: str,
                     new_string: str, replace_all: bool = False,
@@ -416,7 +445,7 @@ class SkillWriterMixin:
                    pending: Optional[bool], expected_revision: Optional[str]):
         """``(uid, current, sha, pending, propose_only, bundled)`` for a patch/edit,
         or the refusal. The base is the file the write lands in
-        (:meth:`_patch_base_file`; for a bundled id its draft, else the seeded copy);
+        (:meth:`_patch_base_file`; for a bundled id, :meth:`_bundled_base_file`);
         a stale ``expected_revision`` refuses with the current sha."""
         uid = self._require_user(user_id)
         if uid is None:
@@ -425,7 +454,7 @@ class SkillWriterMixin:
         if not id_ok:
             return SkillWriteResult(skill_id, False, errors=id_errors)
         bundled = skill_id in self._bundled_ids()
-        skill_file = (self._bundled_base_file(uid, skill_id) if bundled else
+        skill_file = (self._bundled_base_file(uid, skill_id, created_by) if bundled else
                       self._patch_base_file(uid, skill_id, created_by=created_by, pending=pending))
         if skill_file is None:
             return SkillWriteResult(skill_id, False, errors=[f"skill '{skill_id}' not found for user"])
@@ -490,8 +519,7 @@ class SkillWriterMixin:
         if skill_file is None:
             if skill_id in self._bundled_ids():
                 return SkillWriteResult(skill_id, False, errors=[
-                    f"`{skill_id}` is a bundled skill: it is not deleted — patch it (the "
-                    f"owner accepts the fix)"])
+                    f"`{skill_id}` is a bundled skill: it is not deleted — patch it"])
             return SkillWriteResult(skill_id, False, errors=[f"no skill `{skill_id}` to archive"])
         # A forged (non-user) turn must never retire an ACTIVE skill.
         if created_by in _NON_USER_AUTHORS and not self._is_pending_path(skill_file):
@@ -827,11 +855,15 @@ class SkillWriterMixin:
             logger.warning("seed manifest unreadable; bundled skills are read-only", exc_info=True)
             return set()
 
-    def _bundled_base_file(self, uid: str, skill_id: str) -> Optional[Path]:
-        """The base a fix of a bundled skill edits: the author's pending draft if
-        one exists (one draft, one owner accept), else the seeded copy."""
-        for f in (self._user_root(uid) / ".pending" / skill_id / "SKILL.md",
-                  self._seed_root() / skill_id / "SKILL.md"):
+    def _bundled_base_file(self, uid: str, skill_id: str,
+                           created_by: str = PROVENANCE_UNTRUSTED) -> Optional[Path]:
+        """The base a fix of a bundled skill edits. An untrusted author edits its open
+        draft (one draft, one owner accept), else the seeded copy; a trusted author
+        edits the seeded copy, because its write goes live and must not carry a draft
+        that nobody accepted."""
+        draft = self._user_root(uid) / ".pending" / skill_id / "SKILL.md"
+        seeded = self._seed_root() / skill_id / "SKILL.md"
+        for f in ((draft, seeded) if created_by in _NON_USER_AUTHORS else (seeded,)):
             try:
                 self._read_skill_text(f)
                 return f
@@ -839,11 +871,12 @@ class SkillWriterMixin:
                 continue
         return None
 
-    def _promote_bundled(self, uid: str, skill_id: str,
-                         expected_revision: Optional[str]) -> SkillWriteResult:
-        """The owner accepts a fix of a bundled skill: the reviewed draft becomes
-        the seeded copy (prior body archived; the next seed keeps it as the
-        owner's). Validated, and the lines it adds are scanned, fail-closed."""
+    def _promote_bundled(self, uid: str, skill_id: str, expected_revision: Optional[str],
+                         *, actor: str = PROVENANCE_USER) -> SkillWriteResult:
+        """A fix of a bundled skill is accepted: the draft becomes the seeded copy (prior
+        body archived). ``actor`` is who accepted it: an owner's fix survives an update
+        (``seed``), an automatic fix yields to a changed upstream. Validated, and the
+        lines it adds are scanned, fail-closed."""
         from modules.skills.seed import archive_body, seed_lock
         root = self._seed_root()
         pending_file = self._user_root(uid) / ".pending" / skill_id / "SKILL.md"
@@ -880,7 +913,7 @@ class SkillWriterMixin:
                 try:
                     from modules.skills.skill_usage import get_skill_usage_store
                     get_skill_usage_store().record_change(
-                        skill_id, uid, action="promote", actor=PROVENANCE_USER,
+                        skill_id, uid, action="promote", actor=actor,
                         before_sha=before, after_sha=reviewed, archive_path=path,
                         scope="bundled")
                 except Exception as exc:
@@ -940,7 +973,7 @@ class SkillWriterMixin:
         """The body :meth:`patch_skill` must edit — the file the write will LAND in.
 
         ⚠️ This is the whole fix for the 2026-09-21 double-approval loop.
-        :meth:`_find_skill_file` prefers the ACTIVE ``SKILL.md``, but a non-owner
+        :meth:`_find_skill_file` prefers the ACTIVE ``SKILL.md``, but an untrusted
         patch of an active skill is quarantined by :meth:`_resolve_pending` and
         LANDS in ``.pending/<id>/SKILL.md``. So ``patch_skill`` read one file,
         derived its CAS token from it, and handed that token to ``create_skill``,
@@ -953,17 +986,9 @@ class SkillWriterMixin:
         So: when the write will be quarantined and a draft already exists, the
         draft IS the base. A chain of edits then accumulates into ONE pending
         item and costs the owner ONE approval. The active file is still never
-        written by a non-owner author — the quarantine rule is untouched.
+        written by an untrusted author — the quarantine rule is untouched.
         """
-        active_file = self._user_root(uid) / skill_id / "SKILL.md"
-        overwriting_active = (active_file.exists()
-                              or (skill_id in getattr(self, "skill_rules", {})))
-        try:
-            quarantine = self._resolve_pending(created_by, pending,
-                                               overwriting_active=overwriting_active)
-        except Exception:  # fail-open to the legacy resolution order
-            quarantine = False
-        if quarantine:
+        if self._resolve_pending(created_by, pending):
             draft = self._user_root(uid) / ".pending" / skill_id / "SKILL.md"
             try:
                 self._read_skill_text(draft)
@@ -1094,6 +1119,14 @@ class SkillWriterMixin:
     def _record_provenance(self, skill_id: str, uid: str, created_by: str) -> None:
         try:
             from modules.skills.skill_usage import get_skill_usage_store
-            get_skill_usage_store().record_provenance(skill_id, uid, created_by)
+            store = get_skill_usage_store()
+            # The row says who owns the skill: a reviewer's patch or a curator's rollback does
+            # not take the owner's skill or the curator's care away. Only the owner, or the
+            # first trusted writer of a draft, changes it.
+            row = store.get_provenance(skill_id, uid)
+            if (row and created_by != PROVENANCE_USER
+                    and row.get("created_by") not in _NON_USER_AUTHORS):
+                return
+            store.record_provenance(skill_id, uid, created_by)
         except Exception:
             pass  # provenance is a metric, never block a write on it

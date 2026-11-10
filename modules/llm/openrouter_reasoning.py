@@ -1,10 +1,10 @@
-"""OpenRouter reasoning budget — `OPENROUTER_REASONING_MAX_TOKENS` (057 WS-B follow-up).
+"""OpenRouter reasoning budget — `OPENROUTER_REASONING_MAX_TOKENS`.
 
-Prod 2026-09-20: eight output cuts at the 8,192 cap in five hours were REASONING
+Output cuts at the 8,192 cap were REASONING
 — 7,981/8,192 and 8,192/8,192 reasoning tokens per OpenRouter's generation
 records — on steps as small as a `read_file`. The model thought past its output
 budget and never reached the tool call; each cut cost a ~$0.01 retry and 119–181 s
-of wall clock, which is the p90 tail 057 set out to cut. The output cap bounds
+of wall clock, which is the p90 tail. The output cap bounds
 the ANSWER; this bounds the THINKING that precedes it. OpenRouter accepts
 `reasoning: {"max_tokens": N}` and DeepSeek honours it.
 
@@ -16,12 +16,13 @@ it can never itself guarantee the cut it exists to prevent. Lives beside
 from __future__ import annotations
 
 import os
-from contextlib import contextmanager
-from contextvars import ContextVar
-from typing import Any, Dict, Iterator, Optional
+from typing import Any, Dict, Optional
+
+from modules.llm.call_scope import session_reasoning_level
+from modules.llm.catalog_lookup import catalog_row, catalog_wire_id
 
 ENV = "OPENROUTER_REASONING_MAX_TOKENS"
-#: 2026-09-20 11:05Z, measured live: DeepInfra (the upstream OpenRouter picks for
+#: Measured live: DeepInfra (the upstream OpenRouter picks for
 #: deepseek/deepseek-v4.1-flash) IGNORES `reasoning.max_tokens` and `effort` —
 #: a 300-token budget still produced 1,200 reasoning tokens — while
 #: `reasoning.enabled=false` produced 0. On this seat the honoured lever is
@@ -31,25 +32,25 @@ ENV_ENABLED = "OPENROUTER_REASONING_ENABLED"
 #: the share of the output cap that reasoning may take at most
 _MAX_SHARE = 0.75
 
-#: Models whose endpoint REFUSES ``reasoning: {enabled: false}`` with a 400
-#: ("Reasoning is mandatory for this endpoint and cannot be disabled"). Measured
-#: live 2026-10-31 on ``z-ai/glm-5.3``: ``enabled:false`` -> 400, no block -> 200,
-#: ``reasoning.max_tokens`` / ``effort`` -> 200 and honoured. ``x-ai/grok-4`` is
-#: documented always-on in the catalog. A model that is not listed learns the same
-#: fact from its first 400 (:func:`remember_reasoning_mandatory`).
-_MANDATORY = {"z-ai/glm-5.3", "x-ai/grok-4"}
+#: Models that answered "Reasoning is mandatory" in this process. The catalog row of a known
+#: one says so itself (``capabilities.reasoning_mandatory``).
 _LEARNED: set = set()
 
 
+def _canonical(model: Optional[str]) -> str:
+    return (catalog_wire_id((model or "").strip(), "openrouter") or "").lower()
+
+
 def reasoning_mandatory(model: Optional[str]) -> bool:
-    """True when *model* cannot have reasoning switched off."""
-    m = (model or "").strip().lower()
-    return bool(m) and (m in _MANDATORY or m in _LEARNED)
+    """True when *model* cannot have reasoning switched off. An alias reads its row."""
+    m = _canonical(model)
+    row = catalog_row(m)
+    return bool(m) and (m in _LEARNED or bool(row and row.capabilities.reasoning_mandatory))
 
 
 def remember_reasoning_mandatory(model: Optional[str]) -> None:
     """Remember (for the process) a model that answered "Reasoning is mandatory"."""
-    m = (model or "").strip().lower()
+    m = _canonical(model)
     if m:
         _LEARNED.add(m)
 
@@ -74,22 +75,6 @@ def reasoning_disabled() -> bool:
     return raw in {"0", "false", "off", "no", "none"}
 
 
-#: 094: the owner's per-session reasoning level (``/model … reasoning=<level>``),
-#: scoped to ONE main-model call by :func:`session_reasoning` — a context variable,
-#: not a client stamp, because the main client is shared per provider.
-_SESSION_LEVEL: ContextVar[Optional[str]] = ContextVar("polyrob_session_reasoning", default=None)
-
-
-@contextmanager
-def session_reasoning(level: Optional[str]) -> Iterator[None]:
-    """Apply *level* (``off|on|low|medium|high|<tokens>``) to the calls inside."""
-    token = _SESSION_LEVEL.set(level or None)
-    try:
-        yield
-    finally:
-        _SESSION_LEVEL.reset(token)
-
-
 def reasoning_block(level: Optional[str]) -> Optional[Dict[str, Any]]:
     """The OpenRouter ``reasoning`` object for a level (``core/model_switch.py``
     validates it): off/on → ``enabled``, low/medium/high → ``effort``, digits →
@@ -108,7 +93,7 @@ def reasoning_block(level: Optional[str]) -> Optional[Dict[str, Any]]:
 
 
 def _session_block(max_tokens: Optional[int]) -> Optional[Dict[str, Any]]:
-    level = _SESSION_LEVEL.get()
+    level = session_reasoning_level()
     if not level:
         return None
     block = reasoning_block(level)
@@ -120,7 +105,7 @@ def _session_block(max_tokens: Optional[int]) -> Optional[Dict[str, Any]]:
 def reasoning_extra_body(max_tokens: Optional[int] = None,
                          model: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """The `extra_body` reasoning block for this call, or None when no knob is set.
-    The owner's session level (094) wins over the env; `enabled: false` wins over a
+    The owner's session level wins over the env; `enabled: false` wins over a
     budget (the upstream ignores budgets anyway). A model whose reasoning is
     MANDATORY never gets `enabled: false` (it would 400): its "off" falls through
     to the budget, or to no block at all."""
@@ -161,17 +146,18 @@ def apply_request_extras(request_params: Dict[str, Any], client: Any = None,
     own = getattr(client, "request_extras", None)
     if callable(own):
         return own(request_params, max_tokens)
-    from modules.llm.openrouter_routing import apply_provider_routing
-    from modules.llm.prefix_stamp import stamp_client
-    apply_provider_routing(request_params, client)
-    if client is not None:
-        stamp_client(client, request_params)   # prefix identity for the billing record
+    from modules.llm.openrouter_routing import apply_provider_routing, apply_session_id
+    from modules.llm.prefix_stamp import stamp_request
+    apply_provider_routing(request_params)
+    if getattr(client, "SENDS_SESSION_ID", False):
+        apply_session_id(request_params)
+    stamp_request(request_params)   # request identity for the billing record
     apply_usage_accounting(request_params)
     return apply_reasoning_budget(request_params, max_tokens)
 
 
 def apply_usage_accounting(request_params: Dict[str, Any]) -> Dict[str, Any]:
-    """Ask OpenRouter for the cost it ACTUALLY billed — F23 (2026-09-22).
+    """Ask OpenRouter for the cost it ACTUALLY billed.
 
     Every cost figure in the tree is an ESTIMATE recomputed from the model
     catalog's per-token prices. On OpenRouter that estimate is a guess about a

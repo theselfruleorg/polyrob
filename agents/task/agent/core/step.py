@@ -41,11 +41,6 @@ from core.exceptions import (
 # Import billing exception for fail-fast handling
 from core.exceptions import InsufficientCreditsError
 
-# I-5: single source of truth for "does this look like a provider credit-death"
-# (402/insufficient_quota/billing/… — see core/credit_sentinel.py). Replaces the
-# ad-hoc substring re-derivation that missed real-shape OpenRouter 402s.
-from core.credit_sentinel import looks_like_credit_death
-
 # Import centralized utilities to avoid repeated inline imports
 from agents.task.utils_json import normalize_action_schema
 # Model limits now come from modules.llm.model_registry
@@ -64,6 +59,7 @@ from core.exceptions import (
     LLMError,
     LLMRateLimitError,
     LLMAuthenticationError,
+    LLMConfigError,
     LLMConnectionError,
     LLMContextLengthError,
     LLMResponseError,
@@ -97,7 +93,7 @@ from agents.task.telemetry.views import (
     ProviderFallbackSuccessEvent,
 )
 # ProductTelemetry no longer directly used - accessed via TelemetryManager
-from agents.task.utils import time_execution_async, detect_llm_provider, extract_token_usage
+from agents.task.utils import time_execution_async, detect_llm_provider, extract_token_usage, resolve_serving_provider
 # Safely import Google API exceptions
 try:
     from google.api_core.exceptions import ResourceExhausted
@@ -180,65 +176,16 @@ def _log_memory_use(logger: Any, rss_mb: float, history_mb: float, step: int) ->
 		logger.warning(f"Process RSS {rss_mb:.0f} MB at step {step}")
 
 
-def _is_fatal_step_error(error_str: str, billing_failover_enabled: bool) -> bool:
-	"""Classify a step-loop exception as fatal (halt immediately) vs recoverable.
-
-	`error_str` must be lowercased. When `billing_failover_enabled` is True, billing/
-	quota errors are NOT fatal here — they flow to `_handle_step_error` which attempts a
-	provider swap before halting (HIGH-1). With the flag off, classification is identical
-	to the historical inline check (all billing/quota terms fatal).
-	"""
-	is_billing = looks_like_credit_death(error_str)
-	# CO-F5: bare '429'/'rate limit' are NOT fatal — they're retryable. Routing them
-	# here halted the session before `_handle_step_error` could handle them. In practice
-	# a plain-Exception '429'/'rate limit' string is caught by the generic `is_llm_error`
-	# block (error_recovery.py ~:203-296: matches 'rate limit'/'429', then circuit
-	# breaker → provider fallback → backoff), which now owns all retryable rate-limit
-	# handling.
-	return (
-		('quota' in error_str and 'exceeded' in error_str) or
-		'authentication' in error_str or
-		'api key' in error_str or
-		(is_billing and not billing_failover_enabled)
-	)
-
-
-# The only exception family whose MESSAGE TEXT may decide a fatal halt.
-# `_is_fatal_step_error` matches bare substrings ("billing",
-# "api key", "authentication", and via looks_like_credit_death a bare \b402\b), which
-# is safe for a provider exception and actively wrong for anything else: a
-# sqlite3.OperationalError on the shipped `billing_failures` table, a NameError
-# naming a `billing_total` variable, or an HTTP 500 on a path containing /402 all
-# halted the whole session with "check your API configuration".
-#
-# This is the SAME gate `_trip_sentinel_if_credit_death` already applies, added there
-# for exactly these observed false positives — but it was applied only to the sentinel
-# latch (a side effect) and not here, the branch that actually stops the agent.
-# `LLMError` covers LLMPermanentError/LLMAuthenticationError/LLMProviderExhaustedError/
-# LLMRateLimitError/LLMConnectionError; InsufficientCreditsError is the one
-# credit-death shape that is a BotError rather than an LLMError.
-_PROVIDER_FAULT_EXCEPTION_TYPES = (LLMError, InsufficientCreditsError)
-
-
 def _is_fatal_step_exc(error, billing_failover_enabled: bool) -> bool:
-	"""Exception-level fatal check (chain-aware). Reproduces _is_fatal_step_error's
-	top-string truth table, then ALSO catches a credit-death 402 that llm_runner
-	re-wrapped one frame deep (str(error) has no billing text) — the classifier walks
-	__cause__/__context__. Only credit-death detection gains chain-awareness; auth/quota
-	string quirks are unchanged.
-
-	Type-gated: only a provider-fault exception may be judged by its text (see
-	_PROVIDER_FAULT_EXCEPTION_TYPES). An application exception is never fatal here — it
-	flows to `_handle_step_error` and is retried/counted like any other step error.
-	"""
-	from core.error_classifier import FailoverReason, classify_error
-	if isinstance(error, _PROVIDER_FAULT_EXCEPTION_TYPES):
-		if _is_fatal_step_error(str(error).lower(), billing_failover_enabled):
-			return True
-	# classify_error is itself type-gated to the LLM/credit family, so this stays a
-	# no-op for application exceptions.
-	if classify_error(error).reason is FailoverReason.CREDIT_DEATH:
-		return not billing_failover_enabled  # billing halts only when failover is off
+	"""Does this error halt the session before ``_handle_step_error`` runs? A credential or
+	configuration error does. Credit death does when billing failover is off; with failover
+	on, ``_handle_step_error`` tries a provider that still has credit. The type decides, so
+	an application error whose text says "billing" is never fatal."""
+	from core.error_classifier import credit_death_in_chain
+	if isinstance(error, (LLMAuthenticationError, LLMConfigError)):
+		return True
+	if credit_death_in_chain(error) is not None:
+		return not billing_failover_enabled
 	return False
 
 
@@ -283,6 +230,21 @@ def _emit_compaction_event(agent: Any, event_name: str, mode: str, **fields: Any
 		))
 	except Exception:
 		pass
+
+
+def _step_tools(agent: Any) -> Optional[list]:
+	"""The ``tools[]`` the step call sends, or None when it sends none or this
+	cannot read them. The same call, so the warm summariser sends the same bytes."""
+	try:
+		controller = agent.controller
+		provider = resolve_serving_provider(agent.llm, agent.model_name)
+		if not (controller and controller.supports_native_tools(provider)):
+			return None
+		return controller.get_all_actions_for_provider(
+			provider, preferred_order=getattr(agent.message_manager, '_foundation_tool_names', None))
+	except Exception as e:
+		agent.logger.debug(f"step tools not read for the summariser: {e}")
+		return None
 
 
 class StepMixin:
@@ -442,7 +404,8 @@ class StepMixin:
 				# exists to stop. The number is the one the anti-thrash counter already
 				# records — there is no second measurement.
 				_saved = _last_compaction_savings(self.message_manager)
-				_made_progress = _saved is not None and _saved >= COMPACTION_PROGRESS_FLOOR
+				_timed_out = (getattr(self.message_manager, 'last_summary_report', None) or {}).get('timed_out') is True
+				_made_progress = not _timed_out and _saved is not None and _saved >= COMPACTION_PROGRESS_FLOOR
 				if steps_since >= COMPACTION_COOLDOWN_STEPS or _made_progress:
 					if steps_since < COMPACTION_COOLDOWN_STEPS:
 						self.logger.info(
@@ -451,11 +414,9 @@ class StepMixin:
 							f"compaction cut {_saved:.0%}, so this one is allowed"
 						)
 					self.logger.info(f"📦 High context: {usage_pct:.1f}% - LLM compaction")
-					# P2-15: only start the cooldown when compaction ACTUALLY ran. A
-					# transient abort (rate-limit/connection blip), a <15-message history,
-					# or an anti-thrash no-op returns False and is designed to retry next
-					# step — stamping the cooldown regardless delayed that retry by
-					# COMPACTION_COOLDOWN_STEPS while usage sat in the 85-95% band.
+					# P2-15: a compaction that changed nothing (a transient abort before any
+					# rewrite, a <15-message history, an anti-thrash no-op) starts no
+					# cooldown and retries next step.
 					_c_before = self.message_manager.get_token_count()
 					_c_t0 = time.time()
 					_emit_compaction_event(self, 'started', 'llm', tokens_before=_c_before)
@@ -469,7 +430,11 @@ class StepMixin:
 						self.logger.debug("regime probe failed; owner section not lifted", exc_info=True)
 						self.message_manager.owner_instructions_authority = False
 					self.message_manager.last_summary_report = None
-					_compacted = await self.message_manager.llm_compact_history()
+					self.message_manager.warm_summary_tools = _step_tools(self)
+					# The warm summariser sends the step's bytes, so it needs the step's scope.
+					from agents.task.agent.core.call_quality import step_call_scope
+					with step_call_scope(self):
+						_compacted = await self.message_manager.llm_compact_history()
 					_summary = getattr(self.message_manager, 'last_summary_report', None) or {}
 					_emit_compaction_event(
 						self, 'finished', 'llm', tokens_before=_c_before,
@@ -482,7 +447,11 @@ class StepMixin:
 						output_tokens=_summary.get('output_tokens'),
 						tail_tokens=_summary.get('tail_tokens'),
 					)
-					if _compacted:
+					# Any rewrite starts the cooldown: a rewrite colds the prefix, and one
+					# on each step of this band would make the whole band cold. A timeout
+					# starts it too: a stalled upstream must not add its wait to each step.
+					if (_compacted or _summary.get('timed_out') is True
+							or getattr(self.message_manager, 'compaction_rewrote_history', False) is True):
 						self._last_llm_compaction_step = self.state.n_steps
 				else:
 					self.logger.info(
@@ -640,6 +609,9 @@ class StepMixin:
 		# /status facts, <operations> = jobs/goals/pause/stops for the
 		# owner-memory regimes, the skill-index change after load_tool) go to the
 		# ONE <state-delta> channel — pushed at the tail only when a part changed.
+		from agents.task.agent.core.live_health import live_health_injected
+		if live_health_injected(self):
+			self.message_manager.offer_running_version()
 		await self._maybe_update_state_delta()
 
 		# Task 5: session-start "recent activity" digest — first step only, chat/

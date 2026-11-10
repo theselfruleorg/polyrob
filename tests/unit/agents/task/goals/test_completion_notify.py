@@ -79,6 +79,8 @@ def test_notify_on_done_defaults_true():
 
 
 def test_disabled_flag_silences_the_push(monkeypatch):
+    # 107 WS-5: only a done that nothing verified speaks past this setting.
+    monkeypatch.setenv("GOAL_COMPLETION_JUDGE", "false")
     pushed = _run(_Board(), _DoneAgent(), Goal(id="g3", user_id="u1", title="x"),
                   monkeypatch, notify=False, self_wake=False)
     assert not pushed, "GOAL_NOTIFY_ON_DONE=false must silence the completion push"

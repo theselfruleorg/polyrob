@@ -170,3 +170,18 @@ def test_mute_bad_duration_is_a_sentence(tmp_path):
     c = _C(tmp_path)
     out = group_admin.mute(c, "alice", "telegram", "-1", "soon")
     assert "bad duration" in out.lower()
+
+
+def test_a_re_allowed_room_names_the_grants_and_admins_it_keeps(tmp_path, monkeypatch):
+    """`deny` keeps a room's grants and roles; `allow` brought them back silently, so
+    old admins could run /admin with old bundles and the owner never saw it."""
+    from core.surfaces import room_grants
+    monkeypatch.setattr(room_grants, "member_grantable", lambda: frozenset())
+    c = _C(tmp_path)
+    assert group_admin.allow_here(c, "telegram", "-1", "", owner_uid="alice") == (
+        "✅ Allowed telegram:-1.")
+    assert "✅" in group_admin.set_key(c, "alice", "telegram", "-1", "chat.admin_tools", "http")
+    group_admin.set_role(c, "telegram", "-1", "9911", "admin", by="alice")
+    group_admin.deny_here(c, "telegram", "-1")
+    out = group_admin.allow_here(c, "telegram", "-1", "", owner_uid="alice")
+    assert "/admin bundles http" in out and "1 admin(s)" in out

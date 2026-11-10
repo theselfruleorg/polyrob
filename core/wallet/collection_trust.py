@@ -75,6 +75,52 @@ def _is_erc721(rpc: Rpc, address: str) -> bool:
         return False
 
 
+def _address_view(rpc: Rpc, to: str, signature: str, *, strict: bool = False) -> Optional[str]:
+    """The address a view returns, or None when the view is absent (a revert, no data).
+    ``strict``: a read that FAILED (a timeout, a refused or rate-limited RPC) raises
+    ``ValueError`` instead — "absent" and "unread" pin different account kinds."""
+    from core.wallet import abi
+    try:
+        raw = _call(rpc, to, abi.selector(signature))
+    except Exception as exc:  # noqa: BLE001
+        if strict and "revert" not in str(exc).lower():
+            raise ValueError(f"I could not read {signature} of {to} ({type(exc).__name__}) — "
+                             f"try again; nothing was pinned") from exc
+        return None
+    try:
+        got = str(abi.decode([{"type": "address"}], raw)[0])
+    except Exception:  # noqa: BLE001 — absent view (no data)
+        return None
+    return None if int(got, 16) == 0 else got.lower()
+
+
+def _account_version(rpc: Rpc, address: str) -> Tuple[Dict[str, Any], Optional[Dict[str, str]]]:
+    """The profile's ``accounts[0]`` and ``transfer_safe`` for *address*. A collection that names
+    its own account implementation (``accountImplementation()``, the POLYROB collection) is
+    pinned with that implementation, its market and its zone, each by its runtime code hash read
+    now; any other collection is pinned with Tokenbound AccountV3. Raises ``ValueError`` when a
+    transfer-safe fact cannot be read (never a silent fall-back to AccountV3)."""
+    from core.wallet import collection_registry, erc6551
+    impl = _address_view(rpc, address, "accountImplementation()", strict=True)
+    if impl is None or impl == erc6551.ACCOUNT_V3_IMPL.lower():
+        return {"registry": erc6551.REGISTRY, "implementation": erc6551.ACCOUNT_V3_IMPL,
+                "salt": 0}, None
+    ts: Dict[str, str] = {}
+    for key, value in (("account_impl", impl), ("market", _address_view(rpc, address, "MARKET()")),
+                       ("zone", _address_view(rpc, address, "ZONE()"))):
+        if value is None:
+            raise ValueError(f"{address} names its own account implementation {impl}, but its "
+                             f"{key.upper()}() is unreadable — I cannot pin its account")
+        try:
+            sha = collection_registry.runtime_sha256_of(rpc, value)
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"I could not read the code of its {key} {value} ({exc})") from exc
+        if key != "account_impl":
+            ts[key] = value
+        ts[f"{key}_runtime_sha256"] = sha
+    return {"registry": erc6551.REGISTRY, "implementation": impl, "salt": 0}, ts
+
+
 def _has_code(rpc: Rpc, address: str, block: int) -> bool:
     code = rpc("eth_getCode", [address, hex(block)])
     return isinstance(code, str) and len(code) > 2
@@ -120,7 +166,7 @@ def read_facts(chain: str, address: str, *, rpc: Optional[Rpc] = None,
                treasury: Optional[str] = None) -> Dict[str, Any]:
     """Everything a profile needs, read from the chain now. Raises ``ValueError`` with the
     owner's remedy when a fact cannot be read."""
-    from core.wallet import collection_registry, erc6551
+    from core.wallet import collection_registry
     from core.wallet.addresses import normalize_for_chain
     chain = str(chain or "").strip().lower()
     chain_id = collection_registry.chain_id_of(chain)
@@ -166,17 +212,20 @@ def read_facts(chain: str, address: str, *, rpc: Optional[Rpc] = None,
                 "balanceOf", [{"type": "address"}], [treasury])))[0])
         except Exception:  # noqa: BLE001
             held = None
+    account, transfer_safe = _account_version(rpc, address)
+    profile = {"spec": collection_registry.SPEC_V1, "capabilities": [],
+               "chain_id": chain_id, "address": address, "runtime_sha256": runtime,
+               "deploy_block": int(from_block), "max_supply": int(supply),
+               "accounts": [account]}
+    if transfer_safe:
+        profile["transfer_safe"] = transfer_safe
     return {"chain": chain, "chain_id": chain_id, "address": address,
             "name": _string_view(rpc, address, "name()"),
             "symbol": _string_view(rpc, address, "symbol()"),
             "runtime_sha256": runtime, "max_supply": int(supply),
             "deploy_block": int(from_block), "held": held, "treasury": treasury,
-            "profile": {"spec": collection_registry.SPEC_V1, "capabilities": [],
-                        "chain_id": chain_id, "address": address, "runtime_sha256": runtime,
-                        "deploy_block": int(from_block), "max_supply": int(supply),
-                        "accounts": [{"registry": erc6551.REGISTRY,
-                                      "implementation": erc6551.ACCOUNT_V3_IMPL,
-                                      "salt": 0}]}}
+            "account_impl": account["implementation"], "transfer_safe": transfer_safe,
+            "profile": profile}
 
 
 def _pinned(chain_id: int, address: str) -> Optional[str]:
@@ -201,6 +250,15 @@ def _render(f: Dict[str, Any]) -> str:
              f"  code hash:  {f['runtime_sha256'][:16]}… (checked again before every act)",
              f"  supply cap: {f['max_supply']}",
              f"  deployed:   block {f['deploy_block']}"]
+    ts = f.get("transfer_safe")
+    if ts:
+        lines += [f"  accounts:   PolyrobAccount {f['account_impl']} (code "
+                  f"{ts['account_impl_runtime_sha256'][:16]}…; it signs nothing and holds no "
+                  f"standing approval)",
+                  f"  market:     {ts['market']} (code {ts['market_runtime_sha256'][:16]}…)",
+                  f"  zone:       {ts['zone']} (code {ts['zone_runtime_sha256'][:16]}…)"]
+    else:
+        lines.append("  accounts:   Tokenbound AccountV3")
     if f["held"] is not None:
         lines.append(f"  I hold:     {f['held']} of them")
     return "\n".join(lines)

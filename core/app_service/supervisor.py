@@ -531,10 +531,14 @@ class AppSupervisor:
         network. True when everything that EXPOSES the app is gone (the
         container, the stanza, the egress table; a left-over network exposes
         nothing). Every step runs even after one fails; idempotent."""
+        return not await self._teardown_failures(row)
+
+    async def _teardown_failures(self, row: Dict[str, Any]) -> list:
+        """:meth:`_teardown`, naming the exposing steps that failed (``[]`` = all gone)."""
         slug = row["slug"]
         name = self.container_name(row)  # derived, never the row's own text
         net = self.network_name(row)
-        ok = True
+        failed = []
         for label, step, exposes in (
             ("container", lambda: self._docker(["rm", "-f", name], timeout=60), True),
             ("nginx", lambda: self.nginx.remove(slug), True),
@@ -546,13 +550,14 @@ class AppSupervisor:
             except Exception:
                 logger.warning("app_service: teardown step %s failed for %s", label, name,
                                exc_info=True)
-                ok = ok and not exposes
+                if exposes:
+                    failed.append(label)
                 continue
             if exposes and not _step_ok(label, res):
                 logger.warning("app_service: teardown step %s failed for %s: %s", label, name,
                                str(res)[:300])
-                ok = False
-        return ok
+                failed.append(label)
+        return failed
 
     async def _remove_one(self, row: Dict[str, Any]) -> bool:
         """The end of an app's life: tear down again and require it to succeed
@@ -560,11 +565,14 @@ class AppSupervisor:
         logs) descriptor-relative and no-follow, then the row. A row whose
         fields fail H07 is never turned into a path; it is deleted as-is (its
         slug never reached the disk)."""
-        if not self._unsafe(row) and not await self._teardown(row):
+        failed = [] if self._unsafe(row) else await self._teardown_failures(row)
+        if failed:
             # The container (or its stanza) may still serve the app: keep the
             # row — it is the only record that names it — and retry next tick.
             logger.warning("app_service: removal of %s/%s waits: teardown incomplete",
                            row["user_id"], row["slug"])
+            self._removal_waits(row, f"removal waits: the {', '.join(failed)} teardown failed; "
+                                     f"retried every tick")
             return False
         if not self._unsafe(row):
             try:
@@ -584,6 +592,8 @@ class AppSupervisor:
                 except OSError:
                     logger.warning("app_service: could not delete the files of %s/%s",
                                    row["user_id"], row["slug"], exc_info=True)
+                    self._removal_waits(row, "removal waits: its files could not be deleted; "
+                                             "retried every tick")
                     return False  # retried next tick; the row stays visible
                 finally:
                     os.close(fd)
@@ -591,6 +601,15 @@ class AppSupervisor:
             return False
         self._emit(APP_REMOVED, row, {"by": "remove"})
         return True
+
+    def _removal_waits(self, row: Dict[str, Any], error: str) -> None:
+        """A stuck removal is said on the row (``/apps show``) and, once per new reason,
+        on the event stream — never only in the log."""
+        try:
+            if self.registry.record_removal_wait(row["slug"], row["user_id"], error):
+                self._emit(APP_FAILED, row, {"error": error})
+        except Exception:
+            logger.warning("app_service: could not record the removal wait", exc_info=True)
 
     def _prune_snapshots(self) -> None:
         if self.retain_days <= 0:

@@ -43,10 +43,10 @@ survive `polyrob update`.
    `description` required) and — for project scope — local-operator-only
    (`POLYROB_TRUST_PROJECT_SKILLS`; a server never scans its own working
    directory for skills).
-2. **Install** — `polyrob skill install <spec>` (local folder /
+2. **Install** — `polyrob skills install <spec>` (local folder /
    `owner/repo/subdir` / git URL / direct `SKILL.md` URL) threat-scans every
    file, lands it in `.pending/` quarantine, and requires an explicit
-   `polyrob skill approve <name>` before it's active. Remote sources are
+   `polyrob skills approve <name>` before it's active. Remote sources are
    never auto-approved even with `--trust local`. This is the managed,
    audited path — prefer it for anything from outside the owner's own trust
    boundary.
@@ -55,7 +55,7 @@ survive `polyrob update`.
 
 ```
 polyrob skills list|validate|export           # authoring surface
-polyrob skill install|approve|list|info|remove  # install pipeline
+polyrob skills install|approve|list|info|remove  # install pipeline
 ```
 REPL equivalents: `/skills`, `/skills list|info <id>|install <spec>|
 approve <id>|remove <id>`.
@@ -64,10 +64,7 @@ approve <id>|remove <id>`.
 
 The owner can describe a procedure in prose with `/learn <description>`
 (REPL). It's distilled deterministically (no model call) into a SKILL.md body
-and always lands as a PENDING skill — the owner promotes it with
-`/pending approve skill <id>` (or `/pending promote skill <id>`) once they've
-reviewed it. This never auto-activates regardless of other writable-skill
-settings — a described procedure is always owner-reviewed first.
+and is live at once.
 
 ## Writable skills (you authoring your own)
 
@@ -78,14 +75,12 @@ create/patch/edit/delete/rollback skills (`promote` is the owner's). Safety:
 - Tenant-confined (`user_<uid>/` only), anonymous users blocked.
 - Every write is threat-scanned (`is_suspicious`) — fails CLOSED on a scan
   error.
-- `SKILLS_WRITABLE_REQUIRE_REVIEW` (default ON): your writes land in
-  `.pending/` for owner review unless promoted; `SKILL_OVERWRITE_PROTECT`
-  (default ON) means even overwriting an ACTIVE skill you already own becomes
-  a pending proposal, never a silent clobber.
-- **A forged/background/sub-agent/leaf turn (self-wake, async-delegation
-  result, delegated worker, autonomous goal/cron run) can NEVER auto-activate
-  a skill and NEVER patch/delete an active one** — it always quarantines,
-  regardless of the review flag.
+- Your writes are live at once, from a chat, a job, a goal or a reviewer, and a fix
+  to a bundled skill too. Every overwrite archives the prior body, every change is in
+  the ledger, and `rollback` restores the earlier text.
+- **A session with a correspondent's message, a room turn or another tenant can
+  NEVER activate a skill or change an active one**: the write stays a `.pending` draft
+  for the owner (`/pending approve skill <id>`).
 - An authored skill needs a `when` line (60 characters or fewer): it is the
   skill's one line in the catalog, and the only way the agent finds it.
 

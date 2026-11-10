@@ -9,13 +9,13 @@ route.
 
 **Every pack console route is owner-only**, by three layers:
 
-1. the console's auth middleware (``server.auth_middleware``): own_ops and
-   multitenant require a valid session token before the request reaches a
-   route; the ``local`` posture is the loopback owner;
+1. the console's auth middleware (``server.auth_middleware``): every posture,
+   ``local`` too, requires a valid session token before the request reaches a
+   route;
 2. :func:`pack_owner_guard`, mounted on EVERY pack console router: the
    authenticated principal must be the instance owner (own_ops: the bound
-   owner; multitenant: an admin by the ONE role predicate). A tenant is
-   authenticated and still not the owner of this instance's accounts;
+   owner; multitenant and local: the owner login, by the ONE role predicate). A
+   tenant is authenticated and still not the owner of this instance's accounts;
 3. ``webgate.MUTATION_DEPS`` (read-only + same-origin CSRF) on every route, so
    a POST a pack adds later is refused on a ``WEBVIEW_READ_ONLY`` console and
    from a cross-origin page.
@@ -69,15 +69,13 @@ def is_public(path: str, method: str) -> bool:
 
 
 def _is_instance_owner(request: Request) -> bool:
-    if not webgate.requires_owner_login():
-        return True                                   # local: the loopback owner
     state = getattr(request, "state", None)
     if not getattr(state, "authenticated", False):
         return False
     if webgate.is_own_ops():
         uid = str(getattr(state, "user_id", "") or "")
         return bool(uid) and uid == str(webgate.local_owner_id())
-    return webgate.request_is_admin(request)          # multitenant: the operator
+    return webgate.request_is_admin(request)          # multitenant and local: the owner login
 
 
 async def pack_owner_guard(request: Request) -> None:

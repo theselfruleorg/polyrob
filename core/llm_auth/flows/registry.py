@@ -1,8 +1,6 @@
-"""Flow selection, connect/disconnect, and refresh (proposal 024, L2)."""
+"""Flow selection, connect/disconnect, and refresh."""
 from __future__ import annotations
 
-import threading
-import time
 from typing import Any, Callable, Dict, Optional
 
 from core.llm_auth.errors import LLMAuthError
@@ -12,13 +10,12 @@ from core.llm_auth.flows.base import (
     HttpPost,
     oauth_enabled,
     exchange_token,
-    post_form,
     require_oauth_spec_obj,
-    result_from_token_payload,
 )
 from core.llm_auth.flows.device_code import run_device_code_flow
 from core.llm_auth.flows.loopback_pkce import run_loopback_pkce_flow
 from core.llm_auth.flows.manual_paste_pkce import run_manual_paste_pkce_flow
+from core.llm_auth.flows.refresh import refresh_token
 
 
 class UnsupportedGrantError(LLMAuthError):
@@ -33,26 +30,6 @@ _FLOWS: Dict[str, Callable[..., FlowResult]] = {
     "pkce": run_loopback_pkce_flow,
     "loopback_pkce": run_loopback_pkce_flow,
 }
-
-#: In-process refresh serialization, one lock per provider.
-#:
-#: This mirrors the discipline in tools/oauth/manager.py (per-key lock + an
-#: identity guard on the observed token) rather than importing it: that manager
-#: is agent-tier and serializes a different store, and core must not import
-#: upward. Cross-PROCESS safety is not this lock's job — it comes from the
-#: flock the auth store already takes around every mutation.
-_LOCKS: Dict[str, threading.Lock] = {}
-_LOCKS_GUARD = threading.Lock()
-
-
-def _lock_for(provider: str) -> threading.Lock:
-    with _LOCKS_GUARD:
-        lock = _LOCKS.get(provider)
-        if lock is None:
-            lock = threading.Lock()
-            _LOCKS[provider] = lock
-        return lock
-
 
 def get_flow(grant: str, redirect_mode: str = "loopback") -> Callable[..., FlowResult]:
     """The flow callable for *grant*.
@@ -134,82 +111,8 @@ def disconnect(provider: str, *, store=None) -> bool:
 def refresh_if_needed(provider: str, oauth: Any, *, store=None,
                       http_post: Optional[HttpPost] = None,
                       now: Optional[float] = None) -> Optional[FlowResult]:
-    """Refresh *provider*'s token if it is at/near expiry. None if untouched.
-
-    "Near" is the provider's OWN ``refresh_skew_sec`` — observed values differ
-    by an order of magnitude across providers (minutes vs an hour), so it is a
-    per-provider field rather than one global constant.
-
-    Serialized per provider, with an identity guard: if the stored token changed
-    while this call waited for the lock, another caller already refreshed it and
-    this one returns None instead of burning a second (often single-use)
-    refresh token.
-    """
-    store = _store(store)
-    now = time.time() if now is None else now
-
-    entry = store.get_provider(provider)
-    if not entry:
-        return None
-    # An exchanged credential (Copilot) renews by REDOING the exchange with the
-    # retained OAuth token, not by an OAuth refresh grant.
-    if entry.get("exchange_source_token"):
-        expires_at = entry.get("expires_at")
-        oauth_spec = require_oauth_spec_obj(oauth, provider)
-        skew = float(getattr(oauth_spec, "refresh_skew_sec", 120) or 0)
-        if expires_at is not None and now < float(expires_at) - skew:
-            return None
-        with _lock_for(provider):
-            current = store.get_provider(provider) or {}
-            source = current.get("exchange_source_token")
-            if not source:
-                return None
-            exchanged = exchange_token(
-                getattr(oauth_spec, "token_exchange_url", ""), source)
-            merged = dict(current)
-            merged.update(exchanged.to_entry())
-            merged["exchange_source_token"] = source
-            if exchanged.scope:
-                merged["api_base_url"] = exchanged.scope
-            store.set_provider(provider, merged)
-            return exchanged
-    if not entry.get("refresh_token"):
-        return None
-    expires_at = entry.get("expires_at")
-    if expires_at is None:
-        return None                        # no expiry declared: nothing to pre-empt
-
-    oauth = require_oauth_spec_obj(oauth, provider)
-    skew = float(getattr(oauth, "refresh_skew_sec", 120) or 0)
-    if now < float(expires_at) - skew:
-        return None                        # still comfortably valid
-
-    observed = entry.get("access_token")
-    with _lock_for(provider):
-        current = store.get_provider(provider) or {}
-        if current.get("access_token") != observed:
-            return None                    # someone else refreshed it while we waited
-        post = http_post or post_form
-        payload = post(oauth.token_url, {
-            "grant_type": "refresh_token",
-            "client_id": oauth.client_id,
-            "refresh_token": current["refresh_token"],
-        })
-        result = result_from_token_payload(payload, now=now)
-        # A provider that rotates refresh tokens returns a new one; one that
-        # doesn't returns none, and dropping the old one would strand the seat.
-        if not result.refresh_token:
-            result = FlowResult(
-                access_token=result.access_token,
-                refresh_token=current.get("refresh_token"),
-                expires_at=result.expires_at,
-                scope=result.scope or str(current.get("scope") or ""),
-                token_type=result.token_type,
-            )
-        merged = dict(current)
-        merged.update(result.to_entry())
-        store.set_provider(provider, merged)
-        return result
+    """Refresh *provider*'s token in the default store, see :mod:`core.llm_auth.flows.refresh`."""
+    return refresh_token(provider, oauth, store=_store(store), http_post=http_post, now=now)
 
 
 def _store(store):

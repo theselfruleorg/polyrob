@@ -25,7 +25,10 @@ owner or judge — never self/none) on each side, the useful-or-verified rate of
 same-lane runs that loaded it vs that did not. A clearly worse skill files ONE owner
 line; it never archives on this alone.
 
-System/bundled skills are never touched (only skills with a provenance row).
+The lane measure (``measure_changes``, 108 W6): each live change of the reviewer against
+its lane's before window; harm rolls it back once (``lane_measure``).
+
+System/bundled skills are never touched by age (only skills with a provenance row).
 
 (A Phase-2 aux-LLM "merge near-duplicate skills into umbrellas" step was scaffolded
 but never had a real merge policy — it was a logged no-op. It was removed (2026-06-29
@@ -82,8 +85,13 @@ _CONTRIBUTION_ROWS = 500
 
 
 def _run_good(meta: Dict[str, Any]) -> bool:
-    """A run that was useful (a receipt) or that the judge verified."""
-    return meta.get("useful") is True or str(meta.get("verified") or "") == "verified"
+    """A run that was useful (a receipt) or that the judge verified. A cron job's failed
+    ``expect`` check outranks the receipt: the run did something, but not its job."""
+    from agents.task.agent.core.episodic_digest import verified_state
+    verified = meta.get("verified")
+    if verified is False:
+        return False
+    return meta.get("useful") is True or verified_state(verified) is True
 
 
 def _run_skills(e: Any, meta: Dict[str, Any]) -> Set[str]:
@@ -128,7 +136,10 @@ def contribution_findings(skill_ids: Iterable[str], runs: Iterable[Any], *,
 
 
 def contribution_line(f: Dict[str, Any]) -> str:
-    """The one owner line for a finding."""
+    """The one owner line for a finding: a skill against its lane, or a change's measure."""
+    if f.get("measure"):
+        from agents.task.agent.core.lane_measure import measure_line
+        return measure_line(f)
     return (f"{f['skill_id']}: {f['with_good']}/{f['with_n']} useful when loaded vs "
             f"{f['without_good']}/{f['without_n']} without — patch or archive?")
 
@@ -346,6 +357,68 @@ class SkillCurator:
             logger.info("curator: contribution report filed %d line(s)", len(lines))
         return lines
 
+    # --- lane measure and rollback (108 W6) ------------------------------------
+
+    def measure_changes(self) -> List[str]:
+        """Compare each open change with its before window; on harm, roll it back and tell the
+        owner. Each row ends once, so a rollback runs once. A later write to the skill ends the
+        row with no rollback, because the rollback would remove that write too. Returns the lines
+        of this tick. Fail-open per row; an unreadable run store leaves the row open."""
+        from agents.task.agent.core import lane_measure as LM
+        lines: List[str] = []
+        now = self._now()
+        rows = LM.open_rows(self.usage)
+        runs_by_user: Dict[str, Optional[List[Any]]] = {}
+        for key, row in rows.items():
+            try:
+                user_id = row["user_id"]
+                if user_id not in runs_by_user:
+                    since = int(min(r["ts"] for r in rows.values() if r["user_id"] == user_id))
+                    try:
+                        runs_by_user[user_id] = self._recent_runs(user_id, since)
+                    except Exception:
+                        logger.warning("curator: lane measure skipped for a tenant "
+                                       "(run records unreadable)", exc_info=True)
+                        runs_by_user[user_id] = None
+                runs = runs_by_user[user_id]
+                if runs is None:
+                    continue
+                line = self._measure_one(LM, key, row, runs, now)
+                if line:
+                    lines.append(line)
+            except Exception:
+                logger.warning("curator: lane measure failed for %s", key, exc_info=True)
+        if lines:
+            logger.info("curator: lane measure filed %d line(s)", len(lines))
+        return lines
+
+    def _measure_one(self, LM, key: str, row: Dict[str, Any], runs: List[Any],
+                     now: float) -> Optional[str]:
+        after = LM.window(LM.after_rows(runs, row["lane"], float(row["ts"])))
+        result = LM.judge(row, after, now)
+        if result is None:
+            return None
+        sid, uid = row["skill_id"], row["user_id"]
+        if not result.startswith("harm"):
+            line = contribution_line(LM.finding(row, after, result))
+            if not self.dry_run:
+                LM.close_row(self.usage, key, row, result, after=after)
+                self._self_mod_ev("measure", sid, uid, reason="lane_measure", note=line)
+            return line
+        if LM.live_revision(self.sm, row) != row["after_sha"]:
+            if not self.dry_run:
+                LM.close_row(self.usage, key, row, "superseded", after=after)
+            return None
+        if self.dry_run:
+            return LM.rollback_line(row, after, result, True)
+        ok = LM.roll_back(self.sm, row)
+        line = LM.rollback_line(row, after, result, ok)
+        LM.close_row(self.usage, key, row, "rolled_back" if ok else "rollback_failed",
+                     after=after, harm=result)
+        self._self_mod_ev("rollback", sid, uid, ok=ok, reason=result, note=line)
+        logger.warning("curator: %s", line)
+        return line
+
     @staticmethod
     def _self_mod_ev(action: str, skill_id: str, user_id: str, **attrs) -> None:
         """T4-06: curator lifecycle transitions are self-modifications too —
@@ -471,6 +544,10 @@ class SkillCurator:
             result["contribution"] = self.contribution_report()
         except Exception:
             logger.warning("curator contribution report skipped", exc_info=True)
+        try:
+            result["measure"] = self.measure_changes()
+        except Exception:
+            logger.warning("curator lane measure skipped", exc_info=True)
         # 097 D4: retention (episodes, memories, sessions, notes, artifacts, the
         # written-documents KB) no longer rides the curator — it runs on its own
         # always-on ticker (`agents/task/agent/core/retention.py`), so a box with

@@ -1,4 +1,4 @@
-"""Authorization-code + PKCE flow over a loopback redirect (proposal 024, L2).
+"""Authorization-code + PKCE flow over a loopback redirect.
 
 For providers that will not do device code. Strictly the second choice:
 ``device_code`` works on a headless box, this one cannot.

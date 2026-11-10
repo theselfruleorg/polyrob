@@ -18,7 +18,10 @@ now call here (``tests/unit/core/money/test_money_kernel_ratchet.py``).
 
 Tier-0: reads two core tables, imports nothing above ``core``.
 """
+import logging
 from typing import FrozenSet, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def money_tool_ids() -> FrozenSet[str]:
@@ -70,31 +73,56 @@ def money_action(name) -> bool:
     return bool(owner) and money_tool(owner)
 
 
+#: 112 W3: ``fn(payload) -> bool`` — does the payload pin a money-class skill.
+_MONEY_SKILL_PROBE = None
+
+
+def register_money_skill_probe(fn) -> None:
+    """Registered by ``core.skills.catalog`` at import (the skill index lives above here)."""
+    global _MONEY_SKILL_PROBE
+    _MONEY_SKILL_PROBE = fn
+
+
 def is_money_class(payload) -> bool:
     """True when an autonomous run (a cron job or goal *payload*) is MONEY-CLASS.
 
     The ONE answer for routing (``HEAVY_MODEL``), tick ordering, pre-emption and the
-    wake-gate carve-out (2026-10-14 review B-1). Two signals, either suffices:
+    wake-gate carve-out (2026-10-14 review B-1). Three signals, any one suffices:
 
     * ``payload.priority == "money"`` — the explicit label;
+    * a pinned builtin or pack skill labelled ``polyrob-money-class`` (112; the probe
+      ``core.skills.catalog`` registers through :func:`register_money_skill_probe`);
     * the run's TOOLSET holds a money tool — ``payload.tools``, else the rig
       (``payload.rig`` > ``AUTONOMOUS_RIG_DEFAULT``) resolved through
       ``core.config_policy.rigs.resolve_rig_tools``. The live money jobs carry
       ``rig=money_rail`` and no priority; keying on priority alone routed none of them.
 
     *payload* may be a dict or its stored JSON text. Fail-closed to False (a bad
-    payload is not money-class; every spend gate still runs on its own).
+    payload is not money-class; every spend gate still runs on its own), with a
+    warning. A caller that must refuse on an unknown answer uses
+    :func:`money_class_strict`.
     """
     try:
-        if isinstance(payload, (str, bytes)):
-            import json
-            payload = json.loads(payload or "{}")
-        if not isinstance(payload, dict):
-            return False
-        if str(payload.get("priority") or "").strip().lower() == "money":
-            return True
-        from core.config_policy.rigs import resolve_rig_tools
-        ids = resolve_rig_tools(payload) or []
-        return any(money_tool(t) for t in ids)
+        return money_class_strict(payload)
     except Exception:
+        logger.warning("money class unknown for a run payload; read as not money",
+                       exc_info=True)
         return False
+
+
+def money_class_strict(payload) -> bool:
+    """:func:`is_money_class`, but a classification that fails RAISES."""
+    if isinstance(payload, (str, bytes)):
+        import json
+        payload = json.loads(payload or "{}")
+    if not isinstance(payload, dict):
+        return False
+    if str(payload.get("priority") or "").strip().lower() == "money":
+        return True
+    # 112 W3: work that DECIDES money — a pinned builtin/pack skill labelled money-class
+    # (a probe ``core.skills.catalog`` registers; an import here closes a core cycle).
+    if _MONEY_SKILL_PROBE is not None and _MONEY_SKILL_PROBE(payload):
+        return True
+    from core.config_policy.rigs import resolve_rig_tools
+    ids = resolve_rig_tools(payload) or []
+    return any(money_tool(t) for t in ids)

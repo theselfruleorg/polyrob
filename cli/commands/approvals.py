@@ -26,6 +26,7 @@ import click
 
 from core.prefs import load_preferences, propose_pref_change, write_preference
 from cli._admin_home import admin_data_dir, as_root_option
+from cli.commands._options import json_option
 from tools.controller.approval import effective_approval_state
 
 
@@ -66,7 +67,7 @@ def approvals():
               help="Tenant user id (default: this instance's owner)")
 @click.option("--home", "home_dir_opt", default=None, hidden=True,
               help="Override the preferences data home (test/ops only)")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def list_cmd(user_id, home_dir_opt, as_json):
     """Show the effective gated-action set: per-entry source + provider."""
     home_dir = home_dir_opt or _default_home_dir(write=False)

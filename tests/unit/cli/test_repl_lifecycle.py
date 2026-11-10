@@ -89,7 +89,9 @@ async def test_repl_create_session_limit_renders_block(monkeypatch, capsys, tmp_
     from cli.commands.chat import _repl_main
 
     ref: dict = {}
-    await _repl_main(plain=True, lifecycle_ref=ref)
+    with pytest.raises(SystemExit) as stopped:   # 113 W0: a failed start is exit 1
+        await _repl_main(plain=True, lifecycle_ref=ref)
+    assert stopped.value.code == 1
 
     out = capsys.readouterr().out
     assert "Session limit reached" in out

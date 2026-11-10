@@ -55,7 +55,6 @@ def _ctx(uid="alice"):
 @pytest.mark.asyncio
 async def test_self_context_reply_states_inertness_and_command(monkeypatch, tmp_path):
     monkeypatch.setenv("SELF_CONTEXT_WRITABLE", "true")
-    monkeypatch.setenv("SELF_CONTEXT_REQUIRE_REVIEW", "true")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     c = _bare_controller(tmp_path)
     c._register_self_context_manage_action()
@@ -72,7 +71,6 @@ async def test_self_context_reply_states_inertness_and_command(monkeypatch, tmp_
 @pytest.mark.asyncio
 async def test_owner_doc_reply_states_inertness_and_command(monkeypatch, tmp_path):
     monkeypatch.setenv("OWNER_DOC_WRITABLE", "true")
-    monkeypatch.setenv("OWNER_DOC_REQUIRE_REVIEW", "true")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     c = _bare_controller(tmp_path)
     c._register_owner_doc_manage_action()

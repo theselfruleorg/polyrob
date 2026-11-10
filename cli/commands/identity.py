@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import click
 
+from cli.commands._options import yes_option
+
 
 @click.group("identity")
 def identity():
@@ -56,8 +58,7 @@ def _echo_result(result, *, what: str) -> None:
                    "nothing else.")
 @click.option("--dry-run/--execute", "dry_run", default=True, show_default=True,
               help="Default simulates and reports; --execute broadcasts.")
-@click.option("--yes", is_flag=True, default=False,
-              help="Skip the typed confirmation.")
+@yes_option(help="Skip the typed confirmation.")
 def identity_register(chain, max_usd, dry_run, yes):
     """Register THIS instance on the ERC-8004 Identity Registry.
 

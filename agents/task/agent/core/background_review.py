@@ -2,7 +2,7 @@
 
 After a run of productive turns, the agent forks a cheap, fire-and-forget sub-agent
 that reviews what just happened and — when it finds a durable, reusable procedure —
-authors a skill (via the W2 ``skill_manage`` tool, which quarantines it for review).
+authors a skill (via the W2 ``skill_manage`` tool; it is live at once).
 This is the "learning" loop: experience → distilled skill → available next session.
 
 Design:
@@ -20,14 +20,16 @@ Design:
   reviewer never forks its own reviewer).
 - **Fail-open** — any error is swallowed; the loop must never break on a review.
 
-Gated ``BACKGROUND_REVIEW_ENABLED`` (default OFF). Authored skills are quarantined
-(``created_by="background_review"`` → always ``.pending/``), so even a compromised
-review cannot self-activate a skill.
+Gated ``BACKGROUND_REVIEW_ENABLED`` (default OFF). What it writes is live at once, with
+the prior body archived and an owner line in the recap; a correspondent or room session
+never runs a reviewer. After a goal or cron run it runs only on a bad signal (108 W6:
+``review_signal``), and the curator measures each live change (``lane_measure``).
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -221,18 +223,15 @@ class BackgroundReviewMixin:
             # isolated client (with its own httpx pool) on every fire — the old code
             # leaked one pool per background review. Cached on self._judge_llm (the same
             # slot _validate_output uses) and closed once at session cleanup (M2).
-            aux = getattr(self, "_judge_llm", None)
-            if aux is None:
-                try:
-                    # P2-9: async provisioning — don't block the loop building the client.
-                    aux = await self._provision_aux_llm_async("judge")
-                    if aux is not None:
-                        self._judge_llm = aux
-                except Exception:
-                    aux = None
+            from agents.task.agent.core.llm_slots import cached_judge_llm
+            try:
+                # P2-9: async provisioning — don't block the loop building the client.
+                aux = await cached_judge_llm(self)
+            except Exception:
+                aux = None
             # P2-10: make the reviewer's model cost VISIBLE. On openrouter the cheap aux
-            # model keys on the MAIN model's family (OPENROUTER_AUX_FAMILY_MAP, review
-            # B-2: z-ai/glm-5* -> z-ai/glm-5.3-flash); a family with no row (deepseek,
+            # model keys on the MAIN model's family (the spec's aux_family_map:
+            # z-ai/glm-5* -> z-ai/glm-5.3-flash); a family with no row (deepseek,
             # whose flash is already the cheap tier) and nvidia resolve to None, and then
             # this PROACTIVE loop (fires every BG_REVIEW_INTERVAL turns without any user
             # ask) runs up to bg_review_max_steps on the main model. Log at INFO which
@@ -275,54 +274,41 @@ class BackgroundReviewMixin:
 # 095 W13: the reviewer AFTER a goal / cron run, on a trusted outcome signal.
 # --------------------------------------------------------------------------- #
 
-#: R1: learn only from a signal that is not the agent's own opinion.
-TRUSTED_SIGNALS = ("receipt", "owner", "judge")
-
 _RUN_REVIEW_PROMPT = (
-    "You are a background reviewer for an AI agent. One of its scheduled runs just "
-    "ended. You see the run's outcome record and a digest of its last steps; that is "
-    "all you see of that work. Decide whether the run teaches ONE durable lesson that "
-    "would make the next run of this kind better (a failed run: the step that would "
-    "have prevented the failure).\n\n"
-    "Write at most ONE change, in this order of preference:\n"
-    "(a) PATCH a skill the run loaded: load_skill(<id>) to get its sha256, then "
-    "skill_manage(action='patch', skill_id=<id>, expected_sha256=<sha256>, "
-    "old_string=<the smallest span>, new_string=<that span plus one bullet>).\n"
+    "You are a background reviewer for an AI agent. One of its scheduled runs just ended "
+    "with a bad signal: the owner corrected it, its check failed, or it stopped on an "
+    "error. You see the run's outcome record, the run's skills and a digest of its last "
+    "steps; that is all you see of that work.\n\n"
+    "NO CHANGE IS THE DEFAULT. Most runs teach nothing durable: call done() with a "
+    "one-line reason.\n"
+    "A fault in a tool, the harness, a provider or the setup is a mechanism fault. No "
+    "skill can fix it, so change no skill: call done(text='MECHANISM: <one line for the "
+    "developer: what broke and where>').\n"
+    "Change a skill only when the signal shows a wrong or missing step that a skill "
+    "teaches (a failed run: the step that would have prevented the failure). Write at "
+    "most ONE change, in this order of preference:\n"
+    "(a) PATCH a skill in LANE SKILLS below, in ONE call: skill_manage(action='patch', "
+    "skill_id=<id>, expected_sha256=<its sha256 below>, old_string=<the smallest span, "
+    "copied exactly from its body>, new_string=<that span plus one bullet>, "
+    "reason=<one sentence>). old_string, new_string and reason all go in that one call; "
+    "a call with reason alone is refused.\n"
     "(b) If no loaded skill fits, patch the same way the first pinned skill of the "
     "run, with one lesson line.\n"
     "(c) Only if neither fits: skill_manage(action='create', skill_id=<short-kebab-id>, "
-    "when=<one line of <= 60 chars>, content=<a '# Title' heading, when to use, steps>) "
-    "— search the skill index first and never duplicate a skill.\n"
-    "Every skill_manage call passes reason=<one sentence for the owner: what went "
-    "wrong or right in the run that this change addresses>.\n"
+    "when=<one line of <= 60 chars>, content=<a '# Title' heading, when to use, steps>, "
+    "reason=<one sentence>): search the skill index first and never duplicate a skill.\n"
+    "reason is for the owner: what the signal showed in this run, and what this change "
+    "addresses. The system adds the run and the signal to it.\n"
     "Keep it general: no secrets, no ids, no amounts, no dates of this run. Every "
-    "write is a draft that the owner reviews. Write skills only: do not edit owner or "
-    "self documents, do not message anyone, do not do the run's work again.\n"
-    "If there is no durable lesson: call done() with a one-line reason."
+    "write is live for the next run. Write skills only: do not edit owner or "
+    "self documents, do not message anyone, do not do the run's work again."
 )
 
-
-def review_after_run_due(regime: str, meta) -> bool:
-    """Pure: does this run record earn a review after the run? The regime must
-    have ``RegimePolicy.review_after_run``; the record's ``signal_source`` must
-    be trusted (receipt | owner | judge — never self or none); a GOAL run needs
-    a judge verdict or a receipt, a CRON run a useful outcome or a failure with
-    a classified stop reason. Never raises."""
-    try:
-        from agents.task.session_class import CRON, GOAL, REGIME_POLICY
-        policy = REGIME_POLICY.get(regime)
-        if policy is None or not policy.review_after_run:
-            return False
-        m = meta if isinstance(meta, dict) else {}
-        if m.get("signal_source") not in TRUSTED_SIGNALS:
-            return False
-        if regime == GOAL:
-            return bool(str(m.get("verified") or "").strip()) or bool(m.get("useful"))
-        if regime == CRON:
-            return bool(m.get("useful")) or _classified_failure(m.get("stop_reason"))
-    except Exception:
-        logger.debug("review_after_run_due: probe failed", exc_info=True)
-    return False
+#: The lane skills a review prompt shows, and the part of each body it shows.
+_LANE_SKILLS_MAX = 4
+_LANE_BODY_MAX_CHARS = 8000
+_MECHANISM_RE = re.compile(r"^\s*MECHANISM:\s*(.+)$", re.M)
+_MECHANISM_MAX_CHARS = 200
 
 
 def _classified_failure(stop_reason) -> bool:
@@ -330,6 +316,50 @@ def _classified_failure(stop_reason) -> bool:
     from agents.task.runtime.stop_reason import QUIET_STOPS, StopReason
     value = str(stop_reason or "")
     return value in {r.value for r in StopReason} and value not in QUIET_STOPS
+
+
+def run_error(meta, outcome="") -> bool:
+    """Did this run stop on an error? An owner stop or a pause is not an error."""
+    from agents.task.runtime.stop_reason import QUIET_STOPS, StopReason
+    m = meta if isinstance(meta, dict) else {}
+    stop = str(m.get("stop_reason") or "")
+    if stop in QUIET_STOPS and stop != StopReason.DONE.value:
+        return False
+    return (str(outcome or "") == "failed" or _classified_failure(stop)
+            or bool(str(m.get("error") or "").strip()))
+
+
+def review_signal(meta, outcome="") -> str:
+    """The bad signal this run carries: ``owner_correct``, ``verified_failed`` or
+    ``run_error``; ``""`` when it has none. R1: each one comes from the owner or from code,
+    never from the agent's own report (108 W6)."""
+    from agents.task.agent.core.episodic_digest import verified_state
+    m = meta if isinstance(meta, dict) else {}
+    if str(m.get("owner_verdict") or "").strip() == "correct":
+        return "owner_correct"
+    if verified_state(m.get("verified")) is False:
+        return "verified_failed"
+    return "run_error" if run_error(m, outcome) else ""
+
+
+def review_after_run_due(regime: str, meta, outcome="") -> bool:
+    """Pure: does this run record earn a review after the run? The regime must have
+    ``RegimePolicy.review_after_run``, and the record must carry a bad signal
+    (:func:`review_signal`). A plain success gets no review. Never raises."""
+    try:
+        from agents.task.session_class import REGIME_POLICY
+        policy = REGIME_POLICY.get(regime)
+        if policy is None or not policy.review_after_run:
+            return False
+        return bool(review_signal(meta, outcome))
+    except Exception:
+        logger.debug("review_after_run_due: probe failed", exc_info=True)
+    return False
+
+
+def _run_failed(outcome, meta: dict) -> bool:
+    """A run whose own account is not a clean finish: its lessons stay drafts."""
+    return str(outcome or "") != "done" or _classified_failure(meta.get("stop_reason"))
 
 
 def run_outcome_line(outcome: str, meta) -> str:
@@ -346,17 +376,67 @@ def run_outcome_line(outcome: str, meta) -> str:
         return str(v) if v not in (None, "") else "-"
 
     return (f"outcome={outcome or '?'} verified={_v('verified')} useful={_v('useful')} "
-            f"stop={_v('stop_reason')} signal={_v('signal_source')} skills={skills}")
+            f"owner_verdict={_v('owner_verdict')} stop={_v('stop_reason')} "
+            f"signal={_v('signal_source')} skills={skills}")
 
 
-def build_run_review_prompt(digest: str, *, outcome_line: str,
-                            pinned: list = None) -> str:
+def lane_skill_blocks(user_id, skill_ids, created_by: str) -> str:
+    """The body and sha256 of each skill of the lane, read from the file the write lands in,
+    so a patch needs no load step and its ``expected_sha256`` is right. Prod: the old flow
+    spent steps on it and 22 of 68 reviews hit the step limit. Fail-open per skill."""
+    from agents.task.agent.skill_manager import get_skill_manager
+    blocks = []
+    try:
+        sm = get_skill_manager()
+    except Exception:
+        logger.debug("lane skills unreadable", exc_info=True)
+        return ""
+    for sid in list(dict.fromkeys(str(s) for s in skill_ids or [] if str(s or "").strip()))[:_LANE_SKILLS_MAX]:
+        try:
+            base = sm._edit_base(sid, str(user_id or ""), created_by, None, None)
+            if not isinstance(base, tuple):
+                continue
+            body, sha = base[1], base[2]
+            clipped = len(body) > _LANE_BODY_MAX_CHARS
+            note = "\n(the body is cut here: load_skill shows the rest)" if clipped else ""
+            blocks.append(f'<skill id="{sid}" sha256="{sha}">\n{body[:_LANE_BODY_MAX_CHARS]}{note}\n</skill>')
+        except Exception:
+            logger.debug("lane skill %s unreadable", sid, exc_info=True)
+    return "\n".join(blocks)
+
+
+def build_run_review_prompt(digest: str, *, outcome_line: str, pinned: list = None,
+                            lane_skills: str = "") -> str:
     """The after-run reviewer task: the outcome line, the loaded skills with their
-    patch generation, the run's first pinned skill, and the step digest (DATA)."""
+    patch generation, the run's first pinned skill, the body and sha256 of each lane skill,
+    and the step digest (DATA)."""
     head = _RUN_REVIEW_PROMPT + "\n\nRUN OUTCOME: " + outcome_line
     pins = [str(p) for p in (pinned or []) if str(p).strip()]
     head += "\nFIRST PINNED SKILL OF THIS RUN: " + (pins[0] if pins else "(none)")
+    head += "\nLANE SKILLS:\n" + (lane_skills or "(none readable: load_skill(<id>) gives a body "
+                                                 "and its sha256)")
     return build_review_prompt(digest, base=head)
+
+
+def _mechanism_line(result) -> str:
+    """The note in the reviewer's done() text; ``""`` when it has none."""
+    output = getattr(result, "output", "")
+    text = str(getattr(output, "final_text", output) or "")
+    match = _MECHANISM_RE.search(text)
+    return " ".join(match.group(1).split())[:_MECHANISM_MAX_CHARS] if match else ""
+
+
+def _record_mechanism_note(line: str, *, user_id, session_id, rail_id) -> None:
+    """A mechanism fault goes to the digest for the developer, not into a skill. Fail-open."""
+    try:
+        from core.event_kinds import REVIEW_MECHANISM_NOTE
+        from core.event_log import event_log_enabled, get_event_log
+        if event_log_enabled():
+            get_event_log().record(REVIEW_MECHANISM_NOTE, user_id=str(user_id or ""),
+                                   session_id=str(session_id or ""), source="background_review",
+                                   attrs={"note": line, "rail": rail_id})
+    except Exception:
+        logger.debug("reviewer note not recorded", exc_info=True)
 
 
 def _main_agent(orchestrator):
@@ -410,7 +490,7 @@ def _drafts_since(user_id, since_ts: float) -> list:
                             since_ts=since_ts, limit=50) or []:
             a = ev.get("attrs") or {}
             if (a.get("created_by") == "background_review" and a.get("ok")
-                    and a.get("pending") and a.get("action") in ("create", "patch", "edit")):
+                    and not a.get("pending") and a.get("action") in ("create", "patch", "edit")):
                 item = f"{a.get('action')} {a.get('item_id')}"
                 if item not in out:
                     out.append(item)
@@ -420,44 +500,31 @@ def _drafts_since(user_id, since_ts: float) -> list:
         return []
 
 
-async def review_after_run(task_agent, *, regime: str, session_id, user_id,
-                           rail_id: str, outcome: str, meta, pinned=None) -> bool:
-    """Run the reviewer on a finished run's resident session. The run has ended,
-    so this spends nothing of its step budget: the child gets
-    ``BG_REVIEW_MAX_STEPS`` on the aux (judge) model, and its usage rolls up to
-    the run's session (``sub_agent_aggregate``), i.e. to that job's economics.
-    After a review that drafted something, ONE owner line names the draft (a
-    ``self_modification`` ``propose`` event, read by ``core.recap``).
-    True when a reviewer ran. Fail-open; never raises."""
+async def _run_reviewer(agent, manager, *, regime, session_id, user_id, rail_id, outcome, meta,
+                        pinned, digest: str) -> None:
+    """One review. The run has ended, so this spends nothing of its step budget: the child
+    gets ``BG_REVIEW_MAX_STEPS`` on the aux (judge) model, and its usage rolls up to *session_id*.
+    Each live change writes one ``self_modification`` row, and its measure row (108 W6)."""
     import time
+    from core.config_policy import AutonomyConfig
+    from modules.skills.writer import PROVENANCE_BACKGROUND, PROVENANCE_UNTRUSTED, REVIEW_SCOPE, REVIEWING_FAILED_RUN
+    from agents.task.agent.core.llm_slots import cached_judge_llm
     try:
-        if not session_id or not review_after_run_due(regime, meta):
-            return False
-        if not _review_gates_open(user_id):
-            return False
-        from core.config_policy import AutonomyConfig
-        orch = task_agent.get_orchestrator(session_id)
-        agent = _main_agent(orch)
-        manager = orch.get_sub_agent_manager() if orch is not None else None
-        if agent is None or manager is None:
-            return False
-        aux = getattr(agent, "_judge_llm", None)
-        if aux is None:
-            try:
-                aux = await agent._provision_aux_llm_async("judge")
-                if aux is not None:
-                    agent._judge_llm = aux  # closed once at session cleanup (M2)
-            except Exception:
-                aux = None
-        try:
-            digest = build_review_digest(getattr(getattr(agent, "history", None),
-                                                 "history", None))
-        except Exception:
-            digest = ""
-        started = time.time()
-        await manager.run_subtask(
-            task=build_run_review_prompt(digest, outcome_line=run_outcome_line(outcome, meta),
-                                         pinned=pinned),
+        aux = await cached_judge_llm(agent)  # closed once at session cleanup (M2)
+    except Exception:
+        aux = None
+    m = meta if isinstance(meta, dict) else {}
+    failed = _run_failed(outcome, m)
+    signal = review_signal(m, outcome)
+    lane_skills = lane_skill_blocks(user_id, list(pinned or []) + list(m.get("skills_loaded") or []),
+                                    PROVENANCE_UNTRUSTED if failed else PROVENANCE_BACKGROUND)
+    started = time.time()
+    failed_token = REVIEWING_FAILED_RUN.set(failed)
+    scope_token = REVIEW_SCOPE.set(f"run={rail_id} signal={signal}")
+    try:
+        result = await manager.run_subtask(
+            task=build_run_review_prompt(digest, outcome_line=run_outcome_line(outcome, m),
+                                         pinned=pinned, lane_skills=lane_skills),
             parent_agent_id=agent.agent_id,
             profile_id="executor",
             max_steps=AutonomyConfig.bg_review_max_steps(),
@@ -465,21 +532,78 @@ async def review_after_run(task_agent, *, regime: str, session_id, user_id,
             skip_complexity_check=True,
             exclude_actions=set(REVIEWER_EXCLUDED_ACTIONS),
         )
-        drafts = _drafts_since(user_id, started - 1)
-        _record_fallback_reasons(user_id, drafts, _run_reason(rail_id, regime, outcome, meta))
-        if drafts:
-            from core.self_events import emit_self_modification
-            emit_self_modification(
-                kind="skill", action="propose", item_id=drafts[0].split(" ", 1)[-1],
-                user_id=str(user_id or ""), session_id=str(session_id),
-                pending=True, created_by="background_review", source="background_review",
-                note=(f"the reviewer of {rail_id} drafted " + "; ".join(drafts[:3])
-                      + " — /pending to review"),
-                rail=rail_id, lane=str((meta or {}).get("lane") or ""))
-        logger.info("🪞 after-run review of %s done (%d draft(s))", rail_id, len(drafts))
+    finally:
+        REVIEW_SCOPE.reset(scope_token)
+        REVIEWING_FAILED_RUN.reset(failed_token)
+    note = _mechanism_line(result)
+    if note:
+        _record_mechanism_note(note, user_id=user_id, session_id=session_id, rail_id=rail_id)
+    drafts = _drafts_since(user_id, started - 1)
+    _record_fallback_reasons(user_id, drafts, _run_reason(rail_id, regime, outcome, m))
+    from agents.task.agent.core.lane_measure import record_changes
+    from modules.skills.skill_usage import get_skill_usage_store
+    measured = await record_changes(get_skill_usage_store(), user_id=str(user_id or ""),
+                                    since_ts=started - 1, rail_id=rail_id, signal=signal, meta=m)
+    logger.info("🪞 after-run review of %s done (signal %s, %d draft(s), %d measure row(s))",
+                rail_id, signal, len(drafts), measured)
+
+
+async def review_after_run(task_agent, *, regime: str, session_id, user_id,
+                           rail_id: str, outcome: str, meta, pinned=None) -> bool:
+    """Run the reviewer on a finished run's resident session. True when a reviewer ran.
+    Fail-open; never raises."""
+    try:
+        if not session_id or not review_after_run_due(regime, meta, outcome):
+            return False
+        if not _review_gates_open(user_id):
+            return False
+        orch = task_agent.get_orchestrator(session_id)
+        agent = _main_agent(orch)
+        manager = orch.get_sub_agent_manager() if orch is not None else None
+        if agent is None or manager is None:
+            return False
+        try:
+            digest = build_review_digest(getattr(getattr(agent, "history", None),
+                                                 "history", None))
+        except Exception:
+            digest = ""
+        await _run_reviewer(agent, manager, regime=regime, session_id=session_id, user_id=user_id,
+                            rail_id=rail_id, outcome=outcome, meta=meta, pinned=pinned, digest=digest)
         return True
     except Exception as e:
         logger.debug("after-run review skipped (%s): %s", rail_id, e)
+        return False
+
+
+def _episode_digest(episode, meta: dict) -> str:
+    """The run as its record tells it: the owner's correction often comes after the run's
+    session has gone, so its steps are not there to read."""
+    parts = [f"task: {_clip(getattr(episode, 'task', ''))}",
+             f"summary: {_clip(getattr(episode, 'summary', ''), _DIGEST_MAX_CHARS // 2)}",
+             f"the owner's correction: {_clip(meta.get('owner_verdict_quote'))}"]
+    return "\n".join(parts)
+
+
+async def review_after_verdict(agent, orchestrator, *, episode, rail_id: str, meta) -> bool:
+    """Run the reviewer on the owner's correction of a run, from the session that took the
+    reply. True when a reviewer ran. Fail-open; never raises."""
+    try:
+        regime, user_id = getattr(episode, "kind", ""), getattr(episode, "user_id", "")
+        outcome = getattr(episode, "outcome", "") or ""
+        if not review_after_run_due(regime, meta, outcome) or not _review_gates_open(user_id):
+            return False
+        manager = orchestrator.get_sub_agent_manager() if orchestrator is not None else None
+        if agent is None or manager is None:
+            return False
+        from agents.task.agent.core.episodic_digest import rail_payload
+        from core.config_policy.rigs import pinned_skills
+        await _run_reviewer(agent, manager, regime=regime, session_id=getattr(episode, "session_id", ""),
+                            user_id=user_id, rail_id=rail_id, outcome=outcome, meta=meta,
+                            pinned=pinned_skills(rail_payload(rail_id)),
+                            digest=_episode_digest(episode, meta))
+        return True
+    except Exception as e:
+        logger.debug("review after verdict skipped (%s): %s", rail_id, e)
         return False
 
 
@@ -489,11 +613,56 @@ async def review_after_run(task_agent, *, regime: str, session_id, user_id,
 _REVIEWS_IN_FLIGHT: set = set()
 
 
-async def _review_after_run_once(key: str, task_agent, **kw) -> bool:
+#: Owner corrections that arrived while that user's reviewer ran: each one earns its review
+#: (the verdict marks a run corrected only once), so it waits instead of being skipped.
+_QUEUED_REVIEWS: dict = {}
+_QUEUED_MAX = 5
+
+
+async def _once(key: str, make_coro) -> bool:
     try:
-        return await review_after_run(task_agent, **kw)
+        return await make_coro()
     finally:
         _REVIEWS_IN_FLIGHT.discard(key)
+
+
+def _release(key: str) -> None:
+    """The user's reviewer ended: free the slot and start the next queued review."""
+    _REVIEWS_IN_FLIGHT.discard(key)
+    queued = _QUEUED_REVIEWS.get(key)
+    if not queued:
+        return
+    make_coro, rail_id = queued.pop(0)
+    if not queued:
+        _QUEUED_REVIEWS.pop(key, None)
+    try:
+        _spawn_one_per_user(key, make_coro, rail_id, queue=True)
+    except Exception as e:
+        logger.warning("queued review of %s not started: %s", rail_id, e)
+
+
+def _spawn_one_per_user(key: str, make_coro, rail_id, queue: bool = False) -> None:
+    """Start the review unless this user has one running. Then a ``queue`` review waits
+    for it (bounded), and any other is skipped. Never raises."""
+    if key in _REVIEWS_IN_FLIGHT:
+        waiting = _QUEUED_REVIEWS.setdefault(key, []) if queue else None
+        if waiting is not None and len(waiting) < _QUEUED_MAX:
+            waiting.append((make_coro, rail_id))
+            logger.info("review of %s waits: a review for this user is still running", rail_id)
+            return
+        logger.info("after-run review of %s skipped: a review for this user is "
+                    "still running", rail_id)
+        return
+    from core.async_bridge import spawn_retained
+    _REVIEWS_IN_FLIGHT.add(key)
+    try:
+        task = spawn_retained(_once(key, make_coro))
+    except Exception:
+        _REVIEWS_IN_FLIGHT.discard(key)
+        raise
+    # 098 AG-12: the release rides on the TASK's end — a task cancelled
+    # before its first step never runs the coroutine's finally.
+    task.add_done_callback(lambda _t, _k=key: _release(_k))
 
 
 def schedule_review_after_run(task_agent, **kw) -> None:
@@ -502,22 +671,21 @@ def schedule_review_after_run(task_agent, **kw) -> None:
     qualify spawns nothing; a user whose reviewer is still running is skipped.
     Never raises."""
     try:
-        if not review_after_run_due(kw.get("regime", ""), kw.get("meta")):
+        if not review_after_run_due(kw.get("regime", ""), kw.get("meta"), kw.get("outcome", "")):
             return
-        key = str(kw.get("user_id") or "")
-        if key in _REVIEWS_IN_FLIGHT:
-            logger.info("after-run review of %s skipped: a review for this user is "
-                        "still running", kw.get("rail_id", "?"))
-            return
-        from core.async_bridge import spawn_retained
-        _REVIEWS_IN_FLIGHT.add(key)
-        try:
-            task = spawn_retained(_review_after_run_once(key, task_agent, **kw))
-        except Exception:
-            _REVIEWS_IN_FLIGHT.discard(key)
-            raise
-        # 098 AG-12: the release rides on the TASK's end — a task cancelled
-        # before its first step never runs the coroutine's finally.
-        task.add_done_callback(lambda _t, _k=key: _REVIEWS_IN_FLIGHT.discard(_k))
+        _spawn_one_per_user(str(kw.get("user_id") or ""),
+                            lambda: review_after_run(task_agent, **kw), kw.get("rail_id", "?"))
     except Exception as e:
         logger.debug("after-run review not scheduled: %s", e)
+
+
+def schedule_review_after_verdict(agent, orchestrator, *, episode, rail_id: str, meta) -> None:
+    """Fire-and-forget :func:`review_after_verdict`: one owner correction, one review.
+    Never raises."""
+    try:
+        _spawn_one_per_user(str(getattr(episode, "user_id", "") or ""),
+                            lambda: review_after_verdict(agent, orchestrator, episode=episode,
+                                                         rail_id=rail_id, meta=meta), rail_id,
+                            queue=True)
+    except Exception as e:
+        logger.debug("review after verdict not scheduled: %s", e)

@@ -139,6 +139,26 @@ def test_a_late_result_after_the_stuck_sweep_writes_no_second_wake(st):
     assert _wakes(st).pending_count() == 1
 
 
+def test_a_late_result_after_the_agent_saw_failed_settles_again_with_done(st):
+    """The agent was shown "FAILED: No result" (group consumed); the bridge then
+    finished. The DONE never reached it, so it could re-propose the same move."""
+    p = _propose(st)
+    q = _quote_of(p)
+    cards.press(q.card_id, "ok", U)
+    conn = st._conn()
+    conn.execute("UPDATE cards SET updated_at=? WHERE card_id=?",
+                 (time.time() - cards.STUCK_AFTER_S - 5, q.card_id))
+    conn.commit()
+    conn.close()
+    cards.sweep()
+    assert "FAILED" in G.take_outcomes(session_id=S, user_id=U, st=st)
+    assert G.groups(st).get(p.group_id)["state"] == G.G_CONSUMED
+    cards.finish(q.card_id, "SENT AND CONFIRMED tx 0xc5")
+    assert G.groups(st).get(p.group_id)["state"] == G.G_SETTLED
+    assert _wakes(st).pending_count() == 2
+    assert "→ DONE: SENT AND CONFIRMED" in G.render_outcomes(U, p.group_id, st=st)
+
+
 def test_refresh_on_an_expired_quote_runs_a_fresh_quote(st):
     p = _propose(st)
     q = _quote_of(p)

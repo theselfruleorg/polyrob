@@ -397,6 +397,7 @@ async def _perform(tool, p, ctx, verb):
         # not subtracted, so the LP caps over-count, never under-count).
         extra = {'native_raw': plan.value} if p.protocol == 'v4' else {}
         asset, positions, detail, state = None, [], '', tx_notify.STATE_IN_FLIGHT
+        receipt = None
         # CLI1: a cancel in the receipt wait or the position read-back records the
         # broadcast first (no asset — nothing is measured yet) — the ONE seam.
         from tools.defi.receipt_wait import record_on_interrupt
@@ -426,8 +427,10 @@ async def _perform(tool, p, ctx, verb):
                     state = tx_notify.STATE_REVERTED
             except Exception as exc:
                 detail = f'SUBMITTED; receipt/accounting unverified ({exc}). Do not retry blindly.'
-        gate.record(venue='defi', action=verb, amount_usd=decision.amount_usd,
-            counterparty=plan.pool, idempotency_key=plan.intent.idempotency_key,
+        from tools.defi.receipt_wait import book_after_receipt
+        book_after_receipt(gate, receipt, venue='defi', action=verb,
+            amount_usd=decision.amount_usd, counterparty=plan.pool,
+            idempotency_key=plan.intent.idempotency_key,
             result_ref=tx_hash, chain=p.chain, asset=asset, positions=positions, **extra)
         tool._notify_tx(ctx, tx_notify.TxNotice(verb=verb, route=f'{p.chain}:{p.protocol}',
             chain=p.chain, amount_in=plan.description, usd=decision.amount_usd,

@@ -70,7 +70,7 @@ def test_an_arrival_is_found_by_its_transfer_and_confirmed_by_owner_of(chain):
     res = _scan(chain, state)
     assert [r["token_id"] for r in res.arrived] == [3] and res.lost == []
     row = res.arrived[0]
-    assert row["account"] == erc6551.account_address(4663, PINNED, 3)
+    assert row["account"] == erc6551.account_address(4663, PINNED, 3, implementation=erc6551.ACCOUNT_V3_IMPL)
     assert row["label"] == "POLYROB #3" and row["chain"] == "robinhood"
     assert state["scanned"][f"4663:{PINNED.lower()}"] == 0x101
     assert "You gave me POLYROB #3" in nft_holdings.arrived_text(row)
@@ -157,7 +157,7 @@ def test_select_defaults_to_the_only_tracked_nft(chain):
     asyncio.run(nft_holdings.tick(None, treasury=TREASURY, rpc_for=lambda c: chain,
                                   notify=lambda *a: asyncio.sleep(0)))
     held = nft_holdings.select("robinhood", None, rpc=chain, treasury=TREASURY)
-    assert held.token_id == 3 and held.account == erc6551.account_address(4663, PINNED, 3)
+    assert held.token_id == 3 and held.account == erc6551.account_address(4663, PINNED, 3, implementation=erc6551.ACCOUNT_V3_IMPL)
     chain.transfers.append((0x101, 4, TREASURY))       # 4 arrives (again) later
     chain.owners = {3: TREASURY, 4: TREASURY}
     chain.head = 0x101
@@ -178,7 +178,7 @@ def test_overview_lists_accounts_with_their_approvals_and_reports_changes(chain)
         return chain(method, params)
     text = nft_holdings.overview(treasury=TREASURY, rpc_for=lambda c: rpc)
     assert "NEW: You gave me POLYROB #3" in text
-    assert erc6551.account_address(4663, PINNED, 3) in text
+    assert erc6551.account_address(4663, PINNED, 3, implementation=erc6551.ACCOUNT_V3_IMPL) in text
     assert "native:  0.005000" in text and "approvals: none (complete" in text
     assert "NEW:" not in nft_holdings.overview(treasury=TREASURY, rpc_for=lambda c: rpc)
 

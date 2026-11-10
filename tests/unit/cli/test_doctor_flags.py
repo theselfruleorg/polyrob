@@ -17,7 +17,7 @@ def test_flags_report_groups_and_lines():
     lines = flags_report({})
     text = "\n".join(lines)
     assert "LLM / providers" in text
-    assert any("GEMINI_PROMPT_CACHE" in ln for ln in lines)
+    assert any("THINKING_CONFIG_ENABLED" in ln for ln in lines)
     # every flag line shows a source
     flag_lines = [ln for ln in lines if "=" in ln]
     assert flag_lines and all("[" in ln and "]" in ln for ln in flag_lines)
@@ -95,22 +95,22 @@ def test_doctor_flags_default_is_public_tier():
     """067 F1: a bare --flags shows the public tier; --all shows every tier."""
     from core.flags import REGISTRY
     assert REGISTRY["AUTONOMY_POSTURE"].tier == "public"
-    assert REGISTRY["GEMINI_PROMPT_CACHE"].tier == "advanced"
+    assert REGISTRY["THINKING_CONFIG_ENABLED"].tier == "advanced"
     runner = click.testing.CliRunner()
     bare = runner.invoke(doctor, ["--flags"])
     assert bare.exit_code == 0, bare.output
     assert "AUTONOMY_POSTURE" in bare.output
-    assert "GEMINI_PROMPT_CACHE" not in bare.output
+    assert "THINKING_CONFIG_ENABLED" not in bare.output
     assert "--all shows every flag" in bare.output
     full = runner.invoke(doctor, ["--flags", "--all"])
     assert full.exit_code == 0, full.output
-    assert "GEMINI_PROMPT_CACHE" in full.output
+    assert "THINKING_CONFIG_ENABLED" in full.output
     assert "--all shows every flag" not in full.output
 
 
 def test_flags_report_public_view_keeps_explicitly_set_flags():
-    lines = flags_report({"GEMINI_PROMPT_CACHE": "true"}, show_all=False)
-    assert any("GEMINI_PROMPT_CACHE" in ln and "[env]" in ln for ln in lines)
+    lines = flags_report({"THINKING_CONFIG_ENABLED": "true"}, show_all=False)
+    assert any("THINKING_CONFIG_ENABLED" in ln and "[env]" in ln for ln in lines)
     assert not any(ln.strip().startswith("NATIVE_TOOLS_DEBUG ") for ln in lines)
 
 

@@ -82,7 +82,7 @@ def _build_openrouter_only_manager(monkeypatch) -> LLMManager:
 
     captured_isolated = {}
 
-    def _fake_create_llm_client(*, name, config, container, model_type=None):
+    def _fake_create_llm_client(*, name, config, container, model_type=None, isolated=False):
         client = _FakeClient(model_type=model_type)
         captured_isolated[name] = client
         return client

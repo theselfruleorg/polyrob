@@ -13,6 +13,9 @@ Two pieces:
 from __future__ import annotations
 
 from core.runtime_paths import cron_db_path
+from core.money.classify import is_money_class as _money_class  # 112 F2
+from core.model_routing import record_stored_tier  # 112 W2
+import agents.task.constants  # noqa: E402,F401 — 112: registers the light-tier resolver
 import asyncio
 import logging
 import os
@@ -89,6 +92,8 @@ def _cron_ev(job, outcome: str, reason: Optional[str] = None, *,
     try:
         from core.event_log import get_event_log, event_log_enabled
         if event_log_enabled():
+            from core.cron_expect import verified_attrs  # 108 W5
+            extra.update(verified_attrs(job, outcome, session_id))
             get_event_log().record(
                 "cron_run", user_id=getattr(job, "user_id", ""),
                 session_id=str(session_id or ""),
@@ -161,6 +166,19 @@ from cron.jobs import CronJob
 
 logger = logging.getLogger(__name__)
 
+_SESSION_FAILED = "Session failed: "
+
+
+def refusal_reason(status: Any) -> str:
+    """The reason a refused run names to the owner: the model's refusal text (after
+    ``Session failed: ``, cut to 200 chars) when the run halted on a refusal, else
+    the generic words."""
+    from core.exceptions import REFUSAL_HALT_PREFIX
+    text = str(status or "")
+    if text.startswith(_SESSION_FAILED) and REFUSAL_HALT_PREFIX in text:
+        return text[len(_SESSION_FAILED):][:200]
+    return "the run was refused or produced nothing"
+
 
 def _cron_tick_is_active(result: Any) -> bool:
     """A cron tick counts as 'active' (reset the idle-backoff interval to base)
@@ -217,6 +235,16 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
     """
     async def runner(job: CronJob) -> bool:
         payload = dict(job.payload or {})
+
+        def _skipped(reason: str, *, hold: bool = False) -> bool:
+            # A $0 skip did not do the job: it is not "done" and it does not end a
+            # failure streak (the scheduler keeps the streak for this outcome).
+            # ``hold``: an owner pause or a pause window held the run — a one-shot
+            # keeps its slot and runs once the hold ends (cron/scheduler.py::_record).
+            job.run_note = {"outcome": "skipped", "reason": reason}
+            if hold:
+                job.run_note["hold"] = True
+            return True
         # W9 (090 R5, D45): a per-job pause window — e.g. a recurring swap held
         # from T-1 h to 24 h after a mint window. A $0 skip for every job kind.
         from cron.read_job import active_pause_window
@@ -224,7 +252,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
         if _window is not None:
             logger.info("cron job %s: inside its pause window %s — $0 skip", job.id, _window)
             _cron_ev(job, "skipped", "pause_window", window_end=_window[1])
-            return True
+            return _skipped("inside its pause window", hold=True)
         # Owner daily digest: a deterministic $0 tick composed from evidence and
         # pushed via the delivery rail — never invokes the model. Routed here
         # BEFORE the wake/change gates. Fail-open (a compose/deliver error is a
@@ -258,7 +286,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
         if not _dec.allowed:
             logger.warning("cron job %s: %s — $0 skip, agent not invoked", job.id, _dec.reason)
             _cron_ev(job, "skipped", "paused")
-            return True
+            return _skipped("the owner paused jobs", hold=True)
         # Task 14 (Phase 3 R5): a watchtower cron job carrying
         # payload.subscription_id $0-skips once its subscription lapses.
         # Decision: suspended/canceled -> skip (subscription_permits_work
@@ -277,7 +305,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                     logger.info("cron job %s: subscription %s lapsed — $0 skip, "
                                "agent not invoked", job.id, sub_id)
                     _cron_ev(job, "skipped", "subscription_lapsed")
-                    return True
+                    return _skipped("its subscription lapsed")
             except Exception:
                 logger.warning("cron job %s: subscription gate check failed — "
                               "running tick", job.id, exc_info=True)
@@ -291,7 +319,11 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
             _cron_ev(job, "done" if ok else (
                 "skipped" if why == "write_jobs_disabled" else "failed"),
                 why, verb=str((payload.get("write_verb") or {}).get("verb") or ""))
-            return True
+            if why == "write_jobs_disabled":
+                return _skipped("scheduled write jobs are off")
+            if not ok:
+                job.run_note = {"outcome": "failed", "reason": "the write verb failed"}
+            return ok
         # W9: a deterministic READ job — one allowlisted read verb, no session,
         # no model turn (cron/read_job.py). Held by the same owner pause above.
         if payload.get("read_verb"):
@@ -299,7 +331,19 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
             ok, why = await run_read_job(task_agent, job)
             _cron_ev(job, "done" if ok else "failed", why,
                      verb=str((payload.get("read_verb") or {}).get("verb") or ""))
-            return True
+            if not ok:
+                job.run_note = {"outcome": "failed", "reason": "the read verb failed"}
+            return ok
+        # 114 W2: a deterministic SCRIPT job — the agent's own file, run through the
+        # code-execution backend, no session, no model turn (cron/read_job.py).
+        if payload.get("script"):
+            from cron.read_job import run_script_job
+            ok, why = await run_script_job(task_agent, job)
+            _cron_ev(job, "done" if ok else "failed", why,
+                     script=str((payload.get("script") or {}).get("path") or ""))
+            if not ok:
+                job.run_note = {"outcome": "failed", "reason": "the script failed"}
+            return ok
         if not payload.get("wake_agent", True):
             logger.info("cron job %s: wake_agent=False — $0 tick, agent not invoked", job.id)
             _cron_ev(job, "skipped", "wake_agent_false")
@@ -317,7 +361,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
             if _gate_active and should_skip_wake(job, data_dir=data_dir):
                 logger.info("cron job %s: no observable change — $0 tick, agent not invoked", job.id)
                 _cron_ev(job, "skipped", "no_change")
-                return True
+                return _skipped("nothing changed since the last run")
         except Exception:
             logger.warning("cron job %s: wake gate error — running tick", job.id, exc_info=True)
         # Preflight (cron/preflight.py): a job whose declared tool has a live
@@ -340,7 +384,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                     except Exception:
                         logger.warning("cron job %s: preflight owner notice not sent",
                                        job.id, exc_info=True)
-                return True
+                return _skipped(f"preflight: {_pf.reason}")
         except Exception:
             logger.warning("cron job %s: preflight error — running tick", job.id, exc_info=True)
         # 2026-10-14 review A-12: a watch job's declared $0 pre-check
@@ -367,7 +411,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                 logger.info("cron job %s: pre-check quiet — $0 tick, agent not invoked (%s)",
                             job.id, _precheck.attrs)
                 _cron_ev(job, "skipped", _precheck.reason, **_precheck.attrs)
-                return True
+                return _skipped("the pre-check was quiet")
         except Exception:
             _precheck = None
             logger.warning("cron job %s: pre-check error — running tick", job.id, exc_info=True)
@@ -381,7 +425,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                 logger.info("cron job %s: every credentialed provider is credit-dead — $0 skip",
                             job.id)
                 _cron_ev(job, "skipped", "credit_sentinel")
-                return True
+                return _skipped("every provider is out of credit")
             if _live and _live != _pinned:
                 payload = dict(payload or {})
                 payload["provider"] = _live
@@ -422,10 +466,12 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                       error: str = "", summary=None) -> None:
         """The job's run record for one exit path (2026-10-13 review R3)."""
         from agents.task.agent.core.episodic_digest import record_run
+        from core.cron_expect import verified_attrs
         stored = await record_run(regime=_CRON_REGIME, kind="cron", session_id=session_id,
                                   user_id=job.user_id, rail_id=f"cron:{job.id}", task=job.task,
                                   outcome=outcome, reason=reason, error=error, run=run,
-                                  summary=summary, meta={"source": "cron", "job_id": job.id},
+                                  summary=summary, meta={"source": "cron", "job_id": job.id,
+                                                          **verified_attrs(job, outcome, session_id)},
                                   mandate=(job.payload or {}).get("mandate"))
         # 095 W13: the reviewer runs AFTER the run, outside its budget and cap.
         try:
@@ -523,6 +569,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
         except Exception:
             logger.debug("cron start notice failed for %s", job.id, exc_info=True)
         from core.runtime_config import resolve_default_provider
+        import core.skills.catalog  # noqa: F401 — 112: registers the money-skill probe; at CALL time (an import-time catalog build refuses pack policy rows)
         provider = payload.get("provider") or resolve_default_provider()[0]
         # Fill the provider's default model from the registry when the job doesn't pin
         # one — an autonomous run has no interactive config, and a None model crashes
@@ -533,18 +580,26 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
             # call the goal run makes; money-class jobs get HEAVY_MODEL.
             from agents.task.session_class import CRON as _CRON_REG, regime_model_for
             model = regime_model_for(_CRON_REG, payload, provider)
+        _tiered = not model and (payload or {}).get("tier") in ("heavy", "light")
         if not model:
             try:
                 from modules.llm.llm_client_registry import get_default_model
                 model = get_default_model(provider)
             except Exception:
                 model = None
+        record_stored_tier(kind="job", payload=payload, model=model, absent=_tiered,
+                           user_id=job.user_id, ref=job.id)  # 112 W2
         # 061 WS-3: the owner's answer to what THIS job asked last time rides
         # into this run (`agents/task/goals/rail_answers.py`). Fail-open.
         # 2026-10-13 review B4: READ here, CONSUMED only after a run that
         # completed — a refused, failed or cut run used to lose "DECLINED, do
         # not re-ask" and the job asked again.
-        _task_text = job.task
+        # 107 WS-4: a late run knows it is late, so a reminder can say so.
+        _job_text = job.task
+        if job.late_seconds:
+            from core.cron_outcome import late_task_line
+            _job_text = f"{late_task_line(job.late_seconds, datetime.now())}\n\n{job.task}"
+        _task_text = _job_text
         _answers, _answer_board, _answer_ids = "", None, []
         try:
             from agents.task.goals.board import GoalBoard
@@ -554,7 +609,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
             _answers, _answer_ids = peek_rail_answers(
                 _answer_board, job.user_id, f"cron:{job.id}")
             if _answers:
-                _task_text = f"{_answers}\n\n{job.task}"
+                _task_text = f"{_answers}\n\n{_job_text}"
         except Exception:
             logger.debug("cron %s: rail answers skipped (fail-open)", job.id, exc_info=True)
 
@@ -575,9 +630,9 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
         try:
             from agents.task.agent.core.episodic_digest import render_previous_runs
             _prev = await render_previous_runs(user_id=job.user_id, rail_id=_rail,
-                                               regime=_CRON_REGIME)
+                                               regime=_CRON_REGIME, data_dir=data_dir)
             if _prev:
-                _task_text = "\n\n".join(p for p in (_answers, _prev, job.task) if p)
+                _task_text = "\n\n".join(p for p in (_answers, _prev, _job_text) if p)
         except Exception:
             logger.debug("cron %s: previous runs skipped (fail-open)", job.id, exc_info=True)
         # 2026-10-06: owner rules written AFTER the job's text override it
@@ -603,6 +658,8 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
             "provider": provider,
             "model": model,
             "tools": resolve_cron_tools(payload),
+            # 112 F2: the fallback ladder keeps a money run on a money model.
+            "money_class": _money_class(payload),
             # 083 WS-4: the operator's cap; a stored payload.max_steps is inert —
             # except a room-service job, whose short reply turn keeps its 8
             # (`group_service.room_run_max_steps`).
@@ -692,7 +749,9 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                 # carries (e.g. moderating the room it names).
                 from core.autonomy_marker import note_job
                 note_job(job.id, job.task, post_spacing_hours=(
-                    (job.payload or {}).get("post_spacing_hours")))
+                    (job.payload or {}).get("post_spacing_hours")),
+                    kb_holdout_pct=(job.payload or {}).get("kb_holdout_pct"),
+                    scheduled_at=job.next_run_at)
                 # 2026-10-13 review B5: pre-generate the run's session id so a
                 # run CANCELLED by its time cap or an owner pause can still
                 # write its run record (it never returns a RunOutcome).
@@ -740,11 +799,12 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                 # tripped upstream, inside the real Agent step loop, before this
                 # status string is ever formed. This site now only CHECKS the
                 # latch (see credit_sentinel_active() above).
-                await _record(job, session_id, "failed", run=run,
-                              reason="the run was refused or produced nothing",
+                _why = refusal_reason(run.status)
+                await _record(job, session_id, "failed", run=run, reason=_why,
                               error=str(run.status or ""))
-                job.run_note = {"outcome": "failed",
-                                "reason": "the run was refused or produced nothing"}
+                from cron.scheduler import provider_down
+                job.run_note = {"outcome": "failed", "provider_down": provider_down(str(run.status or "")),
+                                "reason": _why}
                 _cron_ev(job, "failed", "refusal_or_empty", session_id=session_id,
                          duration_s=round(time.time() - _t0, 3), model=model,
                          **run_ev_attrs(run, session_id, data_dir))
@@ -768,7 +828,11 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                 from agents.task.runtime.stop_reason import label_last_report
                 _stop = run.stop_description
                 _out = "partial" if _partial else "failed"
-                job.run_note = {"outcome": _out, "reason": str(_stop or "")}
+                from agents.task.runtime.stop_reason import StopReason
+                from cron.scheduler import provider_down
+                job.run_note = {"outcome": _out, "reason": str(_stop or ""),
+                                "provider_down": (run.stop_reason == StopReason.STALL.value
+                                                  or provider_down(str(run.status or "")))}
                 # 083 WS-2: the agent's last report at the step limit (its words).
                 _last = label_last_report(getattr(run, "exhausted_summary", None), 1500)
                 await _record(job, session_id, _out, run=run,
@@ -857,7 +921,8 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
             return True
         except Exception as e:
             logger.error("cron job %s session failed: %s", job.id, e, exc_info=True)
-            job.run_note = {"outcome": "failed",
+            from cron.scheduler import provider_down
+            job.run_note = {"outcome": "failed", "provider_down": provider_down(e),
                             "reason": f"the run raised {type(e).__name__}: {str(e)[:80]}"}
             _cron_ev(job, "failed", "exception", session_id=session_id or _run_sid,
                      duration_s=round(time.time() - _t0, 3), error=str(e)[:200])
@@ -904,4 +969,11 @@ def build_cron_ticker(
         await notify_failed_run(task_agent, job, outcome, reason, at)
 
     scheduler.set_failure_hook(_tell_owner)
+
+    async def _owner_line(text):
+        from core.self_evolution import push_owner_message
+        await push_owner_message(getattr(task_agent, "container", None), text,
+                                 source="job_stopped")
+
+    scheduler.set_notice_hook(_owner_line)
     return CronTicker(scheduler, interval_seconds=interval_seconds)

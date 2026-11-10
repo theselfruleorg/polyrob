@@ -34,6 +34,22 @@ def h_doctor(ctx: CommandContext) -> None:
     ctx.emit("\n".join(lines + ["", DOCTOR_FULL_POINTER]), title="doctor")
 
 
+def h_status(ctx: CommandContext) -> None:
+    """`/status` — the ONE status snapshot, as on every seat (113 I-4).
+
+    The same lines as `/doctor`'s leading view, under its own name: `/status`
+    is the snapshot and `/doctor` is the health report that points at every
+    check (``polyrob doctor --full``)."""
+    from cli.commands.doctor import status_snapshot_lines
+
+    try:
+        lines = status_snapshot_lines()
+    except Exception as exc:
+        ctx.emit(f"status unavailable: {exc}", title="status")
+        return
+    ctx.emit("\n".join(lines), title="status")
+
+
 def h_auth(ctx: CommandContext) -> None:
     """Render credential status + the connect grammar in-session."""
     from modules.llm.profiles import credential_status

@@ -89,6 +89,22 @@ def test_the_reloaded_request_is_byte_identical(tmp_data_root):
     assert after._foundation_tool_names == ["done", "read_file", "web_search"]
 
 
+def test_the_replay_fields_survive_the_session_file(tmp_data_root):
+    from modules.llm.messages import AIMessage
+    before = _dress(_mm())
+    message = AIMessage(content="a")
+    blocks = [{"block": {"type": "thinking", "signature": "s"}}]
+    message.additional_kwargs.update(reasoning_content="why", reasoning_seat="deepseek-native",
+                                     anthropic_thinking=blocks)
+    before._add_message_with_tokens(message, _internal=True)
+    before.save_to_disk(SESSION, USER)
+
+    after = _mm()
+    assert after.load_from_disk(SESSION, USER) is True
+    kept = after.history.messages[-1].message.additional_kwargs
+    assert (kept["reasoning_content"], kept["reasoning_seat"], kept["anthropic_thinking"]) == ("why", "deepseek-native", blocks)
+
+
 def test_the_foundation_object_lands_in_the_one_file(tmp_data_root):
     mm = _dress(_mm())
     mm._foundation_tool_names = ["done"]
@@ -118,7 +134,7 @@ def test_a_changed_model_warns_and_keeps_the_fresh_render(tmp_data_root, caplog)
     assert serialize_messages(
         after.get_messages_for_llm(consume_ephemeral=False)) == fresh
     warnings = [r for r in caplog.records
-                if "foundation rebuilt (model/provider/cwd/version changed)" in r.getMessage()]
+                if "foundation rebuilt (model/provider/cwd changed)" in r.getMessage()]
     assert len(warnings) == 1, [r.getMessage() for r in caplog.records]
 
 
@@ -190,9 +206,9 @@ def test_partial_foundation_never_mixes_saved_and_live_slots(tmp_data_root, miss
 # ---------------------------------------------------------------------------
 
 
-def test_emitted_tool_names_reads_both_wire_shapes():
-    from agents.task.agent.messages.foundation_replay import emitted_tool_names
-    assert emitted_tool_names([
+def test_schema_tool_names_reads_both_wire_shapes():
+    from modules.llm.tool_schemas import schema_tool_names
+    assert schema_tool_names([
         {"type": "function", "function": {"name": "done"}},
         {"name": "read_file"},
         "junk",
@@ -212,13 +228,13 @@ def _registry_with(names):
 
 
 def test_preferred_order_puts_known_names_first():
-    from agents.task.agent.messages.foundation_replay import emitted_tool_names
+    from modules.llm.tool_schemas import schema_tool_names
     registry = _registry_with(["alpha", "bravo", "charlie", "delta"])
 
-    plain = emitted_tool_names(registry.get_all_actions_for_provider("openai"))
+    plain = schema_tool_names(registry.get_all_actions_for_provider("openai"))
     assert plain.index("alpha") < plain.index("bravo") < plain.index("charlie")
 
-    preferred = emitted_tool_names(registry.get_all_actions_for_provider(
+    preferred = schema_tool_names(registry.get_all_actions_for_provider(
         "openai", preferred_order=["delta", "charlie"]))
     assert preferred[:2] == ["delta", "charlie"]
     # everything the order does not name keeps the F1 sorted order and follows
@@ -228,12 +244,12 @@ def test_preferred_order_puts_known_names_first():
 
 
 def test_the_memo_key_distinguishes_two_orders():
-    from agents.task.agent.messages.foundation_replay import emitted_tool_names
+    from modules.llm.tool_schemas import schema_tool_names
     registry = _registry_with(["alpha", "bravo", "charlie"])
 
-    first = emitted_tool_names(registry.get_all_actions_for_provider(
+    first = schema_tool_names(registry.get_all_actions_for_provider(
         "openai", preferred_order=["charlie"]))
-    second = emitted_tool_names(registry.get_all_actions_for_provider(
+    second = schema_tool_names(registry.get_all_actions_for_provider(
         "openai", preferred_order=["bravo"]))
     assert first[0] == "charlie" and second[0] == "bravo", (first, second)
 
@@ -258,31 +274,113 @@ def test_an_unchanged_catalog_refresh_does_not_undo_the_replay(tmp_data_root):
     assert after._tool_catalog_message.content == replayed
 
 
-def test_resumed_session_after_deploy_states_running_version(tmp_data_root, monkeypatch, caplog):
-    """095 W1a (SK-2/SK-9): a foundation saved under the previous deploy rebuilds
-    once, so the resumed chat states the version that RUNS, not the stored one."""
+def test_a_deploy_keeps_the_prefix_and_the_tail_states_the_running_version(tmp_data_root, monkeypatch):
+    """095 W1a (SK-2/SK-9) with 106 C4: a resumed chat states the version that RUNS, and
+    a deploy no longer colds its foundation to say so."""
     import core.version as v
     monkeypatch.setattr(v, "running_version_line", lambda: "v1.0.0 (deployed aaaaaaaaaaaa)")
-    _dress(_mm()).save_to_disk(SESSION, USER)
-    blob = json.loads(_history_file().read_text())["foundation"]
-    assert blob["version"] == "v1.0.0 (deployed aaaaaaaaaaaa)"
+    before = _dress(_mm())
+    expected = serialize_messages(before.get_messages_for_llm(consume_ephemeral=False))
+    before.save_to_disk(SESSION, USER)
+    assert "version" not in json.loads(_history_file().read_text())["foundation"]
 
     monkeypatch.setattr(v, "running_version_line", lambda: "v1.0.1 (deployed bbbbbbbbbbbb)")
     after = _dress(_mm())
-    with caplog.at_level("WARNING"):
-        after.load_from_disk(SESSION, USER)
-    ident = after._runtime_identity_message.content
-    assert "v1.0.1 (deployed bbbbbbbbbbbb)" in ident and "v1.0.0" not in ident
-    assert any("version changed" in r.getMessage() for r in caplog.records)
+    assert after.load_from_disk(SESSION, USER)
+    assert serialize_messages(after.get_messages_for_llm(consume_ephemeral=False))[:len(expected) - 1] \
+        == expected[:-1]
+    after.offer_running_version()
+    assert after.update_state_delta({})
+    tail = str(after.history.messages[-1].message.content)
+    assert "<running-version>\nRunning version: v1.0.1 (deployed bbbbbbbbbbbb).\n</running-version>" in tail
 
 
-def test_a_blob_without_a_version_rebuilds_not_torn(tmp_data_root, caplog):
-    """A pre-W1a blob has no ``version`` key: one rebuild, never "incomplete"."""
+def test_an_old_blob_with_a_version_key_replays(tmp_data_root):
     from agents.task.agent.messages.foundation_replay import replay_foundation, capture_foundation
     mm = _dress(_mm())
     blob = capture_foundation(mm)
-    blob.pop("version")
-    with caplog.at_level("WARNING"):
-        assert replay_foundation(mm, blob) is False
-    assert any("version changed" in r.getMessage() for r in caplog.records)
-    assert not any("incomplete" in r.getMessage() for r in caplog.records)
+    blob["version"] = "v0.9.0 (deployed old)"
+    assert replay_foundation(mm, blob) is True
+
+
+# ---------------------------------------------------------------------------
+# 106 C6: a changed row keeps its bytes, and the change rides the tail
+# ---------------------------------------------------------------------------
+
+
+def _reloaded_with(tmp_data_root, **fresh):
+    before = _mm()
+    before.set_environment_message("Host: a\nautonomy: ENABLED")
+    before.set_self_context_blocks((("owner_rules", "rule one\nrule two"),))
+    before.set_skill_message("- skill-a\n- skill-b")
+    before.set_tool_catalog_message("- done [ready]")
+    before.save_to_disk(SESSION, USER)
+    saved = serialize_messages(before.get_messages_for_llm(consume_ephemeral=False))
+
+    after = _mm()
+    after.set_environment_message(fresh.get("environment", "Host: a\nautonomy: ENABLED"))
+    after.set_self_context_blocks((("owner_rules", fresh.get("rules", "rule one\nrule two")),))
+    after.set_skill_message(fresh.get("skills", "- skill-a\n- skill-b"))
+    after.set_tool_catalog_message("- done [ready]")
+    assert after.load_from_disk(SESSION, USER)
+    return saved, after
+
+
+def _tail_text(mm):
+    mm.update_state_delta({})
+    return "\n".join(str(m.message.content) for m in mm.history.messages)
+
+
+def test_a_changed_row_keeps_its_bytes_and_the_tail_says_what_changed(tmp_data_root):
+    saved, after = _reloaded_with(tmp_data_root, environment="Host: a\nautonomy: PAUSED",
+                                  rules="rule one\nrule three", skills="- skill-a\n- skill-c")
+    assert serialize_messages(after.get_messages_for_llm(consume_ephemeral=False)) == saved
+    tail = _tail_text(after)
+    assert "autonomy: PAUSED" in tail and "autonomy: ENABLED" in tail
+    assert "rule three" in tail and "rule two" in tail and "rule one" not in tail
+    assert "skill-c" in tail
+    assert "This overrides it." in tail
+
+
+def test_no_change_means_no_tail_part(tmp_data_root):
+    _saved, after = _reloaded_with(tmp_data_root)
+    assert after.update_state_delta({}) is False
+
+
+def test_a_second_reload_keeps_the_same_bytes_and_says_it_again(tmp_data_root):
+    saved, after = _reloaded_with(tmp_data_root, rules="rule one\nrule three")
+    after.save_to_disk(SESSION, USER)
+    again = _mm()
+    again.set_self_context_blocks((("owner_rules", "rule one\nrule three"),))
+    assert again.load_from_disk(SESSION, USER)
+    assert any("rule three" in part for part in again._standing_state_parts.values())
+
+
+def test_a_change_too_long_for_one_part_rewrites_the_row(tmp_data_root):
+    """A cut must not hide a rule: over the part cap the fresh render stands."""
+    long_rules = "\n".join(f"rule number {i}" for i in range(600))
+    _saved, after = _reloaded_with(tmp_data_root, rules=long_rules)
+    assert any("rule number 599" in str(m.content) for m in after._self_context_blocks)
+    assert "self_context_update" not in after._standing_state_parts
+
+
+def test_a_system_prompt_change_stands_at_once(tmp_data_root):
+    """A rule of the system prompt cannot be replaced from a user-role row."""
+    from agents.task.agent.messages.foundation_replay import capture_foundation, replay_foundation
+    mm = _dress(_mm())
+    blob = capture_foundation(mm)
+    blob["system_prompt"] = "an older system prompt"
+    fresh = mm._system_message.content
+    assert replay_foundation(mm, blob) is True
+    assert mm._system_message.content == fresh
+
+
+def test_a_tainted_seat_loses_the_owner_part_of_the_delta(tmp_data_root):
+    """SK-18: a seat tainted after the reload must not keep an owner rule in its tail."""
+    _saved, after = _reloaded_with(tmp_data_root, rules="rule one\nprivate rule three")
+    assert after.update_state_delta({})
+    assert "private rule three" in _tail_text(after)
+    after._owner_context_allowed = lambda: False
+    after.update_state_delta({})
+    assert "private rule three" not in "\n".join(
+        str(m.message.content) for m in after.history.messages)

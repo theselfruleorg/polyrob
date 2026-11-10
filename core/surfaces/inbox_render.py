@@ -45,6 +45,8 @@ RemedyTable = Mapping[str, Sequence[Tuple[str, str]]]
 #: is the approval-GATES verb and means something else entirely.
 REPL_REMEDIES: Dict[str, Sequence[Tuple[str, str]]] = {
     "app": (("yes", "/apps approve {id}"), ("no", "/apps reject {id}")),
+    # 113 C-12: approve only the code the person you know sends you.
+    "pairing": (("yes", "/pair approve {surface} <their code>"), ("see", "/pair")),
     "ask": (("mark it done", "/fulfill {id}"),),
     "card": (),    # the card's own tap tokens ride on the item (meta)
     "tool_approval": (("yes", "/pending approve tool_approval {id}"),
@@ -63,6 +65,8 @@ REPL_REMEDIES: Dict[str, Sequence[Tuple[str, str]]] = {
 CLI_REMEDIES: Dict[str, Sequence[Tuple[str, str]]] = {
     "app": (("yes", "polyrob apps approve {id}"),
             ("no", "polyrob apps reject {id}")),
+    "pairing": (("yes", "polyrob owner pair approve {surface} <their code>"),
+                ("see", "polyrob owner pair list")),
     "ask": (("mark it done", "polyrob owner fulfill {id}"),),
     "card": (),
     "tool_approval": (("yes", "polyrob owner promote tool_approval {id}"),
@@ -85,6 +89,7 @@ CLI_REMEDIES: Dict[str, Sequence[Tuple[str, str]]] = {
 #: and the proposal notice render, so all three agree.
 CHAT_REMEDIES: Dict[str, Sequence[Tuple[str, str]]] = {
     "app": (("yes", "/apps approve {id}"), ("no", "/apps reject {id}")),
+    "pairing": (("yes", "/pair approve {surface} <their code>"), ("see", "/pair")),
     "ask": (("mark it done", "/fulfill {id}"),),
     "card": (),
     KIND_UNREADABLE: (("look", "/inbox"), ("why", "/status")),
@@ -174,10 +179,13 @@ def _remedy_line(item: Mapping[str, Any], table: RemedyTable,
         tap_approve, tap_reject = "/approve", "/reject"
     parts = []
     for word, command in verbs:
-        parts.append(f"{word}  "
-                     + command.format(id=item.get("id") or "", kind=kind,
-                                      tap_approve=tap_approve,
-                                      tap_reject=tap_reject))
+        # An item's own string facts (``Item.extra``, e.g. a pairing request's
+        # ``surface``) fill a template too; the four names above always win.
+        facts = {k: v for k, v in (item.get("extra") or {}).items()
+                 if isinstance(v, str)}
+        facts.update(id=item.get("id") or "", kind=kind,
+                     tap_approve=tap_approve, tap_reject=tap_reject)
+        parts.append(f"{word}  " + command.format(**facts))
     if not parts:
         return ""
     line = "      " + "      ".join(parts)

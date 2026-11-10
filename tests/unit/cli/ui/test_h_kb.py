@@ -71,7 +71,7 @@ def test_kb_disabled_is_graceful(monkeypatch):
     _patch(monkeypatch, enabled=False)
     ctx, buf = _plain_ctx()
     asyncio.run(h_kb(ctx))
-    assert "disabled" in buf.getvalue().lower()
+    assert "switched off" in buf.getvalue().lower()
 
 
 def test_kb_gate_raises_is_graceful(monkeypatch):

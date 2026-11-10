@@ -1,8 +1,7 @@
 """Regression (P1 finalization): GeminiClient._generate_with_tools must return the
 3-tuple (text, tool_calls, usage) the caller's _unpack_tool_gen_result requires.
-The timeout-retry-without-tools fallback returned a 2-tuple (text, []), raising
-ValueError downstream and dropping usage. Guard: no tuple-return in that method has
-exactly 2 elements.
+A 2-tuple raises ValueError downstream and drops usage. Guard: no tuple-return in that
+method has exactly 2 elements.
 """
 import ast
 import inspect

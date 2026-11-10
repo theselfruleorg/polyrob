@@ -3,7 +3,6 @@
 from modules.llm.billing_guard import billed_google_options
 import logging
 import asyncio
-import time
 from typing import List, Dict, Any, Optional, Union, Tuple
 import json
 import os
@@ -17,10 +16,14 @@ with warnings.catch_warnings():
     import google.generativeai as genai
     import google.ai.generativelanguage as glm
 
-from modules.llm.llm_client import LLMClient, translate_llm_error
+from modules.llm.call_scope import call_timeout_param
+from modules.llm.llm_client import LLMClient, raise_llm_error, translate_llm_error
 from modules.llm.token_counter import count_messages_tokens
-from modules.llm.gemini_parts import part_is_function_call
-from core.exceptions import LLMError, LLMConnectionError, LLMRateLimitError, ServiceError
+from modules.llm.gemini_parts import (
+    function_call_args, json_schema_to_glm, part_is_function_call, read_candidate, tool_call_fields,
+    tool_names_by_id, wire_system,
+)
+from core.exceptions import LLMConnectionError, LLMRateLimitError, ServiceError
 from core.config import BotConfig
 
 class GeminiClient(LLMClient):
@@ -49,25 +52,12 @@ class GeminiClient(LLMClient):
             os.environ.get('GOOGLE_API_KEY')
         )
         
-        # If we found a key, also set environment variable for libraries that use it directly
-        if self.api_key:
-            os.environ['GEMINI_API_KEY'] = self.api_key
-            os.environ['GOOGLE_API_KEY'] = self.api_key
-            
-        self.last_response = None  # Store the last response for token usage reporting
-
-        # UP-08 / 098 MO-14: explicit cachedContents leases (modules/llm/gemini_cache.py).
-        self._cache_leases = None
-
         # Get defaults from model_registry (single source of truth)
         from modules.llm.model_registry import get_model_config
         model_config = get_model_config(self.model_type)
         
         # Get model limits from registry
-        if model_config:
-            self.max_tokens = model_config.max_completion_tokens or 8192
-        else:
-            self.max_tokens = 8192  # Conservative fallback
+        self.max_tokens = model_config.max_completion_tokens or 8192
 
         # Resolve vision support via base helper (falls back to True if not in registry)
         self.supports_vision = self._resolve_supports_vision()
@@ -80,35 +70,13 @@ class GeminiClient(LLMClient):
         )
 
     def _is_gemini_3_model(self) -> bool:
-        """Check if current model is Gemini 3 (requires thought signatures for function calling).
-
-        Gemini 3 models enforce strict thought signature validation during function calling.
-        When thought signatures are missing, the API may return malformed FunctionCall objects
-        with empty name fields, causing tool calls to fail.
-
-        Returns:
-            True if model is Gemini 3 series, False otherwise
-        """
+        """Gemini 3 requires a thought signature on a replayed function call, and the pinned
+        SDK's ``Part`` has no such field, so this client replays those turns as text."""
         if not self.model_type:
             return False
         model_lower = self.model_type.lower()
         # Match gemini-3-*, gemini3*, etc.
         return 'gemini-3' in model_lower or 'gemini3' in model_lower
-
-    # ---- UP-08 explicit cachedContents (098 MO-14: leases) ------------------
-    def _delete_cached_content(self) -> None:
-        """Delete every cached object this client holds (fail-open)."""
-        from modules.llm.gemini_cache import leases_of
-        leases_of(self).clear()
-
-    def _maybe_build_cached_content(self, system_instruction, tool_objects):
-        from modules.llm.cache_hints import (
-            gemini_explicit_cache_enabled, GEMINI_EXPLICIT_CACHE_MIN_TOKENS)
-        from modules.llm.gemini_cache import build_or_reuse
-        if not gemini_explicit_cache_enabled():
-            return None
-        return build_or_reuse(self, system_instruction, tool_objects,
-                              min_tokens=GEMINI_EXPLICIT_CACHE_MIN_TOKENS)
 
     def _convert_content_to_parts(self, content: Any) -> List[Dict[str, Any]]:
         """Convert message content to Gemini parts format.
@@ -268,6 +236,10 @@ class GeminiClient(LLMClient):
             self.logger.error(f"Error converting image to Gemini format: {e}")
             return None
 
+    def _call_timeout(self) -> float:
+        """The step's time budget inside a step, else the configured request limit."""
+        return call_timeout_param().get("timeout") or self._sdk_limits()["timeout"]
+
     def _validate_llm_config(self) -> None:
         """Validate LLM config."""
         if not self.api_key:
@@ -310,9 +282,6 @@ class GeminiClient(LLMClient):
         **kwargs
     ) -> str:
         """Generate a response from Gemini API."""
-        start_time = time.time()
-        success = False
-        error_message = None
         
         try:
             # Ensure client is initialized
@@ -321,30 +290,22 @@ class GeminiClient(LLMClient):
                 
             # Convert messages to Gemini format
             gemini_messages = []
-            # H1 FIX: capture the system prompt (from the `system` kwarg OR embedded as a
-            # role='system' message) and pass it natively via system_instruction below.
-            # Previously a system message in `messages` was skipped and never re-added
-            # (the injection block only fired for the `system` kwarg), so every no-tools
-            # Gemini call silently lost its system prompt.
-            system_instruction_text = system if isinstance(system, str) else None
+            system_instruction_text = wire_system(system, messages)
+            tool_names = tool_names_by_id(messages)
 
             for msg in messages:
                 role = msg.get('role', '')
                 content = msg.get('content', '')
 
                 if role == 'system':
-                    # Prefer the content embedded in the message list — the agent builds
-                    # the real system prompt there, not via the `system` kwarg.
-                    if content and isinstance(content, str):
-                        system_instruction_text = content
-                    continue  # passed natively via system_instruction below
+                    continue
 
-                # FIX (Dec 2, 2025): Handle tool role in non-tools path
+                # Handle tool role in non-tools path
                 # When _generate is called without tools but history has tool messages,
                 # convert them to text representations to avoid format errors
                 if role == 'tool':
-                    tool_name = msg.get('name', '')
                     tool_call_id = msg.get('tool_call_id', '')
+                    tool_name = msg.get('name') or tool_names.get(tool_call_id, '')
                     # Convert tool response to text format for non-tool generation
                     tool_text = f"[Tool Result ({tool_name or tool_call_id})]: {content}"
                     # Add as user message (tool responses are from user's perspective)
@@ -362,14 +323,13 @@ class GeminiClient(LLMClient):
                     gemini_role = 'user'
                 elif role in ['assistant', 'ai']:
                     gemini_role = 'model'
-                    # FIX (Dec 2, 2025): Handle assistant messages with tool_calls in non-tools path
+                    # Handle assistant messages with tool_calls in non-tools path
                     # Convert tool calls to text representation
                     if 'tool_calls' in msg and msg['tool_calls']:
                         tool_calls_text = []
                         for tc in msg['tool_calls']:
                             if isinstance(tc, dict):
-                                tc_name = tc.get('name') or (tc.get('function', {}).get('name') if 'function' in tc else 'unknown')
-                                tc_args = tc.get('args') or tc.get('arguments') or (tc.get('function', {}).get('arguments') if 'function' in tc else {})
+                                tc_name, tc_args = tool_call_fields(tc)
                                 tool_calls_text.append(f"Called {tc_name} with {tc_args}")
                         if tool_calls_text:
                             combined = content + "\n[Tool Calls: " + "; ".join(tool_calls_text) + "]" if content else "[Tool Calls: " + "; ".join(tool_calls_text) + "]"
@@ -382,7 +342,7 @@ class GeminiClient(LLMClient):
                     self.logger.warning(f"Unknown role {role}, skipping message")
                     continue
 
-                # FIX (Dec 3, 2025): Properly handle multimodal content (text, images)
+                # Handle multimodal content (text, images)
                 # Content might be a string or list of parts (OpenAI multimodal format)
                 parts = self._convert_content_to_parts(content)
                 if parts:
@@ -398,21 +358,15 @@ class GeminiClient(LLMClient):
             # Use provided parameters or default to instance attributes
             temp = temperature if temperature is not None else self.temperature
 
-            # Estimate input tokens (messages + system, Gemini sends them separately)
-            estimated_input_tokens = count_messages_tokens(messages, self.model_type)
-            if system:
-                # Add system message token estimate
-                estimated_input_tokens += count_messages_tokens([{"role": "system", "content": system}], self.model_type)
-
             # Clamp max_tokens to model limits (single canonical logic on base)
             max_tokens_value = self._adjust_max_tokens(
                 messages=messages,
                 max_tokens=max_tokens,
-                estimated_input_tokens=estimated_input_tokens,
+                estimated_input_tokens=self._estimate_input_tokens(messages, system_instruction_text),
             )
 
             # Log request details with proper values being used
-            self.logger.info(f"Gemini API request: model={self.model_type}, temperature={temp}, max_tokens={max_tokens_value}, est_input_tokens={estimated_input_tokens}")
+            self.logger.info(f"Gemini API request: model={self.model_type}, temperature={temp}, max_tokens={max_tokens_value}")
             
             # Filter kwargs to only include supported parameters
             supported_params = {
@@ -430,62 +384,22 @@ class GeminiClient(LLMClient):
                     "max_output_tokens": max_tokens_value,
                     **filtered_kwargs
                 },
-                system_instruction=system_instruction_text if system_instruction_text else None  # H1 FIX
+                system_instruction=system_instruction_text if system_instruction_text else None
             )
             
-            # Make API request using native async method
-            # FIX (Dec 2, 2025): Use generate_content_async instead of to_thread wrapper
-            response = await model.generate_content_async(gemini_messages, **billed_google_options())
-            
-            self.last_response = response
-            
-            # Mark as successful
-            success = True
-            
-            # Process response with robust error handling
-            # FIX (Dec 2, 2025): Handle ProtoType DESCRIPTOR errors from protobuf version mismatches
-            response_text = ""
-            try:
-                if hasattr(response, 'text'):
-                    response_text = response.text
-                elif hasattr(response, 'parts'):
-                    text_parts = []
-                    for part in response.parts:
-                        if hasattr(part, 'text') and part.text:
-                            text_parts.append(part.text)
-                    response_text = " ".join(text_parts)
-            except AttributeError as proto_err:
-                # Handle protobuf version mismatch errors
-                if 'DESCRIPTOR' in str(proto_err) or 'ProtoType' in str(proto_err):
-                    self.logger.warning(f"Protobuf version mismatch, trying fallback: {proto_err}")
-                    # Try to access raw response data as fallback
-                    try:
-                        if hasattr(response, '_result') and hasattr(response._result, 'candidates'):
-                            for candidate in response._result.candidates:
-                                if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
-                                    for part in candidate.content.parts:
-                                        if hasattr(part, 'text'):
-                                            response_text += part.text
-                    except Exception as fallback_err:
-                        self.logger.error(f"Fallback response extraction also failed: {fallback_err}")
-                        raise ServiceError(f"Failed to extract response due to protobuf version mismatch: {proto_err}")
-                else:
-                    raise
-            
-            # Capture telemetry with actual timing and usage data
-            self._extract_usage_and_capture_telemetry(start_time, success, None, kwargs.get('metadata'))
+            self.last_response = await asyncio.wait_for(
+                model.generate_content_async(gemini_messages, **billed_google_options()),
+                timeout=self._call_timeout())
+            response_text, _ = read_candidate(self.last_response, self.model_type)
+
+
                 
             return response_text
             
         except Exception as e:
-            success = False
-            error_message = str(e)
             self.logger.error(f"Gemini API error: {e}")
             
-            # Capture telemetry for failed requests too
-            self._extract_usage_and_capture_telemetry(start_time, success, error_message, kwargs.get('metadata'))
-            
-            raise ServiceError(f"Gemini API error: {e}")
+            raise_llm_error(e, "Gemini", model=self.model_type)
 
     async def generate_response(
         self,
@@ -522,7 +436,7 @@ class GeminiClient(LLMClient):
             
         except Exception as e:
             self.logger.error(f"Failed to generate response: {e}")
-            raise ServiceError(f"Failed to generate response: {e}")
+            raise_llm_error(e, "Gemini", model=self.model_type)
 
     async def _validate_connection(self) -> None:
         """Validate connection to Gemini."""
@@ -564,7 +478,6 @@ class GeminiClient(LLMClient):
 
     async def cleanup(self) -> None:
         """Clean up resources."""
-        self._delete_cached_content()  # UP-08: never orphan a billed cachedContents object
         await self._cleanup_client()
         self._initialized = False
         self.logger.info("Gemini client cleaned up")
@@ -587,7 +500,7 @@ class GeminiClient(LLMClient):
         messages: List[Dict[str, Any]],
         tools: List[Dict[str, Any]],
         **kwargs
-    ) -> Union[Tuple[str, List[Dict[str, Any]], Dict[str, Optional[int]]], str]:
+    ) -> Tuple[str, List[Dict[str, Any]], Dict[str, Optional[int]]]:
         """Generate response with tool-calling support for agents.
 
         This method bridges the adapter contract to enable native tool-calling
@@ -600,10 +513,8 @@ class GeminiClient(LLMClient):
             **kwargs: Additional generation parameters (system, temperature, etc.)
 
         Returns:
-            Either:
-            - Tuple of (content, tool_calls, usage_data) when tool calls are present
-              usage_data dict contains: prompt_tokens, completion_tokens, total_tokens
-            - Just the content string when no tool calls
+            Tuple of (content, tool_calls, usage_data). usage_data contains prompt_tokens,
+            completion_tokens, total_tokens.
 
         Raises:
             LLMError: If generation fails
@@ -626,26 +537,12 @@ class GeminiClient(LLMClient):
                 **kwargs
             )
 
-            # Log the result type for debugging
-            if isinstance(result, tuple):
-                if len(result) == 3:
-                    _, tool_calls, _ = result
-                    self.logger.info(f"[generate_agent_response] Returning 3-tuple with {len(tool_calls)} tool calls")
-                elif len(result) == 2:
-                    _, tool_calls = result
-                    self.logger.warning(f"[generate_agent_response] Got 2-tuple (old format) with {len(tool_calls)} tool calls")
-            else:
-                self.logger.info(f"[generate_agent_response] Returning content only")
-
+            self.logger.info(f"[generate_agent_response] Returning {len(result[1])} tool calls")
             return result
 
-        except LLMError:
-            # Re-raise LLM errors as-is
-            raise
         except Exception as e:
-            # Wrap other exceptions using core.exceptions pattern
-            self.logger.error(f"generate_agent_response failed: {str(e)}", exc_info=True)
-            raise LLMError(f"Failed to generate agent response: {str(e)}")
+            self.logger.error(f"generate_agent_response failed: {e}", exc_info=True)
+            raise_llm_error(e, "Gemini", model=self.model_type)
 
     async def _generate_with_tools(
         self,
@@ -656,7 +553,7 @@ class GeminiClient(LLMClient):
         max_tokens: Optional[int] = None,  # ✅ ADD THIS
         metadata: Optional[Dict[str, Any]] = None,
         **kwargs
-    ) -> Union[str, Tuple[str, List[Dict[str, Any]]]]:
+    ) -> Tuple[str, List[Dict[str, Any]], Dict[str, Optional[int]]]:
         """Generate response with tools support.
 
         Args:
@@ -668,20 +565,19 @@ class GeminiClient(LLMClient):
             metadata: Optional metadata
 
         Returns:
-            Response text or tuple of (text, tool_calls)
+            Tuple of (text, tool_calls, usage_data)
         """
         try:
             if not tools:
-                # If no tools, use standard generation.
-                # H1 FIX: forward system/temperature/max_tokens so the system prompt
-                # isn't lost on the no-tools fallthrough.
-                return await self._generate(
+                text = await self._generate(
                     messages=messages,
                     system=system,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    metadata=metadata,
                     **kwargs
                 )
+                return text, [], self._extract_usage_data()
 
             # Ensure client is initialized
             if not self._initialized:
@@ -690,32 +586,24 @@ class GeminiClient(LLMClient):
             # Convert messages to Gemini format
             gemini_messages = []
 
-            # ✅ FIX: Handle system message separately (skip from messages, prepend to content)
-            system_content = system  # Use explicit system parameter
+            system_content = wire_system(system, messages)
+            tool_names = tool_names_by_id(messages)
 
             for msg in messages:
                 role = msg.get('role', '')
                 content = msg.get('content', '')
 
-                # Skip system messages - handle via system parameter
                 if role == 'system':
-                    if not system_content:
-                        system_content = content if isinstance(content, str) else str(content)
                     continue
 
-                # FIX (Dec 3, 2025): Handle tool response messages
-                # For Gemini 3: FunctionResponse parts require thought_signature, which we don't
-                # have when replaying history. Convert to text representation instead.
-                # For non-Gemini-3: Use proper glm.Part with FunctionResponse
+                # Tool results: a FunctionResponse part, named from the prior assistant row.
                 if role == 'tool':
                     tool_call_id = msg.get('tool_call_id', '')
-                    tool_name = msg.get('name', '')
-                    func_name = tool_name if tool_name else f"tool_{tool_call_id}"
+                    func_name = msg.get('name') or tool_names.get(tool_call_id)
 
-                    # For Gemini 3, always use text to avoid thought_signature requirement
-                    if self._is_gemini_3_model():
-                        # Convert tool response to text representation
-                        tool_result_text = f"[Tool Result ({func_name})]: {content}"
+                    # A result with no name to match its call, and any Gemini 3 result, goes as text.
+                    if not func_name or self._is_gemini_3_model():
+                        tool_result_text = f"[Tool Result ({func_name or tool_call_id})]: {content}"
                         if gemini_messages and gemini_messages[-1]["role"] == "user":
                             gemini_messages[-1]["parts"].append({"text": tool_result_text})
                         else:
@@ -757,19 +645,14 @@ class GeminiClient(LLMClient):
                 elif role in ['assistant', 'ai']:
                     gemini_role = 'model'
 
-                    # FIX (Dec 3, 2025): Handle assistant messages with tool_calls
-                    # For Gemini 3: FunctionCall parts require thought_signature, which we don't
-                    # have when replaying history. Convert to text representation instead.
-                    # For non-Gemini-3: Use proper glm.Part with FunctionCall
+                    # Tool calls: FunctionCall parts; Gemini 3 replays them as text, see
+                    # _is_gemini_3_model.
                     if 'tool_calls' in msg and msg['tool_calls']:
-                        # Check if this is Gemini 3 - if so, convert to text to avoid thought_signature requirement
                         if self._is_gemini_3_model():
-                            # Convert tool calls to text representation for Gemini 3
                             tool_calls_text = []
                             for tc in msg['tool_calls']:
                                 if isinstance(tc, dict):
-                                    tc_name = tc.get('name') or (tc.get('function', {}).get('name') if 'function' in tc else 'unknown')
-                                    tc_args = tc.get('args') or tc.get('arguments') or (tc.get('function', {}).get('arguments') if 'function' in tc else {})
+                                    tc_name, tc_args = tool_call_fields(tc)
                                     if isinstance(tc_args, str):
                                         try:
                                             tc_args = json.loads(tc_args) if tc_args else {}
@@ -800,9 +683,7 @@ class GeminiClient(LLMClient):
                             # Add function call parts
                             for tc in msg['tool_calls']:
                                 if isinstance(tc, dict):
-                                    tc_name = tc.get('name') or (tc.get('function', {}).get('name') if 'function' in tc else None)
-                                    tc_args = tc.get('args') or tc.get('arguments') or (tc.get('function', {}).get('arguments') if 'function' in tc else {})
-
+                                    tc_name, tc_args = tool_call_fields(tc)
                                     if isinstance(tc_args, str):
                                         try:
                                             tc_args = json.loads(tc_args) if tc_args else {}
@@ -834,7 +715,7 @@ class GeminiClient(LLMClient):
                 if not parts:
                     continue
 
-                # ✅ FIX: Merge consecutive messages with same role
+                # Merge consecutive messages with same role
                 # Gemini requires alternating user/model messages
                 if gemini_messages and gemini_messages[-1]["role"] == gemini_role:
                     # Append to existing message with same role
@@ -850,20 +731,15 @@ class GeminiClient(LLMClient):
             if system_content:
                 self.logger.debug(f"Using native system_instruction ({len(system_content)} chars)")
 
-            # ✅ FIX: Use explicit parameters
+            # Use explicit parameters
             temp = temperature if temperature is not None else self.temperature
-
-            # Estimate input tokens (messages + system_content, Gemini sends them separately)
-            estimated_input_tokens = count_messages_tokens(messages, self.model_type)
-            if system_content:
-                # Add system message token estimate
-                estimated_input_tokens += count_messages_tokens([{"role": "system", "content": system_content}], self.model_type)
 
             # Clamp max_tokens to model limits (single canonical logic on base)
             max_tokens_value = self._adjust_max_tokens(
                 messages=messages,
                 max_tokens=max_tokens,
-                estimated_input_tokens=estimated_input_tokens,
+                estimated_input_tokens=self._estimate_input_tokens(messages, system_content),
+                tools=tools,
             )
 
             self.logger.info(f"Gemini API request with tools: model={self.model_type}, tools={len(tools)}, max_tokens={max_tokens_value}, has_system={bool(system_content)}")
@@ -936,54 +812,13 @@ class GeminiClient(LLMClient):
                     if isinstance(tool_dict, dict) and 'function_declarations' in tool_dict:
                         function_declarations = []
                         for func in tool_dict['function_declarations']:
-                            # Convert parameters dict to glm.Schema recursively
-                            def dict_to_schema(params_dict: Dict) -> glm.Schema:
-                                """Recursively convert dict to glm.Schema"""
-                                schema_kwargs = {}
-
-                                # Handle type
-                                if 'type' in params_dict:
-                                    type_map = {
-                                        'object': glm.Type.OBJECT,
-                                        'string': glm.Type.STRING,
-                                        'integer': glm.Type.INTEGER,
-                                        'number': glm.Type.NUMBER,
-                                        'boolean': glm.Type.BOOLEAN,
-                                        'array': glm.Type.ARRAY,
-                                    }
-                                    schema_kwargs['type'] = type_map.get(params_dict['type'], glm.Type.STRING)
-
-                                # Handle description
-                                if 'description' in params_dict:
-                                    schema_kwargs['description'] = params_dict['description']
-
-                                # Handle properties (nested schemas)
-                                if 'properties' in params_dict:
-                                    schema_kwargs['properties'] = {
-                                        k: dict_to_schema(v) for k, v in params_dict['properties'].items()
-                                    }
-
-                                # Handle required
-                                if 'required' in params_dict:
-                                    schema_kwargs['required'] = params_dict['required']
-
-                                # Handle items (for arrays)
-                                if 'items' in params_dict:
-                                    schema_kwargs['items'] = dict_to_schema(params_dict['items'])
-
-                                # Handle enum
-                                if 'enum' in params_dict:
-                                    schema_kwargs['enum'] = params_dict['enum']
-
-                                return glm.Schema(**schema_kwargs)
-
                             # Create FunctionDeclaration
                             try:
                                 function_declarations.append(
                                     glm.FunctionDeclaration(
                                         name=func['name'],
                                         description=func.get('description', ''),
-                                        parameters=dict_to_schema(func.get('parameters', {'type': 'object'}))
+                                        parameters=json_schema_to_glm(glm, func.get('parameters', {'type': 'object'}))
                                     )
                                 )
                             except Exception as e:
@@ -1001,32 +836,17 @@ class GeminiClient(LLMClient):
                 "temperature": temp,
                 "max_output_tokens": max_tokens_value,
             }
+            if kwargs.get('stop_sequences'):
+                generation_config["stop_sequences"] = kwargs['stop_sequences']
 
-            # UP-08: opt-in explicit cachedContents for the stable system+tools prefix.
-            # When a cache is in use, system_instruction/tools live IN the cache and must
-            # NOT be re-sent. Scoped to the non-Gemini-3 path (see _maybe_build_cached_content).
-            cached = self._maybe_build_cached_content(system_content, tool_objects)
-            if cached is not None:
-                model = genai.GenerativeModel.from_cached_content(
-                    cached_content=cached,
-                    generation_config=generation_config,
-                )
-            else:
-                # Create model with tools (uncached default path)
-                model = genai.GenerativeModel(
-                    model_name=self.model_type,
-                    generation_config=generation_config,
-                    tools=tool_objects if tool_objects else None,
-                    system_instruction=system_content if system_content else None  # ✅ Issue #5 fix: native support
-                )
+            model = genai.GenerativeModel(
+                model_name=self.model_type,
+                generation_config=generation_config,
+                tools=tool_objects if tool_objects else None,
+                system_instruction=system_content if system_content else None
+            )
 
-            # FIX (Dec 2, 2025): Use ChatSession for proper thought signature handling
-            # Gemini 3 requires thought signatures for function calling. The SDK's ChatSession
-            # handles this automatically by preserving the full response content including signatures.
-            # We use start_chat with history for multi-turn conversations.
-            # See: https://ai.google.dev/gemini-api/docs/function-calling
-            use_chat_session = self._is_gemini_3_model() and tool_objects
-            # F20: NOT prefix-stamped — Gemini hands the SDK protobuf `Tool`
+            # NOT prefix-stamped — Gemini hands the SDK protobuf `Tool`
             # objects, not a dict request, and a digest of their repr is not
             # stable across SDK versions. An unstable stamp is worse than none.
 
@@ -1034,8 +854,7 @@ class GeminiClient(LLMClient):
             func_count = sum(len(t.function_declarations) for t in tool_objects if hasattr(t, 'function_declarations')) if tool_objects else 0
             self.logger.info(
                 f"Gemini API call: model={self.model_type}, messages={len(gemini_messages)}, "
-                f"functions={func_count}, system={len(system_content) if system_content else 0}chars, "
-                f"mode={'ChatSession' if use_chat_session else 'generate_content'}"
+                f"functions={func_count}, system={len(system_content) if system_content else 0}chars"
             )
 
             # Debug: Log function names
@@ -1043,206 +862,53 @@ class GeminiClient(LLMClient):
                 func_names = [f.name for t in tool_objects if hasattr(t, 'function_declarations') for f in t.function_declarations]
                 self.logger.debug(f"Available functions: {func_names}")
 
-            # FIX (Dec 2, 2025): Use ChatSession for Gemini 3 to handle thought signatures
-            # The SDK's ChatSession automatically preserves thought signatures across turns
-            try:
-                if use_chat_session:
-                    # For Gemini 3 with tools: use ChatSession which handles thought signatures
-                    # Split messages into history (all but last) and current message (last)
-                    if len(gemini_messages) > 1:
-                        history = gemini_messages[:-1]
-                        current_message = gemini_messages[-1]
-                    else:
-                        history = []
-                        current_message = gemini_messages[0] if gemini_messages else {"role": "user", "parts": [{"text": ""}]}
-
-                    # Create chat session with history
-                    chat = model.start_chat(history=history)
-
-                    # Send the current message - SDK handles thought signatures automatically
-                    response = await asyncio.wait_for(
-                        chat.send_message_async(current_message["parts"], **billed_google_options()),
-                        timeout=float(self.DEFAULT_REQUEST_TIMEOUT)
-                    )
-                    self.logger.debug(f"[CHAT_SESSION] Used ChatSession for Gemini 3 thought signature handling")
-                else:
-                    # Standard path for non-Gemini-3 or no tools
-                    response = await asyncio.wait_for(
-                        model.generate_content_async(gemini_messages, **billed_google_options()),
-                        timeout=float(self.DEFAULT_REQUEST_TIMEOUT)
-                    )
-            except asyncio.TimeoutError:
-                self.logger.error(f"Gemini API call timed out after {self.DEFAULT_REQUEST_TIMEOUT} seconds")
-                self.logger.error(f"[DEBUG] Request details: messages={len(gemini_messages)}, tools={len(tool_objects)}, system={bool(system_content)}")
-
-                # An unknown paid request retains its reservation; retries must
-                # enter through the adapter and obtain a new one.
-                from core.billing_context import is_billed
-                # Try without tools as fallback only for operator calls.
-                if tool_objects and not is_billed():
-                    self.logger.warning(f"[DEBUG] Retrying without tools to isolate issue...")
-                    try:
-                        model_no_tools = genai.GenerativeModel(
-                            model_name=self.model_type,
-                            generation_config=generation_config,
-                            system_instruction=system_content if system_content else None
-                        )
-                        response = await asyncio.wait_for(
-                            model_no_tools.generate_content_async(gemini_messages, **billed_google_options()),
-                            timeout=float(self.DEFAULT_REQUEST_TIMEOUT)
-                        )
-                        self.logger.warning(f"[DEBUG] SUCCESS without tools! Tools are the problem.")
-                        # Return text-only response as the 3-tuple the caller's
-                        # _unpack_tool_gen_result requires (P1 finalization: this
-                        # path returned a 2-tuple, raising ValueError downstream and
-                        # dropping usage). Stash the response so usage is extracted.
-                        text = ""
-                        if hasattr(response, 'text'):
-                            text = response.text
-                        self.last_response = response
-                        return text, [], self._extract_usage_data()
-                    except Exception as e2:
-                        self.logger.error(f"[DEBUG] Also failed without tools: {e2}")
-
-                raise ServiceError(f"Gemini API call timed out after {self.DEFAULT_REQUEST_TIMEOUT} seconds")
-            except Exception as e:
-                self.logger.error(f"Gemini API call failed with exception: {type(e).__name__}: {e}")
-                from core.billing_context import is_billed
-                from modules.llm.gemini_cache import leases_of
-                if cached is not None:  # 098 MO-14: the cache may be gone server-side
-                    leases_of(self).drop(cached)
-                if cached is None or use_chat_session or is_billed():
-                    raise ServiceError(f"Gemini API call failed: {e}")  # a billed retry re-enters the adapter
-                model = genai.GenerativeModel(model_name=self.model_type, generation_config=generation_config,
-                                              tools=tool_objects or None, system_instruction=system_content or None)
-                try:
-                    response = await asyncio.wait_for(model.generate_content_async(
-                        gemini_messages, **billed_google_options()), timeout=float(self.DEFAULT_REQUEST_TIMEOUT))
-                except Exception as e2:
-                    raise ServiceError(f"Gemini API call failed: {e2}")
-
-            self.logger.info(f"[DEBUG] Gemini API call completed successfully")
-            
+            response = await asyncio.wait_for(
+                model.generate_content_async(gemini_messages, **billed_google_options()),
+                timeout=self._call_timeout(),
+            )
             self.last_response = response
-            
-            # Check if response contains function calls
+
+            response_text, function_parts = read_candidate(response, self.model_type)
             tool_calls = []
-            response_text = ""
+            for part in function_parts:
+                function_call = part.function_call
+                name = getattr(function_call, 'name', None)
+                if not name or not name.strip():
+                    self.logger.error(f"Gemini function_call missing name: {repr(function_call)[:500]}")
+                    continue
+                tool_calls.append({
+                    "id": f"gemini_call_{uuid4()}",
+                    "type": "function",
+                    "function": {"name": name, "arguments": function_call_args(function_call)},
+                })
 
-            if hasattr(response, 'candidates') and response.candidates:
-                candidate = response.candidates[0]
-                if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
-                    for i, part in enumerate(candidate.content.parts):
-                        # FIX (Dec 2, 2025): Check for thought_signature on the part itself
-                        # Gemini 3 returns thought_signature alongside function_call
-                        # We extract and include it in tool_call_data for preservation
-                        part_thought_sig = getattr(part, 'thought_signature', None)
-                        if part_thought_sig:
-                            self.logger.debug(f"[THOUGHT_SIG] Found thought_signature on part {i}: {str(part_thought_sig)[:50]}...")
-
-                        # hasattr() is True for every oneof member — see gemini_parts.
-                        if part_is_function_call(part):
-                            function_call = part.function_call
-
-                            # Extract name with validation
-                            name = getattr(function_call, 'name', None)
-                            if not name or not name.strip():
-                                # ENHANCED DEBUG (Dec 2025): Log full structure to diagnose malformed calls
-                                # FIX (Dec 2, 2025): Also log if there's a thought_signature - that helps diagnose
-                                self.logger.error(
-                                    f"Gemini function_call missing name. "
-                                    f"Type: {type(function_call).__name__}, "
-                                    f"Dir: {[a for a in dir(function_call) if not a.startswith('_')]}, "
-                                    f"Repr: {repr(function_call)[:500]}, "
-                                    f"thought_signature_present: {part_thought_sig is not None}"
-                                )
-                                # Try alternative attribute names that Gemini might use
-                                alt_name = (
-                                    getattr(function_call, 'function_name', None) or
-                                    getattr(function_call, 'tool_name', None) or
-                                    getattr(function_call, 'method', None)
-                                )
-                                if alt_name:
-                                    self.logger.info(f"Found alternative name attribute: {alt_name}")
-                                    name = alt_name
-                                else:
-                                    continue  # Skip invalid tool calls
-
-                            # Extract args as dict (avoid JSON serialization)
-                            raw_args = getattr(function_call, 'args', None)
-                            if raw_args:
-                                # Convert protobuf Struct to dict
-                                try:
-                                    # Struct has .items() like a dict
-                                    args_dict = {k: v for k, v in raw_args.items()} if hasattr(raw_args, 'items') else {}
-                                except Exception as e:
-                                    self.logger.error(f"Failed to convert Gemini args to dict: {e}")
-                                    args_dict = {}
-                            else:
-                                args_dict = {}
-
-                            # FIX (Dec 2, 2025): Include thought_signature in tool call for Gemini 3
-                            tool_call_data = {
-                                "id": f"gemini_call_{uuid4()}",  # ✅ Issue #1 fix: unique IDs
-                                "type": "function",
-                                "function": {
-                                    "name": name,
-                                    "arguments": args_dict  # ✅ Issue #2 fix: keep as dict
-                                }
-                            }
-
-                            # Include thought_signature if present (Gemini 3 requirement)
-                            if part_thought_sig:
-                                tool_call_data["thought_signature"] = part_thought_sig
-                                self.logger.debug(f"[THOUGHT_SIG] Attached to tool call '{name}'")
-
-                            tool_calls.append(tool_call_data)
-                        elif isinstance(getattr(part, 'text', None), str):
-                            response_text += part.text
-
-            # Extract usage data
             usage_data = self._extract_usage_data()
 
-            # Return tool calls if any were found
-            if tool_calls:
-                # Gemini sometimes returns tool calls without content in native tool mode
-                if not response_text or not response_text.strip():
-                    self.logger.debug(
-                        f"Gemini returned tool calls without content (expected in native tool mode). "
-                        f"Tool calls: {[tc['function']['name'] for tc in tool_calls[:3]]}{'...' if len(tool_calls) > 3 else ''}"
-                    )
-                return response_text, tool_calls, usage_data
+            return response_text, tool_calls, usage_data
 
-            # If no function calls, return text response with empty tool calls list
-            if hasattr(response, 'text'):
-                return response.text, [], usage_data
-            elif hasattr(response, 'parts'):
-                text_parts = []
-                for part in response.parts:
-                    if hasattr(part, 'text') and part.text:
-                        text_parts.append(part.text)
-                return " ".join(text_parts), [], usage_data
-
-            return "", [], usage_data
-            
         except Exception as e:
             self.logger.error(f"Gemini API tool-based generation error: {e}")
-            raise ServiceError(f"Gemini API tool-based generation error: {e}")
+            raise_llm_error(e, "Gemini", model=self.model_type)
+
+    def _estimate_input_tokens(self, messages: List[Dict[str, Any]], system: Optional[str]) -> int:
+        """The rows and the system prompt, with the system prompt counted once."""
+        rows = [m for m in messages if m.get('role') != 'system']
+        if system:
+            rows = [{"role": "system", "content": system}, *rows]
+        return count_messages_tokens(rows, self.model_type)
 
     def _extract_usage_data(self) -> Dict[str, Optional[int]]:
         """Extract usage data from last_response.
 
-        Returns dict with prompt_tokens, completion_tokens, total_tokens.
-        Falls back to estimation if usage data not available.
-        ✅ Issue #4 fix: Never returns None - uses 0 as last resort.
-
-        Note: Gemini uses usage_metadata with different field names.
+        completion_tokens holds the thought tokens, which Gemini bills as output. With no
+        usage_metadata the output is estimated from the text and ``usage_estimated`` says so;
+        the input of such a call is unknown and reads 0. A count is never None.
         """
         # Initialize defaults
         prompt_tokens = None
         completion_tokens = None
         total_tokens = None
-        cached_tokens = 0  # UP-08: Gemini implicit/explicit cache hits
+        cached_tokens = 0  # Gemini implicit cache hits
 
         if not self.last_response:
             self.logger.warning("No last_response available for usage extraction")
@@ -1251,54 +917,42 @@ class GeminiClient(LLMClient):
             usage = self.last_response.usage_metadata
             prompt_tokens = getattr(usage, 'prompt_token_count', None)
             completion_tokens = getattr(usage, 'candidates_token_count', None)
+            thoughts = getattr(usage, 'thoughts_token_count', None)
+            if isinstance(thoughts, int) and thoughts and completion_tokens is not None:
+                completion_tokens += thoughts
             total_tokens = getattr(usage, 'total_token_count', None)
-            # UP-08: implicit (2.5+) and explicit cachedContents hits land here.
             cached_tokens = getattr(usage, 'cached_content_token_count', 0) or 0
 
             # Calculate total if not provided
             if total_tokens is None and prompt_tokens is not None and completion_tokens is not None:
                 total_tokens = prompt_tokens + completion_tokens
 
-        # Fallback: Estimate from content if no usage data
-        if prompt_tokens is None or completion_tokens is None:
-            try:
-                # Extract text content for estimation
-                content_text = ""
-
-                if hasattr(self.last_response, 'text') and self.last_response.text:
-                    content_text = self.last_response.text
-                elif hasattr(self.last_response, 'candidates') and self.last_response.candidates:
-                    # Extract from candidates structure
-                    for candidate in self.last_response.candidates:
-                        if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
-                            for part in candidate.content.parts:
-                                if hasattr(part, 'text') and part.text:
-                                    content_text += part.text
-
-                if content_text:
-                    # Rough estimation: ~4 characters per token
-                    estimated_output = len(content_text) // 4
-                    # Assume input is roughly same size as output
-                    estimated_input = estimated_output
-
-                    prompt_tokens = estimated_input if prompt_tokens is None else prompt_tokens
-                    completion_tokens = estimated_output if completion_tokens is None else completion_tokens
-                    total_tokens = prompt_tokens + completion_tokens
-
-                    self.logger.info(f"Estimated Gemini tokens: {total_tokens} (usage_metadata unavailable)")
-            except Exception as e:
-                self.logger.debug(f"Failed to estimate tokens: {e}")
+        estimated = False
+        if completion_tokens is None and self.last_response:
+            text = self._response_text_for_estimate()
+            if text:
+                completion_tokens = len(text) // 4
+                estimated = True
+                self.logger.info(f"Estimated Gemini output tokens: {completion_tokens} (usage_metadata unavailable)")
 
         # Final validation: Never return None - use 0 as last resort
         usage_data = {
             'prompt_tokens': prompt_tokens if prompt_tokens is not None else 0,
             'completion_tokens': completion_tokens if completion_tokens is not None else 0,
-            'total_tokens': total_tokens if total_tokens is not None else 0,
+            'total_tokens': total_tokens if total_tokens is not None else (prompt_tokens or 0) + (completion_tokens or 0),
             'cached_tokens': cached_tokens,
         }
+        if estimated:
+            usage_data['usage_estimated'] = True
 
         if usage_data['total_tokens'] == 0:
             self.logger.warning("No usage data available and estimation failed - using 0 tokens")
 
         self.logger.debug(f"Extracted usage: {usage_data}")
-        return usage_data 
+        return usage_data
+
+    def _response_text_for_estimate(self) -> str:
+        try:
+            return read_candidate(self.last_response, self.model_type)[0]
+        except Exception:
+            return ""

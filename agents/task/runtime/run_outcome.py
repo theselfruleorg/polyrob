@@ -135,15 +135,23 @@ def session_stop_reason(task_agent: Any, session_id: Optional[str]) -> Optional[
 def _last_tool_error(agent: Any, since_steps: Optional[int]) -> str:
     """The newest tool error of THIS turn (history items after ``since_steps``).
 
-    Only an ACTION result counts: a result paired by position with an action
-    of the step's model output. A step-level error (the LLM call or the
+    The refusal halt line comes first: a refusal step has no model output, but its
+    error is owner text (``LLMRefusalError.owner_text``), and the owner is told it.
+    Otherwise only an ACTION result counts: a result paired by position with an
+    action of the step's model output. A step-level error (the LLM call or the
     provider failed, so the step has no model output) carries raw provider
     text, which the harness keeps out of chat on purpose
     (``core/surfaces/error_notices.py``)."""
+    from core.exceptions import REFUSAL_HALT_PREFIX
     items = _steps(agent)
     if isinstance(since_steps, int) and since_steps >= 0:
         # An absolute index: the list may have dropped its oldest steps since then.
         items = items[max(0, since_steps - trimmed_step_count(getattr(agent, "history", None))):]
+    for item in reversed(items):
+        for res in reversed(list(getattr(item, "result", None) or [])):
+            err = getattr(res, "error", None)
+            if isinstance(err, str) and err.strip().startswith(REFUSAL_HALT_PREFIX):
+                return err.strip()
     for item in reversed(items):
         actions = list(getattr(getattr(item, "model_output", None), "action", None) or [])
         if not actions:
@@ -176,13 +184,39 @@ def session_turn_end_notice(task_agent: Any, session_id: Optional[str], *,
         agent = agents[0] if agents else None
         steps = getattr(getattr(agent, "state", None), "n_steps", None)
         steps = steps if isinstance(steps, int) and not isinstance(steps, bool) else None
+        last_error = _last_tool_error(agent, since_steps) if agent is not None else ""
+        from core.exceptions import REFUSAL_HALT_PREFIX
+        if last_error.startswith(REFUSAL_HALT_PREFIX):
+            # No "Say continue": a resume re-sends the request the model refused.
+            return f"⚠️ My turn ended early: {last_error[len(REFUSAL_HALT_PREFIX):]}"
         return turn_end_notice(
             reason or ("error" if failed else None), steps, cap,
-            last_error=_last_tool_error(agent, since_steps) if agent is not None else "",
+            last_error=last_error,
             last_report="" if spoke else (summary or ""))
     except Exception:
         logger.debug("turn-end notice unavailable", exc_info=True)
         return ""
+
+
+async def run_session_naming_refusal(task_agent: Any, user_id: Any, session_id: str) -> Any:
+    """``run_session`` for a seat with no reply channel of its own (the console
+    chat and any HTTP caller of the session message route): a run that halted on
+    a model refusal writes :func:`session_turn_end_notice` into the session feed
+    once, as a ``command_reply`` note the console transcript draws. Any other
+    end is unchanged. Returns ``run_session``'s status; the note never raises."""
+    status = await task_agent.run_session(user_id, session_id)
+    try:
+        from core.exceptions import REFUSAL_HALT_PREFIX
+        if str(status or "").startswith("Session failed:") \
+                and REFUSAL_HALT_PREFIX in str(status):
+            notice = session_turn_end_notice(task_agent, session_id, failed=True)
+            if notice:
+                import time
+                task_agent.session_manager.add_to_feed(
+                    session_id, "command_reply", {"text": notice, "timestamp": time.time()})
+    except Exception:
+        logger.debug("refusal feed note skipped for %s", session_id, exc_info=True)
+    return status
 
 
 def _main_agents(orchestrator: Any) -> list:
@@ -193,6 +227,15 @@ def _main_agents(orchestrator: Any) -> list:
         return [a for a in agents if not getattr(a, "_is_sub_agent", False)]
     except Exception:
         return []
+
+
+def main_compaction_summary(orchestrator: Any) -> str:
+    """108 W7: the main agent's last compaction summary, bounded, or "". Never raises."""
+    for agent in _main_agents(orchestrator):
+        text = getattr(getattr(agent, "message_manager", None), "last_compaction_summary", "")
+        if isinstance(text, str) and text.strip():
+            return text
+    return ""
 
 
 def trimmed_step_count(history: Any) -> int:
@@ -392,6 +435,7 @@ class RunOutcome:
     stop_reason: Optional[str] = None     # 083 WS-1: runtime.stop_reason.StopReason value
     max_steps: Optional[int] = None       # the step budget the main agent ran with
     exhausted_summary: Optional[str] = None  # 083 WS-2: last report at the cap (agent's words)
+    compaction_summary: str = ""          # 108 W7: the last compaction's summary, bounded
 
     @property
     def stop_description(self) -> str:
@@ -473,6 +517,7 @@ async def build_run_outcome(task_agent: Any, session_id: Optional[str],
         outcome.retry_after_sec = None
     # 083 WS-1: both branches — a RUN_BUDGET_USD halt is a refusal.
     outcome.stop_reason, outcome.max_steps, outcome.exhausted_summary = _main_stop_facts(orch)
+    outcome.compaction_summary = main_compaction_summary(orch)
 
     if outcome.refusal:
         # T1.1 validation fix (2026-07-23): a refusal is not always pre-loop —

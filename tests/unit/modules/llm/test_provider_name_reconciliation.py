@@ -14,7 +14,6 @@ from __future__ import annotations
 from modules.llm.model_registry import (
     CANONICAL_PROVIDER_NAMES,
     PROVIDER_CANONICAL_NAMES,
-    STREAMING_PROVIDER_NAMES,
     ModelProvider,
     canonical_provider_name,
 )
@@ -39,16 +38,22 @@ def test_unknown_provider_falls_back_to_default():
     assert canonical_provider_name(None, default="openai") == "openai"  # type: ignore[arg-type]
 
 
-def test_streaming_set_is_canonical_minus_custom():
-    assert STREAMING_PROVIDER_NAMES == CANONICAL_PROVIDER_NAMES - {"custom"}
+def test_streaming_is_derived_from_the_specs():
+    from modules.llm.model_registry import provider_supports_streaming
+    for name in CANONICAL_PROVIDER_NAMES - {"custom"}:
+        assert provider_supports_streaming(name) is True, name
+    assert provider_supports_streaming("zai-coding") is True  # spec row only
+    assert provider_supports_streaming("openai-codex") is False  # RESPONSES has no stream path
+    assert provider_supports_streaming("custom") is False
+    assert provider_supports_streaming("no-such-provider") is False
 
 
-def test_schema_generators_cover_every_streaming_provider():
+def test_schema_generators_cover_every_canonical_provider():
     # Every canonical real provider must resolve to a concrete schema generator —
     # a missing key would silently degrade native tool-calling for that provider.
     from tools.controller.registry.schema_generators import get_schema_generator
 
-    for name in STREAMING_PROVIDER_NAMES:
+    for name in CANONICAL_PROVIDER_NAMES - {"custom"}:
         gen = get_schema_generator(name)
         assert gen is not None
 
@@ -69,6 +74,16 @@ def test_detect_llm_provider_uses_canonical_map():
         expected = canonical_provider_name(prov, default="generic")
         if expected == "generic":
             continue
-        assert detect_llm_provider(None, model_name) == expected
+        assert detect_llm_provider(model_name) == expected
     # Sanity: we actually exercised the canonical providers, not an empty registry.
     assert "gemini" in {canonical_provider_name(p) for p in seen}
+
+
+def test_a_provider_string_reads_its_enum_from_the_canonical_map():
+    from modules.llm.llm_client_registry import _get_models_for_provider
+    from modules.llm.model_types import PROVIDER_BY_NAME
+    for member, name in PROVIDER_CANONICAL_NAMES.items():
+        assert PROVIDER_BY_NAME[name] is member and PROVIDER_BY_NAME[member.value] is member
+    assert PROVIDER_BY_NAME["google"] is PROVIDER_BY_NAME["gemini"]
+    assert _get_models_for_provider("google") == _get_models_for_provider("gemini") != []
+    assert _get_models_for_provider("no-such-provider") == []

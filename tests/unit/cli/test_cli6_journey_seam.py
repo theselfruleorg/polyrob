@@ -4,6 +4,7 @@ home and default to the SAME 24h window Telegram's `/recap` uses.
 They read ``config.data_dir`` (the shell's home, not the daemon's) and defaulted
 to 7d, so one verb answered a different question on each seat.
 """
+import asyncio
 import types
 
 from cli.ui.commands import h_journey
@@ -12,18 +13,19 @@ from cli.ui.commands import h_journey
 def _run(monkeypatch, args):
     seen = {}
 
-    def fake_render(*, user_id, since_label, data_dir):
-        seen.update(user_id=user_id, since_label=since_label, data_dir=data_dir)
+    async def fake_reply(user_id, data_dir, task_agent, args):
+        seen.update(user_id=user_id, since_label=args[0], data_dir=data_dir)
         return "ok"
 
-    monkeypatch.setattr(h_journey, "render_journey", fake_render)
+    # 113 W4 item 3: the REPL wraps the chat seat's own reply.
+    monkeypatch.setattr("surfaces.telegram.status_ops.journey_reply", fake_reply)
     monkeypatch.setattr("cli._admin_home.admin_data_dir", lambda write=None: "/deployed/home")
     monkeypatch.setattr("cli._admin_home.admin_owner_tenant", lambda uid=None: "tg_owner")
     cfg = types.SimpleNamespace(data_dir="/shell/home")
     ctx = types.SimpleNamespace(args=args, user_id="local",
                                 container=types.SimpleNamespace(config=cfg),
                                 emit=lambda *a, **k: None)
-    h_journey.h_journey(ctx)
+    asyncio.run(h_journey.h_journey(ctx))
     return seen
 
 

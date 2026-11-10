@@ -357,6 +357,10 @@ authorizes or spends, or that names another site is refused. The key is
 the agent's operational wallet; under `WALLET_SIGNER=remote` the signer
 re-classifies every request itself (`sign.classified`).
 
+`/wallet signed [n]` lists what the wallet signed, newest first: the site, the kind,
+the class and whether a goal or job signed it, then the keys sites gave back (only
+their fingerprints). It reads the log and signs nothing.
+
 ---
 
 ## See also

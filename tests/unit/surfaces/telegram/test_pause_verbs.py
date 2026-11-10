@@ -8,7 +8,7 @@ from surfaces.telegram.harness import _OWNER_ADMIN_COMMANDS, _pause_reply, help_
 def test_pause_is_routable_and_helped():
     assert "/pause" in _COMMANDS and "/pause" in _OWNER_ADMIN_COMMANDS
     names = {c for c, _ in help_commands()}
-    assert {"pause", "resume", "halt"} <= names
+    assert {"pause", "resume"} <= names and "halt" not in names   # /halt = old name
 
 
 def test_pause_reply_writes_and_reports(tmp_path, monkeypatch):

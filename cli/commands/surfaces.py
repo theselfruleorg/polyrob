@@ -142,7 +142,7 @@ async def _probe(spec, env: dict):
 
 @click.group()
 def surfaces():
-    """List, add and probe chat surfaces (Telegram, Slack, Discord, …)."""
+    """List, add, probe, pause and resume chat surfaces (Telegram, Slack, Discord, …)."""
 
 
 @surfaces.command("list")
@@ -284,3 +284,15 @@ def add_cmd(surface_id: str, env_file: Optional[str], enable: bool, no_probe: bo
         click.echo(f"probe: {result.render()}")
     click.echo("Restart the process that runs this surface to pick it up: "
                "`polyrob service restart` (or /restart from your chat).")
+
+
+# 113 §2 item 10 (T-08): the circuit-breaker verbs live here; `polyrob surface` is
+# their hidden old name. `state` is the old `surface list` (`surfaces list` is the
+# catalog view).
+from cli.commands.surface import list_surfaces as _state_cmd  # noqa: E402
+from cli.commands.surface import pause_surface as _pause_cmd  # noqa: E402
+from cli.commands.surface import resume_surface as _resume_cmd  # noqa: E402
+
+surfaces.add_command(_state_cmd, "state")
+surfaces.add_command(_pause_cmd, "pause")
+surfaces.add_command(_resume_cmd, "resume")

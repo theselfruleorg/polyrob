@@ -399,7 +399,8 @@ async def _start_repl_agent(task_agent, orchestrator, request, session_id):
 async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
                      *, model: Optional[str] = None, provider: Optional[str] = None,
                      toolset: Optional[str] = None,
-                     start_notice: Optional[tuple] = None):
+                     start_notice: Optional[tuple] = None,
+                     new_chat: bool = False, chat_ref: Optional[str] = None):
     """Build the container, create an interactive session, run the loop.
 
     plain: force the plain renderer (the ``--plain`` flag).  ``POLYROB_PLAIN`` and
@@ -491,7 +492,7 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
     except Exception as e:
         clear_start_notice(_start_out, _start_transient)
         click.echo(click.style("[polyrob] ERROR: ", fg="red") + f"failed to start: {e}")
-        return
+        sys.exit(1)  # 113 W0: a failed start is not exit 0 (parity with `polyrob run`)
     clear_start_notice(_start_out, _start_transient)
     _logging.disable(_logging.NOTSET)
     from polyrob.app.bootstrap import freeze_startup_heap
@@ -701,7 +702,7 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
         except Exception as e:
             from cli.commands._errors import echo_create_session_error
             echo_create_session_error(e, user_id)
-            return
+            sys.exit(1)
 
         session_id = session_info["id"]
         # Scope the feed sink to this session now that we know its id (events from
@@ -724,6 +725,12 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
         # was "NOT delivered" and it re-sent). See core.surfaces.binding.
         from core.surfaces.binding import bind_terminal_surface
         bind_terminal_surface(orchestrator)
+        # 113: this run's chat — the focused one, or --new / --chat (fail-open).
+        from cli.ui import chat_seat
+        _chat = chat_seat.attach(container, orchestrator, user_id=user_id, session_id=session_id,
+                                 new_label="" if new_chat else None, chat_ref=chat_ref)
+        if _chat["note"] or _chat["name"] not in ("", "main"):
+            click.echo(_chat["note"] or f"chat: {_chat['name']}")
 
         # Wire the init-chosen persona into <identity> via the orchestrator seam
         # that run_session/create_agent already reads (execution.py:124). Fail-open.
@@ -766,7 +773,7 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
             task_agent, orchestrator, request, session_id
         )
         if agent is None:
-            return  # clean error already printed by _start_repl_agent
+            sys.exit(1)  # clean error already printed by _start_repl_agent
         # 098 CL-06: the main agent's id comes from the agent itself, not only
         # from the feed telemetry (which can fail); the feed stays fill-if-empty.
         if not _ui_state.main_agent_id:
@@ -1096,7 +1103,8 @@ def _repl_sync_cleanup(lifecycle_ref: dict) -> None:
 
 def run_repl(plain: bool = False, *, model: Optional[str] = None,
              provider: Optional[str] = None, toolset: Optional[str] = None,
-             start_notice: Optional[tuple] = None):
+             start_notice: Optional[tuple] = None,
+             new_chat: bool = False, chat_ref: Optional[str] = None):
     """Synchronous entry point for the REPL.
 
     plain: force the plain renderer (the top-level ``--plain`` flag).
@@ -1113,10 +1121,14 @@ def run_repl(plain: bool = False, *, model: Optional[str] = None,
     try:
         asyncio.run(_repl_main(plain=plain, lifecycle_ref=lifecycle_ref,
                                model=model, provider=provider, toolset=toolset,
-                               start_notice=start_notice))
+                               start_notice=start_notice,
+                               new_chat=new_chat, chat_ref=chat_ref))
     except KeyboardInterrupt:
         _repl_sync_cleanup(lifecycle_ref)
     else:
         # Even on a clean exit, ensure the status is terminal if the async
         # cancel somehow didn't run (idempotent).
         _repl_sync_cleanup(lifecycle_ref)
+        # A chat verb moved the focus: start the terminal again in that chat.
+        from cli.ui import chat_seat
+        chat_seat.restart_if_wanted()

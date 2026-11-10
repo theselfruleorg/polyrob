@@ -51,8 +51,8 @@ def test_resolve_invoice_asset_refuses_an_asset_from_another_chain(demo_asset):
 
 def test_resolve_invoice_asset_refuses_a_chain_with_no_payable_asset():
     with pytest.raises(ValueError) as e:
-        invoicing.resolve_invoice_asset("polygon", None)
-    assert "polygon" in str(e.value)
+        invoicing.resolve_invoice_asset("nochain", None)
+    assert "nochain" in str(e.value)
 
 
 def test_the_instance_default_asset_env_is_honoured(demo_asset, monkeypatch):

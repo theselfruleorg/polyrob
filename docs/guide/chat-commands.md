@@ -31,17 +31,20 @@ column is a summary, and `/help <verb>` on your seat is the full form.
 | Command | What it does | Runs on |
 |---|---|---|
 | `/start` | A welcome and a short tour of what I can do | every seat |
+| `/new [name]` | Open a separate chat beside the main one | every seat |
+| `/chats` (`/sessions`) | Your chats: the main one and each separate one | every seat, not in a room |
+| `/chat <number or name>` | Switch to another of your chats | every seat, not in a room |
+| `/rename <name>` | Name the chat you are in | every seat, not in a room |
+| `/close [number or name]` | Close a separate chat and go back to the main one | every seat, not in a room |
 | `/clear` | Clear this chat and keep my instructions | terminal |
 | `/compact` (`/compress`) | Shorten this chat's history in the background | terminal |
 | `/history` | The turns of this chat | terminal |
 | `/attach <path> [path…]` | Attach local files or images to my next step | terminal |
-| `/steer <guidance>` | Give the running turn one more instruction | terminal |
+| `/steer <guidance>` | Give the running turn one more instruction (in a chat app, just send it) | terminal |
 | `/session` (`/info`) | Who and where this chat is: owner, model, memory, files | terminal |
-| `/sessions` | Every chat I know about | terminal |
 | `/replay <session-id>` | Replay a chat's feed | terminal |
 | `/export <format> [output]` | Export this chat's data | terminal |
-| `/task <goal>` | Start a new task | chat apps |
-| `/new` | Start fresh: stop the turn and clear this conversation | every seat |
+| `/task <goal>` | The old form of /new: a separate chat that starts with your goal | chat apps |
 
 ### Needs you
 
@@ -63,11 +66,10 @@ column is a summary, and `/help <verb>` on your seat is the full form.
 |---|---|---|
 | `/goal new <what> · <show\|retry\|pause\|stop [--forever]\|allow> <id>` | Add, show, retry, grant, pause, or stop one goal | every seat, not in a room |
 | `/goals` | The goal board summary | every seat |
-| `/jobs` | Scheduled jobs: next run, last outcome, and who wrote each | every seat |
-| `/job <new\|show\|edit\|pause\|resume\|run\|stop> …` | Add, change, grant, pause, resume, run, or stop one scheduled job | every seat, not in a room |
+| `/job [list\|new\|show\|edit\|pause\|resume\|run\|stop] …` (`/jobs`) | Scheduled jobs: the list, or add, change, grant, pause, resume, run, or stop one | every seat, not in a room |
 | `/apps [list\|show\|approve\|reject\|kill\|start\|remove\|logs <slug>]` | Deployed apps: approve an address, check health, stop, start or remove one | every seat, not in a room |
-| `/skills [words \| <id>]` | The skills I can load, and what each one does; /skills &lt;id&gt; shows one skill's text | every seat, not in a room |
-| `/learn <description>` | Describe how to do something and I draft a skill for you to check | terminal |
+| `/skills [words \| <id>]` | The skills I can load, and what each one does; /skills &lt;id&gt; shows one skill's text. You install or approve a skill in the terminal | every seat, not in a room |
+| `/learn <description>` | Describe how to do something and I save it as a skill | terminal |
 | `/todos` | The todo list in my working files | terminal |
 | `/subagents` | What I can hand to a helper | terminal |
 
@@ -76,7 +78,7 @@ column is a summary, and `/help <verb>` on your seat is the full form.
 | Command | What it does | Runs on |
 |---|---|---|
 | `/book [retire <chain> <address> [go]]` | My ledger against every money chain: one verdict, then what disagrees | every seat |
-| `/wallet [balances\|tokens]` | Wallet addresses, network, and spend caps; set the no-ask ceiling or trust a token | every seat |
+| `/wallet [balances\|tokens\|signed [n]]` | Wallet addresses, network, and spend caps; set the no-ask ceiling or trust a token | every seat |
 | `/invoices [status] \| refunded <id> [tx]` | What I have billed and who owes me | every seat |
 | `/settle <id> [tx]` | Mark an invoice paid | every seat |
 | `/trade start\|status\|pause\|resume\|stop\|release` | Trading: start it with one decision, see it, pause, resume, stop, or release a loss stop | every seat |
@@ -86,7 +88,7 @@ column is a summary, and `/help <verb>` on your seat is the full form.
 | `/deploy <SYMBOL> <supply> <name…> [on <chain>] [decimals <n>] [go]` | Deploy a fixed-supply token | every seat |
 | `/lp positions\|pool\|quote\|add\|remove\|collect` | Liquidity positions: inspect, quote, add, remove, or collect fees | every seat |
 | `/claim <token> [go]` | Collect the creator fees a launchpad already owes me | every seat |
-| `/nft [send <id> <to> [go]]\|list\|info <contract> <id>\|transfer <contract> <id> <to> [go]\|revoke <contract> <operator> [go]` | Collectibles I hold: look, trust a collection, send one, or revoke an approval | every seat |
+| `/nft [send <id> <to> [go]]\|list\|info <contract> <id>\|account [<id>]\|transfer <contract> <id> <to> [go]\|revoke <contract> <operator> [go]` | Collectibles I hold: look, trust a collection, send one, or revoke an approval | every seat |
 | `/dapp list\|revoke <id>` | Web pages my wallet is connected to, and how to cut one off | every seat |
 | `/paid <status\|enable\|disable\|price <verb> <usd>\|asset <id>\|offers\|cancel <id>>` | Paid room actions: status, pricing, and offers | every seat |
 | `/pay <url> [max_usd] [go] [id=<name>]` | Pay for one x402 resource, up to a price you name | every seat |
@@ -100,10 +102,9 @@ column is a summary, and `/help <verb>` on your seat is the full form.
 
 | Command | What it does | Runs on |
 |---|---|---|
-| `/cancel` | Stop the task I am running now | every seat |
-| `/pause [word…] [for 6h]` | Stop autonomous work now, all of it or one scope | every seat, not in a room |
+| `/cancel` (`/stop`) | Stop the task I am running now | every seat |
+| `/pause [word…] [for 6h]` (`/halt`) | Stop autonomous work now, all of it or one scope | every seat, not in a room |
 | `/resume [word…]` | Lift the pause | every seat, not in a room |
-| `/halt` | Stop all autonomous work now | every seat, not in a room |
 | `/run [pause\|resume\|stop <n>]` | Pause, resume or stop one background run | every seat, not in a room |
 | `/mode` | What I may do without you, what I do when you are away, and how to change it | every seat |
 | `/dev [message]` | Pass a message to an operator-run maintenance script, if this host has one | every seat, not in a room |
@@ -115,13 +116,12 @@ column is a summary, and `/help <verb>` on your seat is the full form.
 
 | Command | What it does | Runs on |
 |---|---|---|
-| `/recap [window]` | The same as /journey | every seat |
 | `/thread [n \| <hours>h]` | Our conversation across every session and rail, newest last | every seat, not in a room |
-| `/journey [window]` | What I have done over a recent window | every seat |
+| `/journey [window]` (`/recap`) | What I have done over a recent window | every seat |
 | `/rules` | Your rules for me and my operating contract, numbered | every seat, not in a room |
 | `/kb [list [collection] \| search <query> \| <words>]` | Search and list my knowledge base | every seat |
-| `/memory [search <query> \| scopes]` | Recall across sessions and inspect memory scopes | terminal |
-| `/self` (`/soul`) | My identity documents, read-only | terminal |
+| `/memory [search <query> \| scopes]` | Recall across sessions and inspect memory scopes | every seat, not in a room |
+| `/self` (`/soul`) | My identity documents, read-only | every seat, not in a room |
 
 ### Look
 
@@ -150,14 +150,15 @@ column is a summary, and `/help <verb>` on your seat is the full form.
 | `/allow <surface> <target>` | Allow me to message a target | every seat, not in a room |
 | `/deny <surface> <target>` | Revoke a message permission | every seat, not in a room |
 | `/allowlist` | Who I am allowed to message | every seat |
+| `/pair [list\|approve <surface> <code>\|revoke <surface> <id>]` | Strangers who asked to talk to me: list, approve or revoke | every seat, not in a room |
 | `/groups <allow\|deny\|list\|use\|mode\|set\|role\|roles\|tools\|audit\|tail\|service\|admins> here\|<surface> <chat_id> [...]` | Room presence admin: allow, deny, mode, roles, and more | every seat |
 | `/mute here\|<surface> <chat_id> <duration>` | Silence a room, or mute a member for a while | every seat |
-| `/ban <duration> IN REPLY to a message` | Ban a member for a while | every seat |
-| `/unban IN REPLY to a message` | Lift a member's ban | every seat |
-| `/unmute IN REPLY to a message` | End a member's mute early | every seat |
-| `/config [get\|explain <key> \| set <key> <value>]` | Read or set preferences | every seat, not in a room |
+| `/ban <duration> IN REPLY to a message` | Ban a member for a while | Telegram, terminal, console |
+| `/unban IN REPLY to a message` | Lift a member's ban | Telegram, terminal, console |
+| `/unmute IN REPLY to a message` | End a member's mute early | Telegram, terminal, console |
+| `/config [list \| get\|explain <key> \| search <words> \| set <key> <value> \| check]` | Read or set preferences | every seat, not in a room |
 | `/workers [show\|approve\|remove\|stop\|steer] …` | Named helpers: approve them, and stop or steer a running one | terminal |
-| `/prefs [all]` | The preferences you have set | every seat, not in a room |
+| `/prefs [all]` (`/settings`) | The preferences you have set | every seat, not in a room |
 | `/mcp [add <id> <url>\|remove <id>\|test <id>]` | MCP servers I can use: add, remove, or test | every seat, not in a room |
 | `/model [<name> [default] [reasoning=<level>] \| reset \| aliases]` | The model this chat runs on — switch it live, set your default, pick reasoning | every seat, not in a room |
 | `/auth` | The provider keys I have, and how to connect one | terminal |
@@ -172,7 +173,7 @@ column is a summary, and `/help <verb>` on your seat is the full form.
 |---|---|---|
 | `/avatar [show \| set <file\|url> \| set nft <chain>:<contract>:<id>]` | This instance's avatar image — show, set, clear | every seat |
 | `/identity register\|set-uri [go]` | My on-chain identity: register it, or update where it is published (spends gas) | every seat, not in a room |
-| `/quiet` | Hide or show the step transcript | terminal |
+| `/brief` (`/quiet`) | Hide or show the step transcript | terminal |
 | `/verbose` | Show or hide the live trace | terminal |
 
 ### Leave

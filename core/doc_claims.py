@@ -43,8 +43,27 @@ def _stamp_parts(line: str):
     return start, parts[-1]
 
 
-#: 060 WS-6: the heading that starts a rules doc's superseded section.
-_SUPERSEDED_RE = re.compile(r"^\s*##\s+superseded\s*$", re.IGNORECASE)
+#: 060 WS-6: a heading that starts a FROZEN section of a rules doc. The active rules
+#: end at the first one; ``## Superseded`` and ``## History`` are stored, never injected.
+_FROZEN_RE = re.compile(r"^\s*##\s+(superseded|history)\s*$", re.IGNORECASE)
+_H2_RE = re.compile(r"^\s*##\s")
+
+
+def _frozen_index(lines: List[str]) -> Optional[int]:
+    """The index of the line that ends the active rules, or None. A ``## History`` with an
+    ordinary ``##`` heading after it is an owner's own section, not the frozen one: treating
+    it as frozen would take the rules below it out of the prompt with no word."""
+    for i, line in enumerate(lines):
+        match = _FROZEN_RE.match(line)
+        if not match:
+            continue
+        if match.group(1).lower() == "superseded":
+            return i
+        later = next((l for l in lines[i + 1:] if _H2_RE.match(l)), None)
+        if later is None or _FROZEN_RE.match(later):
+            return i
+    return None
+
 
 def today_iso() -> str:
     """Today's date in UTC, ``YYYY-MM-DD``. The default for ``observed_at``."""
@@ -104,9 +123,9 @@ def changed_lines(old: str, new: str) -> List[str]:
     """
     old_bodies = {strip_stamp(l).strip() for l in (old or "").splitlines()}
     out = []
-    for line in (new or "").splitlines():
-        if _SUPERSEDED_RE.match(line):
-            break  # 060 WS-6: the superseded section is history, never a change
+    lines = (new or "").splitlines()
+    frozen = _frozen_index(lines)
+    for line in lines if frozen is None else lines[:frozen]:  # a frozen section is never a change
         body = strip_stamp(line).strip()
         if not body:
             continue
@@ -134,10 +153,11 @@ def stamp_changed_lines(old: str, new: str, source: str,
             old_lines[body] = l
     out = []
     lines = (new or "").splitlines()
+    frozen = _frozen_index(lines)
     for idx, line in enumerate(lines):
-        if _SUPERSEDED_RE.match(line):
-            # 060 WS-6: the superseded section keeps the stamps it was retired
-            # with; re-stamping it would date history as observed today.
+        if idx == frozen:
+            # 060 WS-6: a frozen section keeps the stamps it was written with;
+            # re-stamping it would date history as observed today.
             out.extend(lines[idx:])
             break
         body = strip_stamp(line).strip()
@@ -171,37 +191,61 @@ def stamp_changed_lines(old: str, new: str, source: str,
 #: The ONE heading that starts the superseded section of a rules doc.
 SUPERSEDED_HEADING = "## Superseded"
 
-#: The superseded section's own bound. Past it the OLDEST entries fall off the
+#: The heading of dated narrative the owner keeps out of the rules. Handled as
+#: ``## Superseded`` is: stored, frozen, not injected, off the cap. A write only adds to it.
+HISTORY_HEADING = "## History"
+
+#: Each frozen section's own bound. Past it the OLDEST entries fall off the
 #: live file — nothing is lost: every active write archives the whole prior doc
 #: first (``SelfContextWriter._archive_existing``). Kept at 2x OWNER_DOC_MAX_CHARS
 #: so one whole retired doc still fits; the section is never injected.
 SUPERSEDED_MAX_CHARS = 48000  # 2026-10-11: 2x OWNER_DOC_MAX_CHARS (24000)
 
-def split_superseded(text: str):
-    """``(active, superseded)`` — the doc before the ``## Superseded`` heading,
-    and the section body after it (heading excluded). No heading => ``(text, "")``."""
+def _split_frozen(text: str):
+    """``(active, superseded, history)``: the ONE parser of a rules doc. The active
+    part ends at the first frozen heading, in either order. No heading => ``(text, "", "")``."""
     lines = (text or "").splitlines()
-    for i, line in enumerate(lines):
-        if _SUPERSEDED_RE.match(line):
-            active = "\n".join(lines[:i]).rstrip()
-            sup = "\n".join(lines[i + 1:]).strip("\n")
-            return active, sup
-    return (text or ""), ""
+    active_end = _frozen_index(lines)
+    if active_end is None:
+        return (text or ""), "", ""
+    current = None
+    bodies = {"superseded": [], "history": []}
+    for line in lines[active_end:]:
+        match = _FROZEN_RE.match(line)
+        if match:
+            current = match.group(1).lower()
+        else:
+            bodies[current].append(line)
+    return ("\n".join(lines[:active_end]).rstrip(),
+            "\n".join(bodies["superseded"]).strip("\n"),
+            "\n".join(bodies["history"]).strip("\n"))
+
+
+def split_superseded(text: str):
+    """``(active, superseded)``: the doc before its first frozen heading, and the
+    ``## Superseded`` body (heading excluded). No heading => ``(text, "")``."""
+    active, superseded, _history = _split_frozen(text)
+    return active, superseded
+
+
+def history_text(text: str) -> str:
+    """The ``## History`` body (heading excluded), or ``""``."""
+    return _split_frozen(text)[2]
 
 
 def split_superseded_raw(text: str):
     """``(head, tail)`` with ``head + tail == text`` exactly: ``tail`` starts at the
-    ``## Superseded`` heading line (``""`` when there is none). A patch edits
+    first frozen heading line (``""`` when there is none). A patch edits
     ``head`` only and re-joins the untouched ``tail`` — history is never rewritten
     by a string replace (prod 2026-10-09/11: a ``replace_all`` rewrote retired
     entries and the active rule kept the old cron id)."""
     text = text or ""
-    pos = 0
-    for line in text.splitlines(keepends=True):
-        if _SUPERSEDED_RE.match(line.rstrip("\r\n")):
-            return text[:pos], text[pos:]
-        pos += len(line)
-    return text, ""
+    lines = text.splitlines(keepends=True)
+    frozen = _frozen_index([line.rstrip("\r\n") for line in lines])
+    if frozen is None:
+        return text, ""
+    pos = sum(len(line) for line in lines[:frozen])
+    return text[:pos], text[pos:]
 
 
 _SUPERSEDED_DATE_RE = re.compile(r"(— superseded) \d{4}-\d{2}-\d{2}")
@@ -242,14 +286,18 @@ def carry_superseded(old: str, new: str, *, observed_at: Optional[str] = None) -
     - A dropped line gets ``— superseded <date>``; when the edit replaced exactly
       one line with exactly one line, ``by: <successor>`` names the new one.
     - Headings are structure, not rules, and are never carried.
+    - ``## History`` is carried too, and a write only adds lines to it. A rule line
+      the same write moved there is history, not a superseded rule.
     - Idempotent: nothing dropped and no section on either side => ``new`` as is.
     """
-    new_active, new_sup = split_superseded(new)
-    old_active, old_sup = split_superseded(old)
+    new_active, new_sup, new_hist = _split_frozen(new)
+    old_active, old_sup, old_hist = _split_frozen(old)
     new_bodies = {strip_stamp(l).strip() for l in new_active.splitlines()}
+    moved = {_entry_body(strip_stamp(l)) for l in new_hist.splitlines()}
     dropped = [l for l in old_active.splitlines()
                if l.strip() and not l.lstrip().startswith("#")
-               and strip_stamp(l).strip() not in new_bodies]
+               and strip_stamp(l).strip() not in new_bodies
+               and _entry_body(strip_stamp(l)) not in moved]
     entries: List[str] = []
     seen = set()
     # Exact AND date-only duplicates collapse (first kept) — prod 2026-10-11
@@ -273,12 +321,103 @@ def carry_superseded(old: str, new: str, *, observed_at: Optional[str] = None) -
             if _entry_key(entry) not in seen:
                 seen.add(_entry_key(entry))
                 entries.append(entry)
-    if not entries:
+    old_hist_lines = old_hist.splitlines()
+    known = {l.strip() for l in old_hist_lines}
+    history = old_hist_lines + [l.rstrip() for l in new_hist.splitlines()
+                                if l.strip() and l.strip() not in known]
+    if not entries and not history:
         return new
-    # Bound the section; the oldest fall off (archived with the prior doc).
-    while entries and len("\n".join(entries)) > SUPERSEDED_MAX_CHARS:
-        entries.pop(0)
-    return new_active.rstrip() + "\n\n" + SUPERSEDED_HEADING + "\n\n" + "\n".join(entries) + "\n"
+    out = new_active.rstrip()
+    for heading, lines in ((SUPERSEDED_HEADING, entries), (HISTORY_HEADING, history)):
+        # Bound the section; the oldest fall off (archived with the prior doc).
+        while lines and len("\n".join(lines)) > SUPERSEDED_MAX_CHARS:
+            lines.pop(0)
+        if lines:
+            out += "\n\n" + heading + "\n\n" + "\n".join(lines)
+    return out + "\n"
+
+
+# --- A job row is the record of its own state ----------------------------------
+#
+# Owner rule: "we should not store jobs state in the owner doc". Prod held an active
+# line that said a job was off while the enabled job kept running. A line of the
+# active rules may not name a job id or claim a job's on/off state. Deterministic and
+# narrow on purpose, so a real rule ("NEVER follow anyone") is never refused:
+#
+# - a job id: 12 lower-case hex chars with a digit and a letter, not part of a path,
+#   a URL, a dotted name, a uuid or a 0x address;
+# - a job noun (job, cron, cronjob, lane) with up to two name words, then a state:
+#   "is/are/stays/... on|off|on hold|enabled|disabled|paused|stopped|cancelled";
+#   the words other than on and off need no verb ("cron job paused until Monday");
+#   an upper-case state needs no verb either ("the promo job OFF");
+# - any subject with a verb or a colon, then an UPPER-CASE state ("the buyback is OFF",
+#   "Buyback: OFF");
+# - an UPPER-CASE subject, then an UPPER-CASE state word other than ON and OFF
+#   ("BUYBACKS STOPPED"), since "TURN OFF" is an instruction.
+#
+# The state must end its clause ("the job is on Monday" is a time) and the clause must
+# not be a condition or a general rule ("When a job is paused, tell the owner").
+
+_STATE_WORDS = r"enabled|disabled|paused|stopped|cancell?ed"
+_STATE_UPPER = r"ENABLED|DISABLED|PAUSED|STOPPED|CANCELL?ED"
+_STATE_VERB = (r"(?:\s*(?:[:=]|->|→)\s*"
+               r"|\s+(?:is|are|was|were|stays?|remains?|has been|have been)"
+               r"(?:\s+(?:now|currently|still))?\s+"
+               r"|\s+(?:now|currently)\s+)")
+_STATE_END = (r"(?=\s*(?:$|[.;,:!?()\]—–]|-\s"
+              r"|(?:until|since|for good|forever|now|as of|today|again)\b))")
+_JOB_NOUN = r"(?i:\b(?:jobs?|cronjobs?|crons?|lanes?)\b)(?:\s+[\w-]+){0,2}?"
+
+_JOB_ID_RE = re.compile(r"(?<![\w/.-])(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{12}"
+                        r"(?![\w/-])(?!\.\w)")
+_STATE_CLAIMS = (
+    re.compile(_JOB_NOUN + _STATE_VERB + r"(?i:on hold|on|off|" + _STATE_WORDS + r")" + _STATE_END),
+    re.compile(_JOB_NOUN + r"\s+(?i:on hold|" + _STATE_WORDS + r")" + _STATE_END),
+    re.compile(_JOB_NOUN + r"\s+(?:ON|OFF)\b" + _STATE_END),
+    re.compile(r"\b[\w-]{3,}" + _STATE_VERB + r"(?:ON|OFF|" + _STATE_UPPER + r")\b" + _STATE_END),
+    re.compile(r"\b[A-Z][A-Z0-9_-]{2,}\s+(?:" + _STATE_UPPER + r")\b" + _STATE_END),
+)
+#: Words that make a clause a condition or a general rule, not a claim about one job.
+_NOT_A_CLAIM = re.compile(r"\b(?:if|when|whenever|unless|while|once|before|after|never|always|"
+                          r"must|should|shall|any|every|each|do not|don'?t)\b", re.IGNORECASE)
+_GENERIC_NOUN = re.compile(r"\b(?:a|an|no)\s*$", re.IGNORECASE)
+_RELATIVE = re.compile(r"\s(?:that|which|who)\s", re.IGNORECASE)
+
+
+def _states_a_claim(text: str, match) -> bool:
+    prefix = re.split(r"[.;:!?—–]", text[:match.start()])[-1]
+    if _NOT_A_CLAIM.search(prefix) or _GENERIC_NOUN.search(prefix):
+        return False
+    return not _RELATIVE.search(match.group(0))
+
+
+def job_state_claim(line: str) -> str:
+    """The text in ``line`` that names a job id or claims a job's on/off state, or ``""``.
+    Pure. The stamp is not read, and emphasis marks do not hide a claim."""
+    text = strip_stamp(line or "").replace("*", "").replace("`", "")
+    found = _JOB_ID_RE.search(text)
+    if found:
+        return found.group(0)
+    for pattern in _STATE_CLAIMS:
+        for match in pattern.finditer(text):
+            if _states_a_claim(text, match):
+                return match.group(0).strip()
+    return ""
+
+
+def job_state_refusal(old: str, new: str) -> str:
+    """Why this write is refused, or ``""``. Only a NEW or CHANGED active line counts, so
+    an older line does not block an edit of another rule, and retiring it stays free."""
+    old_active = split_superseded(old or "")[0]
+    for line in changed_lines(old_active, new or ""):
+        claim = job_state_claim(line)
+        if claim:
+            return (f"this line holds a job's state ({claim!r}): \"{line[:120]}\". owner.md "
+                    f"holds standing rules only, and a job's own row holds its on or off "
+                    f"state, schedule, id and progress. Read it with cronjob_show. Change it "
+                    f"with cronjob_edit or cronjob_cancel, or name the owner's /pause <job id>. "
+                    f"Write the rule again with no job id and no state")
+    return ""
 
 
 def _rule_keys(text: str) -> set:
@@ -327,7 +466,11 @@ def rebase_draft(base: str, draft: str, current: str):
 
 
 __all__ = [
+    "HISTORY_HEADING",
     "SUPERSEDED_HEADING",
+    "history_text",
+    "job_state_claim",
+    "job_state_refusal",
     "rebase_draft",
     "SUPERSEDED_MAX_CHARS",
     "active_rule_lines",

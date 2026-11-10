@@ -28,8 +28,12 @@ def _resources_text(resources: List[Any]) -> str:
     for r in resources or ():
         where = f" {r.chain}:{r.address}" if getattr(r, "address", None) else ""
         data = {k: v for k, v in dict(getattr(r, "data", {}) or {}).items()
-                if k in ("abi_hint", "function", "path", "sha256", "url", "service", "note")}
+                if k in ("abi_hint", "function", "functions", "path", "sha256", "url",
+                         "service", "note")}
         lines.append(f"- {r.kind}{where} {json.dumps(data) if data else ''}".rstrip())
+    if any(getattr(r, "kind", "") == "contract" for r in resources or ()):
+        lines.append("  (call a contract's listed function with defi_trade call: chain, to, "
+                     "function=\"<signature>\", args=[…], value 0)")
     return "\n".join(lines) or "- (none)"
 
 

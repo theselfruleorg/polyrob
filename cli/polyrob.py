@@ -93,8 +93,8 @@ _LAZY_SUBCOMMANDS.update(_surface_commands())
 # canonical row ("session (alias: sessions)"), never as duplicate entries.
 # `soul`/`persona`/`avatar` fold onto `identity` (the new umbrella group, A14);
 # `approvals` folds onto `owner` (a display-only alias line for now — `owner
-# approvals` as a real subcommand is phase 3 create work, 043 §4.1); `skill`
-# (the single-skill install pipeline) folds onto `skills`.
+# approvals` as a real subcommand is phase 3 create work, 043 §4.1). `skill` is
+# the old name of `skills` (113 T-08): it still runs and the help does not list it.
 _COMMAND_ALIASES = {
     "session": ("sessions",),
     "model": ("models",),
@@ -102,14 +102,16 @@ _COMMAND_ALIASES = {
     "profile": ("profiles",),
     "identity": ("soul", "persona", "avatar"),
     "owner": ("approvals",),
-    "skills": ("skill",),
     "setup": ("init",),
     "doctor": ("status",),
     "job": ("cron",),
 }
-_RELATED_COMMANDS = {name: _COMMAND_ALIASES.pop(name) for name in ("identity", "owner", "skills")}
+_RELATED_COMMANDS = {name: _COMMAND_ALIASES.pop(name) for name in ("identity", "owner")}
 _DISPLAY_FOLDS = {**_COMMAND_ALIASES, **_RELATED_COMMANDS}
-_ALIAS_NAMES = {alias for aliases in _DISPLAY_FOLDS.values() for alias in aliases}
+#: Old names that still run and that the help does not show.
+_HIDDEN_OLD_NAMES = ("skill",)
+_ALIAS_NAMES = ({alias for aliases in _DISPLAY_FOLDS.values() for alias in aliases}
+                | set(_HIDDEN_OLD_NAMES))
 
 # Grouped --help: a first-run user needs "start here", not 40 flat rows.
 # Anything unlisted lands in a computed "Other" section, so a new command can
@@ -234,12 +236,16 @@ class _LazyGroup(click.Group):
 @click.option("--model", "-m", default=None, help="Model for this REPL session (parity with `polyrob run`)")
 @click.option("--provider", "-p", default=None, help="Provider for this REPL session")
 @click.option("--toolset", default=None, help="Named toolset for this REPL session")
+@click.option("--new", "new_chat", is_flag=True, default=False,
+              help="Start in a new separate chat (the main chat stays as it is)")
+@click.option("--chat", "chat_ref", default=None, metavar="NUMBER|NAME",
+              help="Start in one of your chats (see /chats); `main` is the main chat")
 @click.option("--profile", "-P", "profile", default=None, metavar="NAME",
               help="Named profile to run as (an isolated home under "
                    "~/.polyrob/profiles/<NAME>: its own .env, characters, "
                    "memory, identity). See `polyrob profile --help`.")
 @click.pass_context
-def cli(ctx, plain, project, model, provider, toolset, profile):
+def cli(ctx, plain, project, model, provider, toolset, new_chat, chat_ref, profile):
     """POLYROB AI automation platform CLI."""
     # Profile resolution MUST run before anything else — flags freeze at import
     # and every subcommand's load_env refreezes them once; the profile env
@@ -258,10 +264,11 @@ def cli(ctx, plain, project, model, provider, toolset, profile):
         from pathlib import Path
         os.environ["POLYROB_PROJECT_DIR"] = str(Path(project).resolve())
     if ctx.invoked_subcommand is None:
-        _start_repl(plain=plain, model=model, provider=provider, toolset=toolset)
+        _start_repl(plain=plain, model=model, provider=provider, toolset=toolset,
+                    new_chat=new_chat, chat_ref=chat_ref)
 
 
-def _start_repl(plain, model, provider, toolset):
+def _start_repl(plain, model, provider, toolset, new_chat=False, chat_ref=None):
     """Show instant feedback, then import + run the REPL.
 
     The transient ``starting…`` notice is written BEFORE the chat-module /
@@ -284,7 +291,7 @@ def _start_repl(plain, model, provider, toolset):
 
         from cli.commands.chat import run_repl
         run_repl(plain=plain, model=model, provider=provider, toolset=toolset,
-                 start_notice=(stream, transient))
+                 start_notice=(stream, transient), new_chat=new_chat, chat_ref=chat_ref)
     finally:
         if _titled:
             terminal_title.clear_terminal_title(stream)
@@ -308,11 +315,15 @@ def version():
 @click.option("--model", "-m", default=None, help="Model for this REPL session (parity with `polyrob run`)")
 @click.option("--provider", "-p", default=None, help="Provider for this REPL session")
 @click.option("--toolset", default=None, help="Named toolset for this REPL session")
-def chat_cmd(plain, model, provider, toolset):
+@click.option("--new", "new_chat", is_flag=True, default=False,
+              help="Start in a new separate chat (the main chat stays as it is)")
+@click.option("--chat", "chat_ref", default=None, metavar="NUMBER|NAME",
+              help="Start in one of your chats (see /chats); `main` is the main chat")
+def chat_cmd(plain, model, provider, toolset, new_chat, chat_ref):
     """Open the interactive REPL chat session."""
     from cli.commands._options import inherit_options
     values = inherit_options(plain=plain, model=model, provider=provider, toolset=toolset)
-    _start_repl(**values)
+    _start_repl(**values, new_chat=new_chat, chat_ref=chat_ref)
 
 
 def _register_pack_policies() -> None:

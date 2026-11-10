@@ -67,3 +67,21 @@ def test_tenants_are_isolated(store):
     assert store.load("u2")["password"] == "pw2"
     store.delete("u1")
     assert store.load("u2") is not None
+
+
+def test_save_over_an_unreadable_file_raises_and_keeps_it(store, tmp_path, monkeypatch):
+    from pathlib import Path
+    store.save("tenant-a", handle="first_acct", storage_state=STATE)
+    path = tmp_path / ".x_session.json"
+    before = path.read_bytes()
+    real_read_text = Path.read_text
+
+    def _denied(self, *a, **k):
+        if self == path:
+            raise PermissionError(13, "Permission denied", str(path))
+        return real_read_text(self, *a, **k)
+    monkeypatch.setattr(Path, "read_text", _denied)
+    with pytest.raises(OSError):
+        store.save("tenant-b", handle="second_acct")
+    monkeypatch.setattr(Path, "read_text", real_read_text)
+    assert path.read_bytes() == before

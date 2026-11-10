@@ -1,4 +1,4 @@
-"""Shared brain-state scrubber (OR-7, 2026-06).
+"""Shared brain-state scrubber.
 
 POLYROB instructs every model to emit its brain-state as a ``{"current_state": {...}}``
 JSON object (or bare brain keys) in the text-content field every turn. That content
@@ -42,8 +42,8 @@ BRAIN_KEYS = frozenset(
         "immediate_step",
     }
 )
-# S7 (2026-08-29): THE brain-state key set. agents/task/utils_json, agents/task_agent_lite
-# and cli/ui/dialog all read this one (the four hand-copies had drifted by one key each).
+# THE brain-state key set. agents/task/utils_json, agents/task_agent_lite
+# and cli/ui/dialog all read this one (one copy, so the sets cannot drift).
 _MIN_BRAIN_KEYS = 2
 
 
@@ -131,6 +131,22 @@ def _looks_brainish(fragment: str) -> bool:
     return sum(1 for k in BRAIN_KEYS if f'"{k}"' in fragment) >= _MIN_BRAIN_KEYS
 
 
+def _is_truncated_brain(s: str, start: int, decoder: json.JSONDecoder) -> bool:
+    """True when the brace at *start* opens a brain object that the stream cut. A JSON
+    object opens with a key, and a whole brain object later proves this brace is prose."""
+    if not s[start + 1:].lstrip().startswith('"') or not _looks_brainish(s[start:]):
+        return False
+    later = s.find("{", start + 1)
+    while later != -1:
+        try:
+            if _is_brain_obj(decoder.raw_decode(s, later)[0]):
+                return False
+        except ValueError:
+            pass
+        later = s.find("{", later + 1)
+    return True
+
+
 def _inner_is_brain(inner: str) -> bool:
     inner = inner.strip()
     if not inner.startswith("{"):
@@ -179,7 +195,7 @@ def scrub_brain_blocks(text: Optional[str]) -> Optional[str]:
             except ValueError:
                 # Unparseable object here: a truncated brain tail (stream cut
                 # mid-object) ⇒ drop to end; otherwise keep one char and advance.
-                if _looks_brainish(s[i:]):
+                if _is_truncated_brain(s, i, decoder):
                     break
                 out.append(s[i])
                 i += 1

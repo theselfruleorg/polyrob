@@ -48,11 +48,14 @@ MACHINE_MODULES = [
     "core.surfaces.idempotency",
     "core.lifecycle:_request_machine",  # built on first use (import cycle)
     "agents.task.agent.core.curator",
+    "agents.task.agent.core.lane_measure",
     "modules.memory.sqlite_curated_store",
     "modules.payments.sweep_state",
     "core.money.receipt_state",
     "core.commerce.store",
     "core.commerce.orders",
+    "core.surfaces.card_states",
+    "core.wallet.submission_journal",
 ]
 
 

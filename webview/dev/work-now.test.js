@@ -421,6 +421,13 @@ describe("On a clock lists jobs and offers Cancel", () => {
     expect(nextRunText({ next_run_at: null }, COPY)).toBe("");
   });
 
+  it("On a clock adds the server's note: a late job's wait, a pause by the limit", () => {
+    expect(nextRunText({ next_run_at: new Date(NOW_MS).toISOString(), next_note: "waiting 40m" },
+      COPY)).toMatch(/^next .* · waiting 40m$/);
+    expect(nextRunText({ next_run_at: null, next_note: "paused after 3 failed runs" }, COPY))
+      .toBe("paused after 3 failed runs");
+  });
+
   it("cron off is a plain notice; a failed read is a dashed reason", () => {
     let ctx = schedCtx();
     expect(renderSchedule(ctx, { enabled: false }, COPY)).toBe("disabled");

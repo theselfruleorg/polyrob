@@ -84,6 +84,19 @@ class DiscordClient:
     async def trigger_typing(self, channel_id: str) -> None:
         await self._request("POST", f"/channels/{channel_id}/typing")
 
+    async def add_reaction(self, channel_id: str, message_id: str, emoji: str) -> None:
+        """React as the bot (needs the Add Reactions permission in a guild)."""
+        from urllib.parse import quote
+        await self._request(
+            "PUT", f"/channels/{channel_id}/messages/{message_id}/reactions/"
+                   f"{quote(emoji, safe='')}/@me")
+
+    async def remove_reaction(self, channel_id: str, message_id: str, emoji: str) -> None:
+        from urllib.parse import quote
+        await self._request(
+            "DELETE", f"/channels/{channel_id}/messages/{message_id}/reactions/"
+                      f"{quote(emoji, safe='')}/@me")
+
     async def create_dm(self, user_id: str) -> str:
         """Open (or fetch) the DM channel with *user_id*; returns channel id."""
         payload = await self._request("POST", "/users/@me/channels",

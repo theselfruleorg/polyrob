@@ -124,6 +124,20 @@ def test_a_dm_from_the_paired_owner_routes_as_owner(tmp_path):
     inbound = parse_event(_event(), BOT, user_directory=directory)
     store = PairingStore(str(tmp_path / "pairing.db"))
     assert store.approve(store.request(inbound.identity.user_id)) == inbound.identity.user_id
+    env = {"POLYROB_OWNER_USER_ID": "u_owner", "POLYROB_REQUIRE_PAIRING": "1"}
+    assert resolve_access_tier(_Container(str(tmp_path)), inbound.identity,
+                               env=env) == AccessTier.OWNER
+
+
+def test_a_dm_from_the_configured_owner_routes_as_owner(tmp_path, monkeypatch):
+    """110: the owner is the sender whose id equals OWNER_FEISHU_ID; it runs under the
+    owner principal's tenant (no pairing)."""
+    from tools.user_directory import UserDirectory
+    monkeypatch.setenv("OWNER_FEISHU_ID", OWNER)
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u_owner")
+    directory = UserDirectory(str(tmp_path / "users.db"))
+    inbound = parse_event(_event(), BOT, user_directory=directory)
+    assert inbound.identity.user_id == "u_owner"
     env = {"POLYROB_OWNER_USER_ID": "u_owner"}
     assert resolve_access_tier(_Container(str(tmp_path)), inbound.identity,
                                env=env) == AccessTier.OWNER
@@ -146,12 +160,12 @@ def test_an_unknown_dm_sender_is_denied(tmp_path):
                                env={"POLYROB_OWNER_USER_ID": "u_owner"}) == AccessTier.DENIED
 
 
-def test_feishu_is_never_an_owner_alias_surface():
-    """alias_owner stays False: the owner is recognised through a pairing row."""
+def test_feishu_aliases_only_the_configured_owner_id():
     from core.instance import owner_surface_alias
-    assert owner_surface_alias(OWNER, "feishu",
-                               env={"OWNER_FEISHU_ID": OWNER,
-                                    "POLYROB_OWNER_USER_ID": "alice"}) is None
+    env = {"OWNER_FEISHU_ID": OWNER, "POLYROB_OWNER_USER_ID": "alice"}
+    assert owner_surface_alias(OWNER, "feishu", env=env) == "alice"
+    assert owner_surface_alias(STRANGER, "feishu", env=env) is None
+    assert owner_surface_alias(OWNER, "feishu", env={"POLYROB_OWNER_USER_ID": "alice"}) is None
 
 
 # --- the REST client: chunking, receive_id_type, token refresh -----------------

@@ -22,14 +22,10 @@ logger = logging.getLogger(__name__)
 
 
 def is_owner_tenant(user_id: str) -> bool:
-    """Whether a tenant may fall back to the instance owner's private address."""
-    from core.env import bool_env
-    from core.instance import is_owner_local_safe, resolve_owner_principal
-    try:
-        return is_owner_local_safe(user_id, owner_principal=resolve_owner_principal(),
-                                   local_enabled=bool_env("POLYROB_LOCAL", False))
-    except Exception:
-        return False
+    """Whether a tenant may fall back to the instance owner's private address
+    (``core.instance.is_owner_uid``, the one owner-tenant check)."""
+    from core.instance import is_owner_uid
+    return is_owner_uid(user_id)
 
 
 def _env_by_surface() -> dict:

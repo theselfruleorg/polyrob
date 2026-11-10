@@ -7,6 +7,7 @@ from agents.task.agent.message_manager.views import (
 	ManagedMessage, MessageHistory, MessageMetadata)
 from agents.task.agent.messages import summary_contract as SC
 from agents.task.agent.messages.compactor import CompactorMixin
+from modules.llm.call_result import CallFacts
 from modules.llm.messages import AIMessage, HumanMessage
 
 
@@ -21,6 +22,12 @@ def test_only_an_answer_that_reached_its_end_line_is_complete():
 	assert not SC.is_complete(_whole()[:-5])
 	assert not SC.is_complete("")
 	assert not SC.is_complete(f"{SC.END_LINE} and more")
+
+
+def test_a_call_the_provider_says_it_cut_is_not_complete_even_with_its_end_line():
+	assert not SC.is_complete(_whole(), CallFacts(finish_reason="length"))
+	assert SC.is_complete(_whole(), CallFacts(finish_reason="stop"))
+	assert SC.is_complete(_whole(), None)
 
 
 @pytest.mark.parametrize("name", SC.REQUIRED_SECTIONS)

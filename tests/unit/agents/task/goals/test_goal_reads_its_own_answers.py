@@ -40,7 +40,7 @@ def test_a_decline_is_carried_too(board):
 
 
 def test_held_ready_goal_gets_the_answer(board):
-    """B2: a goal held in `ready` by its own goal_ask is not `blocked`; the
+    """B2: a goal held in `ready` by its own owner_ask is not `blocked`; the
     answer used to be written nowhere."""
     g = board.create(user_id="alice", title="Swap on the better chain")
     a = board.create_ask(user_id="alice", what="Base or Solana?", blocks_goal_ids=[g.id])

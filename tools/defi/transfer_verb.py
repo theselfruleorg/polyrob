@@ -201,7 +201,8 @@ async def perform_transfer(tool, params, execution_context=None):
             execution_context=execution_context,
             notice_kw=dict(verb="transfer", route=params.chain, chain=params.chain,
                            amount_in=_label, usd=decision.amount_usd))
-        gate.record(**_rec)
+        from tools.defi.receipt_wait import book_after_receipt
+        book_after_receipt(gate, receipt, **_rec)
         tool._notify_tx(execution_context, tx_notify.TxNotice(
             verb="transfer", route=params.chain, chain=params.chain, amount_in=_label,
             usd=decision.amount_usd, tx_ref=tx_hash,

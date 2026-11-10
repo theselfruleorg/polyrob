@@ -27,7 +27,7 @@ actually trusted:
 | The **owner** (bound owner principal, or the local CLI operator) | Trusted | Steers the agent directly — COMMAND/STEER/TASK_AGENT access |
 | A **correspondent** (a third party the agent itself initiated contact with) | Untrusted DATA | Their reply is delivered to the session as framed data, never as a command — see §2 |
 | **Fetched web content / browser page content / MCP tool outputs** | Untrusted DATA | Anything from `browser`, `web_fetch`, `http_request`, `mcp`, `perplexity`, `anysite`, `email` bodies, etc. may contain adversarial text (indirect prompt injection) |
-| **Skill content** authored by the agent itself (writable skills) | Untrusted-by-default | Content is threat-scanned before write; a forged/background turn can never auto-activate or patch an active skill |
+| **Skill content** authored by the agent itself (writable skills) | Untrusted-by-default | Content is threat-scanned before write; a skill from the owner's turn, job or reviewer is active at once with a rollback; one from a chat that holds someone else's message, a group or another user stays a draft. See the gap below on external text |
 | A **group member** in an allowlisted room | Untrusted, room-scoped | May trigger a turn, but that turn runs a public session on a read-only toolset — see §2's room rail |
 | An **unknown or unverified sender** on any surface | Denied | No routing authority — see the four tiers below |
 
@@ -383,6 +383,14 @@ it.
 `tools/git/tool.py`, `tools/coding/lsp.py` and `tools/coding/snapshot.py` ask the
 same rule before spawning host binaries. They run with the host user's privileges
 and must only consume trusted workspaces and configuration.
+
+### b2) A skill written after the agent read external text
+
+A skill that your own turn or job writes is active at once, also when that run read a web page,
+a mention or an email. Text planted on that page can therefore reach later runs as instructions,
+through a skill. The threat scan and the rollback are the only checks. A chat that holds someone
+else's message, a group and another user still land a draft. Before you let a job read untrusted
+pages, check its skills with `polyrob skills info <id>` and roll back a change you did not expect ([skills.md](skills.md)).
 
 ### c) MCP stdio children
 

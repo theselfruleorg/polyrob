@@ -1,5 +1,6 @@
 """Per-task aux-model resolution: explicit env wins, then auto-map, else None."""
-from agents.task.constants import resolve_aux_model, AUX_MODEL_MAP, _AUX_TASK_ENV
+from agents.task.constants import resolve_aux_model, _AUX_TASK_ENV
+from modules.llm.provider_spec import get_spec
 
 
 def test_explicit_env_wins(monkeypatch):
@@ -10,7 +11,7 @@ def test_explicit_env_wins(monkeypatch):
 def test_auto_map_when_enabled(monkeypatch):
     monkeypatch.delenv("AUX_MODEL_JUDGE", raising=False)
     monkeypatch.setenv("AUX_AUTO", "true")
-    assert resolve_aux_model("judge", provider="anthropic") == AUX_MODEL_MAP["anthropic"]
+    assert resolve_aux_model("judge", provider="anthropic") == get_spec("anthropic").aux_model
 
 
 def test_none_when_unconfigured(monkeypatch):
@@ -27,7 +28,7 @@ def test_planner_vision_rows_removed(monkeypatch):
     monkeypatch.setenv("AUX_AUTO", "true")
     monkeypatch.setenv("AUX_MODEL_PLANNER", "should-be-ignored")
     monkeypatch.setenv("AUX_MODEL_VISION", "should-be-ignored")
-    assert resolve_aux_model("planner", provider="anthropic") == AUX_MODEL_MAP["anthropic"]
+    assert resolve_aux_model("planner", provider="anthropic") == get_spec("anthropic").aux_model
     # ^ note: an unknown task with AUX_AUTO+provider still falls through to the auto-map;
     # the point is the *explicit* AUX_MODEL_PLANNER/VISION envs are no longer consulted.
     monkeypatch.delenv("AUX_AUTO", raising=False)

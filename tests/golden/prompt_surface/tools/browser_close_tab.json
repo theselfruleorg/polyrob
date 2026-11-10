@@ -1,0 +1,20 @@
+{
+  "function": {
+    "description": "Close a browser tab (default: the current tab) and continue in the last tab that stays open.",
+    "name": "browser_close_tab",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for closing a tab.",
+      "properties": {
+        "pageId": {
+          "default": null,
+          "description": "The tab to close; default: the current tab",
+          "nullable": true,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

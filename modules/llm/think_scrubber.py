@@ -1,11 +1,10 @@
 """Stateful scrubber for reasoning/thinking blocks in streamed assistant text.
 
-UP-07: ported essentially verbatim from Reference (`agent/think_scrubber.py`,
-the reference agent) — pure, zero-dependency. POLYROB wires it at the
+Pure, zero-dependency. POLYROB wires it at the
 LLM-adapter content seam (modules/llm/adapters.py) so every provider's assistant text is
-scrubbed before it becomes an AIMessage. The legacy `agents/task/utils_json.py` regex
-strip stays for the fallback JSON-from-text path; this module covers the native seam and
-a broader tag set (UP-07, 2026-06 agent-upgrade wave).
+scrubbed before it becomes an AIMessage. The `agents/task/utils_json.py` regex
+strip serves for the fallback JSON-from-text path; this module covers the native seam and
+a broader tag set.
 
 ``run_agent._strip_think_blocks`` is regex-based and correct for a complete
 string, but when it runs *per-delta* in ``_fire_stream_delta`` it destroys
@@ -74,7 +73,7 @@ def scrub_think_blocks(content: str) -> str:
     Equivalent to feeding the whole string as one delta then flushing. Safe no-op when
     there's no '<' (the overwhelming-majority fast path), so a non-reasoning completion
     is never touched. Used by the adapter content seam where the whole completion arrives
-    at once (UP-07).
+    at once.
     """
     if not content or "<" not in content:
         return content
@@ -283,9 +282,9 @@ class StreamingThinkScrubber:
             open_idx = buf_lower.find(open_lower)
             if open_idx == -1:
                 continue
-            # P2-13: DEPTH-aware close matching. A nested same-variant block
-            # (<think>a<think>b</think>c</think>) used to match the FIRST inner close
-            # (non-greedy), which ended the block early and LEAKED the outer tail
+            # DEPTH-aware close matching. A nested same-variant block
+            # (<think>a<think>b</think>c</think>) must not match the FIRST inner close
+            # (non-greedy): that would end the block early and LEAK the outer tail
             # ("c") plus an orphan </think>. Count nested opens/closes and extend to
             # the OUTER close. If the outer close isn't in the buffer yet (streaming,
             # split mid-nest), matched_end stays -1 and we skip — the open-at-boundary

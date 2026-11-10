@@ -291,7 +291,7 @@ async def test_the_dollar_cap_gets_one_bounded_last_report(monkeypatch, _env):
     from modules.llm.output_budget import output_token_cap
 
     async def _report(messages):
-        seen["cap"] = output_token_cap(client, 16384)
+        seen["cap"] = output_token_cap(16384)
         seen["stamp"] = client._polyrob_session_output_cap
         return _model_output(_Act("done", {"text": REPORT}))
     agent.get_next_action = AsyncMock(side_effect=_report)
@@ -304,7 +304,7 @@ async def test_the_dollar_cap_gets_one_bounded_last_report(monkeypatch, _env):
     # The bound is per call: the shared client/adapter are never stamped.
     assert seen == {"cap": BUDGET_REPORT_MAX_TOKENS, "stamp": None}
     assert agent.llm._default_max_tokens is None
-    assert output_token_cap(client, 16384) == 16384               # scope ended
+    assert output_token_cap(16384) == 16384               # scope ended
     assert agent.state.stop_reason == "run_budget"
     assert agent.state.exhausted_summary == REPORT
     last = agent.history.history[-1].result[-1]

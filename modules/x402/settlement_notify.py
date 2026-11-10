@@ -180,7 +180,7 @@ class SettlementNotifyMixin:
               attrs={"request_id": inv["request_id"], "amount_usd": inv.get("amount_usd"),
                      "transaction_hash": inv.get("transaction_hash"), "kind": "offer_order"})
         container = getattr(getattr(self, "task_agent", None), "container", None)
-        order = await on_settled(inv, container=container)
+        order = await on_settled(inv, container=container, db=getattr(self, "_db", None))
         status = getattr(order, "status", None)
         # The words follow the order's REAL state. An unknown, cancelled, expired or
         # refused (failed) order was already reported by `on_settled` as money held

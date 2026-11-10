@@ -34,10 +34,14 @@ _DEFAULT_MAX_DURATION_S = 600
 #: that outlives the session and budget that created it. Module constant, not a
 #: flag: five minutes is already 288 paid runs a day.
 MIN_INTERVAL_SECONDS = 300
-#: A DETERMINISTIC job (``payload.read_verb`` / ``payload.write_verb``) runs no model
+#: A DETERMINISTIC job (``payload.read_verb`` / ``write_verb`` / ``script``) runs no model
 #: turn, so the paid-run floor above does not apply to it; one minute is the
 #: ticker's own cadence (a collection revealer runs every minute in the mint window).
 DETERMINISTIC_MIN_INTERVAL_SECONDS = 60
+
+
+#: The payload keys that make a job deterministic. A job carries at most one.
+DETERMINISTIC_KEYS = ("read_verb", "write_verb", "script")
 
 
 def _current_gap(job, now) -> float:
@@ -52,7 +56,7 @@ def _current_gap(job, now) -> float:
 
 def _interval_floor(payload: Optional[Dict[str, Any]]) -> int:
     p = payload or {}
-    return (DETERMINISTIC_MIN_INTERVAL_SECONDS if (p.get("read_verb") or p.get("write_verb"))
+    return (DETERMINISTIC_MIN_INTERVAL_SECONDS if any(p.get(k) for k in DETERMINISTIC_KEYS)
             else MIN_INTERVAL_SECONDS)
 
 
@@ -106,13 +110,29 @@ def last_outcome(job) -> str:
                         getattr(job, "last_run_at", None))
 
 
-def next_run_text(job) -> str:
-    """The next run, or the reason there is none. A paused job shows no time."""
+def next_note(job) -> str:
+    """How long a late job has waited, or that the failure limit paused it; else ""."""
+    from core.cron_outcome import FAILURE_STREAK_LIMIT, stopped_by_failures, waiting_text
+    if job.status == "paused" and stopped_by_failures(job.payload):
+        return f"paused after {FAILURE_STREAK_LIMIT} failed runs"
+    return waiting_text(job.next_run_at) if job.status == "scheduled" else ""
+
+
+def next_run_text(job, *, clock: bool = False) -> str:
+    """The next run, or the reason there is none. A paused job shows no time.
+    *clock* adds the server clock zone, for an owner seat's reply about one job."""
     if job.status == "paused":
-        return "paused"
+        return next_note(job) or "paused"
     if job.status in ("cancelled", "done", "failed"):
         return job.status if job.status != "cancelled" else "stopped"
-    return job.next_run_at.strftime("%Y-%m-%d %H:%M") if job.next_run_at else "-"
+    if not job.next_run_at:
+        return "-"
+    when = job.next_run_at.strftime("%Y-%m-%d %H:%M")
+    if clock:
+        from core.cron_slots import server_clock
+        when = f"{when} {server_clock()}"
+    note = next_note(job)
+    return f"{when}, {note}" if note else when
 
 
 def parse_new_job_args(tokens: List[str]) -> "tuple[str, str]":
@@ -175,6 +195,7 @@ def _checked_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     from cron.read_job import ReadJobError, normalize_pause_windows, validate_read_verb
     from cron.write_job import WriteJobError, validate_write_verb
     from cron.read_job import PrecheckError, validate_precheck
+    from cron.read_job import ScriptJobError, checked_script
     try:
         if payload.get("pause_windows") is not None:
             payload["pause_windows"] = normalize_pause_windows(payload["pause_windows"])
@@ -183,20 +204,25 @@ def _checked_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         # Impl handoff E: the one allowlisted write verb (cron/write_job.py).
         if payload.get("write_verb") is not None:
             payload["write_verb"] = validate_write_verb(payload["write_verb"])
+        # 114 W2: the agent's own script (cron/read_job.py).
+        if payload.get("script") is not None:
+            payload["script"] = checked_script(payload["script"])
         # 2026-10-14 review A-12: a watch job's $0 pre-check (cron/read_job.py).
         if payload.get("precheck") is not None:
             payload["precheck"] = validate_precheck(payload["precheck"])
-    except (ReadJobError, WriteJobError, PrecheckError) as exc:
+    except (ReadJobError, WriteJobError, PrecheckError, ScriptJobError) as exc:
         raise ScheduleError(str(exc)) from exc
     _no_mixed_kinds(payload)
     return payload
 
 
 def _no_mixed_kinds(payload: Dict[str, Any]) -> None:
-    if payload.get("read_verb") and payload.get("write_verb"):
-        raise ScheduleError("a job runs either a read_verb or a write_verb, not both")
-    if payload.get("precheck") and (payload.get("read_verb") or payload.get("write_verb")):
-        raise ScheduleError("a precheck guards a model run; a read_verb or write_verb job "
+    kinds = [k for k in DETERMINISTIC_KEYS if payload.get(k)]
+    if len(kinds) > 1:
+        raise ScheduleError(f"a job runs one of {', '.join(DETERMINISTIC_KEYS)}, not both "
+                            f"({' and '.join(kinds)})")
+    if payload.get("precheck") and kinds:
+        raise ScheduleError(f"a precheck guards a model run; a {kinds[0]} job "
                             "runs no model, so it cannot carry one")
 
 
@@ -262,6 +288,8 @@ class CronService:
         """
         schedule = parse_schedule(schedule_spec)  # raises ScheduleError
         payload = _checked_payload(dict(payload or {}))  # W9: read_verb, pause_windows
+        if owner_seat:
+            payload["exact_time"] = True  # the owner typed this time: no tool moves it
         if "deliver" in payload:  # one delivery validator for schedule and edit
             deliver = normalized_deliver(payload.pop("deliver"))
             if deliver:
@@ -307,10 +335,28 @@ class CronService:
                  for lane, stop in stops]
         if paused:
             notes.append(lanes.scope_pause_text(paused))
+        if owner_seat:
+            notes.extend(self._owner_overlap_note(stored, user_id=user_id, now=now))
         stored.schedule_notes = notes
         self._audit(CRON_SCHEDULED, user_id=user_id, via=via, job_id=stored.id,
                     schedule_spec=schedule_spec, one_shot=stored.one_shot)
         return stored
+
+    def _owner_overlap_note(self, job: CronJob, *, user_id: str, now: datetime) -> List[str]:
+        """An owner's typed time stays as typed; the reply names the job it overlaps."""
+        from core.cron_slots import SlotTable, holds_a_slot
+        if job.next_run_at is None or not holds_a_slot(job.payload):
+            return []
+        try:
+            table = SlotTable(self.store.list(user_id=user_id, enabled_only=True), now)
+            hit = table.overlap(table.job_fires(job), exclude_id=job.id)
+        except Exception:
+            logger.warning("cron job %s: slot check failed", job.id, exc_info=True)
+            return []
+        if hit is None:
+            return []
+        return [f"It overlaps job {hit.job.id[:8]} at {hit.at.strftime('%Y-%m-%d %H:%M')}: jobs "
+                f"run one at a time, so the later one waits for the earlier one."]
 
     def list_jobs(self, user_id: Optional[str] = None) -> List[CronJob]:
         return self.store.list(user_id=user_id)
@@ -345,6 +391,18 @@ class CronService:
             self._audit(CRON_CANCELLED, user_id=user_id or "", via=via,
                         job_id=job_id)
         return ok
+
+    def cut_note(self, job_id: str, *, user_id: str) -> str:
+        """The line a pause reply owes its owner: a pause drops an unsettled cut mark, so a
+        restart that cut a run which cannot repeat is told here or never. Read BEFORE
+        ``pause``; '' when there is nothing to tell."""
+        from cron.scheduler import cut_run_may_repeat
+        job = self.store.get(job_id, user_id=user_id)
+        mark = (job.payload or {}).get("cut_run") if job is not None else None
+        if not mark or cut_run_may_repeat(job):
+            return ""
+        by = "an owner pause" if mark == "pause" else "a restart"
+        return f" Its last run was cut by {by}; check what it did."
 
     def pause(self, job_id: str, *, user_id: str, via: str) -> bool:
         """Pause one job: its own state ('paused', no next run). True iff it moved."""
@@ -469,7 +527,7 @@ class CronService:
         if payload_updates:
             payload_updates = dict(payload_updates)
             checked = _checked_payload({k: v for k, v in payload_updates.items()
-                                        if k in ("read_verb", "write_verb", "pause_windows",
+                                        if k in (*DETERMINISTIC_KEYS, "pause_windows",
                                                  "precheck")
                                         and v is not None})
             payload_updates.update(checked)
@@ -479,7 +537,7 @@ class CronService:
                     {k: v for k, v in after.items() if v is not None}) <= _current_gap(job, self._now()):
                 raise ScheduleError(
                     f"the job recurs faster than {MIN_INTERVAL_SECONDS // 60} minutes; only a "
-                    f"read or write job may — change the schedule in the same edit")
+                    f"read, write or script job may — change the schedule in the same edit")
         changed: List[str] = []
         if new_task is not None and self.store.set_task(job_id, new_task, user_id=user_id):
             changed.append("task")

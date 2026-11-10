@@ -44,10 +44,10 @@ class _FakeBot:
     def __init__(self, blob=b"OGGDATA"):
         self.blob = blob
         self.got = []
-    async def get_file(self, file_id):
+    async def get_file(self, file_id, request_timeout=None):
         self.got.append(file_id)
         return type("F", (), {"file_path": f"voice/{file_id}.ogg"})()
-    async def download_file(self, file_path):
+    async def download_file(self, file_path, destination=None, timeout=30):
         import io
         return io.BytesIO(self.blob)
 
@@ -165,3 +165,77 @@ def test_an_oversized_voice_note_is_never_downloaded():
     assert extract_voice_file_id(long) is None
     assert extract_voice_file_id(big) is None
     assert extract_voice_file_id(ok) == "v"
+
+
+@pytest.mark.asyncio
+async def test_a_download_gets_the_long_timeout():
+    seen = {}
+
+    class _Bot(_FakeBot):
+        async def download_file(self, file_path, destination=None, timeout=30):
+            seen["timeout"] = timeout
+            return await super().download_file(file_path)
+
+    assert await download_voice_bytes(_Bot(b"VIDEO"), "v1") == b"VIDEO"
+    assert seen["timeout"] == 120
+
+
+@pytest.mark.asyncio
+async def test_a_failed_download_logs_the_reason_at_warning(caplog):
+    class _Bot(_FakeBot):
+        async def get_file(self, file_id, request_timeout=None):
+            raise RuntimeError("file is too big")
+
+    with caplog.at_level("WARNING", logger="surfaces.telegram.voice"):
+        assert await download_voice_bytes(_Bot(), "v1") is None
+    assert "file is too big" in caplog.text
+
+
+class _StreamBot(_FakeBot):
+    def __init__(self, size=None):
+        super().__init__()
+        self.size = size
+        self.downloads = []
+
+    async def get_file(self, file_id, request_timeout=None):
+        self.request_timeout = request_timeout
+        return type("F", (), {"file_path": "/srv/video.mp4", "file_size": self.size})()
+
+    async def download_file(self, file_path, destination=None, timeout=30):
+        self.downloads.append(destination)
+        with open(destination, "wb") as stream:
+            stream.write(b"VIDEO")
+
+
+@pytest.mark.asyncio
+async def test_a_video_streams_to_its_spool_file(tmp_path):
+    from pathlib import Path
+
+    from core.surfaces.media import Media
+    from surfaces.telegram.media import fetch_media_file
+
+    spool = tmp_path / "spool"
+    bot = _StreamBot()
+    got = await fetch_media_file(bot, Media(kind="video", ref="v1", spool=str(spool)))
+    assert got == Path(spool)
+    assert spool.read_bytes() == b"VIDEO"
+    assert bot.request_timeout == 60
+
+
+@pytest.mark.asyncio
+async def test_a_file_over_the_cap_at_get_file_is_not_downloaded(tmp_path):
+    from surfaces.telegram.voice import download_file_to_path
+
+    bot = _StreamBot(size=11)
+    assert await download_file_to_path(bot, "v1", str(tmp_path / "s"), 10) is False
+    assert bot.downloads == []
+
+
+@pytest.mark.asyncio
+async def test_a_local_server_gets_the_long_get_file_timeout(tmp_path, monkeypatch):
+    from surfaces.telegram.voice import LOCAL_GET_FILE_TIMEOUT_SECONDS, download_file_to_path
+
+    monkeypatch.setenv("TELEGRAM_BOT_API_URL", "http://127.0.0.1:8081")
+    bot = _StreamBot()
+    assert await download_file_to_path(bot, "v1", str(tmp_path / "s"), 10)
+    assert bot.request_timeout == LOCAL_GET_FILE_TIMEOUT_SECONDS

@@ -68,8 +68,8 @@ auto-created — the owner opts into each explicitly on their own terminal.
   owner to copy, and never say it is done or queued — nothing moves from your
   card. To ask the owner
   to choose between a few options and wait for the answer in this turn, call
-  `present_choice(question=…, options=[…])` (not in an autonomous run — use
-  `owner_ask` there).
+  `owner_ask(question=…, options=[…])`. In an autonomous run the same call raises a
+  durable ask, and the answer reaches the next run.
 
 ## Which tokens you trust — and the owner's verbs for it
 

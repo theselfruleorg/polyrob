@@ -29,7 +29,7 @@
  * 4. **It decides nothing itself.** A Stop / Cancel is a POST to an existing
  *    route (`http.js`), and the row says back exactly what the server answered.
  */
-import { latestOnly, postJson } from "./http.js";
+import { latestOnly, postJson, readJson } from "./http.js";
 
 /** The copy the server handed over, as a plain object. */
 export function copyFrom(node) {
@@ -339,16 +339,18 @@ export function renderNowNext(ctx, data, runningData, copy, opts = {}) {
 }
 
 /** The next run, in the reader's local time, from the job's `next_run_at`
- *  (ISO). `""` when the job has none (a finished one-shot) or it cannot be
- *  read — never an invented time. */
+ *  (ISO), with the server's `next_note` (a late job's wait, a pause by the failure
+ *  limit). `""` when the job has neither — never an invented time. */
 export function nextRunText(job, copy) {
+  const note = (job && job.next_note) || "";
   const ms = job && job.next_run_at ? Date.parse(job.next_run_at) : NaN;
-  if (!Number.isFinite(ms)) return "";
+  if (!Number.isFinite(ms)) return note;
   const when = new Date(ms).toLocaleString(undefined, {
     weekday: "short", month: "short", day: "numeric",
     hour: "2-digit", minute: "2-digit",
   });
-  return format(copy && copy.sched_next, { when });
+  const text = format(copy && copy.sched_next, { when });
+  return note ? `${text} · ${note}` : text;
 }
 
 /** One cron job as a `<tr>`: what it does, when, last run, and Cancel. A row
@@ -489,17 +491,12 @@ function wireTabs() {
 
 // --- reads ------------------------------------------------------------------ #
 
-async function getJson(url, fetcher) {
-  const call = fetcher || fetch;
-  const resp = await call(url, { credentials: "include" });
-  if (!resp.ok) return { error: String(resp.status) };
-  return await resp.json();
-}
+// 113 W5 (C-09): every read goes through http.js::readJson (over getJson).
 
-export const loadGoals = (f) => getJson("/api/webgate/goals", f);
-export const loadRunning = (f) => getJson("/api/webgate/running", f);
-export const loadCron = (f) => getJson("/api/webgate/cron", f);
-export const loadLive = (f) => getJson("/api/webgate/live", f);
+export const loadGoals = (f) => readJson("/api/webgate/goals", f);
+export const loadRunning = (f) => readJson("/api/webgate/running", f);
+export const loadCron = (f) => readJson("/api/webgate/cron", f);
+export const loadLive = (f) => readJson("/api/webgate/live", f);
 
 // --- mutations -------------------------------------------------------------- #
 

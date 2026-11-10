@@ -49,6 +49,8 @@ _DEDUP_WINDOW_S = 120.0   # an identical line inside this window is the same lin
 #: message is the last thing the owner received before it, within this window
 #: (2026-10-13 review C5: "stop posting that" in plain text never reached the job).
 PLAIN_REPLY_WINDOW_S = 3600.0
+#: Owner lines that are never a reply to anything.
+_NOT_REPLY_KINDS = frozenset({"command", "card_tap"})
 BLOCK_MAX_CHARS = 2000    # the rendered <owner-thread> block, whatever the row count
 LINE_MAX_CHARS = 400      # one rendered line
 #: F5 (prod review 2026-10-29): a FRESH owner session's tail — the one block that
@@ -310,18 +312,39 @@ class OwnerThreadStore:
         out: List[dict] = []
         for r in rows:
             r = dict(r)
-            prev = execute_retry(
-                self.db_path,
-                "SELECT rail_id, ts FROM owner_thread WHERE user_id=? AND direction='out' "
-                "AND (ts<? OR (ts=? AND id<?)) ORDER BY ts DESC, id DESC LIMIT 1",
-                (uid, float(r["ts"]), float(r["ts"]), int(r["id"])), fetch="one")
+            prev = self._plain_reply_target(uid, float(r["ts"]), int(r["id"]))
             if prev is None or str(prev["rail_id"] or "") != str(rail_id):
-                continue
-            if float(r["ts"]) - float(prev["ts"]) > PLAIN_REPLY_WINDOW_S:
                 continue
             r["plain_reply"] = True
             out.append(r)
         return out
+
+    def _plain_reply_target(self, uid: str, ts: float,
+                            row_id: Optional[int] = None) -> Optional[dict]:
+        """The line a PLAIN owner line at ``ts`` answers: the last line the owner received
+        before it, within :data:`PLAIN_REPLY_WINDOW_S`. ``row_id=None``: the line has no row
+        yet, so every row at ``ts`` is before it."""
+        prev = execute_retry(
+            self.db_path,
+            "SELECT * FROM owner_thread WHERE user_id=? AND direction='out' "
+            "AND (ts<? OR (ts=? AND id<?)) ORDER BY ts DESC, id DESC LIMIT 1",
+            (uid, ts, ts, (2 ** 63 - 1) if row_id is None else row_id), fetch="one")
+        if prev is None or ts - float(prev["ts"]) > PLAIN_REPLY_WINDOW_S:
+            return None
+        return dict(prev)
+
+    def answered_rail_line(self, user_id: str, *, via: str, ts: float, reply_to_mid: str,
+                           kind: str) -> Optional[dict]:
+        """The rail's outgoing row that an owner line answers: by its quote-reply, else by the
+        plain-reply rule. ``None`` when it answers no rail."""
+        if kind in _NOT_REPLY_KINDS:
+            return None
+        if reply_to_mid:
+            row = self.by_mid(user_id, via=via, mid=reply_to_mid)
+            row = row if row is not None and row.get("direction") == "out" else None
+        else:
+            row = self._plain_reply_target(str(user_id or ""), ts)
+        return row if row is not None and row.get("rail_id") else None
 
     def outbound_bodies_since(self, user_id: str, since_secs: float, *,
                               now: Optional[float] = None, limit: int = 50) -> List[str]:
@@ -517,7 +540,9 @@ def record_owner_in(container: Any, user_id: str, text: str, *, via: str,
                     reply_to_mid: Optional[str] = None, kind: str = "comment",
                     now: Optional[float] = None) -> bool:
     """Record a line the owner SENT (owner tier only — the caller has resolved
-    the tier; a correspondent or room line never comes here). Never raises."""
+    the tier; a correspondent or room line never comes here). A line that answers a
+    rail stores that ``rail_id`` and waits for the end of the turn
+    (:func:`take_bound_replies`). Never raises."""
     body = (text or "").strip()
     if not body or not str(user_id or "").strip():
         return False
@@ -525,17 +550,62 @@ def record_owner_in(container: Any, user_id: str, text: str, *, via: str,
         store = resolve_store(container, create=True)
         if store is None:
             return False
-        store.record("in", user_id, body, via=via or "", session_id=session_id or "",
-                     mid=mid or "", reply_to_mid=reply_to_mid or "", kind=kind or "comment",
-                     now=now)
+        ts = time.time() if now is None else float(now)
+        answered = _answered_line(store, user_id, via=via or "", ts=ts,
+                                  reply_to_mid=reply_to_mid or "", kind=kind or "comment")
+        rail_id = str(answered["rail_id"]) if answered else ""
+        rowid = store.record("in", user_id, body, via=via or "", session_id=session_id or "",
+                             mid=mid or "", reply_to_mid=reply_to_mid or "",
+                             rail_id=rail_id, kind=kind or "comment", now=ts)
+        if rowid and answered and session_id:
+            _hold_bound_reply(str(session_id), {
+                "user_id": str(user_id), "rail_id": rail_id,
+                "rail_text": str(answered.get("body") or ""), "owner_text": body,
+                # The run that sent the answered line: its verdict goes on that run's
+                # episode, not on a newer run of the same rail.
+                "rail_session_id": str(answered.get("session_id") or "")})
         return True
     except Exception:
         logger.debug("owner thread: in record skipped (fail-open)", exc_info=True)
         return False
 
 
+def _answered_line(store: OwnerThreadStore, user_id: str, **kw: Any) -> Optional[dict]:
+    """A fault here costs the binding, never the owner's line."""
+    try:
+        return store.answered_rail_line(user_id, **kw)
+    except Exception:
+        logger.warning("owner thread: reply not bound to a rail", exc_info=True)
+        return None
+
+
+#: Replies bound to a rail, by session, until the end of the owner's turn. Memory only: a
+#: restart loses them, and the verdict has no retry either. Bounded, as a session can end
+#: with no turn end to take them.
+_BOUND_REPLIES: Dict[str, List[dict]] = {}
+_BOUND_SESSIONS_KEPT = 64
+_BOUND_REPLIES_KEPT = 5
+
+
+def _hold_bound_reply(session_id: str, reply: dict) -> None:
+    held = _BOUND_REPLIES.setdefault(session_id, [])
+    held.append(reply)
+    del held[:-_BOUND_REPLIES_KEPT]
+    while len(_BOUND_REPLIES) > _BOUND_SESSIONS_KEPT:
+        _BOUND_REPLIES.pop(next(iter(_BOUND_REPLIES)))
+
+
+def take_bound_replies(session_id: str) -> List[dict]:
+    """The session's replies to a rail since the last call: ``{user_id, rail_id, rail_text,
+    owner_text}``, oldest first."""
+    return _BOUND_REPLIES.pop(str(session_id or ""), [])
+
+
 def thread_tail(container: Any, user_id: str, *, hours: Optional[float] = None,
-                max_rows: Optional[int] = None, now: Optional[float] = None) -> List[dict]:
+                max_rows: Optional[int] = None,
+                now: Optional[float] = None) -> Optional[List[dict]]:
+    """The owner thread's recent rows, oldest first; ``None`` when the store could not be
+    read (an unreadable store is not an empty one: the caller keeps its watermark)."""
     try:
         store = resolve_store(container, create=False)
         if store is None:
@@ -544,16 +614,17 @@ def thread_tail(container: Any, user_id: str, *, hours: Optional[float] = None,
         return store.tail(user_id, since_ts=ts - (hours or tail_hours()) * 3600,
                           limit=max_rows or tail_rows())
     except Exception:
-        logger.debug("owner thread: tail read failed (fail-open)", exc_info=True)
-        return []
+        logger.warning("owner thread: tail read failed", exc_info=True)
+        return None
 
 
 def thread_delta(container: Any, user_id: str, *, session_id: str, since_ts: float,
-                 max_rows: int = 20) -> List[dict]:
+                 max_rows: int = 20) -> Optional[List[dict]]:
     """The NEWEST ``max_rows`` rows other sessions (and the owner's own verbs)
     produced after ``since_ts``, oldest first. When more exist, the first row
     carries ``_earlier`` = how many older rows were left out, so the block can
-    say so instead of losing them silently (084 R10)."""
+    say so instead of losing them silently (084 R10). ``None`` when the store could
+    not be read: the caller must not move its watermark past rows it never saw."""
     try:
         store = resolve_store(container, create=False)
         if store is None:
@@ -568,8 +639,8 @@ def thread_delta(container: Any, user_id: str, *, session_id: str, since_ts: flo
                 rows[0] = dict(rows[0], _earlier=total - len(rows))
         return rows
     except Exception:
-        logger.debug("owner thread: delta read failed (fail-open)", exc_info=True)
-        return []
+        logger.warning("owner thread: delta read failed", exc_info=True)
+        return None
 
 
 def thread_for_session(container: Any, user_id: str, session_id: str, *,

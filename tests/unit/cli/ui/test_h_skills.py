@@ -70,7 +70,7 @@ def test_no_args_lists_skills(monkeypatch):
     assert "web-research" in out
     assert "data-cleaner" in out
     assert "Research topics on the web" in out
-    assert "2 skill(s) available" in out
+    assert "2 skill(s) I can load" in out  # the chat seat's words (113 W4)
     # user_id was threaded through to the backend.
     assert manager.calls and manager.calls[0][0] == "local"
 
@@ -149,7 +149,7 @@ def test_query_no_match_is_graceful(monkeypatch):
     ctx, buf = _plain_ctx(args=["nonexistentquery"])
     _run(ctx)
     out = buf.getvalue()
-    assert "no skills match" in out
+    assert "No skill matches" in out
     assert "nonexistentquery" in out
 
 
@@ -163,7 +163,7 @@ def test_empty_catalog_is_graceful(monkeypatch):
     _patch_manager(monkeypatch, manager)
     ctx, buf = _plain_ctx()
     _run(ctx)
-    assert "no skills available" in buf.getvalue()
+    assert "No skills are installed" in buf.getvalue()
 
 
 def test_manager_unavailable_is_graceful(monkeypatch):
@@ -176,8 +176,8 @@ def test_manager_unavailable_is_graceful(monkeypatch):
     ctx, buf = _plain_ctx()
     _run(ctx)
     out = buf.getvalue()
-    assert "Could not load skills" in out
-    assert "boom" in out
+    assert "could not read the skills" in out
+    assert "RuntimeError" in out
 
 
 def test_never_raises_on_backend_error(monkeypatch):
@@ -189,7 +189,7 @@ def test_never_raises_on_backend_error(monkeypatch):
     ctx, buf = _plain_ctx()
     # Must not raise.
     _run(ctx)
-    assert "Could not load skills" in buf.getvalue()
+    assert "could not read the skills" in buf.getvalue()
 
 
 # ---------------------------------------------------------------------------

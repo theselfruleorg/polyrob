@@ -57,10 +57,36 @@ def test_forged_reentry_and_leaf_turns_are_not_origins(tmp_path, monkeypatch):
 
 
 def test_a_leaf_or_sub_agent_cannot_create_a_durable_goal(tmp_path):
-    """Review E2: cronjob is delegate_blocked and goal_ask / rail_propose refuse a
+    """Review E2: cronjob is delegate_blocked and owner_ask / rail_propose refuse a
     leaf; goal_create let a delegated leaf queue durable autonomous work."""
     tool = _tool(tmp_path)
     for ctx in (_Ctx("leaf-1", role="leaf"), _Ctx("sub-1", is_sub_agent=True)):
         r = asyncio.run(tool.goal_create(GoalCreateAction(title="durable work", body="b"), ctx))
         assert r.error and "leaf/sub-agent" in r.error
     assert tool._goal_board.list(user_id="tester", limit=5) == []
+
+
+def test_report_back_defaults_true_from_the_owners_chat_only(tmp_path, monkeypatch):
+    """112 W3: a heavy or money goal the owner's chat asked for reports its full result back;
+    an explicit false is kept; a planner goal stays a one-line notice."""
+    monkeypatch.setattr("core.autonomy_marker.is_autonomous",
+                        lambda sid: sid == "planner-1", raising=False)
+    monkeypatch.setattr("tools.goal_tools.owner_seat_turn", lambda ctx: ctx.session_id != "planner-1")
+    monkeypatch.setenv("DEFAULT_PROVIDER", "openrouter")
+    monkeypatch.setenv("DEFAULT_MODEL", "deepseek/deepseek-v4.1-flash")
+    monkeypatch.setenv("HEAVY_MODEL", "deepseek/deepseek-v4-pro")
+    tool = _tool(tmp_path)
+    asyncio.run(tool.goal_create(GoalCreateAction(title="judge and draw", body="b", tier="heavy",
+                                                  why="decides the winners"), _Ctx("chat-1")))
+    g = [x for x in tool._goal_board.list(user_id="tester", limit=5) if x.title == "judge and draw"][0]
+    assert g.payload.get("report_back") is True and g.payload.get("tier") == "heavy"
+    _create(tool, _Ctx("chat-1"), "owner asked for a summary")
+    plain = [x for x in tool._goal_board.list(user_id="tester", limit=5)
+             if x.title == "owner asked for a summary"][0]
+    assert "report_back" not in plain.payload   # not heavy, not money: the one-line wake
+    asyncio.run(tool.goal_create(GoalCreateAction(title="quiet one", body="b", report_back=False),
+                                 _Ctx("chat-1")))
+    quiet = [x for x in tool._goal_board.list(user_id="tester", limit=5) if x.title == "quiet one"][0]
+    assert "report_back" not in quiet.payload
+    p = _create(_tool(tmp_path / "p"), _Ctx("planner-1"), "planner queued this")
+    assert "report_back" not in p.payload

@@ -340,7 +340,7 @@ class ResultProcessingMixin:
 					ai_content=ai_content,
 					tool_calls=tool_calls_to_pass,
 					tool_responses=tool_responses,
-					reasoning_content=getattr(self, '_current_reasoning_content', None),
+					replay_fields=getattr(self, '_current_replay_fields', None),
 				)
 				self.logger.info(f"[ATOMIC] ✅ Added AIMessage + {len(tool_responses)} ToolMessages atomically")
 

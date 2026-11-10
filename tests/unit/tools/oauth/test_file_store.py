@@ -289,3 +289,35 @@ def test_flush_never_widens_an_existing_mode_to_other_users(tmp_path):
     os.chmod(path, 0o666)
     FileTokenStore(path)[("u1", "p")] = b"secret"
     assert stat.S_IMODE(path.stat().st_mode) & 0o007 == 0
+
+
+# --- an unreadable file is never REPLACED by a write ---------------------------
+
+def _deny_reads(monkeypatch, path):
+    from pathlib import Path
+    real_read_text = Path.read_text
+
+    def _denied(self, *a, **k):
+        if self == path:
+            raise PermissionError(13, "Permission denied", str(path))
+        return real_read_text(self, *a, **k)
+    monkeypatch.setattr(Path, "read_text", _denied)
+
+
+@pytest.mark.parametrize("write", ["set", "del"])
+def test_a_write_over_an_unreadable_file_raises_and_keeps_it(tmp_path, monkeypatch, write):
+    """``_load`` answered {} on EACCES and the writer then flushed ONE row over
+    every row the file held. A writer now loads strictly and refuses."""
+    from tools.oauth.file_store import FileTokenStore
+    path = tmp_path / "tokens.json"
+    path.write_text('{"u|p": "aGk=", "v|q": "aGk="}')
+    _deny_reads(monkeypatch, path)
+    store = FileTokenStore(path)
+    assert dict(store) == {}                       # reads stay fail-open
+    with pytest.raises(OSError):
+        if write == "set":
+            store[("w", "r")] = b"new"
+        else:
+            del store[("u", "p")]
+    monkeypatch.undo()
+    assert path.read_text() == '{"u|p": "aGk=", "v|q": "aGk="}'

@@ -30,7 +30,7 @@
  * shared link shows the same board; the tab stays the hash (`#goals`).
  */
 import { copyFrom, elapsed, format, noticeEntry, unreadableEntry } from "./work-now.js";
-import { latestOnly, postJson } from "./http.js";
+import { latestOnly, postJson, readJson } from "./http.js";
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -562,11 +562,8 @@ export function renderFiles(box, answers, copy) {
 
 // --- reads + wiring --------------------------------------------------------- #
 
-async function getJson(url) {
-  const resp = await fetch(url, { credentials: "include" });
-  if (!resp.ok && resp.status !== 404) return { error: String(resp.status) };
-  return await resp.json();
-}
+// 113 W5 (C-09): the one read helper, http.js; a 404 keeps its own body.
+const readGoal = (url) => readJson(url, undefined, { allow404: true });
 
 export const boardUrl = (n) => `/api/webgate/goals/board?finished=${encodeURIComponent(n)}`;
 export const detailUrl = (id) => `/api/webgate/goals/${encodeURIComponent(id)}/detail`;
@@ -632,7 +629,7 @@ function bind() {
   };
 
   let data = null;
-  const read = latestOnly(() => getJson(boardUrl(finishedN)));
+  const read = latestOnly(() => readGoal(boardUrl(finishedN)));
   const draw = () => renderBoard(ctx, data, copy, { filter, readOnly, closed, flash });
   // A live redraw waits while the owner is in the middle of something on the
   // board: an answer typed, a box in focus, an action on its way.
@@ -687,7 +684,7 @@ function bind() {
     if (dTitle) dTitle.textContent = (row && row.title) || id;
     if (dBody) dBody.replaceChildren(noticeEntry(copy.d_loading));
     if (!dialog.open && dialog.showModal) dialog.showModal();
-    getJson(detailUrl(id)).then((d) => {
+    readGoal(detailUrl(id)).then((d) => {
       if (filter.goal !== id) return;
       if (dTitle && d && d.title) dTitle.textContent = d.title;
       renderDetail(dBody, d, copy, { readOnly });
@@ -695,7 +692,7 @@ function bind() {
       const sids = (d && d.sessions) || [];
       if (box && sids.length) {
         Promise.all(sids.slice(0, 3).map((sid) =>
-          getJson(`/api/webgate/artifacts?session_id=${encodeURIComponent(sid)}`)
+          readGoal(`/api/webgate/artifacts?session_id=${encodeURIComponent(sid)}`)
             .then((body) => ({ sid, body }), () => ({ sid, body: null }))))
           .then((answers) => renderFiles(box, answers, copy));
       } else if (box) renderFiles(box, [], copy);

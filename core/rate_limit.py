@@ -227,6 +227,25 @@ class PersistentWindowLimiter:
         finally:
             db.close()
 
+    def used(self, bucket):
+        """Units held in *bucket* inside the window (a read; reserves nothing).
+        0 for a store that does not exist yet."""
+        import os
+        from core.sqlite_util import wal_connect
+        if not os.path.exists(self.db_path):
+            return 0
+        db = wal_connect(self.db_path)
+        try:
+            row = db.execute('SELECT count(*) FROM rate_events WHERE bucket=? AND ts > ?',
+                             (str(bucket), self.time_fn() - self.window)).fetchone()
+            return int(row[0] if row else 0)
+        except Exception as exc:
+            if 'no such table' in str(exc):
+                return 0
+            raise
+        finally:
+            db.close()
+
 
 class TokenBucket:
     """Per-key token bucket: ``burst`` capacity refilled at ``rate_per_sec``.

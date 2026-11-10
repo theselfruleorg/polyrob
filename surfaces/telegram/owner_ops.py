@@ -402,6 +402,10 @@ def wallet_reply(args: List[str], user_id: Optional[str] = None,
         return refusal
     if args and args[0].lower() in ("autonomous", "auto", "ceiling"):
         return _set_autonomous_ceiling(args[1:], user_id, data_dir)
+    if args and args[0].lower() in ("signed", "signatures"):
+        # 113 W6 G-5: what the wallet signed — a read of the one signing journal.
+        from surfaces.telegram.signing_ops import signing_history_reply
+        return signing_history_reply(list(args[1:]))
     if args and args[0].lower() in ("tokens", "token", "trust", "untrust"):
         # W1: which tokens are trusted, and the owner's trust / untrust — the
         # chat seat that replaces `polyrob wallet pin-token` on the server.
@@ -590,8 +594,9 @@ def _invoicing_off_note() -> str:
     return f"\n⚠️ {note}" if note else ""
 
 
-async def invoices_reply(user_id: str, args: List[str]) -> str:
-    """`/invoices [<status>]` — the agent's receivables.
+async def invoices_reply(user_id: str, args: List[str], *, db=None) -> str:
+    """`/invoices [<status>]` — the agent's receivables. The REPL calls it too,
+    with its own bot.db (``db``), so one verb gives one text (113 W4 item 3).
 
     ⚠️ The filter vocabulary is ``modules.x402.invoicing.INVOICE_STATUSES``,
     imported and never re-listed. This seat carried its own
@@ -604,7 +609,7 @@ async def invoices_reply(user_id: str, args: List[str]) -> str:
     # `refunded` is also a status: bare it LISTS refunded rows; with an id it
     # records a refund (098 MO-03).
     if len(args) > 1 and args[0].lower() == "refunded":
-        return await _invoice_refunded_reply(user_id, args[1:])
+        return await _invoice_refunded_reply(user_id, args[1:], db=db)
     _usage = (f"Usage: /invoices [{'|'.join(INVOICE_STATUSES)}] · "
               "/invoices refunded <id> [tx-hash]")
     status = None
@@ -615,7 +620,7 @@ async def invoices_reply(user_id: str, args: List[str]) -> str:
         else:
             return _usage
     try:
-        rows = await list_payment_requests(user_id=user_id, status=status, limit=50)
+        rows = await list_payment_requests(user_id=user_id, status=status, limit=50, db=db)
     except Exception as e:
         logger.warning("telegram /invoices read failed: %s", e, exc_info=True)
         return f"Could not read invoices: {e}"
@@ -651,18 +656,19 @@ async def invoices_reply(user_id: str, args: List[str]) -> str:
     return "\n".join(lines)
 
 
-async def _invoice_refunded_reply(user_id: str, args: List[str]) -> str:
+async def _invoice_refunded_reply(user_id: str, args: List[str], *, db=None) -> str:
     """`/invoices refunded <id> [tx-hash]` — record that a refund the agent owed
     was paid back (``refund_due → refunded``, 098 MO-03).
 
     The SAME operation as ``polyrob owner refunded`` (``mark_payment_refunded``,
     a guarded write from ``refund_due`` only). The id resolves among the
     caller's OWN ``refund_due`` rows, so a chat id can never close another
-    tenant's obligation."""
+    tenant's obligation. The REPL calls it too, with its own bot.db (``db``)."""
     from modules.x402.invoicing import list_payment_requests
     from modules.x402.x402_integration import mark_payment_refunded
     try:
-        rows = await list_payment_requests(user_id=user_id, status="refund_due", limit=200)
+        rows = await list_payment_requests(user_id=user_id, status="refund_due", limit=200,
+                                           db=db)
     except Exception as e:
         logger.warning("telegram /invoices refunded lookup failed: %s", e, exc_info=True)
         return f"Could not read invoices: {e}"
@@ -672,7 +678,7 @@ async def _invoice_refunded_reply(user_id: str, args: List[str]) -> str:
     tx_hash = args[1] if len(args) > 1 else None
     try:
         done = await mark_payment_refunded(request_id, tx_hash=tx_hash,
-                                           note="owner: /invoices refunded")
+                                           note="owner: /invoices refunded", db=db)
     except Exception as e:
         logger.warning("telegram /invoices refunded failed: %s", e, exc_info=True)
         return f"Refund not recorded: {e}"
@@ -709,7 +715,8 @@ async def settle_reply(user_id: str, args: List[str]) -> str:
         return f"Settle failed: {e}"
     if not settled:
         return (f"{_code(request_id[:8])} was not settled — it may already be "
-                "completed, or that tx hash already settled another invoice.")
+                "completed, that tx hash already settled another invoice, "
+                "or it is an order's invoice: give the transaction hash.")
     out = f"✅ Settled {_code(request_id[:8])}."
     note = _invoicing_off_note()
     out += (note if note else

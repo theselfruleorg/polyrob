@@ -12,7 +12,7 @@ appended to the local journal after the receipt (``core.wallet.nft_account``).
 
 Nothing here authorizes: :func:`resolve` only refuses early with a reason (pinned collection,
 code hash, deployed account, ``ownerOf == treasury``); the guard's own pre-flight re-reads the
-owner, the lock, the pins and ``state()``. Gate: ``AGENT_NFT_ENABLED`` (default OFF).
+owner, the lock (AccountV3 only), the pins and ``state()``. Gate: ``AGENT_NFT_ENABLED`` (default OFF).
 """
 from __future__ import annotations
 

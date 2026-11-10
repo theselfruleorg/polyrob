@@ -25,7 +25,7 @@ from surfaces.telegram.harness import (
 #: to survive being written down.
 ROOM_REACHABLE = {
     # read-only
-    "/status", "/help", "/goals", "/jobs", "/recap", "/journey", "/missed", "/book",
+    "/status", "/help", "/goals", "/journey", "/missed", "/book",
     "/inbox", "/asks", "/pending", "/allowlist", "/mode", "/avatar", "/kb",
     "/files", "/cwd", "/start",
     "/usage",   # 2026-10-14 D6: the AI-cost view, a read answered in the owner's DM

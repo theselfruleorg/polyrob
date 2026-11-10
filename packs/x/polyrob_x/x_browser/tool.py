@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from core.config import BotConfig
 from polyrob_x.write_budget import reserve_write
+from polyrob_x.x_browser.driver import PostUnconfirmed
 from tools.base_tool import BaseTool
 from agents.task.loop_types.controller_types import ActionResult
 
@@ -125,10 +126,23 @@ def _proof(rail: str, **facts) -> str:
         return ""
 
 
+def _no_permalink(what: str, url: str) -> str:
+    """The composer closed (X took it) but no link under the agent's own handle
+    showed: say exactly that, with no proof line (there is no status URL)."""
+    return (f"{what} (permalink not found): X closed the composer, and no status "
+            f"link under the agent's own handle showed. Find it on {url}; do not "
+            "post it again.")
+
+
 def _leaf_or_forged(execution_context) -> bool:
     """True for a delegated/leaf/forged turn — never let one drive X."""
     from polyrob.sdk import is_leaf_or_forged   # W5: the ONE owner-turn definition
     return is_leaf_or_forged(execution_context)
+
+
+def _operator_denies() -> bool:
+    from tools.controller.approval import operator_denies_approvals
+    return operator_denies_approvals()
 
 
 class XBrowserTool(BaseTool):
@@ -203,7 +217,7 @@ class XBrowserTool(BaseTool):
 
     @BaseTool.action(
         "Publish a post to X (x.com) from the agent's own saved account. "
-        "Owner-approval-gated. Requires a captured X session.",
+        "Requires a captured X session.",
         param_model=XPostAction,
     )
     async def x_post(self, params: XPostAction, execution_context=None) -> ActionResult:
@@ -212,6 +226,13 @@ class XBrowserTool(BaseTool):
                 error="x_post is blocked for delegated/forged turns — report back "
                       "and let the main agent post.",
                 include_in_memory=True)
+        if _operator_denies():
+            return ActionResult(error="x_post blocked: APPROVAL_PROVIDER=deny stops every "
+                                      "post on this install.", include_in_memory=True)
+        from polyrob_x.post_spacing import placeholder_refusal
+        placeholder = placeholder_refusal("x_post", getattr(params, "text", None))
+        if placeholder:
+            return ActionResult(error=placeholder, include_in_memory=True)
         user_id = self._user_id(execution_context)
         if not self.session_store.exists(user_id):
             return ActionResult(
@@ -230,6 +251,8 @@ class XBrowserTool(BaseTool):
                                 include_in_memory=True)
         try:
             url = await driver.post(params.text)
+        except PostUnconfirmed as e:
+            return ActionResult(error=str(e), include_in_memory=True)
         except Exception as e:
             return ActionResult(
                 error=f"post failed: {e} — the session may be expired; "
@@ -237,6 +260,9 @@ class XBrowserTool(BaseTool):
                 include_in_memory=True)
         finally:
             await self._run_release(release)
+        if "/status/" not in url:
+            return ActionResult(extracted_content=_no_permalink("posted", url),
+                                include_in_memory=True)
         # 057 WS-E: the proof rule rides with the receipt (tools/rails/verification.py).
         return ActionResult(
             extracted_content=f"posted to X: {url}\n{_proof('x_post', url=url)}",
@@ -245,7 +271,7 @@ class XBrowserTool(BaseTool):
     @BaseTool.action(
         "Reply to an existing X post (by status URL or id) from the agent's own "
         "saved account — the public-reply lane the API tier refuses (403) for "
-        "non-mentioners. Owner-approval-gated. Requires a captured X session.",
+        "non-mentioners. Requires a captured X session.",
         param_model=XReplyAction,
     )
     async def x_reply(self, params: XReplyAction, execution_context=None) -> ActionResult:
@@ -254,6 +280,9 @@ class XBrowserTool(BaseTool):
                 error="x_reply is blocked for delegated/forged turns — report back "
                       "and let the main agent reply.",
                 include_in_memory=True)
+        if _operator_denies():
+            return ActionResult(error="x_reply blocked: APPROVAL_PROVIDER=deny stops every "
+                                      "post on this install.", include_in_memory=True)
         user_id = self._user_id(execution_context)
         if not self.session_store.exists(user_id):
             return ActionResult(
@@ -272,6 +301,8 @@ class XBrowserTool(BaseTool):
                                 include_in_memory=True)
         try:
             url = await driver.reply(params.status_id, params.text)
+        except PostUnconfirmed as e:
+            return ActionResult(error=str(e), include_in_memory=True)
         except Exception as e:
             return ActionResult(
                 error=f"reply failed: {e} — the session may be expired; "
@@ -279,6 +310,11 @@ class XBrowserTool(BaseTool):
                 include_in_memory=True)
         finally:
             await self._run_release(release)
+        if "/status/" not in url:
+            return ActionResult(
+                extracted_content=_no_permalink(
+                    f"replied under status {params.status_id}", url),
+                include_in_memory=True)
         return ActionResult(
             extracted_content=(f"replied on X under status {params.status_id}: {url}"
                                f"\n{_proof('x_reply', url=url)}"),
@@ -378,14 +414,16 @@ class XBrowserTool(BaseTool):
         # Bounded escalation loop: run → on pause, escalate → if cleared, resume.
         from polyrob_x.x_browser.signup import SignupPaused
         resume = params.resume
+        # Each pass opens its own browser context and closes it in `finally`, AFTER
+        # the escalation (the owner may solve the check on that open page). Driver and
+        # release stay local: the tool instance is shared between turns.
         for _ in range(4):
+            driver = release = None
             try:
-                flow = await self._build_signup_flow(user_id, resume)
+                flow, driver, release = await self._build_signup_flow(user_id, resume)
                 result = await flow.run(resume=resume)
             except SignupPaused as paused:
-                outcome = await self._escalate(
-                    paused, user_id, session_id,
-                    driver=getattr(self, "_signup_driver", None))
+                outcome = await self._escalate(paused, user_id, session_id, driver=driver)
                 from polyrob_x.x_browser.escalation import EscalationOutcome
                 if outcome is EscalationOutcome.CLEARED:
                     resume = True
@@ -402,6 +440,11 @@ class XBrowserTool(BaseTool):
             except Exception as e:
                 return ActionResult(error=f"X signup failed: {e}",
                                     include_in_memory=True)
+            finally:
+                try:
+                    await self._run_release(release)
+                except Exception as e:
+                    logger.debug("x signup context release failed: %s", e)
             return ActionResult(
                 extracted_content=self._signup_summary(result),
                 include_in_memory=True)
@@ -432,7 +475,8 @@ class XBrowserTool(BaseTool):
         return " ".join(parts)
 
     async def _build_signup_flow(self, user_id: str, resume: bool):
-        """Construct a live SignupFlow (headless on a server). Overridable in tests."""
+        """``(SignupFlow, driver, release)`` for one pass (headless on a server); the
+        caller calls ``release`` when the pass ends. Overridable in tests."""
         from core.instance import resolve_instance_id
         from polyrob_x.x_browser.session_store import XSessionStore
         from polyrob_x.x_browser.signup import MailPoller, SignupFlow
@@ -453,13 +497,11 @@ class XBrowserTool(BaseTool):
         except Exception as e:
             raise RuntimeError(f"could not provision the agent inbox for X signup: {e}")
 
-        driver, release = await self._open_signup_driver(user_id)
-        self._signup_driver = driver
-        self._signup_release = release
         mail = MailPoller(client)
         progress = XSessionStore(provider="x_signup")
         display, handle = self._signup_identity()
         disclosure = self._disclosure()
+        driver, release = await self._open_signup_driver(user_id)   # opened last
 
         class _Identity:
             name = display
@@ -468,8 +510,13 @@ class XBrowserTool(BaseTool):
             disclosure = ""
         _Identity.handle = handle
         _Identity.disclosure = disclosure
-        return SignupFlow(driver=driver, mail=mail, store=self.session_store,
-                          progress=progress, identity=_Identity(), user_id=user_id)
+        try:
+            flow = SignupFlow(driver=driver, mail=mail, store=self.session_store,
+                              progress=progress, identity=_Identity(), user_id=user_id)
+        except BaseException:
+            await self._run_release(release)
+            raise
+        return flow, driver, release
 
     @staticmethod
     def _signup_identity() -> tuple:

@@ -24,6 +24,8 @@
  * crosses from Python into JS.
  */
 
+import { postJson } from "./http.js";
+
 /**
  * Session status -> running | waiting | done | failed | stopped, or "unknown"
  * (070 W0.11). A suspended run waits for the owner; a failed run did not
@@ -82,9 +84,18 @@ export function rowNode(session, copy) {
   const row = el("a", "entry");
   row.href = `/c/${encodeURIComponent(session?.id || "")}`;
   row.dataset.state = state;
-  row.appendChild(el("h3", "entry-title", session?.task || (copy && copy.untitled) || ""));
+  // 113: one of your console chats shows the name you gave it; the main chat says so.
+  const chat = session?.chat || null;
+  row.appendChild(el("h3", "entry-title",
+    (chat && chat.label) || session?.task || (copy && copy.untitled) || ""));
 
   const meta = el("p", "entry-meta");
+  if (chat && chat.main) {
+    const main = el("span", "pill is-done", (copy && copy.main) || "");
+    main.dataset.chat = "main";
+    meta.appendChild(main);
+    meta.appendChild(document.createTextNode(" "));
+  }
   const pill = el("span", `pill ${statusClass(state)}`);
   pill.appendChild(el("span", "dot"));
   pill.appendChild(document.createTextNode((copy && copy[`status_${state}`]) || state));
@@ -128,10 +139,52 @@ export function rowNode(session, copy) {
 }
 
 /**
+ * 113: Rename and Close for one of YOUR console chats, or null (a run that is not
+ * a chat of yours, a read-only console). The main chat has no Close. `act(verb,
+ * slug, label)` does the change; the buttons sit after the row link, never in it.
+ */
+export function actionsNode(session, copy, act, ask = globalThis.prompt) {
+  const chat = session?.chat || null;
+  if (!chat || !chat.slug || !(copy && copy.can_write) || typeof act !== "function") return null;
+  const box = el("div", "state-actions");
+  box.dataset.chatActions = chat.slug;
+  const name = chat.label || (chat.main ? copy.main : chat.slug) || "";
+  const rename = el("button", "btn btn-quiet", copy.rename || "");
+  rename.type = "button";
+  rename.setAttribute("aria-label", `${copy.rename || ""}: ${name}`);
+  rename.addEventListener("click", () => {
+    const label = typeof ask === "function" ? ask(copy.rename_ask || "", chat.label || "") : null;
+    if (label && String(label).trim()) act("rename", chat.slug, String(label).trim());
+  });
+  box.appendChild(rename);
+  if (!chat.main) {
+    const close = el("button", "btn btn-quiet", copy.close_chat || "");
+    close.type = "button";
+    close.setAttribute("aria-label", `${copy.close_chat || ""}: ${name}`);
+    close.addEventListener("click", () => act("close", chat.slug));
+    box.appendChild(close);
+  }
+  return box;
+}
+
+function appendRow(list, session, copy, act) {
+  list.appendChild(rowNode(session, copy));
+  const actions = actionsNode(session, copy, act);
+  if (actions) list.appendChild(actions);
+}
+
+/** POST one chat change; the answer of a refusal is shown, never dropped. */
+export async function change(verb, slug, label, fetcher) {
+  const res = await postJson(`/api/webgate/chats/${encodeURIComponent(slug)}/${verb}`,
+    verb === "rename" ? { label } : {}, fetcher ? { fetcher } : {});
+  return { ok: res.ok, error: res.ok ? "" : String((res.body && (res.body.error || res.body.detail)) || "") };
+}
+
+/**
  * Fill *list* from *sessions*. `sessions === null` means the read FAILED, which
  * is a different answer from an empty list and is rendered as one.
  */
-export function render(list, state, sessions, copy) {
+export function render(list, state, sessions, copy, act) {
   list.replaceChildren();
   if (sessions === null) {
     state.textContent = (copy && copy.unreadable) || "";
@@ -144,7 +197,7 @@ export function render(list, state, sessions, copy) {
     return "empty";
   }
   state.hidden = true;
-  sessions.forEach((session) => list.appendChild(rowNode(session, copy)));
+  sessions.forEach((session) => appendRow(list, session, copy, act));
   return "rows";
 }
 
@@ -163,6 +216,13 @@ export async function load(dialog, offset = 0, fetcher = fetch) {
   const copy = copyFrom(document.getElementById("chats-copy"));
   state.textContent = copy.loading || "";
   state.hidden = false;
+  const act = async (verb, slug, label) => {
+    let out = { ok: false, error: "" };
+    try { out = await change(verb, slug, label, fetcher === fetch ? undefined : fetcher); }
+    catch (err) { console.error("[chats] the change did not go through", err); }
+    await load(dialog, 0, fetcher);
+    if (!out.ok) { state.hidden = false; state.textContent = out.error || copy.unreadable || ""; }
+  };
   try {
     const resp = await fetcher(`/api/webgate/chats?offset=${offset}&limit=50`, { credentials: "include" });
     if (!resp.ok) throw new Error(String(resp.status));
@@ -170,12 +230,12 @@ export async function load(dialog, offset = 0, fetcher = fetch) {
     if (requests.get(dialog) !== request) return;
     if (!Array.isArray(data.sessions)) throw new Error('Invalid chat catalog');
     dialog.querySelector('[data-chats-more]')?.remove();
-    if (!offset) render(list, state, Array.isArray(data.sessions) ? data.sessions : [], copy);
+    if (!offset) render(list, state, Array.isArray(data.sessions) ? data.sessions : [], copy, act);
     else {
       const seen = new Set([...list.querySelectorAll('a.entry')].map(row => row.getAttribute('href')));
       data.sessions.forEach(session => {
-        const row = rowNode(session, copy);
-        if (!seen.has(row.getAttribute('href'))) { list.appendChild(row); seen.add(row.getAttribute('href')); }
+        const href = rowNode(session, copy).getAttribute('href');
+        if (!seen.has(href)) { appendRow(list, session, copy, act); seen.add(href); }
       });
       state.hidden = true;
     }

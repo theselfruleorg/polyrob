@@ -65,3 +65,53 @@ def test_a_send_that_runs_now_counts_as_paid(_owner):  # noqa: F811
                       args=["311628", TOKEN, "to", A, "on", "robinhood"], ttl=3600.0)
     assert cards.store().transition(card.card_id, frozenset({cards.S_OPEN}), cards.S_CONFIRMED)
     assert "already paid" in (_propose(f"/send 311628 {TOKEN} to {A} on robinhood").error or "")
+
+
+def _ran(to, result):
+    """A /send quote confirmed and finished by the rail with ``result``."""
+    card = cards._new("alice", cards.KIND_QUOTE, "test", "Quote", verb="/send",
+                      args=["311628", TOKEN, "to", to, "on", "robinhood"], ttl=3600.0)
+    assert cards.store().transition(card.card_id, frozenset({cards.S_OPEN}), cards.S_CONFIRMED)
+    return cards.finish(card.card_id, result)
+
+
+def test_a_send_of_unknown_outcome_counts_as_paid(_owner):  # noqa: F811
+    """A broadcast whose receipt was not seen is `failed` but may have landed: the
+    repeat guard skipped it, so a second card could pay the address twice."""
+    done = _ran(A, "transfer\n  RESULT: BROADCAST BUT NOT CONFIRMED within the timeout.")
+    assert done.state == cards.S_FAILED and done.outcome == "unknown"
+    err = _propose(f"/send 311628 {TOKEN} to {A} on robinhood").error or ""
+    assert "already paid" in err and "outcome is unknown" in err
+
+
+def test_a_swept_send_counts_as_paid(_owner):  # noqa: F811
+    card = cards._new("alice", cards.KIND_QUOTE, "test", "Quote", verb="/send",
+                      args=["311628", TOKEN, "to", A, "on", "robinhood"], ttl=3600.0)
+    assert cards.store().transition(card.card_id, frozenset({cards.S_OPEN}), cards.S_CONFIRMED)
+    conn = cards.store()._conn()
+    try:
+        conn.execute("UPDATE cards SET updated_at=? WHERE card_id=?",
+                     (time.time() - 3600, card.card_id))
+        conn.commit()
+    finally:
+        conn.close()
+    [swept] = cards.store().sweep_stuck("alice")
+    assert swept.state == cards.S_FAILED and swept.outcome == "unknown"
+    assert "already paid" in (_propose(f"/send 311628 {TOKEN} to {A} on robinhood").error or "")
+
+
+def test_a_send_that_certainly_did_not_go_does_not_block(_owner):  # noqa: F811
+    done = _ran(A, "transfer\n  RESULT: NOT SENT — nothing was broadcast.")
+    assert done.state == cards.S_FAILED and done.outcome == "not_sent"
+    assert _propose(f"/send 311628 {TOKEN} to {A} on robinhood").error is None
+
+
+def test_an_unreadable_card_store_refuses_the_proposal(_owner, monkeypatch):  # noqa: F811
+    """The guards read an unreadable store as "no earlier payment" and let it through."""
+    from tools.controller import card_actions
+
+    def _broken():
+        raise OSError("disk I/O error")
+    monkeypatch.setattr(cards, "store", _broken)
+    res = _propose(f"/send 311628 {TOKEN} to {A} on robinhood")
+    assert res.error == card_actions.STORE_UNREADABLE

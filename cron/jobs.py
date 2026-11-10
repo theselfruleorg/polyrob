@@ -48,6 +48,8 @@ class CronJob:
     #: on the claimed object — ``{"outcome": "failed", "reason": "stopped at the
     #: step limit (150/150)"}`` — and written to ``payload.last_outcome``.
     run_note: Optional[Dict[str, str]] = field(default=None, compare=False, repr=False)
+    #: NOT stored as a column: how late THIS run started, in seconds; 0 when on time.
+    late_seconds: float = field(default=0, compare=False, repr=False)
     #: NOT a stored field of the job: the lease THIS claim holds (``lease_until``
     #: from :meth:`CronJobStore.claim_for_run`). The run end is a CAS on it, so
     #: a run whose lease ran out and was reclaimed can never end the run that
@@ -85,14 +87,25 @@ def default_max_duration_sec() -> int:
         return 600
 
 
-def is_money_job(job) -> bool:
+def money_job_class(job) -> Optional[bool]:
     """Whether *job* is money-class: ``core.money.classify.is_money_class`` over its
-    payload (``priority=money`` OR a toolset/rig holding a money tool — review B-1)."""
+    payload (``priority=money`` OR a toolset/rig holding a money tool — review B-1).
+    None = the class could not be read (with a warning)."""
     try:
-        from core.money.classify import is_money_class
-        return is_money_class(getattr(job, "payload", None) or {})
+        import core.skills.catalog  # noqa: F401 — 112: registers the money-skill probe; at CALL time (an import-time catalog build refuses pack policy rows)
+        from core.money.classify import money_class_strict
+        return bool(money_class_strict(getattr(job, "payload", None) or {}))
     except Exception:
-        return False
+        logger.warning("cron job %s: money class unknown", getattr(job, "id", "?"),
+                       exc_info=True)
+        return None
+
+
+def is_money_job(job, *, unknown: bool = False) -> bool:
+    """:func:`money_job_class` as a bool: a class that could not be read answers
+    *unknown* (a refusal passes True)."""
+    cls = money_job_class(job)
+    return unknown if cls is None else cls
 
 
 def job_preempts(job) -> bool:
@@ -336,8 +349,10 @@ class CronJobStore:
     def pause(self, job_id: str, *, user_id: Optional[str], note: Dict[str, Any]) -> bool:
         """'scheduled'/'running' -> 'paused', next run cleared, ``payload.paused``
         = *note*. A CAS on status; True iff the row moved."""
+        # A cut not yet settled goes with the pause: the run it names is long over
+        # when the owner resumes, and settling it then would skip the fresh slot.
         sql = ("UPDATE cron_jobs SET status='paused', next_run_at=NULL, "
-               "payload=json_set(payload, '$.paused', json(?)) "
+               "payload=json_set(json_remove(payload, '$.cut_run'), '$.paused', json(?)) "
                "WHERE id=? AND enabled=1 AND status IN ('scheduled','running')")
         params: tuple = (json.dumps(note), job_id)
         if user_id is not None:
@@ -347,9 +362,12 @@ class CronJobStore:
 
     def resume(self, job_id: str, *, user_id: Optional[str],
                next_run_at: datetime) -> bool:
-        """'paused' -> 'scheduled' at *next_run_at*; drops ``payload.paused``."""
+        """'paused' -> 'scheduled' at *next_run_at*; drops ``payload.paused`` and the
+        failure streak, so the job gets a full new count; ``last_outcome.resumed``
+        lets the first failure of that count be told again."""
         sql = ("UPDATE cron_jobs SET status='scheduled', next_run_at=?, "
-               "payload=json_remove(payload, '$.paused') "
+               "payload=json_set(json_remove(payload, '$.paused', '$.last_outcome.streak', "
+               "'$.cut_run'), '$.last_outcome.resumed', 1) "
                "WHERE id=? AND enabled=1 AND status='paused'")
         params: tuple = (_iso(next_run_at), job_id)
         if user_id is not None:
@@ -374,13 +392,18 @@ class CronJobStore:
 
     def record_outcome(self, job_id: str, outcome: str, at: datetime,
                        reason: Optional[str] = None,
-                       report: Optional[str] = None) -> None:
+                       report: Optional[str] = None,
+                       streak: int = 0, late_by: float = 0) -> None:
         """Store the last run's outcome on the row (``payload.last_outcome``):
         recurring jobs go back to 'scheduled' after every run, so the status
         alone never says how the last run ended. *reason* (why a run did not
         finish, e.g. "stopped at the step limit (150/150)") rides with it.
-        Merges; never replaces."""
+        *streak* counts the failed runs in a row. Merges; never replaces."""
         rec = {"outcome": str(outcome), "at": _iso(at)}
+        if streak:
+            rec["streak"] = int(streak)
+        if late_by:
+            rec["late_by"] = int(late_by)
         if reason:
             rec["reason"] = str(reason)[:200]
         if report:
@@ -450,7 +473,8 @@ class CronJobStore:
                 continue
             rc = execute_retry(
                 self.db_path,
-                "UPDATE cron_jobs SET status='scheduled', run_owner=NULL, lease_until=NULL "
+                "UPDATE cron_jobs SET status='scheduled', run_owner=NULL, lease_until=NULL, "
+                "payload=json_set(payload, '$.cut_run', 1) "
                 "WHERE id=? AND status='running' AND enabled=1 "
                 "AND run_owner IS ? AND lease_until IS ?",
                 (r["id"], r["run_owner"], r["lease_until"])) or 0
@@ -469,6 +493,26 @@ class CronJobStore:
             except Exception:
                 pass
         return n
+
+    def mark_cut_run(self, job_id: str, *, by: str = "restart") -> None:
+        """107 WS-3: this job's run was cut (*by* ``restart`` or ``pause``); the next
+        tick decides if it may repeat. A crash reclaim stores 1, read as a restart."""
+        execute_retry(self.db_path,
+                      "UPDATE cron_jobs SET payload=json_set(payload, '$.cut_run', ?) "
+                      "WHERE id=? AND status='scheduled'", (str(by), job_id))
+
+    def clear_cut_run(self, job_id: str) -> None:
+        execute_retry(self.db_path,
+                      "UPDATE cron_jobs SET payload=json_remove(payload, '$.cut_run') "
+                      "WHERE id=?", (job_id,))
+
+    def cut_runs(self) -> List[CronJob]:
+        """The jobs whose run a crash or a shutdown cut, not yet settled."""
+        rows = execute_retry(
+            self.db_path,
+            "SELECT * FROM cron_jobs WHERE enabled=1 AND status='scheduled' "
+            "AND json_extract(payload, '$.cut_run') IS NOT NULL", (), fetch="all") or []
+        return [self._row_to_job(r) for r in rows]
 
     def set_max_duration(self, job_id: str, seconds: int, *,
                          user_id: Optional[str] = None) -> bool:

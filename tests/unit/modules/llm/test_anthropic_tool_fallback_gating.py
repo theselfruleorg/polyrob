@@ -7,15 +7,15 @@ days — doubled hammering on an already rate-limited account), and whenever
 that second call succeeded it returned ZERO tool_calls, producing the
 "Model output has empty action list" / thinking-loop CRITICAL storms.
 
-The fallback is now gated: only a request-shape problem (LLMInvalidRequestError
-per translate_llm_error) may drop the tools block; everything else re-raises so
-the adapter classifies it and the agent runs provider fallback.
+The fallback is gated: only a 400 that names the tools array may drop the tools block;
+everything else raises typed, so the agent runs its recovery.
 """
 import logging
 from types import SimpleNamespace
 
 import pytest
 
+from core.exceptions import LLMError, LLMInvalidRequestError
 from modules.llm.anthropic_client import AnthropicClient
 
 
@@ -71,7 +71,7 @@ TOOLS = [{"name": "do_x", "input_schema": {"type": "object", "properties": {}}}]
 ])
 async def test_non_request_errors_reraise_without_fallback(error_text):
     client, calls = _make_client(error_text)
-    with pytest.raises(RuntimeError):
+    with pytest.raises(LLMError):
         await client._generate_with_tools(
             messages=[{"role": "user", "content": "hi"}],
             tools=TOOLS, system="sys", max_tokens=1024,
@@ -79,6 +79,21 @@ async def test_non_request_errors_reraise_without_fallback(error_text):
     assert calls["count"] == 1, (
         f"{error_text!r} must re-raise for provider fallback, not retry "
         f"without tools (made {calls['count']} calls)")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_text", [
+    "Error code: 400 - invalid_request_error: messages.3: tool_use ids must have a result",
+    "Error code: 400 - invalid_request_error: max_tokens: too large",
+])
+async def test_any_other_400_raises_typed_with_no_second_call(error_text):
+    client, calls = _make_client(error_text)
+    with pytest.raises(LLMInvalidRequestError):
+        await client._generate_with_tools(
+            messages=[{"role": "user", "content": "hi"}],
+            tools=TOOLS, system="sys", max_tokens=1024,
+        )
+    assert calls["count"] == 1
 
 
 @pytest.mark.asyncio

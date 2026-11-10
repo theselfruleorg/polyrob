@@ -72,7 +72,7 @@ def edited_since_last_test(orchestrator: Any) -> bool:
 #: Refusals that mean "tests cannot run on THIS deploy" — a posture, not a
 #: failed test. Nudging "run tests" after one of these asks for the impossible:
 #: 2026-09-25 the prod agent got the nudge six times after `run_tests` had
-#: already said "Do not retry" (no Docker for the agent identity, 053 pending).
+#: already said "Do not retry" (no Docker for the agent identity).
 _UNRUNNABLE_MARKERS = (
     "code execution unavailable on this deploy",
     "host execution refused while wallet custody",

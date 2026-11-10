@@ -1,12 +1,13 @@
 {
   "function": {
-    "description": "Send keyboard keys/shortcuts (e.g., \"Enter\", \"Escape\", \"Control+A\").",
+    "description": "Press keyboard keys: one key (\"Enter\", \"Escape\"), a shortcut (\"Control+A\") or a sequence (\"Tab Tab Enter\"). Text that is not a key is typed into the focused element.",
     "name": "browser_send_keys",
     "parameters": {
       "additionalProperties": false,
       "description": "Model for sending keyboard keys.",
       "properties": {
         "keys": {
+          "description": "A key (\"Enter\"), a shortcut (\"Control+A\") or a sequence (\"Tab Tab Enter\")",
           "type": "string"
         }
       },

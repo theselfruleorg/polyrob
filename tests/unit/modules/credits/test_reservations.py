@@ -112,7 +112,7 @@ async def test_reservation_precedes_provider_and_travels_on_response(balance, mo
             response = messages[-1]
         else:
             response = (await adapter._agenerate([HumanMessage(content='hello')])).generations[0].message
-        ref = extract_stable_request_id(adapter, response, 'provider')
+        ref = extract_stable_request_id(response, 'provider')
         assert ref.startswith('llm-reserve:')
         with pytest.raises(InsufficientCreditsError):
             await adapter._agenerate([HumanMessage(content='another call')])
@@ -191,7 +191,8 @@ async def test_admin_reconciliation_settles_original_hold(balance, monkeypatch, 
     assert (await balance.get_balance('payer'))['balance'] == 40
     # Deposit enough to reconcile. No synthetic second charge may bypass the hold.
     await balance.add_credits('payer', 1000, 'deposit')
-    monkeypatch.setattr('api.dependencies.require_service',
+    # The admin routes use the module-level import, so that name is the one to replace.
+    monkeypatch.setattr('api.admin_endpoints.require_service',
                         lambda name, **kw: balance if name == 'balance_manager' else balance.db)
     monkeypatch.setattr('api.admin_endpoints.get_audit_logger', AsyncMock(return_value=None))
     request = Request({'type': 'http', 'method': 'POST', 'headers': [], 'state': {'user_id': 'admin'}})

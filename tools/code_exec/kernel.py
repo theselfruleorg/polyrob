@@ -214,14 +214,14 @@ def kernel_argv(backend, workdir: Optional[str]):
                 "persist=True needs the session's PERSISTENT docker sandbox "
                 "(AGENT_COMPUTE_POSTURE>=1); this run uses a one-shot container")
         from tools.code_exec.backends.docker import docker_binary
-        from tools.code_exec.env_policy import build_child_env
+        from tools.code_exec.env_policy import docker_cli_env
         argv = [docker_binary(), "exec", "-i", "-w", "/workspace"]
         if getattr(backend, "user", None):
             argv += ["--user", str(backend.user)]
         if getattr(backend, "_dev_mode", False):  # WS-1: /install stays importable
             argv += ["-e", "PYTHONPATH=/install", "-e", "HOME=/install"]
         argv += [container, "python3", "-u", "-s", "-c", KERNEL_SOURCE, cap]
-        return argv, build_child_env({}), None
+        return argv, docker_cli_env(), None
     if name in ("local_subprocess", "local"):
         from tools.code_exec.env_policy import build_child_env
         return [sys.executable, "-u", "-I", "-c", KERNEL_SOURCE, cap], build_child_env({}), workdir

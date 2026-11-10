@@ -12,7 +12,9 @@ from modules.llm.messages import HumanMessage
 
 @pytest.fixture(autouse=True)
 def owner(monkeypatch):
-    monkeypatch.setattr('core.instance.is_owner', lambda uid: uid == 'owner')
+    # The one owner-tenant check the credential gate asks (110 W0: the old bare
+    # ``is_owner(uid)`` had no principal and refused every id, which this mock hid).
+    monkeypatch.setattr('core.surfaces.owner_address.is_owner_tenant', lambda uid: uid == 'owner')
 
 
 @pytest.mark.parametrize('source', ['oauth', 'borrowed'])

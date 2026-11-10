@@ -15,6 +15,7 @@ import click
 
 from cli._admin_home import as_root_option
 from cli.commands._grouped import GroupedGroup
+from cli.commands._options import json_option
 
 logger = logging.getLogger(__name__)
 
@@ -85,17 +86,17 @@ def _data_dir(write: "bool | None" = None) -> str:
 # D7 (proposal 030): sectioned --help instead of one flat alphabetical wall.
 _OWNER_HELP_SECTIONS = [
     ("Access & pairing",
-     ["correspondents", "invite", "approve", "allow", "deny", "allowlist",
+     ["correspondents", "invite", "person-approve", "allow", "deny", "allowlist",
       "pair", "groups"]),
     ("Pending & asks",
      # 043 D1: `inbox` LEADS this section — it is the union the other five are
      # pieces of, and a person looking for "what needs me" should meet it first.
-     ["inbox", "pending", "show-pending", "promote", "reject", "asks",
+     ["inbox", "pending", "show-pending", "approve", "promote", "reject", "asks",
       "fulfill", "missed"]),
     # 046: `paid` is MONEY — it prices what a room sells and names what the
     # treasury OWES a payer whose effect never landed.
     ("Money", ["invoices", "settle", "reopen", "refunded", "sub", "paid", "deposits", "deposit-resolve", "invoice-resolve"]),
-    ("Control", ["halt", "resume", "pause-entries", "resume-entries", "show"]),
+    ("Control", ["resume", "pause-entries", "resume-entries", "show"]),
     # 025: quarantined goal/cron findings (memory scopes).
     ("Memory", ["memory"]),
 ]
@@ -143,10 +144,10 @@ def show():
     click.echo(f"surfaces: {surf}")
 
 
-@owner.command("halt")
+@owner.command("halt", hidden=True)
 @as_root_option
 def halt_cmd():
-    """Pause EVERYTHING autonomous now (alias of `polyrob autonomy pause`).
+    """Pause EVERYTHING autonomous now — hidden old name of `autonomy pause` (113 T-08).
 
     Writes the ONE 031 pause record (<data>/AUTONOMY_PAUSE.json); every autonomous
     loop, trade, and payment refuses while it holds. Lift it with
@@ -165,7 +166,7 @@ def resume_cmd():
     """Lift every pause (alias of `polyrob autonomy resume`)."""
     from core.surfaces.owner_admin import render_resume_result, resume_autonomy_scopes
     res = resume_autonomy_scopes(_data_dir(write=True), via="cli")
-    click.echo(render_resume_result(res, halt_hint="`polyrob owner halt`"))
+    click.echo(render_resume_result(res, halt_hint="`polyrob autonomy pause`"))
 
 
 @owner.command("pause-entries")
@@ -203,7 +204,7 @@ def resume_entries_cmd():
               metavar="SURFACE ADDRESS",
               help="Show the stored transcript with ONE correspondent instead "
                    "of the listing (E10 — the `contact_history` action's seat).")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def correspondents(user, all_tenants, history, as_json):
     """List the third-party correspondents the agent is talking to.
 
@@ -279,55 +280,6 @@ def _echo_contact_history(tenant: str, surface: str, address: str, *,
         who = m.get("direction") or "?"
         body = str(m.get("body") or "")
         click.echo(f"  [{_iso(m.get('ts') or 0)}] {who:<8} {body}")
-
-
-@owner.command("invite")
-@click.argument("surface")
-@click.argument("address")
-@click.argument("session_id")
-@click.option("--user", default=None, help="Tenant user_id (default: bound owner / 'local')")
-@click.option("--thread", default=None, help="Thread anchor (default: address-keyed)")
-@as_root_option
-def invite(surface, address, session_id, user, thread):
-    """Register a third party as a correspondent of SESSION_ID (owner-driven seed).
-
-    Their replies then route to that session as DATA. Honours the approval gate +
-    per-day cap (a pending invite needs `polyrob owner approve`).
-    """
-    # C6: this used to `os.environ.setdefault("CORRESPONDENT_ACCESS_ENABLED",
-    # "true")` — one owner verb silently switching on the capability flag that
-    # governs whether a third party may reach the agent AT ALL, for the life of
-    # the process, in a way no other seat could see. A verb refuses and names
-    # the remedy; it never grants itself the posture it needs.
-    from core.surfaces.config import SurfaceConfig
-    if not SurfaceConfig.correspondent_access_enabled():
-        raise click.ClickException(
-            "correspondent access is OFF, so a seeded binding would route "
-            "nothing: their reply would be denied at the door.\n"
-            "    polyrob config set CORRESPONDENT_ACCESS_ENABLED true --global\n"
-            "then re-run this invite (a systemd deploy sets it in its own env "
-            "file and needs a restart).")
-    from core.surfaces.seed import maybe_seed_correspondent
-
-    # ⚠️ The SAME resolver `pending`/`inbox` read (`_owner_tenant`). It seeded
-    # under `resolve_owner_principal()` until 2026-09-15, so an owner-seeded
-    # invite landed in one tenant and the decision queue read another — a
-    # confident zero over a real item, the 035 P0-3 class.
-    tenant = _owner_tenant(user)
-
-    class _C:
-        def get_service(self, name):
-            return (_registry(_data_dir(write=True))
-                    if name == "correspondent_registry" else None)
-
-    address = _canon(address)   # C22: the key every routing seat reads
-    state = maybe_seed_correspondent(
-        _C(), surface=surface, address=address, session_id=session_id,
-        user_id=tenant, thread_id=thread, provenance="owner")
-    color = {"active": "green", "pending": "yellow"}.get(state, "red")
-    click.echo(click.style(f"invite {surface}:{address} -> session {session_id}: {state}",
-                           fg=color)
-               + ("  (run `polyrob owner approve` to activate)" if state == "pending" else ""))
 
 
 def _instance_id() -> str:
@@ -440,7 +392,7 @@ def inbox(user, limit):
 
 @owner.command("pending")
 @click.option("--user", default=None, help="Tenant user_id (default: bound owner / 'local')")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def pending(user, as_json):
     """List the agent's PENDING self-evolution proposals (identity notes + skills),
     queued tool-approval requests (Task 9 / G-2 — PAYMENT_APPROVAL_MODE=approve),
@@ -635,7 +587,7 @@ def _goal_board():
 
 @owner.command("asks")
 @click.option("--user", default=None, help="Tenant user_id (default: bound owner / 'local')")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def asks(user, as_json):
     """List the agent's OPEN asks — concrete needs blocking its progress (§7.2b).
 
@@ -754,7 +706,7 @@ def _do_approve_all(registry, user_id=None, surface=None):
     return approved
 
 
-@owner.command("approve")
+@owner.command("person-approve")
 @click.argument("surface", required=False)
 @click.argument("address", required=False)
 @click.option("--all", "approve_all", is_flag=True, default=False,
@@ -767,13 +719,10 @@ def _do_approve_all(registry, user_id=None, surface=None):
               help="With --all: approve across EVERY tenant on this box.")
 @as_root_option
 def approve(surface, address, approve_all, thread, user, all_tenants):
-    """Approve a PENDING correspondent so their replies route as DATA.
+    """Approve a PENDING correspondent (a person) so their replies route as DATA.
 
-    Single: polyrob owner approve <surface> <address>
-    Bulk:   polyrob owner approve --all [<surface>] [--user tenant]
-
-    Bulk approval is scoped to this instance's owner tenant unless you ask for
-    `--all-tenants`.
+    One: `<surface> <address>`. Bulk: `--all [<surface>] [--user tenant]`, scoped to
+    this instance's owner tenant unless you ask for `--all-tenants`.
     """
     # C3: `--all` defaulted to user_id=None = every tenant on the box, so one
     # owner's bulk approve activated another tenant's pending contacts.
@@ -788,7 +737,7 @@ def approve(surface, address, approve_all, thread, user, all_tenants):
         return
     if not surface or not address:
         click.echo(click.style(
-            "usage: polyrob owner approve <surface> <address>  (or --all)", fg="yellow"))
+            "usage: polyrob owner person-approve <surface> <address>  (or --all)", fg="yellow"))
         raise SystemExit(1)
     address = _canon(address)   # C22: the key the registry and routing agree on
     reg = _registry(_data_dir(write=True))
@@ -863,7 +812,7 @@ def deny(surface, target, user):
 
 @owner.command("allowlist")
 @click.option("--user", default=None, help="Tenant user_id (default: bound owner / 'local')")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def allowlist(user, as_json):
     """List the outbound-send allowlist for a tenant."""
     tenant = _allowlist_tenant(user)
@@ -906,18 +855,17 @@ def _bot_db_path():
 
 
 async def _with_bot_db(coro_factory):
-    """Open the bot DB, run coro_factory(db), close. Returns (ok, result_or_msg)."""
-    from pathlib import Path
-    path = _bot_db_path()
-    if not path:
-        return False, "no bot.db found (is this instance initialized?)"
+    """Open the bot DB, run coro_factory(db), close: (ok, result_or_msg), never a traceback."""
     from modules.database.connection import DatabaseConnection
-    db = DatabaseConnection(Path(path))
-    await db.connect()
+    if not (path := _bot_db_path()):
+        return False, "no bot.db found (is this instance initialized?)"
     try:
-        return True, await coro_factory(db)
-    finally:
-        await db.close()
+        async with DatabaseConnection(path) as db:  # closes on every exit
+            return True, await coro_factory(db)
+    except click.ClickException:  # a usage refusal from the verb is click's to print
+        raise
+    except Exception as e:  # KeyboardInterrupt/SystemExit are not Exception
+        return False, f"could not read bot.db: {e}"
 
 
 def _warn_if_invoicing_off() -> None:
@@ -964,7 +912,7 @@ def _warn_if_subscriptions_off() -> None:
                    "`modules.x402.invoicing.INVOICE_STATUSES` — pending, "
                    "settling, completed, settled_no_tx, expired, refund_due "
                    "(money taken that was not delivered on).")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 @click.option("--stuck", is_flag=True, help="Only rows held in settling that no reaper releases.")
 def invoices(user, all_tenants, limit, status, as_json, stuck):
     """List agent-created x402 payment requests (invoices).
@@ -1113,7 +1061,7 @@ def settle(request_id, tx_hash):
                 "session wake will fire until a watcher runs.", fg="yellow"))
     else:
         click.echo(click.style(
-            f"{request_id} not settled (unknown id or not pending)", fg="yellow"))
+            f"{request_id} not settled (unknown id, not pending, or an order: --tx-hash)", fg="yellow"))
 
 
 # --- Task 14 (Phase 3 R5): watchtower subscriptions ---------------------
@@ -1376,7 +1324,7 @@ def groups_role(surface, chat_id, user_id, role):
 @groups.command("roles")
 @click.argument("surface")
 @click.argument("chat_id")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def groups_roles(surface, chat_id, as_json):
     """Who holds a ROLE in a room (admin / member / blocked).
 
@@ -1450,60 +1398,6 @@ def groups_service(surface, chat_id, every, max_replies):
     from cron.room_service import service as _room_service
     click.echo(_room_service(_group_container(write=True), _group_owner_uid(),
                              surface, chat_id, every=every, max_replies=max_replies))
-
-
-# ---------------------------------------------------------------------------
-# DM pairing (POLYROB_REQUIRE_PAIRING) — 3.11/O5, 2026-07-14 review.
-# core/pairing.py issues one-time codes to unknown senders; these commands are
-# the operator-side approval path that previously DIDN'T EXIST (the docstring
-# pointed at a phantom `polyrob pair approve`). Same PairingStore + data home the
-# surface dispatcher uses.
-# ---------------------------------------------------------------------------
-
-def _pairing_store(*, write: "bool | None" = None):
-    import os as _os
-
-    from core.pairing import PairingStore
-    return PairingStore(_os.path.join(_data_dir(write=write), "pairing.db"))
-
-
-@owner.group("pair")
-def pair():
-    """Approve/inspect DM pairing requests (POLYROB_REQUIRE_PAIRING)."""
-
-
-@pair.command("pending")
-def pair_pending():
-    """List users waiting for pairing approval (with their codes)."""
-    rows = _pairing_store(write=False).list_pending()
-    if not rows:
-        from cli.ui.candy import empty
-        click.echo(empty("pending pairing requests",
-                         "nobody unknown has written in"))
-        return
-    for user_id, code in rows:
-        click.echo(f"pending  {user_id}  code={code}"
-                   "  (approve: polyrob owner pair approve <code>)")
-
-
-@pair.command("approve")
-@click.argument("code")
-@as_root_option
-def pair_approve(code):
-    """Approve the pairing request holding CODE."""
-    uid = _pairing_store(write=True).approve(code)
-    if uid is None:
-        raise click.ClickException(f"no pending pairing request with code {code!r}")
-    click.echo(click.style(f"paired {uid}", fg="green"))
-
-
-@pair.command("revoke")
-@click.argument("user_id")
-@as_root_option
-def pair_revoke(user_id):
-    """Revoke a paired (or pending) user."""
-    _pairing_store(write=True).revoke(user_id)
-    click.echo(click.style(f"revoked {user_id}", fg="green"))
 
 
 # ---------------------------------------------------------------------------
@@ -1636,4 +1530,7 @@ for _cmd in (_reopen, _refunded, _deposits, deposit_resolve, invoice_resolve): o
 sub.add_command(sub_reactivate)
 
 owner.add_command(_memory_group)
+from cli.commands.owner_correspondents import invite as _invite  # noqa: E402
+owner.add_command(_invite)
 from cli.commands import owner_groups_tools  # noqa: E402,F401 — 101: registers on `groups`
+from cli.commands import owner_decide, owner_pair  # noqa: E402,F401 — `owner approve`, `owner pair`

@@ -1,25 +1,32 @@
-"""F20: every provider path stamps its prefix identity on the client.
+"""F20: every provider path stamps its prefix identity on the call.
 
 Before this, only OpenRouter did. `usage_records` could therefore group
 first-call cache hits by prefix identity on exactly one seat, and the question
 "are the bytes we send the same run to run?" stayed an inference everywhere
 else. Each test drives the real client method with a fake SDK object and asserts
-the stamps read back through the adapter, i.e. through `llm._client` — which is
-the POLYROB client wrapper, not the vendor SDK object.
+the stamps reach the call this task opened.
 """
 import asyncio
 import types
 
 import pytest
 
-from modules.llm.prefix_stamp import read_stamps
+from modules.llm.call_scope import begin_call
 
 SYSTEM = "You are Nova."
 TOOLS = [{"type": "function", "function": {"name": "read_file"}}]
 
 
-def _read(client):
-    return read_stamps(types.SimpleNamespace(_client=client))
+_opened = {}
+
+
+@pytest.fixture(autouse=True)
+def _open_call():
+    _opened["request"] = begin_call()
+
+
+def _read(_client):
+    return _opened["request"].stamps
 
 
 # ── OpenAI (and every OpenAI-compat seat that inherits this path) ───────────
@@ -57,7 +64,6 @@ def _openai_client():
                                      warning=lambda *a, **k: None,
                                      error=lambda *a, **k: None,
                                      isEnabledFor=lambda *a: False)
-    c._extract_usage_and_capture_telemetry = lambda *a, **k: None
     return c
 
 
@@ -100,7 +106,6 @@ def _anthropic_client():
                                      warning=lambda *a, **k: None,
                                      error=lambda *a, **k: None,
                                      isEnabledFor=lambda *a: False)
-    c._extract_usage_and_capture_telemetry = lambda *a, **k: None
     c._initialized = True
     return c
 
@@ -124,15 +129,15 @@ def test_anthropic_tool_path_stamps_the_prefix():
 # ── DeepSeek (its own requests.post transport, no SDK client object) ────────
 
 def test_deepseek_stamps_the_prefix():
-    from modules.llm.prefix_stamp import stamp_client, compute_stamps
-    # The DeepSeek path hands the SAME request_body dict to stamp_client that it
+    from modules.llm.prefix_stamp import stamp_request, compute_stamps
+    # The DeepSeek path hands the SAME request_body dict to stamp_request that it
     # posts, so the contract is exactly compute_stamps of that body.
     body = {"model": "deepseek-chat",
             "messages": [{"role": "system", "content": SYSTEM},
                          {"role": "user", "content": "go"}],
             "tools": TOOLS}
     client = types.SimpleNamespace()
-    stamp_client(client, body)
+    stamp_request(body)
     assert _read(client) == compute_stamps(body)
     assert set(_read(client)) == {"prefix_sha", "tools_sha"}
 
@@ -140,11 +145,11 @@ def test_deepseek_stamps_the_prefix():
 # ── the Responses API (`instructions`, not a system message) ────────────────
 
 def test_responses_path_stamps_instructions_as_the_prefix():
-    from modules.llm.prefix_stamp import stamp_client, compute_stamps
+    from modules.llm.prefix_stamp import stamp_request, compute_stamps
     params = {"model": "gpt", "input": [{"role": "user", "content": "go"}],
               "instructions": SYSTEM, "tools": TOOLS}
     client = types.SimpleNamespace()
-    stamp_client(client, params, system=SYSTEM)
+    stamp_request(params, system=SYSTEM)
     assert _read(client)["prefix_sha"] == compute_stamps({"system": SYSTEM})["prefix_sha"]
 
 

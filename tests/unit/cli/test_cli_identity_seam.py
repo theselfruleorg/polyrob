@@ -8,24 +8,23 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from core.identity import ConstantIdentity
 
 
-def test_session_cancel_resolves_user_via_identity_seam():
+def test_session_cancel_resolves_user_via_identity_seam(tmp_path):
+    """113 T-04: the tenant is the identity seam's, through the admin seam's owner
+    tenant (the deployed owner on a box); the session is read from the admin home."""
     from cli.commands import session as sess
 
-    fake_agent = MagicMock()
-    fake_agent.cancel_session = AsyncMock(return_value=True)
-    fake_container = MagicMock()
-    fake_container.get_agent.return_value = fake_agent
-    fake_container.get_service.return_value = ConstantIdentity("tenantZ")
+    seen = {}
 
-    async def _fake_build(*a, **k):
-        return fake_container
+    def _owner_tenant(uid):
+        seen["uid"] = uid
+        return uid
 
-    with patch("polyrob.app.bootstrap.build_cli_container", _fake_build), \
-         patch("polyrob.app.bootstrap.setup_project_path", lambda: None), \
-         patch("polyrob.app.bootstrap.setup_sqlite_compat", lambda: None), \
-         patch("cli.keys.preflight_or_onboard", lambda **k: True), \
+    with patch("core.identity.resolve_identity", lambda: "tenantZ"), \
+         patch("cli._admin_home.admin_owner_tenant", _owner_tenant), \
+         patch.object(sess, "_data_root", lambda write=False: tmp_path), \
+         patch.object(sess, "ensure_env_loaded", lambda: None), \
          patch("cli.commands._session_control.control_live_session", new_callable=AsyncMock) as control:
         asyncio.run(sess._session_cancel("sess-1"))
 
-    fake_container.get_service.assert_any_call("identity")
-    control.assert_awaited_once_with(fake_agent, "tenantZ", "sess-1", "cancel")
+    assert seen["uid"] == "tenantZ"
+    control.assert_awaited_once_with(None, None, "tenantZ", "sess-1", "cancel")

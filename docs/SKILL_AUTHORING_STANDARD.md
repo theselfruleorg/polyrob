@@ -98,7 +98,7 @@ When refining an **existing** skill, always read the current body before writing
 
 A `patch`, `edit` or `delete` with a stale `expected_sha256` is refused with the current sha256: read the skill again. `create` never overwrites a skill that exists and needs a `when` line (section 9).
 
-Overwriting an active skill creates a `.pending` proposal that the owner must promote. Surface the pending ID to the user.
+Overwriting an active skill is live at once: the prior body is archived and `rollback` restores it. A write from an untrusted turn (a correspondent's message in the session, a room, another tenant) stays a `.pending` draft for the owner.
 
 ## 8. Security checks
 
@@ -137,6 +137,7 @@ metadata:
   polyrob-triggers: '{"tool_ids":["defi_trade"]}'   # optional; the gate domain, see 9a
   polyrob-requires: '["token-identity"]'   # optional prerequisite skill ids, see 9b
   polyrob-owner-only: 'true'       # optional; omit it (default false). 'true' = the owner's own seats only, see 9a
+  polyrob-money-class: 'true'      # optional (112). 'true' = a run that pins it DECIDES money (who is paid, how much): the goal/job is money-class (heavy model). Builtin and pack skills only; an authored skill's label is ignored
   polyrob-version: '1'
   polyrob-generated: '<generator>; do not edit'   # optional; a generated skill — edit the generator, never the file
 ---

@@ -15,10 +15,13 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import signal
+import time
 from pathlib import Path
 from typing import Callable, Optional
 
+from core.state.files import UnreadableStateFile
 from core.state.journal import PhaseJournal
 
 logger = logging.getLogger(__name__)
@@ -34,7 +37,8 @@ def recover_open_update(snapshots_root, *, rollback: Optional[Callable[[dict], d
                         echo: Callable[[str], None] = print) -> Optional[str]:
     """Roll back an update whose process died mid-apply. Returns
     ``"rolled_back"``, ``"rollback_failed"``, ``"live"`` (its process still
-    runs) or None (nothing open). Never raises."""
+    runs), ``"unreadable"`` (the journal cannot be read: nothing was rolled back)
+    or None (nothing open). Never raises."""
     try:
         journal = update_journal(snapshots_root)
         entry = journal.pending()
@@ -43,6 +47,13 @@ def recover_open_update(snapshots_root, *, rollback: Optional[Callable[[dict], d
         from core.state.proc import ProcIdentity, is_alive
         owner = ProcIdentity.decode(entry.get("owner"))
         if owner is not None and is_alive(owner):
+            return "live"
+        # Take the dead owner's entry under the journal lock (a compare-and-set on
+        # its owner) BEFORE acting: two processes starting at once both saw it
+        # dead, and both rolled the same update back. The loser reads it as live.
+        from core.state.proc import process_identity
+        entry = journal.claim(str(entry.get("owner") or ""), process_identity().encode())
+        if entry is None:
             return "live"
         info = dict(entry.get("info") or {})
         if entry.get("phase") in ("begin", "snapshot"):
@@ -66,6 +77,12 @@ def recover_open_update(snapshots_root, *, rollback: Optional[Callable[[dict], d
              f"{info.get('snapshot') or '(none)'}; run `polyrob update --rollback` "
              f"and `git reset --keep {info.get('old_sha') or '<old commit>'}`.")
         return "rollback_failed"
+    except UnreadableStateFile as exc:
+        logger.warning("update journal unreadable: %s", exc)
+        echo(f"[polyrob] the update journal {Path(snapshots_root) / JOURNAL_NAME} is unreadable: "
+             "an interrupted update was NOT rolled back. Run `polyrob update --rollback` "
+             "to restore the last snapshot and set the journal aside.")
+        return "unreadable"
     except Exception:
         logger.warning("update journal recovery failed", exc_info=True)
         return None
@@ -79,10 +96,29 @@ def failed_rollback(snapshots_root) -> Optional[dict]:
     return None
 
 
+def set_aside_unreadable(snapshots_root) -> Optional[str]:
+    """Move an unreadable journal to ``<path>.unreadable-<epoch>`` (never delete
+    it). Returns the new path, or None when there was nothing to move."""
+    path = Path(snapshots_root) / JOURNAL_NAME
+    aside = f"{path}.unreadable-{int(time.time())}"
+    try:
+        os.replace(path, aside)
+    except FileNotFoundError:
+        return None
+    logger.warning("update journal unreadable: kept as %s", aside)
+    return aside
+
+
 def clear_failed(snapshots_root) -> None:
-    """``--rollback`` / ``--force`` acknowledged a failed rollback."""
-    with contextlib.suppress(Exception):
+    """``--rollback`` / ``--force`` acknowledged a failed rollback. An unreadable
+    journal is set aside: it would block every later apply."""
+    try:
         update_journal(snapshots_root).clear()
+    except UnreadableStateFile:
+        with contextlib.suppress(OSError):
+            set_aside_unreadable(snapshots_root)
+    except Exception:
+        logger.warning("update journal: clear failed", exc_info=True)
 
 
 @contextlib.contextmanager

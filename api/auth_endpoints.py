@@ -198,6 +198,16 @@ async def verify_signature(request: VerifyRequest):
         chain=request.chain
     )
 
+    # The administrator's block list holds at sign-in too, not only on later requests.
+    from api.account_access import is_account_blocked
+    try:
+        blocked = await is_account_blocked(db, user_id)
+    except Exception:
+        logger.warning("Account block list is unreadable at sign-in", exc_info=True)
+        raise HTTPException(status_code=503, detail="Account access unavailable")
+    if blocked:
+        raise HTTPException(status_code=403, detail="Account blocked")
+
     # Get user details
     user = await db.fetch_one("""
         SELECT role, tier FROM user_profiles WHERE user_id = ?

@@ -1,10 +1,10 @@
 {
   "function": {
-    "description": "Scroll the page in the specified direction (up, down, left, right).",
+    "description": "Scroll the page in the specified direction (up, down, left, right). With an element index it scrolls the scrollable area that holds that element.",
     "name": "browser_scroll",
     "parameters": {
       "additionalProperties": false,
-      "description": "Model for scrolling the page.",
+      "description": "Model for scrolling the page, or one scrollable area of it.",
       "properties": {
         "amount": {
           "default": null,
@@ -14,6 +14,12 @@
         "direction": {
           "default": "down",
           "type": "string"
+        },
+        "elementIndex": {
+          "default": null,
+          "description": "Scroll the scrollable area that holds this element (a list, a dialog) and not the page",
+          "nullable": true,
+          "type": "integer"
         }
       },
       "type": "object"

@@ -35,7 +35,9 @@ Ask only what is missing: what is sold and what the buyer receives; the price
 a brief…); where to sell (Telegram, X or another chat surface the owner uses;
 A2A, MCP, HTTP 402; a marketplace pack). **Email is never a buying channel.**
 Say the defaults you pick (rail `usdc-base`, 2 attempts, 30-minute deadline,
-20 orders a day, one open order per buyer).
+20 orders a day, one open order per buyer). Every dollar pinned for a network is a rail
+named `<symbol>-<network>` (`usdc-base`, `usdg-robinhood` — Robinhood Chain's dollar is
+USDG; it has no USDC); a draft refuses one that is not payable here.
 
 ## 2. The manifest — `offer_manage(op="draft", manifest=…)`
 
@@ -66,8 +68,8 @@ Rules the validator enforces (it names the field it refuses):
 
 ## 3. The playbook — write it before the go-live card
 
-Write skill `offer-<id>` with `skill_manage`. It lands pending; the owner's
-go-live Confirm promotes it. It says, step by step, how ONE order is fulfilled
+Write skill `offer-<id>` with `skill_manage`; the owner's go-live Confirm pins its
+exact text. It says, step by step, how ONE order is fulfilled
 from the order's inputs, which resources it uses, and how it ends:
 `order_deliver(order_id=…, proof={…}, message=…)` — `tx_hash` for a
 `tx_receipt`, `sha256` for a `file_hash`, `url` for a `url` proof; on failure
@@ -102,7 +104,22 @@ call to a throwaway recipient), then
 tools, the per-order envelope and the callable contract functions. NOTHING is
 live until the owner taps Confirm — never say it is.
 
-## 6. After go-live
+## 6. Announce in public (a surface that reads replies, e.g. X)
+
+After the Confirm, post ONE announcement with your normal post tool: what it is, the
+price, and how to order — `reply /buy field=value …` with the input names. Then
+record it: `offer_manage(op="announce", offer_id=…, surface="x", post_id=<your post>)`.
+From then on CODE answers every `/buy` and `/order` reply under that post, in the
+thread: payment details, payment received, the delivery proof. Never answer those
+replies yourself.
+
+In the playbook, call the pinned function by name: `defi_trade` `call` with
+`function="mint(address,string)"`, `args=[<recipient>, <uri>]`, value 0. Then
+`order_deliver` with the `tx_hash`; it is read on chain (from your wallet, to the
+pinned contract, an event to the recipient) before the order counts as delivered.
+Your `message` reaches a DM buyer; a thread buyer gets only code's words.
+
+## 7. After go-live
 
 - `offer_manage(op="orders")` shows orders; a quoted order needs the owner's
   `/offer quote <order> <usd>`.

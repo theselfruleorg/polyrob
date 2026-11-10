@@ -16,6 +16,10 @@ from core.config import BotConfig, DEFAULT_MAX_BROWSER_CONTEXTS
 from tools.browser.browser import Browser
 from tools.browser.context import BrowserContext, BrowserContextConfig
 
+#: A released context holds its pool slot until its close ends: a close that hangs
+#: is given up after this many seconds, so the slot is freed in every case.
+CONTEXT_CLOSE_TIMEOUT_SEC = 30.0
+
 
 def _session_key(agent_id: str) -> str:
     """The session of an ``agentname_sessionid`` id, for the per-session limit. The part
@@ -99,6 +103,9 @@ class BrowserManager(BaseComponent):
         #: 098 TS-05: session -> the in-flight creation (a reserved slot that
         #: counts against max_contexts; a second caller awaits the same future).
         self._creating: Dict[str, asyncio.Future] = {}
+        #: Contexts detached from the pool and not yet closed: a close of a dead browser
+        #: takes seconds, and the context still holds its memory, so it holds its slot too.
+        self._closing = 0
         self.context_allocation_times: Dict[str, float] = {}
 
         # Per-session tracking
@@ -266,7 +273,7 @@ class BrowserManager(BaseComponent):
 
     def _slots_taken(self) -> int:
         """In-use contexts plus reserved creations (both count against the cap)."""
-        return len(self.contexts_in_use) + len(self._creating)
+        return len(self.contexts_in_use) + len(self._creating) + self._closing
 
     async def _finish_create(self, session_id: str, creating: asyncio.Future):
         """Create the reserved context OUTSIDE the lock (Playwright can take
@@ -337,6 +344,7 @@ class BrowserManager(BaseComponent):
 
         context = self.contexts_in_use.pop(session_id)
         self.context_allocation_times.pop(session_id, None)
+        self._closing += 1  # released by _close_detached
 
         # Remove from session tracking
         base_session = _session_key(session_id)
@@ -360,7 +368,7 @@ class BrowserManager(BaseComponent):
         context = self._detach_context(session_id)
         if context is None:
             return
-        await self._close_quietly(context, session_id)  # 098 TS-06: always closed, never pooled
+        await self._close_detached(context, session_id)  # 098 TS-06: always closed, never pooled
 
         # Process wait queue after releasing (no lock needed - caller holds it)
         await self._notify_wait_queue()
@@ -378,7 +386,7 @@ class BrowserManager(BaseComponent):
             context = self._detach_context(session_id)
         if context is None:
             return
-        await self._close_quietly(context, session_id)
+        await self._close_detached(context, session_id)
         async with self._pool_lock:
             await self._notify_wait_queue()
 
@@ -429,7 +437,7 @@ class BrowserManager(BaseComponent):
         if detached:
             # Shielded: these left the pool, so a cancel here would lose the rest for ever.
             await asyncio.shield(asyncio.gather(
-                *(self._close_quietly(context, session_id) for context, session_id in detached)))
+                *(self._close_detached(context, session_id) for context, session_id in detached)))
             async with self._pool_lock:
                 await self._notify_wait_queue()
 
@@ -525,10 +533,20 @@ class BrowserManager(BaseComponent):
             future.set_result(context)
             self.logger.debug(f"Allocated context to waiting session {session_id}")
 
+    async def _close_detached(self, context: BrowserContext, session_id: str) -> None:
+        """Close a context _detach_context took out of the pool; its slot frees after."""
+        try:
+            await self._close_quietly(context, session_id)
+        finally:
+            self._closing -= 1
+
     async def _close_quietly(self, context: BrowserContext, session_id: str) -> None:
         try:
-            await context.close()
+            await asyncio.wait_for(context.close(), timeout=CONTEXT_CLOSE_TIMEOUT_SEC)
             self.logger.debug(f"Closed context for session {session_id}")
+        except asyncio.TimeoutError:
+            self.logger.error(f"Context for {session_id} did not close within "
+                              f"{CONTEXT_CLOSE_TIMEOUT_SEC:g}s; its pool slot is freed")
         except Exception as e:
             self.logger.error(f"Error closing context for {session_id}: {e}")
 

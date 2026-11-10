@@ -50,8 +50,8 @@ def prune_surface_stores(registry) -> None:
         from core.runtime_paths import store_db_path
         pairing_db = store_db_path("pairing.db", os.path.dirname(db_path) or ".")
         if os.path.exists(pairing_db):
-            from core.pairing import PairingStore
-            n = PairingStore(pairing_db).purge_expired()
+            from core.pairing import store_at
+            n = store_at(pairing_db).purge_expired()
             if n:
                 logger.info("surface GC purged %d expired pairing code(s)", n)
     except Exception as e:

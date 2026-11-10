@@ -23,6 +23,9 @@
             </ul>
             {% endif %}
             <div class="error-actions">
+{%- if new_chat %}
+                <a href="/?new=1" class="action-link">{{ t('error.new_chat') }}</a>
+{%- endif %}
                 <a href="/" class="action-link">{{ t('error.home') }}</a>
             </div>
             <details class="error-section">

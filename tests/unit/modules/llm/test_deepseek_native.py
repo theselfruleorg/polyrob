@@ -29,25 +29,23 @@ def _response(reasoning="think first", tool_calls=None, usage=None):
 
 
 def _adapter(client):
-    from modules.llm.adapters import OpenRouterAdapter
-    return OpenRouterAdapter(client=client, model_name=client.model_type)
+    from modules.llm.adapters import DeepSeekAdapter
+    return DeepSeekAdapter(client=client, model_name=client.model_type)
 
 
 TC = [{"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}]
 
 
 def test_adapter_stamps_reasoning_on_its_own_message():
-    c = _client()
-    c.last_response = _response("plan: read the file")
     ai = AIMessage(content="")
-    _adapter(c)._stamp_reasoning(ai)
+    _adapter(_client())._stamp_reasoning(ai, _response("plan: read the file"))
     assert ai.additional_kwargs["reasoning_content"] == "plan: read the file"
 
 
 def test_adapter_replays_reasoning_on_assistant_tool_turns():
     a = _adapter(_client())
     ai = AIMessage(content="x", tool_calls=TC)
-    ai.additional_kwargs["reasoning_content"] = "plan"
+    ai.additional_kwargs.update(reasoning_content="plan", reasoning_seat="deepseek-native")
     out = a._convert_to_client_messages(
         [HumanMessage(content="go"), ai, ToolMessage(content="ok", tool_call_id="c1")])
     assert out[1]["reasoning_content"] == "plan"
@@ -65,13 +63,13 @@ def test_a_tool_turn_from_another_model_replays_an_empty_reasoning():
 
 
 def test_other_openai_compatible_clients_never_send_reasoning():
-    from modules.llm.openrouter_client import OpenRouterClient
-    c = object.__new__(OpenRouterClient)
+    from modules.llm.nvidia_client import NvidiaClient
+    c = object.__new__(NvidiaClient)
     c.model_type = "z-ai/glm-5.2"
-    c.last_response = _response("hidden")
-    a = _adapter(c)
+    from modules.llm.adapters import OpenRouterAdapter
+    a = OpenRouterAdapter(client=c, model_name=c.model_type)
     ai = AIMessage(content="", tool_calls=TC)
-    a._stamp_reasoning(ai)
+    a._stamp_reasoning(ai, _response("hidden"))
     assert "reasoning_content" not in ai.additional_kwargs
     ai.additional_kwargs["reasoning_content"] = "hidden"
     out = a._convert_to_client_messages([ai])
@@ -94,8 +92,10 @@ def test_atomic_pair_keeps_reasoning_on_the_ai_message():
 
     mm = _MM()
     mm.add_tool_call_pair_atomic("c", [{"id": "c1", "name": "read_file", "args": {}}],
-                                 [("c1", "ok")], reasoning_content="plan")
+                                 [("c1", "ok")],
+                                 replay_fields={"reasoning_content": "plan", "reasoning_seat": "deepseek-native"})
     assert mm.history.messages[0].additional_kwargs["reasoning_content"] == "plan"
+    assert mm.history.messages[0].additional_kwargs["reasoning_seat"] == "deepseek-native"
 
 
 def test_request_extras_replace_openrouter_extras(monkeypatch):

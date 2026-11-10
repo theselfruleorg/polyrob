@@ -31,8 +31,9 @@ def test_help_for_a_seat_local_verb_names_the_seat_not_a_typo(verb):
     out = _help_for(verb)
     assert "Unknown command" not in out
     assert verb in out
-    for seat in row.seats:
-        assert seat in out
+    from surfaces.telegram.unknown_verb import _SEAT_WORDS
+    for seat in row.seats:   # 113 W0: the owner word for the seat, not its id
+        assert _SEAT_WORDS.get(seat, seat) in out
     # It still says WHAT the verb is, so the answer is useful, not just polite.
     assert row.help.rstrip(".") in out
 

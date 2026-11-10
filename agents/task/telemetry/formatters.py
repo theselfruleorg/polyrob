@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional, List
 from abc import ABC, abstractmethod
 
-from agents.task.telemetry.views import BaseTelemetryEvent
+from agents.task.telemetry.views import BaseTelemetryEvent, model_provider
 
 # Import logger
 from agents.task.logging_config import get_task_logger
@@ -184,13 +184,6 @@ class AgentStepFormatter(BaseFeedFormatter):
 class LLMRequestFormatter(BaseFeedFormatter):
     """Formatter for LLM request events."""
 
-    @staticmethod
-    def _detect_provider(model_name: str) -> str:
-        """Detect the provider based on model name."""
-        from agents.task.utils import detect_llm_provider
-        provider = detect_llm_provider(None, model_name)
-        return 'unknown' if provider == 'generic' else provider
-
     def format(self, event: BaseTelemetryEvent) -> Dict[str, Any]:
         """Format LLM request event for feed."""
         return {
@@ -201,7 +194,7 @@ class LLMRequestFormatter(BaseFeedFormatter):
                 'component': event.properties.get('component', 'Unknown'),
                 'purpose': event.properties.get('purpose', 'Unknown'),
                 'model_name': event.properties.get('model_name', 'Unknown'),
-                'provider': self._detect_provider(event.properties.get('model_name', '')),
+                'provider': model_provider(event.properties.get('model_name', '')),
                 'duration_seconds': event.properties.get('duration_seconds', 0),
                 'success': event.properties.get('success', False),
                 'token_count': event.properties.get('token_count', None),

@@ -1,7 +1,7 @@
 """LLM response/provider helpers: provider detection, serving-provider resolution,
 token-usage extraction.
 
-Relocated from ``agents/task/utils.py`` to the LLM layer (S5, 2026-08-29) — they read
+Kept in the LLM layer, not ``agents/task/utils.py`` — they read
 only ``modules.llm.model_registry`` and are needed by ``modules.llm.aux_metering``;
 ``agents.task.utils`` re-exports the three names for its callers.
 """
@@ -11,33 +11,21 @@ from typing import Any, Dict, Optional
 logger = logging.getLogger("task.utils")
 
 
-def detect_llm_provider(result: Any, model_name: Optional[str] = None) -> str:
+def detect_llm_provider(model_name: Optional[str]) -> str:
     """Detect LLM provider from model name using the model_registry.
 
     Args:
-        result: LLM response object (not used, kept for compatibility)
         model_name: Model name for detection
 
     Returns:
-        Provider name ('openai', 'anthropic', 'gemini', 'deepseek', 'openrouter', 'llama', or 'generic')
+        Provider name ('openai', 'anthropic', 'gemini', 'deepseek', 'openrouter', or 'generic')
     """
     if not model_name:
         return 'generic'
     
-    try:
-        # Use model_registry as the SINGLE SOURCE OF TRUTH (WS-2.3): the canonical
-        # enum→string map lives there, so a new provider is added in one place and
-        # GOOGLE→'gemini' can never drift back to 'google' here.
-        from modules.llm.model_registry import get_model_config, canonical_provider_name
-
-        model_config = get_model_config(model_name)
-        if model_config and model_config.provider:
-            return canonical_provider_name(model_config.provider, default='generic')
-
-    except ImportError:
-        logger.debug("model_registry not available for provider detection")
-
-    return 'generic'
+    # The registry holds the canonical enum→string map: GOOGLE→'gemini'.
+    from modules.llm.model_registry import get_model_config, canonical_provider_name
+    return canonical_provider_name(get_model_config(model_name).provider, default='generic')
 
 
 def resolve_serving_provider(llm: Any, model_name: Optional[str] = None) -> str:
@@ -52,8 +40,7 @@ def resolve_serving_provider(llm: Any, model_name: Optional[str] = None) -> str:
     emitting tool calls as prose.
 
     Schema shape follows the SERVING provider, so prefer the ProviderSpec the
-    live client was built from — the same resolution
-    ``modules.llm.adapters._client_provider_label`` uses for error framing.
+    live client was built from.
     Built-in clients carry no ``_spec`` and fall back to model-name detection,
     so their behaviour is unchanged.
     """
@@ -65,7 +52,7 @@ def resolve_serving_provider(llm: Any, model_name: Optional[str] = None) -> str:
     # here poisons every consumer (billing keys, schema lookup, telemetry).
     if isinstance(spec_name, str) and spec_name:
         return spec_name
-    return detect_llm_provider(None, model_name)
+    return detect_llm_provider(model_name)
 
 
 #: the keys of :func:`extract_token_usage` that are token COUNTS. Everything
@@ -75,7 +62,7 @@ _TOKEN_KEYS = ('total_tokens', 'prompt_tokens', 'completion_tokens',
 
 
 def cache_creation_1h_from(usage: Any, cache_creation: int) -> int:
-    """The 1h-window slice of an Anthropic cache write — F4 (2026-09-22).
+    """The 1h-window slice of an Anthropic cache write.
 
     Anthropic splits the write by window in ``usage.cache_creation``
     (``ephemeral_5m_input_tokens`` / ``ephemeral_1h_input_tokens``); the 1h
@@ -120,7 +107,7 @@ def _money(value: Any) -> Optional[float]:
 
 
 def _billed_cost_fields(result: Any) -> Dict[str, Optional[float]]:
-    """What the provider says this call COST — F23 (2026-09-22).
+    """What the provider says this call COST.
 
     Every cost in the tree is otherwise an estimate recomputed from the model
     catalog. On OpenRouter (with ``usage: {"include": true}`` on the request,
@@ -149,12 +136,30 @@ def _billed_cost_fields(result: Any) -> Dict[str, Optional[float]]:
     return out
 
 
-def extract_token_usage(result: Any, provider: str) -> Dict[str, Optional[int]]:
-    """Extract token usage from LLM response using provider-specific paths.
+def chat_usage_fields(response: Any) -> Dict[str, Optional[Any]]:
+    """The usage dict of an OpenAI-shaped chat completion: the counts, the cache reads and
+    writes in ``prompt_tokens_details``, and the billed cost when the provider reports one."""
+    usage = getattr(response, 'usage', None)
+    if not usage:
+        return {'prompt_tokens': None, 'completion_tokens': None, 'total_tokens': None,
+                'billed_cost_usd': None, 'cache_discount_usd': None}
+    details = getattr(usage, 'prompt_tokens_details', None)
+    cache_write = getattr(details, 'cache_write_tokens', None)
+    return {
+        'prompt_tokens': getattr(usage, 'prompt_tokens', None),
+        'completion_tokens': getattr(usage, 'completion_tokens', None),
+        'total_tokens': getattr(usage, 'total_tokens', None),
+        'cached_tokens': getattr(details, 'cached_tokens', None) or 0,
+        'cache_creation_tokens': cache_write if isinstance(cache_write, int) else 0,
+        **_billed_cost_fields(response),
+    }
+
+
+def extract_token_usage(result: Any) -> Dict[str, Optional[int]]:
+    """Extract token usage from LLM response.
 
     Args:
         result: LLM response object (could be raw LLM response or structured output)
-        provider: Provider name from detect_llm_provider
 
     Returns:
         Dictionary with token counts (total_tokens, prompt_tokens, completion_tokens, cached_tokens)
@@ -188,7 +193,7 @@ def extract_token_usage(result: Any, provider: str) -> Dict[str, Optional[int]]:
                 token_usage['cached_tokens'] = usage.get('cache_read_input_tokens') or usage.get('cached_tokens')
                 token_usage['cache_creation_tokens'] = usage.get('cache_creation_input_tokens')
                 token_usage['cache_creation_1h_tokens'] = usage.get('cache_creation_1h_tokens')
-                # F23: the adapter carries the provider's billed cost here.
+                # The adapter carries the provider's billed cost here.
                 token_usage['billed_cost_usd'] = _money(usage.get('billed_cost_usd'))
                 token_usage['cache_discount_usd'] = _money(usage.get('cache_discount_usd'))
             else:
@@ -216,42 +221,15 @@ def extract_token_usage(result: Any, provider: str) -> Dict[str, Optional[int]]:
                 token_usage['total_tokens'] = usage.get('total_tokens')
                 token_usage['cached_tokens'] = usage.get('cached_tokens')
 
-        # Direct attribute access based on known provider patterns
-        elif provider == 'openai':
-            # OpenAI format: result.usage.{total_tokens, prompt_tokens, completion_tokens}
-            if hasattr(actual_result, 'usage') and actual_result.usage:
-                usage = actual_result.usage
-                token_usage['total_tokens'] = getattr(usage, 'total_tokens', None)
-                token_usage['prompt_tokens'] = getattr(usage, 'prompt_tokens', None)
-                token_usage['completion_tokens'] = getattr(usage, 'completion_tokens', None)
-                token_usage['cached_tokens'] = getattr(usage, 'cached_tokens', None)
-
-        elif provider == 'anthropic':
-            # Anthropic format: result.usage.{input_tokens, output_tokens}
-            if hasattr(actual_result, 'usage') and actual_result.usage:
-                usage = actual_result.usage
-                token_usage['prompt_tokens'] = getattr(usage, 'input_tokens', None)
-                token_usage['completion_tokens'] = getattr(usage, 'output_tokens', None)
-                token_usage['cached_tokens'] = getattr(usage, 'cache_read_input_tokens', None)
-            # Sometimes Anthropic puts these directly on result
-            elif hasattr(actual_result, 'input_tokens'):
-                token_usage['prompt_tokens'] = getattr(actual_result, 'input_tokens', None)
-                token_usage['completion_tokens'] = getattr(actual_result, 'output_tokens', None)
-
-        else:
-            # Generic fallback - try multiple common patterns
-            if hasattr(actual_result, 'usage') and actual_result.usage:
-                usage = actual_result.usage
-                # Try OpenAI pattern first
-                token_usage['total_tokens'] = getattr(usage, 'total_tokens', None)
-                token_usage['prompt_tokens'] = getattr(usage, 'prompt_tokens', None)
-                token_usage['completion_tokens'] = getattr(usage, 'completion_tokens', None)
-                token_usage['cached_tokens'] = getattr(usage, 'cached_tokens', None) or getattr(usage, 'cache_read_input_tokens', None)
-                # Try Anthropic pattern if OpenAI didn't work
-                if not token_usage['prompt_tokens']:
-                    token_usage['prompt_tokens'] = getattr(usage, 'input_tokens', None)
-                if not token_usage['completion_tokens']:
-                    token_usage['completion_tokens'] = getattr(usage, 'output_tokens', None)
+        # A raw response: the OpenAI shape first, then the Anthropic names.
+        elif hasattr(actual_result, 'usage') and actual_result.usage:
+            usage = actual_result.usage
+            fields = chat_usage_fields(actual_result)
+            token_usage['total_tokens'] = fields['total_tokens']
+            token_usage['prompt_tokens'] = fields['prompt_tokens'] or getattr(usage, 'input_tokens', None)
+            token_usage['completion_tokens'] = fields['completion_tokens'] or getattr(usage, 'output_tokens', None)
+            token_usage['cached_tokens'] = (fields['cached_tokens'] or getattr(usage, 'cached_tokens', None)
+                                            or getattr(usage, 'cache_read_input_tokens', None))
 
         # Calculate total if we have prompt + completion but no total
         if (token_usage['total_tokens'] is None and
@@ -268,7 +246,7 @@ def extract_token_usage(result: Any, provider: str) -> Dict[str, Optional[int]]:
                 except (ValueError, TypeError):
                     token_usage[key] = None
 
-        # F23: what the provider says it ACTUALLY billed, when it says so.
+        # What the provider says it ACTUALLY billed, when it says so.
         # Only a reported figure overrides: an AIMessage has no `usage` block, and a
         # None here would erase the cost its usage_metadata already carried.
         token_usage.update({k: v for k, v in _billed_cost_fields(actual_result).items()

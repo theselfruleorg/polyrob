@@ -314,6 +314,24 @@ async def test_p2_15_no_cooldown_stamp_when_compaction_returns_false():
 
 
 @pytest.mark.asyncio
+async def test_106_c3_a_rewrite_starts_the_cooldown_whatever_compaction_returned():
+    """Ageing rewrote the history and the summariser then failed: the next step must
+    not rewrite again, or the whole 85-95% band runs cold."""
+    a = _compaction_agent(usage_pct=90.0)
+    mm = a.message_manager
+    async def _aged_then_aborted():
+        mm.compaction_rewrote_history = True
+        return False
+    mm.llm_compact_history = AsyncMock(side_effect=_aged_then_aborted)
+
+    a.state.n_steps = 11
+    await a._prepare_step()
+    a.state.n_steps = 12
+    await a._prepare_step()
+    assert mm.llm_compact_history.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_p2_15_cooldown_stamped_when_compaction_succeeds():
     """Regression: a successful (True) compaction DOES stamp the cooldown."""
     a = _compaction_agent(usage_pct=90.0)

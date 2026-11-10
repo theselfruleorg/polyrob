@@ -91,7 +91,7 @@ only on a single-owner box — axis 1 on and an owner bound; otherwise the card
 shows `supervised` with the reason.
 
 **4. `AUTONOMY_POSTURE` — how visible the background work is.** `owner-visible`
-adds completion judging, blocker escalation and the continuity trio (episodic
+adds completion judging and the continuity trio (episodic
 memory, the session-start digest, reflection on close); `full` adds time-based
 initiative (cron by default) and the no-change wake gate. Never moves:
 capabilities (axis 3), money, host access.
@@ -152,6 +152,8 @@ default and only says so). The CLI does not load a per-directory
 refused: nothing is written, and the message names the file the CLI reads.
 Every write tells you which file it
 wrote and when the value applies (`live`, `next-step`, `next-turn`, `next-session`, or `restart`).
+An unreadable `preferences.toml` is never overwritten: a write refuses, reads keep the
+last good values, and `/config` shows it as UNREADABLE.
 
 An **environment flag is read when the process starts**, so a change needs a
 restart of whatever is running (the REPL, `polyrob serve`, a surface, a systemd
@@ -305,6 +307,13 @@ another model with its own `payload.model`. The old `CHAT_PROVIDER`/`CHAT_MODEL`
 names are retired; set alone, POLYROB refuses to start and names the
 `DEFAULT_` name to use.
 
+**Model tiers.** `HEAVY_MODEL` (on the pinned provider) is the `heavy` tier; the
+provider's cheap model is `light`; `DEFAULT_MODEL` is `default`. The agent picks a
+tier by name, with a one-line reason: for a helper it starts, and — when you asked for the
+work in chat — for a goal or job (`heavy` for work that decides money). It never
+names a raw model for unattended work. The tiers resolve on the pinned
+`DEFAULT_PROVIDER` only. `/status` shows the last choices and why.
+
 `DEEPSEEK_API_KEY` selects DeepSeek's own API (sixth in the order above): `deepseek-flash` by default, `deepseek-v4-pro`, and the legacy ids
 `deepseek-chat` (thinking off) and `deepseek-reasoner` (thinking on). The
 names `deepseek-v4.1-flash` and `deepseek-pro` also work: the agent sends DeepSeek
@@ -388,7 +397,7 @@ change it: `ANTHROPIC_CACHE_TTL` (`auto` | `5m` | `1h`) sets the cache window
 Anthropic holds your prompt for — `auto` gives an interactive chat 1 hour and
 an autonomous cron or goal run 5 minutes, which is the right trade in each
 case. `LLM_PROMPT_CACHE` (or `ANTHROPIC_PROMPT_CACHE`) set to `false` turns caching
-off; `GEMINI_PROMPT_CACHE` opts in to Gemini's explicit cache. Everything about caching
+off. Gemini caches implicitly and needs no setting. Everything about caching
 that costs or saves money shows up in `polyrob doctor` and in `/context`.
 
 ### Your own endpoint (`providers.yaml`)
@@ -652,15 +661,13 @@ alias automatically.
 ### Strangers
 
 Private chats are permission-list by default. Beyond the owner, a sender is
-either **paired** (`POLYROB_REQUIRE_PAIRING=true`, then `polyrob owner pair
-approve <code>`) or a **correspondent** the agent contacted first, whose
+either **paired** (`POLYROB_REQUIRE_PAIRING=true`, then `/pair approve <surface>
+<code>` from your chat or `polyrob owner pair approve <surface> <code>`) or a **correspondent** the agent contacted first, whose
 replies arrive as data, never as instructions (`CORRESPONDENT_ACCESS_ENABLED`).
 Email senders are always correspondent-or-denied.
 
-⚠️ A **paired** sender is treated as the owner on that surface (full owner
-routing; no host execution in local mode). Approve only a code that your own
-account received. Codes expire after 15 minutes and work once; remove a pairing
-with `polyrob owner pair revoke <user_id>`.
+⚠️ A **paired** sender may command the agent on that chat app with their own memory and work. They never reach your wallet, money, approvals, owner commands or your memory, and in local mode they run no code on your host. Approve only a code you expected. Codes expire after 15 minutes and work once; remove a pairing
+with `/pair revoke <surface> <id>`.
 
 ### Groups
 

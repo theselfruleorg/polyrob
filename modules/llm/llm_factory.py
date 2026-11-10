@@ -6,9 +6,8 @@ ABC). The agent loop, tool-calling, prompt-caching and token-counting are all
 native, with no third-party agent-framework dependency. Raises on an unknown
 provider (no silent provider swap).
 
-Provider→adapter dispatch is driven by ``PROVIDER_CONFIG`` (model_registry),
-the single source of truth for which providers exist. Provider-specific
-parameter sanitisation remains inline since it is not the duplicated concern.
+``PROVIDER_CONFIG`` (model_registry) says which providers exist, and the provider's spec
+selects the adapter.
 """
 
 import logging
@@ -18,21 +17,19 @@ from typing import Optional
 from modules.llm.adapters import BaseChatModel
 from core.lazy_deps import FeatureUnavailable
 from modules.llm.llm_client import LLMClient
-from modules.llm.model_registry import get_model_config, PROVIDER_CONFIG, openai_reasoning_model
-
-# Centralized timeout/retry constants. LLMClient.DEFAULT_REQUEST_TIMEOUT (=120) is the
-# canonical mirror of TimeoutConfig.LLM_REQUEST_TIMEOUT. We read it from LLMClient (L1)
-# rather than agents.task.constants (L2): a capability lib must not import up into the
-# agent layer at module load, which dragged the whole agents/__init__ fan-out (+aiogram)
-# into anything importing modules.llm. Equality is guarded by tests
-# (P0-L, 2026-06-26 runtime-architecture finalization).
-DEFAULT_REQUEST_TIMEOUT = LLMClient.DEFAULT_REQUEST_TIMEOUT
-DEFAULT_MAX_RETRIES = LLMClient.DEFAULT_MAX_RETRIES
+from modules.llm.model_registry import get_model_config, PROVIDER_CONFIG
+from modules.llm.model_types import openai_reasoning_model
 
 logger = logging.getLogger(__name__)
 
+_GEMINI_SHORTHAND = {
+    "gemini-3": "gemini-3-pro-preview",
+    "gemini-3-pro": "gemini-3-pro-preview",
+    "gemini": "gemini-2.5-flash",
+}
 
-def _get_model_max_tokens_from_registry(model: str, provider: str) -> Optional[int]:
+
+def _get_model_max_tokens_from_registry(model: str) -> Optional[int]:
     """Get appropriate max_tokens limit from model registry.
 
     This is the ONLY place that should determine max_tokens.
@@ -41,28 +38,79 @@ def _get_model_max_tokens_from_registry(model: str, provider: str) -> Optional[i
     if not model:
         return None
 
-    config = get_model_config(model)
-    if config:
-        max_completion = config.max_completion_tokens
-        if max_completion and max_completion > 0:
-            # The model's completion CEILING is not a per-request size: a flash
-            # model advertises 384000, and a credit-metered provider reserves what
-            # a request asks for. Resolve the SAME per-request cap every call is
-            # clamped to (``_adjust_max_tokens`` -> ``output_token_cap``), so the
-            # value stored and logged here is one a request can carry.
-            from modules.llm.llm_client import _DEFAULT_OUTPUT_TOKEN_CAP
-            from modules.llm.output_budget import output_token_cap
-            cap = output_token_cap(None, _DEFAULT_OUTPUT_TOKEN_CAP)
-            logger.debug(f"max_tokens for {model}: model ceiling {max_completion}, "
-                         f"per-request cap {cap}")
-            return min(max_completion, cap)
+    max_completion = get_model_config(model).max_completion_tokens
+    # The model's completion CEILING is not a per-request size: a flash model advertises
+    # 384000, and a credit-metered provider reserves what a request asks for. Resolve the
+    # SAME per-request cap every call is clamped to (``_adjust_max_tokens`` ->
+    # ``output_token_cap``), so the value stored and logged here is one a request can carry.
+    from modules.llm.llm_client import _DEFAULT_OUTPUT_TOKEN_CAP
+    from modules.llm.output_budget import output_token_cap
+    cap = output_token_cap(_DEFAULT_OUTPUT_TOKEN_CAP)
+    logger.debug(f"max_tokens for {model}: model ceiling {max_completion}, per-request cap {cap}")
+    return min(max_completion, cap)
 
-    logger.warning(
-        f"Model '{model}' not found in registry. "
-        f"No max_tokens limit will be set (model will self-regulate). "
-        f"Consider adding this model to model_registry.py"
-    )
-    return None
+
+def _sync_client_model(llm_client: LLMClient, model: str, *, capabilities: bool) -> None:
+    """Keep a shared client's ``model_type`` (and its capabilities) in sync with the request."""
+    if not hasattr(llm_client, 'model_type') or llm_client.model_type == model:
+        return
+    logger.info(f"Updating {type(llm_client).__name__} model_type: {llm_client.model_type} -> {model}")
+    llm_client.model_type = model
+    if capabilities:
+        model_config = get_model_config(model)
+        llm_client.supports_vision = model_config.capabilities.supports_vision
+        llm_client.max_tokens = model_config.max_completion_tokens
+
+
+def _openai_adapter(model: str, llm_client: LLMClient, params: dict) -> BaseChatModel:
+    from modules.llm.adapters import OpenAIAdapter
+    sanitized_params = {k: v for k, v in params.items() if k != "model"}
+    # An o-series reasoning model rejects these.
+    if openai_reasoning_model(model):
+        for key in ("parallel_tool_calls", "temperature", "max_tokens"):
+            sanitized_params.pop(key, None)
+    logger.info(f"Creating OpenAIAdapter for model {model}")
+    return OpenAIAdapter(client=llm_client, model_name=model, **sanitized_params)
+
+
+def _anthropic_adapter(model: str, llm_client: LLMClient, params: dict) -> BaseChatModel:
+    from core.lazy_deps import ensure_provider
+    ensure_provider("provider.anthropic")  # no-op when present
+    from modules.llm.adapters import AnthropicAdapter
+    sanitized_params = {k: v for k, v in params.items() if k != "model"}
+    logger.info(f"Creating AnthropicAdapter for model {model}")
+    return AnthropicAdapter(client=llm_client, model_name=model, **sanitized_params)
+
+
+def _gemini_adapter(model: str, llm_client: LLMClient, params: dict) -> BaseChatModel:
+    from core.lazy_deps import ensure_provider
+    ensure_provider("provider.gemini")  # no-op when present
+    from modules.llm.adapters import GeminiAdapter
+    # Strip "models/" prefix and map shorthand names to official codes
+    clean_model = model.replace("models/", "") if model.startswith("models/") else model
+    clean_model = _GEMINI_SHORTHAND.get(clean_model, clean_model)
+    _sync_client_model(llm_client, clean_model, capabilities=True)
+    sanitized_params = {k: v for k, v in params.items()
+                        if k not in ("parallel_tool_calls", "tool_choice", "model")}
+    logger.info(f"Creating GeminiAdapter for model {clean_model}")
+    return GeminiAdapter(client=llm_client, model_name=clean_model, **sanitized_params)
+
+
+def _openrouter_adapter(model: str, llm_client: LLMClient, params: dict, *,
+                        sync_capabilities: bool) -> BaseChatModel:
+    """Every client on the OpenAI-compatible or Responses wire: they share one adapter, and
+    the wire translation lives in the client."""
+    from modules.llm.adapters import OpenRouterAdapter
+    from modules.llm.deepseek_client import DeepSeekClient
+    _sync_client_model(llm_client, model, capabilities=sync_capabilities)
+    sanitized_params = {k: v for k, v in params.items()
+                        if k not in ("parallel_tool_calls", "model")}
+    adapter = OpenRouterAdapter
+    if isinstance(llm_client, DeepSeekClient):   # the one seat that sends reasoning back
+        from modules.llm.adapters import DeepSeekAdapter
+        adapter = DeepSeekAdapter
+    logger.info(f"Creating {adapter.__name__} for {model}")
+    return adapter(client=llm_client, model_name=model, **sanitized_params)
 
 
 def create_chat_model(
@@ -94,7 +142,7 @@ def create_chat_model(
     # Intelligent max_tokens from model registry
     max_tokens = kwargs.pop('max_tokens', None)
     if max_tokens is None:
-        max_tokens = _get_model_max_tokens_from_registry(model, provider)
+        max_tokens = _get_model_max_tokens_from_registry(model)
 
     # llm_client is for internal use only — never forward it into adapter kwargs
     filtered_kwargs = {k: v for k, v in kwargs.items() if k != 'llm_client'}
@@ -138,156 +186,38 @@ def create_chat_model(
             + "."
         )
 
-    # UP-08: stamp the resolved cache strategy once so clients read self.cache_strategy
-    # instead of re-deriving caching ad hoc. Default "none" if unset (back-compatible).
+    # Stamp the resolved cache strategy once so clients read self.cache_strategy
+    # instead of re-deriving caching ad hoc. Default "none" if unset.
     try:
         from modules.llm.cache_hints import provider_cache_strategy
         llm_client.cache_strategy = provider_cache_strategy(provider_l, model)
     except Exception:
         pass
 
-    # Provider-specific adapter construction. The if/elif chain below handles
-    # parameter sanitisation that differs per provider — NOT client-class
-    # selection (that now comes from PROVIDER_CONFIG). The order of branches
-    # is preserved for readability but the fallthrough ValueError is replaced
-    # by the early guard above.
+    # The spec selects the adapter: a bespoke client's own parameter rules, else its transport.
     try:
-        if provider_l == "openai":
-            from modules.llm.adapters import OpenAIAdapter
-            from modules.llm.openai_client import OpenAIClient
-            if not isinstance(llm_client, OpenAIClient):
-                logger.warning(f"Expected OpenAIClient but got {type(llm_client).__name__}")
-
-            sanitized_params = common_params.copy()
-            # H1: o-series reasoning models (o1/o3/o4) reject these params. SSOT helper —
-            # prefix-based, so o3/o4-mini are covered (the old substring list missed them).
-            if openai_reasoning_model(model):
-                for key in ["parallel_tool_calls", "temperature", "max_tokens"]:
-                    sanitized_params.pop(key, None)
-            sanitized_params.pop("model", None)
-
-            logger.info(f"Creating OpenAIAdapter for model {model}")
-            return OpenAIAdapter(client=llm_client, model_name=model, **sanitized_params)
-
-        elif provider_l == "anthropic":
-            from core.lazy_deps import ensure_provider
-            ensure_provider("provider.anthropic")          # no-op when present (058 T7.2)
-            from modules.llm.adapters import AnthropicAdapter
-            from modules.llm.anthropic_client import AnthropicClient
-            if not isinstance(llm_client, AnthropicClient):
-                logger.warning(f"Expected AnthropicClient but got {type(llm_client).__name__}")
-
-            sanitized_params = common_params.copy()
-            sanitized_params.pop("model", None)
-
-            logger.info(f"Creating AnthropicAdapter for model {model}")
-            return AnthropicAdapter(client=llm_client, model_name=model, **sanitized_params)
-
-        elif provider_l in ("openrouter", "nvidia", "deepseek"):
-            # NVIDIA NIM and DeepSeek are OpenAI-compatible exactly like OpenRouter, and
-            # both clients subclass OpenRouterClient — so they ride the same adapter path.
-            from modules.llm.adapters import OpenRouterAdapter
-            from modules.llm.openrouter_client import OpenRouterClient
-            if not isinstance(llm_client, OpenRouterClient):
-                logger.warning(f"Expected OpenRouterClient but got {type(llm_client).__name__}, trying to adapt anyway")
-
-            # Keep shared client's model_type/capabilities in sync with the request
-            if hasattr(llm_client, 'model_type') and llm_client.model_type != model:
-                logger.info(f"Updating OpenRouterClient model_type: {llm_client.model_type} -> {model}")
-                llm_client.model_type = model
-                model_config = get_model_config(model)
-                if model_config:
-                    llm_client.supports_vision = model_config.capabilities.supports_vision
-                    llm_client.max_tokens = model_config.max_completion_tokens or 32768
-
-            sanitized_params = common_params.copy()
-            for key in ("parallel_tool_calls", "model"):
-                sanitized_params.pop(key, None)
-
-            logger.info(f"Creating OpenRouterAdapter for model {model}")
-            return OpenRouterAdapter(client=llm_client, model_name=model, **sanitized_params)
-
-        elif provider_l == "gemini":
-            from core.lazy_deps import ensure_provider
-            ensure_provider("provider.gemini")             # no-op when present (058 T7.2)
-            from modules.llm.adapters import GeminiAdapter
-            from modules.llm.gemini_client import GeminiClient
-            if not isinstance(llm_client, GeminiClient):
-                logger.warning(f"Expected GeminiClient but got {type(llm_client).__name__}, trying to adapt anyway")
-
-            # Strip "models/" prefix and map shorthand names to official codes
-            clean_model = model.replace("models/", "") if model.startswith("models/") else model
-            GEMINI_SHORTHAND_MAPPING = {
-                "gemini-3": "gemini-3-pro-preview",
-                "gemini-3-pro": "gemini-3-pro-preview",
-                "gemini": "gemini-2.5-flash",
-            }
-            if clean_model in GEMINI_SHORTHAND_MAPPING:
-                clean_model = GEMINI_SHORTHAND_MAPPING[clean_model]
-
-            if hasattr(llm_client, 'model_type') and llm_client.model_type != clean_model:
-                logger.info(f"Updating GeminiClient model_type: {llm_client.model_type} -> {clean_model}")
-                llm_client.model_type = clean_model
-                model_config = get_model_config(clean_model)
-                if model_config:
-                    llm_client.supports_vision = model_config.capabilities.supports_vision
-                    llm_client.max_tokens = model_config.max_completion_tokens or 8192
-
-            sanitized_params = common_params.copy()
-            for key in ("parallel_tool_calls", "tool_choice", "model"):
-                sanitized_params.pop(key, None)
-
-            logger.info(f"Creating GeminiAdapter for model {clean_model}")
-            return GeminiAdapter(client=llm_client, model_name=clean_model, **sanitized_params)
-
-        else:
-            # Proposal 024 (L0): a registry provider with no bespoke branch above
-            # (a user-declared providers.yaml row) dispatches on its TRANSPORT to
-            # the matching generic adapter. The PROVIDER_CONFIG guard above already
-            # rejected genuinely unknown providers, so reaching here with no spec
-            # is a real bug worth the loud ValueError below.
-            from modules.llm.provider_spec import Transport, get_spec
-            spec = get_spec(provider_l)
-            if spec is not None and spec.transport is Transport.CHAT_COMPLETIONS:
-                from modules.llm.adapters import OpenRouterAdapter
-                sanitized_params = common_params.copy()
-                for key in ("parallel_tool_calls", "model"):
-                    sanitized_params.pop(key, None)
-                if hasattr(llm_client, 'model_type') and llm_client.model_type != model:
-                    logger.info(f"Updating {type(llm_client).__name__} model_type: "
-                                f"{llm_client.model_type} -> {model}")
-                    llm_client.model_type = model
-                logger.info(f"Creating OpenRouterAdapter (generic chat_completions) for {model}")
-                return OpenRouterAdapter(client=llm_client, model_name=model, **sanitized_params)
-            if spec is not None and spec.transport is Transport.RESPONSES:
-                # The Responses client implements the same
-                # generate_agent_response contract, so the OpenRouter adapter
-                # drives it unchanged — the wire translation lives in the
-                # client, not in a fourth adapter.
-                from modules.llm.adapters import OpenRouterAdapter
-                sanitized_params = common_params.copy()
-                for key in ("parallel_tool_calls", "model"):
-                    sanitized_params.pop(key, None)
-                if hasattr(llm_client, 'model_type') and llm_client.model_type != model:
-                    llm_client.model_type = model
-                logger.info(f"Creating OpenRouterAdapter (responses transport) for {model}")
-                return OpenRouterAdapter(client=llm_client, model_name=model, **sanitized_params)
-            if spec is not None and spec.transport is Transport.ANTHROPIC_MESSAGES:
-                from modules.llm.adapters import AnthropicAdapter
-                sanitized_params = common_params.copy()
-                sanitized_params.pop("model", None)
-                logger.info(f"Creating AnthropicAdapter (generic anthropic_messages) for {model}")
-                return AnthropicAdapter(client=llm_client, model_name=model, **sanitized_params)
-            raise ValueError(
-                f"Unsupported LLM provider '{provider}'"
-                + (f" (transport '{spec.transport.value}' not implemented)" if spec else "")
-                + ". Supported: " + ", ".join(sorted(PROVIDER_CONFIG.keys())) + "."
-            )
+        from modules.llm.provider_spec import Transport, get_spec
+        spec = get_spec(provider_l)
+        client_class = spec.client_class_name if spec else None
+        if client_class == "OpenAIClient":
+            return _openai_adapter(model, llm_client, common_params)
+        if client_class == "GeminiClient":
+            return _gemini_adapter(model, llm_client, common_params)
+        if spec is not None and spec.transport is Transport.ANTHROPIC_MESSAGES:
+            return _anthropic_adapter(model, llm_client, common_params)
+        if spec is not None and spec.transport in (Transport.CHAT_COMPLETIONS, Transport.RESPONSES):
+            return _openrouter_adapter(model, llm_client, common_params,
+                                       sync_capabilities=client_class is not None)
+        raise ValueError(
+            f"Unsupported LLM provider '{provider}'"
+            + (f" (transport '{spec.transport.value}' not implemented)" if spec else "")
+            + ". Supported: " + ", ".join(sorted(PROVIDER_CONFIG.keys())) + "."
+        )
 
     except ValueError:
         raise
     except FeatureUnavailable:
-        # 058 T7.2: an absent provider SDK carries its own remedy (the extra to
+        # An absent provider SDK carries its own remedy (the extra to
         # install / add to PROD_EXTRAS); wrapping it below would bury that in a
         # generic "Failed to create chat model" string.
         raise

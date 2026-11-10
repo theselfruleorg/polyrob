@@ -387,6 +387,21 @@ async def test_a_failed_landing_is_recorded_and_says_failed(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_an_expired_send_says_it_never_landed(monkeypatch):
+    """Only the rail's EXPIRED (unseen AND blockhash past) reads as never
+    landed; it stays booked on the caps."""
+    from core.wallet.solana_rail import EXPIRED_PREFIX
+    wallet = _Wallet()
+    tool = _tool(monkeypatch, deltas=_native_deltas(500_000_000), wallet=wallet,
+                 confirm=(False, f"{EXPIRED_PREFIX}: the cluster never saw it."))
+    res = await tool.solana_transfer(_params(dry_run=False))
+    out = _text(res)
+    assert "RESULT: EXPIRED" in out and "can no longer land" in out
+    assert "NOT CONFIRMED" not in out
+    assert len(wallet.policy.recorded) == 1
+
+
+@pytest.mark.asyncio
 async def test_an_unconfirmed_send_says_do_not_retry(monkeypatch):
     wallet = _Wallet()
     tool = _tool(monkeypatch, deltas=_native_deltas(500_000_000), wallet=wallet,

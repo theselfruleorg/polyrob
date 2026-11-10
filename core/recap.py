@@ -158,14 +158,28 @@ def _ledger(user_id: str, days: int) -> Dict[str, Any]:
     return ledger_rollup_strict(user_id, days)
 
 
+def _reviewer_live_change(attrs: Dict[str, Any]) -> bool:
+    """One change, one row: a reviewer's live write carries its reason, so that row IS the
+    owner's line (108 W6)."""
+    return (attrs.get("created_by") == "background_review" and attrs.get("ok") is not False
+            and not attrs.get("pending") and bool(attrs.get("note"))
+            and attrs.get("action") in ("create", "patch", "edit"))
+
+
 def self_modification_text(attrs: Dict[str, Any]) -> str:
     """One line for a ``self_modification`` event. A curator ``propose`` event
-    (095 W12) carries the owner's question in ``note`` — that line IS the text.
+    (095 W12) carries the owner's question in ``note`` — that line IS the text, and a
+    curator ``measure`` or ``rollback`` event carries its result the same way.
     The ONE renderer for these events on every owner seat (recap, digest)."""
     attrs = attrs or {}
     note = str(attrs.get("note") or "").strip().replace("\n", " ")
     if attrs.get("action") == "propose" and note:
         return f"proposal: {note[:200]}"
+    if attrs.get("action") in ("measure", "rollback") and attrs.get("created_by") == "curator" and note:
+        return note[:300]
+    if _reviewer_live_change(attrs):
+        return (f"the reviewer changed skill {attrs.get('item_id') or '?'} ({note[:200]}): "
+                f"live now; ask me to roll it back")
     what = attrs.get("kind") or attrs.get("action") or "self_modification"
     ident = attrs.get("skill_id") or attrs.get("item_id") or attrs.get("id") or ""
     return f"{what} {ident}".strip()
@@ -173,8 +187,9 @@ def self_modification_text(attrs: Dict[str, Any]) -> str:
 
 def curator_proposals(user_id: str, since_ts: Optional[float],
                       data_home: Optional[str] = None) -> List[str]:
-    """The curator's owner proposal lines in the window, newest first, one per
-    distinct line. Raises on a failed read; a disabled or absent log is empty."""
+    """The owner's learning lines in the window (the curator's proposals and measures, a
+    rollback, a reviewer's live change), newest first, one per distinct line. Raises on a
+    failed read; a disabled or absent log is empty."""
     from core.event_kinds import SELF_MODIFICATION
     from core.event_log import event_log_enabled, open_event_log
     if not event_log_enabled():
@@ -186,11 +201,35 @@ def curator_proposals(user_id: str, since_ts: Optional[float],
     for ev in log.query(kind=SELF_MODIFICATION, user_id=user_id, since_ts=since_ts,
                         limit=200) or []:
         attrs = ev.get("attrs") or {}
-        if attrs.get("action") != "propose" or not attrs.get("note"):
+        owner_line = (attrs.get("note") and (
+            attrs.get("action") == "propose"
+            or (attrs.get("created_by") == "curator" and attrs.get("action") in ("measure", "rollback"))
+            or _reviewer_live_change(attrs)))
+        if not owner_line:
             continue
         text = self_modification_text(attrs)
         if text not in out:
             out.append(text)
+    return out
+
+
+def mechanism_notes(user_id: str, since_ts: Optional[float],
+                    data_home: Optional[str] = None) -> List[str]:
+    """The reviewers' one-line notes for the developer in the window, newest first, one per
+    distinct line. Raises on a failed read; a disabled or absent log is empty."""
+    from core.event_kinds import REVIEW_MECHANISM_NOTE
+    from core.event_log import event_log_enabled, open_event_log
+    if not event_log_enabled():
+        return []
+    log = open_event_log(data_home)
+    if log is None:
+        return []
+    out: List[str] = []
+    for ev in log.query(kind=REVIEW_MECHANISM_NOTE, user_id=user_id, since_ts=since_ts,
+                        limit=50) or []:
+        note = str((ev.get("attrs") or {}).get("note") or "").strip()
+        if note and note not in out:
+            out.append(note)
     return out
 
 
@@ -256,6 +295,8 @@ def build_recap(user_id: str, data_home: Optional[str] = None,
             src = str(ev.get("source") or attrs.get("source") or "")
             text = (f"told you ({src}{', ' + outcome if outcome and outcome != 'sent' else ''}): "
                     f"{body[:200]}" if body else f"user_delivery {outcome}".strip())
+        elif raw_kind == "review_mechanism_note":
+            text = f"for the developer: {str(attrs.get('note') or '').strip()[:200]}"
         else:
             text = raw_kind
         entries.append(RecapEntry(ts=float(ev.get("ts") or now), kind=raw_kind, text=text))

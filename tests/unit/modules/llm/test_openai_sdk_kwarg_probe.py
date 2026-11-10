@@ -16,13 +16,13 @@ import pytest
 
 
 def test_probe_reports_a_known_parameter():
-    from modules.llm.openai_client import sdk_supports
+    from modules.llm.sdk_caps import sdk_supports
     assert sdk_supports("messages") is True
     assert sdk_supports("model") is True
 
 
 def test_probe_reports_an_unknown_parameter():
-    from modules.llm.openai_client import sdk_supports
+    from modules.llm.sdk_caps import sdk_supports
     assert sdk_supports("definitely_not_an_openai_parameter") is False
 
 

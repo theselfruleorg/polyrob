@@ -116,8 +116,7 @@ PROFILES: Dict[str, Tuple[str, ...]] = {
     "rig:money_rail": ("defi_data", "defi_trade", "filesystem", "task", "message"),
     # 071: a P&L post needs `reconcile` first (trading-mandate), so the
     # social rig carries the read tool (never the spend one).
-    "rig:social": ("twitter", "x_browser", "filesystem", "task", "message", "web_fetch",
-                   "defi_data"),
+    "rig:social": ("twitter", "x_browser", "filesystem", "task", "message", "web_fetch"),
     "rig:research": ("web_fetch", "anysite", "knowledge", "filesystem", "task", "message",
                      "defi_data"),
     "rig:ops": ("filesystem", "task", "goal", "cronjob", "message"),

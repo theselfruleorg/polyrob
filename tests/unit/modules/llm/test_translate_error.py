@@ -3,6 +3,8 @@
 RED first: billing/402/insufficient_quota → LLMPermanentError was only in
 adapters.py, not in the base; several token sets were missing on the base.
 """
+import logging
+
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -145,47 +147,6 @@ class TestGenericError:
 
 
 # ---------------------------------------------------------------------------
-# LLMClient._translate_error delegates to translate_llm_error
-# ---------------------------------------------------------------------------
-
-class TestLLMClientTranslateError:
-    """LLMClient._translate_error must produce same results as translate_llm_error."""
-
-    def _make_client(self):
-        """Build a minimal concrete LLMClient without full init."""
-        from modules.llm.llm_client import LLMClient
-
-        # Silence abstract enforcement so we can instantiate the base class directly.
-        class _Concrete(LLMClient):
-            async def _setup_client(self): pass
-            async def _validate_connection(self): pass
-            async def _make_validation_request(self): pass
-            def _check_validation_response(self, r): pass
-            async def _cleanup_client(self): pass
-            async def _generate(self, *a, **kw): pass
-            async def generate_response(self, *a, **kw): pass
-
-        client = object.__new__(_Concrete)
-        client.logger = MagicMock()
-        return client
-
-    def test_client_method_billing(self):
-        client = self._make_client()
-        result = client._translate_error(Exception("insufficient_quota"), "test")
-        assert isinstance(result, LLMPermanentError)
-
-    def test_client_method_rate_limit(self):
-        client = self._make_client()
-        result = client._translate_error(Exception("429 too many requests"), "test")
-        assert isinstance(result, LLMRateLimitError)
-
-    def test_client_method_generic(self):
-        client = self._make_client()
-        result = client._translate_error(Exception("oops"), "test")
-        assert isinstance(result, LLMError)
-
-
-# ---------------------------------------------------------------------------
 # Finding 2: bare 'rate' token false-positive guard
 # ---------------------------------------------------------------------------
 
@@ -270,3 +231,40 @@ class TestPlanQuotaExhaustion:
         assert isinstance(result, LLMRateLimitError), (
             "a transient 429 without quota-death text must stay retryable"
         )
+
+
+def test_a_400_that_names_the_key_is_an_authentication_error():
+    """Google answers a bad key with a 400."""
+    from core.exceptions import LLMAuthenticationError
+
+    class _Bad(Exception):
+        status_code = 400
+
+    assert isinstance(translate_llm_error(_Bad("API key not valid. Please pass a valid API key.")),
+                      LLMAuthenticationError)
+    assert isinstance(translate_llm_error(_Bad("invalid_api_key")), LLMAuthenticationError)
+
+
+def test_an_unmatched_tool_call_is_an_invalid_request():
+    from core.exceptions import LLMInvalidRequestError
+    from modules.llm.openai_client import OpenAIClient
+    client = OpenAIClient.__new__(OpenAIClient)
+    client.logger = logging.getLogger("test.translate")
+    calls = [{"id": "c1", "type": "function", "function": {"name": "t", "arguments": "{}"}}]
+    with pytest.raises(LLMInvalidRequestError):
+        client._validate_tool_call_pairs([{"role": "assistant", "tool_calls": calls}])
+    with pytest.raises(LLMInvalidRequestError):
+        client._validate_tool_call_pairs([{"role": "assistant", "tool_calls": calls}, {"role": "user", "content": "x"}])
+
+
+@pytest.mark.asyncio
+async def test_a_manager_with_no_client_raises_a_configuration_error_with_the_one_message():
+    from core.config import BotConfig
+    from core.exceptions import LLMConfigError
+    from modules.llm.llm_manager import LLMManager
+    from modules.llm.profiles import no_key_message
+    manager = LLMManager(name="llm", config=BotConfig())
+    manager.llm_config = {}
+    with pytest.raises(LLMConfigError) as raised:
+        await manager._initialize()
+    assert str(raised.value) == no_key_message()

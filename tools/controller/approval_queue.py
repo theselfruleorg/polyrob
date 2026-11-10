@@ -835,6 +835,8 @@ async def run_approved_outbound(metadata: Dict[str, Any], user_id: str,
     except Exception as exc:
         logger.warning("owner_queue: late send of %s failed", tool, exc_info=True)
         ok, text = False, f"{type(exc).__name__}: {exc}"
+    from tools.controller.effect_hooks import record_approved_send
+    record_approved_send(tool, params, user_id=user_id, ok=ok, text=text)
     await _push_owner_notification(
         getattr(task_agent, "container", None), user_id,
         (f"✅ Approved {tool} sent (once, with the approved text): {text}" if ok
@@ -873,13 +875,14 @@ def _rearm_cron_job(board: Any, job_id: str) -> bool:
     (same data home, same rule ``_wake_queue_for_board`` uses). Returns True
     when the row was re-armed; False (logged) when it was not — the grant is
     still live for the job's own next scheduled run either way."""
-    from datetime import datetime, timezone
+    from datetime import datetime
     try:
         from core.cron_rearm import cron_db_beside, rearm_job
         cron_db = cron_db_beside(getattr(board, "db_path", None))
         if cron_db is None:
             return False
-        return rearm_job(cron_db, job_id, datetime.now(timezone.utc))
+        # Naive LOCAL, the cron store's clock (an aware value broke the late check).
+        return rearm_job(cron_db, job_id, datetime.now())
     except Exception:
         logger.debug("owner_queue: cron re-arm failed for %s (fail-open)", job_id,
                      exc_info=True)

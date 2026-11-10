@@ -190,7 +190,9 @@ def _shadow_line(sec: Section) -> str:
         return f"shadow log: unreadable ({st.get('error')})"
     c = st["counts"]
     line = (f"shadow (7d): {c['agree']} agree · {c['disagree']} disagree · "
-            f"{c['no_intent']} unguarded · {c['unreachable']} unreachable")
+            f"{c['no_intent']} unguarded · {c['unreachable']} unreachable"
+            + (f" · {c['needs_approval']} would need the on-box approval"
+               if c.get("needs_approval") else ""))
     bad = c["disagree"] + c["no_intent"]
     if bad:
         last = st.get("last_disagreement") or {}

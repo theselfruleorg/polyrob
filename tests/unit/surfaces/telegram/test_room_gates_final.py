@@ -212,7 +212,8 @@ async def test_money_host_and_control_verbs_are_refused_from_a_room(cmd, monkeyp
     out = await h._handle_command(object(), _command_result(cmd), None)
     assert ran == [], f"{cmd} EXECUTED from inside a room"
     assert "private chat" in (out or "")
-    assert cmd in (out or "")
+    from core.surfaces.dispatcher import _command_token
+    assert _command_token(cmd) in (out or "")   # an old name (/halt) is named by its row
 
 
 @pytest.mark.asyncio

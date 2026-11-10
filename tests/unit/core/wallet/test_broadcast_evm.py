@@ -350,3 +350,67 @@ def test_an_ordinary_v3_swap_is_unaffected():
     r = rail.EvmRail(chain="base", signer=_signer())
     sized = r.size_gas({"maxFeePerGas": 6_000_000}, 160_000)
     assert sized["gas"] == 240_000, "x1.5 margin, exactly as before"
+
+
+# --------------------------------------------------------------------------
+# G-7: an ERC-6551 account call NEEDS more gas than it USES (a PolyrobAccount holds gas back
+# after each leg). Measured on a 4663 fork (polyrob-desk docs/facts.md §13): each shape passes
+# the simulation and then reverts on chain at gasUsed x1.5. Sized from eth_estimateGas.
+
+MEASURED = [  # (shape, needs, uses)
+    ("1-leg ETH send", 120_356, 65_530),
+    ("ERC-20 transfer", 154_110, 92_245),
+    ("W8 approve-swap-reset", 403_473, 179_980),
+    ("ready + journal", 179_674, 108_694),
+]
+
+
+def _account_tx(monkeypatch, *, estimate, batch=False):
+    calls = []
+
+    def rpc(c, m, p, timeout=8.0):
+        if m == "eth_estimateGas":
+            calls.append(p)
+            if isinstance(estimate, Exception):
+                raise estimate
+            return hex(estimate)
+        return {"eth_chainId": hex(8453), "eth_getTransactionCount": hex(7),
+                "eth_maxPriorityFeePerGas": hex(10 ** 6),
+                "eth_getBlockByNumber": {"baseFeePerGas": hex(10 ** 6)}}[m]
+    monkeypatch.setattr(rail, "_rpc_call", rpc)
+    r = rail.EvmRail(chain="base", signer=_signer())
+    data = ("0x43629a73" if batch else "0x51945447") + "00" * 128
+    return r, r.build_call(to=TO, value=0, data=data), calls
+
+
+@pytest.mark.parametrize("shape, needs, uses", MEASURED)
+def test_an_account_call_is_sized_from_what_it_needs_not_what_it_uses(monkeypatch, shape, needs, uses):
+    assert uses * 3 // 2 < needs, f"{shape}: the old x1.5 limit reverts on chain"
+    r, tx, calls = _account_tx(monkeypatch, estimate=needs, batch=shape.startswith("W8"))
+    sized = r.size_gas(tx, uses)["gas"]
+    assert sized >= needs, shape
+    assert sized == max(uses * 3 // 2, needs * 6 // 5)
+    (params,) = calls
+    assert params[0]["from"] == _signer().address and params[0]["to"] == TO and params[1] == "latest"
+
+
+def test_an_account_call_is_sized_even_without_a_measurement(monkeypatch):
+    r, tx, _ = _account_tx(monkeypatch, estimate=120_356)
+    assert r.size_gas(tx, None)["gas"] == 120_356 * 6 // 5
+
+
+def test_a_failed_estimate_refuses_instead_of_falling_back(monkeypatch):
+    r, tx, _ = _account_tx(monkeypatch, estimate=RuntimeError("execution reverted: 0xd88c09e3"))
+    with pytest.raises(rail.BroadcastError, match="eth_estimateGas"):
+        r.size_gas(tx, 65_530)
+
+
+def test_an_estimate_past_the_gas_ceiling_refuses(monkeypatch):
+    r, tx, _ = _account_tx(monkeypatch, estimate=rail.MAX_GAS_LIMIT + 1)
+    with pytest.raises(rail.GasCeilingExceeded, match="eth_estimateGas"):
+        r.size_gas(tx, 100_000)
+
+
+def test_a_plain_call_does_not_estimate(monkeypatch):
+    r, tx = _built_tx(monkeypatch)  # the fixture rpc has no eth_estimateGas: a call raises KeyError
+    assert r.size_gas(tx, 140_000)["gas"] == 210_000

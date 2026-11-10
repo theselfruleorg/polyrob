@@ -13,7 +13,7 @@ self-definition, so it is a prompt-injection **persistence** vector — guarded 
    persist; a *raising* scanner also rejects.
 4. **Over-cap ERRORS** — an over-cap ``propose`` returns an
    actionable "consolidate then retry" error instead of silently truncating.
-5. **Quarantined** — a normal author follows ``SELF_CONTEXT_REQUIRE_REVIEW``; a
+5. **Quarantined** — a normal author writes what the caller's ``pending`` says; a
    forged (sub-agent / self-wake / background-review) turn is **always** ``.pending``
    and can **never** patch/promote an active doc.
 6. **Atomic** — temp-file + ``os.replace``.
@@ -214,7 +214,7 @@ class SelfContextWriter:
         if pending is not None:
             base = pending
         else:
-            base = AutonomyConfig.self_context_require_review()
+            base = True
         # Hard rule: a forged author can NEVER auto-activate.
         if created_by in _NON_USER_AUTHORS:
             return True
@@ -271,11 +271,13 @@ class SelfContextWriter:
         heading, or an agent write that drops more than ``MAX_AGENT_RETIRE``
         active rules, is refused — the owner's own writes are not limited.
         """
-        from core.doc_claims import SUPERSEDED_HEADING, active_rule_lines, strip_stamp
-        if sum(1 for l in body.splitlines() if l.strip() == SUPERSEDED_HEADING) > 1:
-            return SelfContextWriteResult(False, errors=[
-                f"the doc has more than one '{SUPERSEDED_HEADING}' heading — keep one, "
-                f"at the end; everything above it is the live rules"])
+        from core.doc_claims import (HISTORY_HEADING, SUPERSEDED_HEADING, active_rule_lines,
+                                     strip_stamp)
+        for heading in (SUPERSEDED_HEADING, HISTORY_HEADING):
+            if sum(1 for l in body.splitlines() if l.strip() == heading) > 1:
+                return SelfContextWriteResult(False, errors=[
+                    f"the doc has more than one '{heading}' heading — keep one, "
+                    f"at the end; everything above it is the live rules"])
         if created_by == PROVENANCE_USER:
             return None
         try:
@@ -291,6 +293,13 @@ class SelfContextWriter:
                 f"this write would retire {len(gone)} active rules at once ({heads}…). "
                 f"Nothing was written. Use patch to change one rule, or keep the other "
                 f"rules above the '{SUPERSEDED_HEADING}' heading"])
+        return None
+
+    def _content_guard(self, uid: str, body: str, *, created_by: str,
+                       pending: Optional[bool]) -> Optional[SelfContextWriteResult]:
+        """A refusal for what the text says, or None. Every write runs it: propose,
+        patch and promote all pass through ``_propose``. None by default; the owner
+        RULES doc overrides it."""
         return None
 
     def _provenance_baseline(self, uid: str, *, quarantine: bool) -> str:
@@ -389,6 +398,9 @@ class SelfContextWriter:
 
         body = content or ""
         refused = self._structure_guard(uid, body, created_by=created_by, pending=pending)
+        if refused is not None:
+            return refused
+        refused = self._content_guard(uid, body, created_by=created_by, pending=pending)
         if refused is not None:
             return refused
         prov = self._apply_provenance(uid, body, pending=pending,
@@ -492,8 +504,8 @@ class SelfContextWriter:
         if count == 0:
             if frozen and old_string in frozen:
                 return SelfContextWriteResult(False, errors=[
-                    "old_string is only in the '## Superseded' history, which a patch "
-                    "never rewrites — patch the ACTIVE rule that replaced it instead"])
+                    "old_string is only in the frozen '## Superseded' or '## History' part, "
+                    "which a patch never rewrites — patch the ACTIVE rule instead"])
             return SelfContextWriteResult(False, errors=["old_string not found"])
         if count > 1 and not replace_all:
             return SelfContextWriteResult(False, errors=[

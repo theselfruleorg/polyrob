@@ -274,11 +274,12 @@ class SystemPrompt:
 		return str(s.get("chat_type") or "dm") == "dm"
 
 	def _owner_moves_line(self) -> str:
-		"""B1: present_choice, for a live owner turn only."""
+		"""B1: owner_ask with options, for a live owner turn only."""
 		if self.autonomous or not self._owner_facing():
 			return ""
 		# 093 C3: a missing capability is read from the harness, then answered once.
-		return _p("communication.owner_moves") + "\n" + _p("harness")
+		# 112 W3: work that decides money leaves the chat for a heavy goal (live owner turn only).
+		return _p("communication.owner_moves") + "\n" + _p("harness") + "\n" + _p("owner_work")
 
 	def _get_rules_content(self) -> str:
 		"""Get critical rules section content.
@@ -692,13 +693,14 @@ class SystemPrompt:
 			optional_sections += f"\n<subtask-delegation>\n{subtask_section}\n</subtask-delegation>\n"
 		if vision_section:
 			optional_sections += f"\n<vision-capabilities>\n{vision_section}\n</vision-capabilities>\n"
-		# UP-06: injection-defense notice (gated; static => prompt-cache-stable)
+		# UP-06: injection-defense notice (a posture flag, the same on each seat)
+		static_sections = ""
 		try:
 			from agents.task.constants import UNTRUSTED_TOOL_RESULT_WRAP
 		except Exception:
 			UNTRUSTED_TOOL_RESULT_WRAP = False
 		if UNTRUSTED_TOOL_RESULT_WRAP:
-			optional_sections += f"\n<security>\n{self._get_security_content()}\n</security>\n"
+			static_sections += f"\n<security>\n{self._get_security_content()}\n</security>\n"
 		# 035 P1-9: route an owner instruction to the lane that can enforce it.
 		# Per-session stable (registry-derived), so prompt caching is unaffected.
 		_routing_on = bool(self._owner_route_parts())
@@ -751,7 +753,7 @@ class SystemPrompt:
 		except Exception:
 			_precedence_on = True
 		if _precedence_on:
-			optional_sections += f"\n<source-precedence>\n{self._get_source_precedence_content()}\n</source-precedence>\n"
+			static_sections += f"\n<source-precedence>\n{self._get_source_precedence_content()}\n</source-precedence>\n"
 
 		# T1-06: <input-format> describes browser state (URL / tabs / interactive
 		# elements) — inject it only when the session can actually drive a browser.
@@ -765,34 +767,37 @@ class SystemPrompt:
 		# 095 W9: no memory backend => no <memory-system> section and no identity claim.
 		_memory = self._get_memory_system_content()
 		_memory_section = f"<memory-system>\n{_memory}\n</memory-system>\n\n" if _memory else ""
+		# 106 C8: the sections no seat changes come first, so two seats share the prefix
+		# of this message. A gated section (tools, memory, a surface, a persona) comes
+		# after them, because a prefix cache stops at its first difference.
 		AGENT_PROMPT = f"""<system-prompt>
+
+<response-format>
+{self._get_response_format_content()}
+</response-format>
+{static_sections}
+<rules>
+{self._get_rules_content()}
+</rules>
+
+<agency>
+{self._get_agency_content()}
+</agency>
 
 <identity>
 {_p("identity", memory=_p("identity.memory") if _memory else "")}
 {model_specific_instructions}{persona_section}
 </identity>
 
-<response-format>
-{self._get_response_format_content()}
-</response-format>
-
+<communication>
+{self._get_communication_content()}
+</communication>
+{optional_sections}
 {_memory_section}<tool-capabilities>
 {self._get_tools_section()}
 </tool-capabilities>
 
 {{SKILLS_PLACEHOLDER}}
-
-<communication>
-{self._get_communication_content()}
-</communication>
-
-<agency>
-{self._get_agency_content()}
-</agency>
-{optional_sections}
-<rules>
-{self._get_rules_content()}
-</rules>
 {input_format_section}{actions_section}
 </system-prompt>"""
 		return SystemMessage(content=AGENT_PROMPT)

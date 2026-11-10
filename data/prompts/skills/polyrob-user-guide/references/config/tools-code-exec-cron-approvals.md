@@ -39,7 +39,7 @@ One line per setting: NAME — default — meaning. Code anchors and full prose:
 - VERCEL_TOKEN — default: unset — **SECRET, masked** — `vercel_sandbox` pack backend: the Vercel access token; unset, the Vercel SDK uses its own OIDC/env resolution.
 - VERCEL_TEAM_ID — default: unset — `vercel_sandbox` pack backend: the Vercel team the sandbox bills to.
 - VERCEL_PROJECT_ID — default: unset — `vercel_sandbox` pack backend: the Vercel project the sandbox belongs to.
-- DOCKER_HOST — default: unset (docker default unix:///var/run/docker.sock) — Read only to locate the docker daemon socket the `docker` sandbox backend would use: when it names a `unix://` socket that is absent or unreachable, `run_code`/`run_tests` refuse ONCE with the remedy instead of retrying a dead daemon; a TC…
+- DOCKER_HOST — default: unset (docker default unix:///var/run/docker.sock) — The daemon the `docker` sandbox backend uses (passed to the `docker` CLI; a rootless sandbox daemon has its own socket).
 - CODE_EXEC_MAX_TIMEOUT_SEC — default: 30 (dev mode, unset: follows SHELL_MAX_TIMEOUT_SEC=600) — Hard cap on a code-exec run.
 - CODE_EXEC_MAX_OUTPUT_BYTES — default: 100000 — Code-exec output byte cap.
 - CODE_EXEC_DOCKER_IMAGE — default: python:3.12-slim — Container image for the `docker` code-exec backend (explicit value wins over `CODE_EXEC_DEV_IMAGE` in every mode).
@@ -109,6 +109,7 @@ One line per setting: NAME — default — meaning. Code anchors and full prose:
 - MESSAGE_MEDIA_MAX_MB — default: 45 — Per-file cap for the explicit `message` tool `media_paths` send (owner-directed; Telegram hard limit ~50 MB).
 - INBOUND_MEDIA_ENABLED — default: ON — Master switch for the INBOUND media rail: a photo/document/video arriving on a chat surface is stored in the session workspace under `inbound/` and described on the turn (image ⇒ a vision block, small text file ⇒ inlined, anything else ⇒ r…
 - INBOUND_MEDIA_MAX_MB — default: 20 — Per-file cap for a file arriving from a chat surface.
+- INBOUND_VIDEO_MAX_MB — default: 500 — Per-file cap for a video a surface streams to disk (Telegram).
 - INBOUND_MEDIA_MAX_FILES — default: 5 — Max attachments read from ONE inbound message; the remainder is counted on the turn ("N more attachment(s) … were not read"), never dropped in silence.
 - INBOUND_IMAGE_MAX_MB — default: 10 — Per-image cap for building a vision block (base64 inflates ~33%).
 - WEBVIEW_PUBLIC_URL — default: unset — Public base URL of the owner-auth webview console (e.g. `https://console.example.com`).

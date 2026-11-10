@@ -11,7 +11,8 @@ Reads/writes the SAME two knob layers the rest of the CLI already resolves:
   ``polyrob config set`` and the webview also use (026 P2).
 
 Subcommands: ``list [group]``, ``get KEY``, ``set KEY VALUE [--confirm]``,
-``check``. The core logic is the pure function ``cmd_config(ctx, args) ->
+``unset KEY``, ``explain KEY``, ``search WORDS``, ``check`` — the ONE grammar
+(``core.config_service.parse_config_command``). The core logic is the pure function ``cmd_config(ctx, args) ->
 str`` over a tiny ``ConfigCtx`` dataclass (``user_id``, ``home_dir``) so it is
 testable without a live REPL (see ``tests/unit/cli/test_h_config.py``); the
 registered REPL closure in ``handlers.py`` builds a ``ConfigCtx`` from the
@@ -47,33 +48,40 @@ class ConfigCtx:
 
 
 def cmd_config(ctx: ConfigCtx, args: List[str]) -> str:
-    """Handle ``/config list|get|set|check`` and return the rendered reply.
+    """Handle ``/config list|get|set|unset|explain|search|check``.
 
-    Empty *args* defaults to ``list`` (mirrors ``/kb``'s bare-invocation
-    default). Never raises — every branch degrades to a friendly string.
+    113 W4 item 4 (D-3): the words are parsed by the ONE grammar
+    (``core.config_service.parse_config_command``) the chat apps and
+    ``polyrob config`` share; this seat only renders. Empty *args* = ``list``.
+    Never raises — every branch degrades to a friendly string.
     """
-    sub = args[0].lower() if args else "list"
-    rest = args[1:]
+    from core.config_service import parse_config_command
+    cmd = parse_config_command(args)
+    if cmd.error:
+        return cmd.error
     try:
-        if sub == "list":
-            return _cmd_list(ctx, rest)
-        if sub == "get":
-            return _cmd_get(ctx, rest)
-        if sub == "set":
-            return _cmd_set(ctx, rest)
-        if sub == "check":
-            return _cmd_check(ctx, rest)
-        if sub == "explain":
-            return _cmd_explain(ctx, rest)
-        if sub == "search":
-            return _cmd_search(ctx, rest)
+        if cmd.verb == "list":
+            return _cmd_list(ctx, [cmd.query] if cmd.query else [])
+        if cmd.verb == "get":
+            return _cmd_get(ctx, [cmd.key])
+        if cmd.verb == "set":
+            return _cmd_set(ctx, [cmd.key, cmd.value] + (["--confirm"] if cmd.confirm else []))
+        if cmd.verb == "unset":
+            return _cmd_unset(cmd.key)
+        if cmd.verb == "check":
+            return _cmd_check(ctx, [])
+        if cmd.verb == "explain":
+            return _cmd_explain(ctx, [cmd.key])
+        return _cmd_search(ctx, [cmd.query])
     except Exception as exc:  # fail-open: never crash the REPL dispatcher
-        return f"/config {sub} failed: {exc}"
-    return (
-        f"unknown /config subcommand: {sub!r}\n"
-        "usage: /config list [group] | get KEY | set KEY VALUE [--confirm] | "
-        "explain KEY | search QUERY | check"
-    )
+        return f"/config {cmd.verb} failed: {exc}"
+
+
+def _cmd_unset(key: str) -> str:
+    """``/config unset KEY`` — the ONE unset ``polyrob config unset`` runs."""
+    from core.config_service import unset_value
+    res = unset_value(key, surface="local")
+    return res.message if res.ok else f"error: {res.message}"
 
 
 # ---------------------------------------------------------------------------
@@ -337,16 +345,10 @@ def _cmd_set(ctx: ConfigCtx, rest: List[str]) -> str:
 
 
 def _cmd_check(ctx: ConfigCtx, rest: List[str]) -> str:
-    from core.paths import env_file_candidates
-    from core.prefs import check_env_files, find_invalid_preferences
-
-    # The home .env is the one file the CLI writes (there is no project tier:
-    # ./.polyrob/.env is never loaded).
-    cands = env_file_candidates()
-    findings = list(check_env_files([cands[0].path]))
-
-    for key, err in find_invalid_preferences(ctx.home_dir, ctx.user_id):
-        findings.append(f"preferences.toml: {key}: {err}")
+    # The home env file and the stored preferences: the ONE check every seat
+    # runs (``core.config_service.check_findings``).
+    from core.config_service import check_findings
+    findings = check_findings(user_id=ctx.user_id, home_dir=ctx.home_dir)
 
     # DEFAULT_PROVIDER-shadows-cli.json (cli-layer concern — core.prefs stays
     # cli-import-free): only meaningful when a default was actually persisted.

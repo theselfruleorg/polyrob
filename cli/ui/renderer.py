@@ -76,11 +76,11 @@ class Renderer(ABC):
         #: True the trace layer renders live (step blocks, tool lines, full
         #: reasoning); when False only dialog + activity are visible.
         self.verbose: bool = False
-        #: Tool-transcript toggle (flipped by ``/quiet``).  ON by default: each
+        #: Tool-transcript toggle (flipped by ``/brief``).  ON by default: each
         #: tool call (name + scrubbed args) and its result (status + duration +
         #: truncated preview) render as finalized lines so the user sees what the
         #: agent is doing, not just a spinner.  This is a SEPARATE axis from
-        #: ``verbose``: ``/quiet`` mutes the tool lines for a clean chat;
+        #: ``verbose``: ``/brief`` mutes the tool lines for a clean chat;
         #: ``/verbose`` is a SUPERSET (full raw trace).  ``verbose`` therefore
         #: never shows LESS than the default tool view.
         self.show_tools: bool = True
@@ -362,7 +362,7 @@ class Renderer(ABC):
         """Shared gate for a tool line (call-start or result).
 
         True when the tool transcript should render this action:
-        - ``show_tools or verbose`` is on (``/quiet`` mutes both off),
+        - ``show_tools or verbose`` is on (``/brief`` mutes both off),
         - the action is real tool work (not send_message/done — those are the
           dialog bubble), and
         - it is NOT a sub-agent's tool in the default (non-verbose) view.

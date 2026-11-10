@@ -16,6 +16,8 @@ from core.secret_scrub import scrub_secret_shapes
 
 logger = logging.getLogger("modules.memory.sqlite_memory_provider")
 
+_META_CAP = 4000
+
 
 def _scrub_json(value, fallback: str) -> str:
     serialized = scrub_secret_shapes(json.dumps(value))
@@ -115,7 +117,7 @@ class EpisodeStoreMixin:
             return "[]"
         return serialized
     @staticmethod
-    def _safe_meta_json(meta, cap: int = 4000) -> str:
+    def _safe_meta_json(meta, cap: int = _META_CAP) -> str:
         """Serialize the meta dict; if it exceeds `cap` chars, store "{}" (valid JSON)
         rather than a character-sliced (and therefore corrupt) string. Meta is
         supplementary/best-effort, so dropping an oversize blob wholesale is
@@ -207,6 +209,27 @@ class EpisodeStoreMixin:
         except Exception as e:
             logger.warning("prune_episodes failed: %s", e)
             return 0
+    def update_episode_meta(self, *, user_id: Optional[str], session_id: str, ts: int,
+                            patch: dict) -> bool:
+        """Set only the keys in ``patch`` on one episode's meta (108 W5). One guarded statement:
+        the row must still be the record that the caller read (``ts``; a new record of the
+        session moves it) and the result must stay under the meta cap. False on a miss or a
+        fault. Never raises."""
+        if self._anon_blocked(user_id):
+            return False
+        try:
+            from core.state.sql import json_patch
+            clean = json.loads(_scrub_json(patch, "{}"))
+            if not clean:
+                return False
+            return json_patch(self.db_path, "episodes", key="user_id=? AND session_id=?",
+                              key_params=(self._norm_user(user_id), session_id), json_col="meta",
+                              set=clean, where_extra="ts=? AND length(meta)+?<=?",
+                              where_params=(int(ts), len(json.dumps(clean)), _META_CAP))
+        except Exception as e:
+            logger.warning("update_episode_meta failed: %s", e)
+            return False
+
     def mark_episode_surfaced(self, *, session_id: str, user_id: Optional[str] = None) -> None:
         """Mark the episode(s) for this session_id as already delivered out-of-band
         (cron/self-wake), so a subsequent digest recall (``exclude_surfaced=True``)

@@ -13,55 +13,37 @@ accounting and error translation are inherited unchanged.
 Docs: https://docs.api.nvidia.com/nim/reference/llm-apis
 """
 
-import logging
 from typing import Dict
 
 from openai import AsyncOpenAI
 
-from modules.llm.openrouter_client import OpenRouterClient
+from modules.llm.openrouter_client import OpenAIWireSeat
 from modules.llm.model_registry import get_model_config
 from core.exceptions import ServiceError
 from core.config import BotConfig
 
 
-class NvidiaClient(OpenRouterClient):
+class NvidiaClient(OpenAIWireSeat):
     """NVIDIA NIM client — OpenAI-compatible access to Kimi, Llama, and more.
 
     Inherits the full request/response/tool-calling pipeline from
     :class:`OpenRouterClient`; only credentials, base URL and headers differ.
     """
 
-    # Fallback base URL; the declarative source is the "nvidia" ProviderProfile (P8).
+    # Fallback base URL; the declarative source is the "nvidia" ProviderProfile.
     NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
 
     # Name used in inherited log/exception messages (overrides OpenRouterClient).
     _PROVIDER_LABEL = "NVIDIA"
 
     def _profile_base_url(self) -> str:
-        """Transport base URL sourced from the declarative ProviderProfile (P8),
+        """Transport base URL sourced from the declarative ProviderProfile,
         falling back to the hardcoded constant if the profile is unavailable.
 
         Delegates to the base ``_resolve_profile_base_url`` helper; keeps the
         class-level constant as the fallback.
         """
         return self._resolve_profile_base_url("nvidia") or self.NVIDIA_BASE_URL
-
-    def _resolve_supports_vision(self, model_type=None) -> bool:
-        """Override: NVIDIA's un-registered fallback is False (not True).
-
-        When the model IS in the registry the registry value is authoritative
-        (a registered NVIDIA model with vision=True should still report True).
-        Only the "not in registry" branch differs from the base.
-        """
-        from modules.llm.model_registry import get_model_config as _gmc
-        name = model_type if model_type is not None else self.model_type
-        try:
-            mc = _gmc(name)
-            if mc is not None:
-                return mc.capabilities.supports_vision
-        except Exception:
-            pass
-        return False  # NVIDIA: assume NO vision if model not registered
 
     def __init__(self, config: BotConfig, name: str = "nvidia_client"):
         """Initialize the NVIDIA NIM client."""
@@ -81,16 +63,7 @@ class NvidiaClient(OpenRouterClient):
         self.site_url = ''
         self.site_name = ''
 
-        self.last_response = None
-
-        model_config = get_model_config(self.model_type)
-        if model_config:
-            self.max_tokens = model_config.max_completion_tokens
-        else:
-            self.max_tokens = 16384
-            self.logger.warning(f"Model '{self.model_type}' not found in registry, using defaults")
-
-        # Resolve vision support via overridden helper (NVIDIA fallback = False)
+        self.max_tokens = get_model_config(self.model_type).max_completion_tokens
         self.supports_vision = self._resolve_supports_vision()
 
         self.temperature = 0.7
@@ -115,6 +88,7 @@ class NvidiaClient(OpenRouterClient):
             self._client = AsyncOpenAI(
                 api_key=self.api_key,
                 base_url=self._base_url(),
+                **self._sdk_limits(),
             )
             self.logger.debug("NVIDIA client setup completed")
         except Exception as e:

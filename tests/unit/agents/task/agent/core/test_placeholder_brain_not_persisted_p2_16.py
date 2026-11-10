@@ -20,7 +20,7 @@ class _CapturingMM:
         self.captured = {}
 
     def add_tool_call_pair_atomic(self, *, ai_content, tool_calls, tool_responses,
-                                  reasoning_content=None):
+                                  replay_fields=None):
         self.captured["ai_content"] = ai_content
 
 

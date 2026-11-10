@@ -148,7 +148,76 @@ def operator_model_for(provider, env=None):
 #: caller keeps the parent's LLM (a child agent). The tier -> model map stays in env
 #: because a model id is per-provider. A NEW owner chat's tier (the owner's own
 #: default above the operator's) is ``core.model_pins.chat_runtime_for`` (094).
-MODEL_TIERS = ("default", "heavy", "inherit")
+MODEL_TIERS = ("default", "heavy", "light", "inherit")
+
+#: 112 W2: the tiers the AGENT may name (``delegate_task(tier=…)``; ``goal_create`` /
+#: ``cronjob_schedule`` on an owner turn). ``inherit`` stays internal to the regime column.
+#: The model picks a NAME; the operator's env decides the model behind it.
+ROUTABLE_TIERS = ("default", "heavy", "light")
+
+_LIGHT_RESOLVER = None
+
+
+def register_light_resolver(fn) -> None:
+    """112 W2: ``fn(provider, main_model) -> cheap model id | None`` — the provider's aux
+    map (``modules.llm.provider_spec``), registered from ``agents/task/constants.py``
+    (core may not import it)."""
+    global _LIGHT_RESOLVER
+    _LIGHT_RESOLVER = fn
+
+
+def _light_model(provider, env=None):
+    """The ``light`` tier on *provider*: its cheap aux model for the operator's model, or the
+    operator's model itself when that already is the cheap one (prod: flash). ``None`` when
+    the provider is not the operator's pin."""
+    pinned = canonicalize_provider(operator_provider_pin(env))
+    if not provider or not pinned or canonicalize_provider(provider) != pinned:
+        return None
+    main = operator_model_pin(env)
+    cheap = None
+    if _LIGHT_RESOLVER is not None:
+        try:
+            cheap = _LIGHT_RESOLVER(pinned, main)
+        except Exception:
+            cheap = None
+    return cheap or main
+
+
+def tier_models(provider, env=None) -> dict:
+    """``{tier: model}`` for the tiers that resolve on *provider* (an absent key = the tier is
+    not configured there). ``default`` is the operator's model on its pinned provider."""
+    env = _os.environ if env is None else env
+    out = {}
+    pinned = canonicalize_provider(operator_provider_pin(env))
+    if provider and pinned and canonicalize_provider(provider) == pinned:
+        if operator_model_pin(env):
+            out["default"] = operator_model_pin(env)
+        heavy = heavy_model_pin(env)
+        if heavy:
+            out["heavy"] = heavy
+        light = _light_model(provider, env)
+        if light:
+            out["light"] = light
+    return out
+
+
+def tier_refusal(tier, provider, env=None) -> str:
+    """Why *tier* cannot be used on *provider* (``""`` = it can). An absent tier refuses —
+    it never falls back silently to another model."""
+    if tier not in ROUTABLE_TIERS:
+        return f"refused: tier must be one of {', '.join(ROUTABLE_TIERS)}"
+    if tier == "default":
+        return ""
+    if tier in tier_models(provider, env):
+        return ""
+    if tier == "heavy" and not heavy_model_pin(env):
+        return "refused: the heavy tier is not configured (HEAVY_MODEL is unset)"
+    pinned = canonicalize_provider(operator_provider_pin(env))
+    if tier == "light" and provider and pinned and canonicalize_provider(provider) == pinned:
+        return ("refused: the light tier is not configured (no DEFAULT_MODEL and no cheap "
+                "model for this provider)")
+    return (f"refused: the {tier} tier is set only on the operator's provider "
+            f"({operator_provider_pin(env) or 'none pinned'}), not on {provider or '?'}")
 
 
 def heavy_model_pin(env=None):
@@ -157,12 +226,22 @@ def heavy_model_pin(env=None):
     return (env.get("HEAVY_MODEL") or "").strip() or None
 
 
+def fallback_provider_allowlist(env=None):
+    """``LLM_FALLBACK_PROVIDERS``: the canonical providers the fallback ladder may use,
+    or ``None`` when unset (every ladder candidate may serve)."""
+    env = _os.environ if env is None else env
+    names = {canonicalize_provider(n.strip()) for n in (env.get("LLM_FALLBACK_PROVIDERS") or "").split(",")
+             if n.strip()}
+    return frozenset(names) or None
+
+
 def model_for(payload, provider, *, tier="default", env=None):
     """The ONE model resolver for an autonomous run (2026-10-14 review B-8 / E-9).
 
-    Precedence: ``payload.model`` (explicit) > the heavy tier (*tier* ``"heavy"``, or a
-    MONEY-CLASS payload — ``core.money.classify.is_money_class``) -> ``HEAVY_MODEL`` on
-    the operator's pinned provider > ``None``. ``None`` means "the caller fills
+    Precedence: ``payload.model`` (explicit) > the heavy tier (a stored ``payload.tier``
+    or *tier* ``"heavy"``, or a MONEY-CLASS payload — ``core.money.classify.is_money_class``,
+    which beats a stored ``light``/``default``) -> ``HEAVY_MODEL`` on the operator's pinned
+    provider > a stored ``light`` tier -> the light model (112) > ``None``. ``None`` means "the caller fills
     ``get_default_model(provider)``" (that registry read stays out of core) — or, for
     *tier* ``"inherit"``, "keep the parent's model".
 
@@ -181,12 +260,20 @@ def model_for(payload, provider, *, tier="default", env=None):
     explicit = str(payload.get("model") or "").strip()
     if explicit:
         return explicit
+    # 112 W2: a tier the owner's turn stored on the job/goal (an unknown value = default).
+    stored = str(payload.get("tier") or "").strip().lower()
+    if stored in ROUTABLE_TIERS:
+        tier = stored
     if tier == "inherit":
         return None
     heavy = tier == "heavy"
     if not heavy:
+        # Money class wins over a stored light/default tier: work that spends or decides
+        # money never runs below HEAVY_MODEL (112 review).
         from core.money.classify import is_money_class
         heavy = is_money_class(payload)
+    if not heavy and tier == "light":
+        return _light_model(provider, env)
     if not heavy:
         return None
     model = heavy_model_pin(env)

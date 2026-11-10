@@ -9,15 +9,14 @@ confident zero this module exists to refuse (043 A37).
 
 from core.runtime_paths import cron_db_path, goals_db_path, session_registry_db_path
 def _iso_ts(raw) -> "float | None":
-    """An epoch float from an ISO text (cron's ``last_run_at``) or None."""
+    """An epoch float from an ISO text (cron's ``last_run_at``) or None. A stamp
+    with no zone is the server's LOCAL clock (``datetime.now()`` in the cron
+    scheduler and the session registry), never UTC."""
     if raw in (None, ""):
         return None
     try:
-        from datetime import datetime, timezone
-        dt = datetime.fromisoformat(str(raw))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.timestamp()
+        from datetime import datetime
+        return datetime.fromisoformat(str(raw)).timestamp()
     except (TypeError, ValueError):
         return None
 

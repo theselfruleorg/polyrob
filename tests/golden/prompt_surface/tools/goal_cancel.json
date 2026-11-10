@@ -7,7 +7,7 @@
       "properties": {
         "forever": {
           "default": false,
-          "description": "True ONLY when the owner said never again: the title is switched off, so no stream, planner or agent creates it again (until the owner's /goal allow). Default: stop just this goal.",
+          "description": "True ONLY when the owner said never again: the title is switched off, so no job or agent creates it again (until the owner's /goal allow). Default: stop just this goal.",
           "type": "boolean"
         },
         "goal_id": {

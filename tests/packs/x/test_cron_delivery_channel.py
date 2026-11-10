@@ -1,7 +1,7 @@
 """033 T0.2 + 067 P3b — the X pack's ``twitter`` cron delivery channel.
 
 Cron delivery used to build a raw TwitterTool and call ``post()``, which skips
-_check_ready, the hourly rate limit, TWITTER_REQUIRE_APPROVAL, the cross-session
+_check_ready, the hourly rate limit, the approval gate, the cross-session
 repeat-post cooldown and the social_write record. The channel (moved out of
 ``cron/delivery.py`` into ``polyrob_x.cron_delivery``) must go through the gated
 ACTION and record the external write. Without the pack, ``deliver=twitter`` is
@@ -96,3 +96,48 @@ async def test_cron_delivery_records_the_external_write(monkeypatch, tmp_path):
     assert all(r["effect"] == "social" and r["attrs"]["surface"] == "cron"
                and r["attrs"]["autonomous"] is True and r["user_id"] == "tenant-1"
                for r in rows)
+
+
+# --- deliver=twitter on the owner's job posts with no tap ---------------------------
+
+async def _deliver(monkeypatch, *, user_id="u1", provider=None):
+    from types import SimpleNamespace
+    import polyrob_x.cron_delivery as cd
+    from polyrob_x import twitter_tool as tt
+    seen = {}
+
+    class _Tool:
+        async def twitter_post(self, params, execution_context=None):
+            seen["passed"] = tt._OWNER_APPROVED_ACTION.get() == "twitter_post"
+            return SimpleNamespace(error=None)
+
+    async def _ready(config, container):
+        return _Tool()
+
+    async def _close(tool):
+        return None
+    monkeypatch.setattr(cd, "build_ready_twitter_tool", _ready)
+    monkeypatch.setattr(cd, "close_quietly", _close)
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
+    monkeypatch.delenv("POLYROB_LOCAL", raising=False)
+    if provider:
+        monkeypatch.setenv("APPROVAL_PROVIDER", provider)
+    else:
+        monkeypatch.delenv("APPROVAL_PROVIDER", raising=False)
+    job = SimpleNamespace(id="j", session_id="s", user_id=user_id)
+    task_agent = SimpleNamespace(container=SimpleNamespace(config=SimpleNamespace(data_dir=None)),
+                                 config=SimpleNamespace(data_dir=None))
+    assert await cd.deliver_post(task_agent, job, "hello") is True
+    assert tt._OWNER_APPROVED_ACTION.get() is None, "the pass ends with the call"
+    return seen["passed"]
+
+
+@pytest.mark.asyncio
+async def test_the_owners_job_carries_its_decision_to_the_gate(monkeypatch):
+    assert await _deliver(monkeypatch) is True
+
+
+@pytest.mark.asyncio
+async def test_another_tenants_job_and_a_deny_do_not(monkeypatch):
+    assert await _deliver(monkeypatch, user_id="other") is False
+    assert await _deliver(monkeypatch, provider="deny") is False

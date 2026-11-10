@@ -54,6 +54,27 @@ def read_json(path: str, default: Any = None) -> Any:
         return default
 
 
+class UnreadableStateFile(RuntimeError):
+    """A state file EXISTS but cannot be read or parsed. Not "empty": a writer
+    that went on from a default would overwrite what it could not read."""
+
+    def __init__(self, path: str, error: BaseException):
+        super().__init__(f"state file {path} is unreadable: {type(error).__name__}: {error}")
+        self.path, self.error = path, error
+
+
+def read_json_strict(path: str, default: Any = None) -> Any:
+    """The file's JSON; ``default`` ONLY when the file is missing. A torn,
+    unparsable or unreadable file raises :class:`UnreadableStateFile`."""
+    try:
+        with open(os.fspath(path), "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except FileNotFoundError:
+        return default
+    except (OSError, ValueError) as e:
+        raise UnreadableStateFile(os.fspath(path), e) from e
+
+
 @contextlib.contextmanager
 def file_lock(path: str):
     """Exclusive cross-process lock on ``<path>.lock``."""
@@ -78,9 +99,11 @@ def locked_update_json(path: str, fn: Callable[[Any], Any], *, default: Any,
 
     ``fn`` mutates ``data`` in place and returns a result, or returns a NEW
     object to store by wrapping it as ``Replace(obj)``. The result is returned.
+    An existing file that cannot be read raises :class:`UnreadableStateFile`
+    and is never overwritten.
     """
     with file_lock(path):
-        data = read_json(path, default() if callable(default) else _copy(default))
+        data = read_json_strict(path, default() if callable(default) else _copy(default))
         result = fn(data)
         if isinstance(result, Replace):
             data, result = result.value, result.value

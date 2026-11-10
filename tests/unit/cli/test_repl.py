@@ -76,12 +76,16 @@ def test_run_repl_threads_launch_flags(monkeypatch):
     captured = {}
 
     async def _fake_main(plain=False, lifecycle_ref=None, *, model=None,
-                         provider=None, toolset=None, start_notice=None):
-        captured.update(model=model, provider=provider, toolset=toolset)
+                         provider=None, toolset=None, start_notice=None,
+                         new_chat=False, chat_ref=None):
+        captured.update(model=model, provider=provider, toolset=toolset,
+                        new_chat=new_chat, chat_ref=chat_ref)
 
     monkeypatch.setattr(chat_mod, "_repl_main", _fake_main)
-    chat_mod.run_repl(plain=True, model="gpt-5", provider="openai", toolset="research")
-    assert captured == {"model": "gpt-5", "provider": "openai", "toolset": "research"}
+    chat_mod.run_repl(plain=True, model="gpt-5", provider="openai", toolset="research",
+                      chat_ref="notes")
+    assert captured == {"model": "gpt-5", "provider": "openai", "toolset": "research",
+                        "new_chat": False, "chat_ref": "notes"}
 
 
 def test_chat_command_accepts_launch_flags(monkeypatch):
@@ -90,13 +94,19 @@ def test_chat_command_accepts_launch_flags(monkeypatch):
     captured = {}
 
     def _fake_repl(plain=False, *, model=None, provider=None, toolset=None,
-                   start_notice=None):
-        captured.update(model=model, provider=provider, toolset=toolset)
+                   start_notice=None, new_chat=False, chat_ref=None):
+        captured.update(model=model, provider=provider, toolset=toolset,
+                        new_chat=new_chat, chat_ref=chat_ref)
 
     monkeypatch.setattr("cli.commands.chat.run_repl", _fake_repl)
     res = CliRunner().invoke(cli, ["chat", "-m", "gpt-5", "-p", "openai", "--toolset", "research"])
     assert res.exit_code == 0, res.output
-    assert captured == {"model": "gpt-5", "provider": "openai", "toolset": "research"}
+    assert captured == {"model": "gpt-5", "provider": "openai", "toolset": "research",
+                        "new_chat": False, "chat_ref": None}
+    # 113: `polyrob --new` and `polyrob --chat <ref>` reach the REPL (group and `chat`)
+    assert CliRunner().invoke(cli, ["--new"]).exit_code == 0 and captured["new_chat"] is True
+    assert CliRunner().invoke(cli, ["chat", "--chat", "2"]).exit_code == 0
+    assert captured["chat_ref"] == "2" and captured["new_chat"] is False
 
 
 @pytest.mark.asyncio
@@ -252,3 +262,42 @@ async def test_respond_exception_without_renderer_echoes(capsys):
     out = capsys.readouterr().out
     assert "RuntimeError: boom" in out
     assert "ok" in out
+
+
+def test_a_failed_container_start_exits_nonzero(monkeypatch):
+    """113 W0 (T-06): the REPL printed "failed to start" and exited 0, so a script
+    could not tell a dead start from a clean one. `polyrob run` exits 1 here."""
+    import asyncio
+
+    from cli.commands import chat as chat_mod
+
+    async def _boom(**kw):
+        raise RuntimeError("no container")
+    monkeypatch.setattr("polyrob.app.bootstrap.build_cli_container", _boom)
+    monkeypatch.setattr("cli.keys.preflight_or_onboard", lambda **k: True)
+    monkeypatch.setattr("cli.keys.first_run_no_config", lambda: False, raising=False)
+    with pytest.raises(SystemExit) as caught:
+        asyncio.run(chat_mod._repl_main(plain=True))
+    assert caught.value.code == 1
+
+
+def test_kb_export_defaults_to_the_owner_tenant(monkeypatch):
+    """113 W0 (T-07): `--user` defaulted to "local", an empty tenant on a bound install."""
+    from cli.commands import knowledge as kn
+    seen = {}
+
+    async def _provider():
+        return None, "/tmp/x"
+
+    async def _vault(out_dir, **kw):
+        seen.update(kw)
+        return {}
+    monkeypatch.setattr(kn, "_bootstrap", lambda: None)
+    monkeypatch.setattr(kn, "_resolve_provider_and_data_dir", _provider)
+    monkeypatch.setattr("agents.task.knowledge_export.build_vault", _vault)
+    monkeypatch.setattr("core.admin_data_home.admin_owner_principal", lambda: "u_owner")
+    try:
+        kn.run_export("/tmp/vault-x", None, None)
+    except Exception:
+        pass   # the summary print of an empty manifest is not the subject
+    assert seen["user_id"] == "u_owner"

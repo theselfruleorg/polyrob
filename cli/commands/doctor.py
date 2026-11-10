@@ -15,6 +15,7 @@ from pathlib import Path
 import click
 
 from core.config_policy import _FALSEY
+from cli.commands._options import json_option
 from cli.config_store import resolve_provider_model
 from core.path_safety import is_within_root
 from core.runtime_paths import resolve_runtime_paths
@@ -244,16 +245,16 @@ def schema_status_line(env: dict) -> str:
     if not db_path.is_file():
         return f"db schema: no bot.db yet (baselined at {head} on first boot)"
     try:
-        import sqlite3
-        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        from core.sqlite_util import read_only_connect
+        con = read_only_connect(db_path)
         try:
             rows = con.execute("SELECT version FROM schema_versions").fetchall()
         finally:
             con.close()
-    except Exception:
-        rows = None
-    if rows is None:
-        return "db schema: not versioned yet (stamped at next boot)"
+    except Exception as exc:
+        if "no such table" not in str(exc):
+            return f"db schema: unreadable ({type(exc).__name__}: {exc})"
+        rows = []
     if not rows:
         return "db schema: not versioned yet (stamped at next boot)"
 
@@ -644,7 +645,7 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
         # would serve (the old line said "gemini" on a zero-key box).
         lines.append("resolved provider/model: (none — no usable provider yet)")
 
-    # Owner/instance pairing (complements `polyrob init`): show who this instance
+    # Owner/instance binding (complements `polyrob init`): show who this instance
     # answers to and its instance id, plus the session-registry backend posture.
     _owner = None
     try:
@@ -656,6 +657,8 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
     except Exception as e:
         # Losing BOTH lines silently reads as an instance with no identity; say so.
         lines.append(f"instance id / owner: unavailable ({type(e).__name__}: {e})")
+    from core.pairing import status_line as _pairing_status
+    lines.append(_pairing_status(env))
 
     # 2026-08-28 status SSOT: the SAME health block Telegram /status, the
     # webview /system page and the agent's agent_status render — credit
@@ -940,6 +943,9 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
     from core.runtime_paths import bot_db_default_path
     from modules.credits.usage_tracker import billed_vs_catalog_line
     lines.append(billed_vs_catalog_line(bot_db_default_path(str(doctor_data_home(env)))))
+    from core.status_economics import cache_ratio_warning
+    lines.extend(filter(None, [cache_ratio_warning(bot_db_default_path(str(doctor_data_home(env))))]))
+    lines.extend(_model_catalog_lines(env))
     lines.append(live_activity_line())
     # 1.4: a retired env name still set — FAIL for an identity/money alias the
     # runtime now refuses, WARN for a line that is merely ignored.
@@ -1413,8 +1419,7 @@ def perms_report(*, strict: bool = False, as_json: bool = False) -> int:
 @click.option("--strict", "perms_strict", is_flag=True,
               help="With --perms: exit non-zero when the audit finds an "
                    "offender (CI / deploy gate).")
-@click.option("--json", "as_json", is_flag=True,
-              help="Emit as JSON: the typed status snapshot (every section with "
+@json_option(help="Emit as JSON: the typed status snapshot (every section with "
                    "its state/reason/data + ranked health) plus the rendered "
                    "prose. --full adds the whole check transcript; --flags mode "
                    "emits {\"report\": [lines]} only.")
@@ -1461,6 +1466,11 @@ def doctor(show_flags: bool, flag_all: bool, flag_group: str | None,
         _emit_doctor(show_full, as_json)
 
 
+def _model_catalog_lines(env: dict) -> list[str]:
+    from cli.commands.doctor_models import uncatalogued_model_lines
+    return uncatalogued_model_lines(env, str(doctor_data_home(env)))
+
+
 def _emit_doctor(show_full: bool, as_json: bool) -> None:
     status = status_snapshot_lines()
     if as_json:
@@ -1475,6 +1485,7 @@ def _emit_doctor(show_full: bool, as_json: bool) -> None:
         payload["report"] = (doctor_report(custody_environ()) if show_full
                              else [DOCTOR_FULL_POINTER])
         payload["full"] = bool(show_full)
+        payload["model_catalog"] = _model_catalog_lines(custody_environ())
         click.echo(_json.dumps(payload, indent=2, default=str))
         return
     for line in status:
@@ -1484,5 +1495,6 @@ def _emit_doctor(show_full: bool, as_json: bool) -> None:
         for line in doctor_report(custody_environ()):
             click.echo(line)
     else:
+        for line in _model_catalog_lines(custody_environ()):
+            click.echo(line)
         click.echo(DOCTOR_FULL_POINTER)
-

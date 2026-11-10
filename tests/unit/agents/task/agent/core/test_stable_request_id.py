@@ -22,28 +22,8 @@ from modules.llm.aux_metering import extract_stable_request_id, meter_aux_llm
 def test_prefers_id_on_response_object_itself():
     response = types.SimpleNamespace(id="msg_direct_on_response")
     llm = types.SimpleNamespace(_client=types.SimpleNamespace(last_response=None))
-    assert extract_stable_request_id(llm, response, "anthropic") == \
+    assert extract_stable_request_id(response, "anthropic") == \
         "resp:anthropic:msg_direct_on_response"
-
-
-def test_falls_back_to_client_last_response_object_id():
-    """The realistic path: AIMessage never carries `.id` (adapters never set
-    it), but the underlying client's raw SDK response does -- e.g. Anthropic's
-    Message object (`msg_...`) or OpenAI's ChatCompletion (`chatcmpl_...`)."""
-    response = types.SimpleNamespace(content="hi")  # no .id, like a real AIMessage
-    raw = types.SimpleNamespace(id="msg_01AbC")
-    llm = types.SimpleNamespace(_client=types.SimpleNamespace(last_response=raw))
-    assert extract_stable_request_id(llm, response, "anthropic") == "resp:anthropic:msg_01AbC"
-
-
-def test_falls_back_to_client_last_response_dict_id():
-    """DeepSeek's raw response is a parsed JSON dict, not an SDK object."""
-    response = types.SimpleNamespace(content="hi")
-    llm = types.SimpleNamespace(_client=types.SimpleNamespace(
-        last_response={"id": "chatcmpl-deepseek-123", "choices": []}
-    ))
-    assert extract_stable_request_id(llm, response, "deepseek") == \
-        "resp:deepseek:chatcmpl-deepseek-123"
 
 
 def test_structured_output_dict_shape_checks_raw_key():
@@ -54,7 +34,7 @@ def test_structured_output_dict_shape_checks_raw_key():
     llm = types.SimpleNamespace(_client=types.SimpleNamespace(
         last_response=types.SimpleNamespace(id="msg_should_not_be_used")
     ))
-    assert extract_stable_request_id(llm, response, "anthropic") == \
+    assert extract_stable_request_id(response, "anthropic") == \
         "resp:anthropic:msg_from_raw_key"
 
 
@@ -63,28 +43,32 @@ def test_no_id_anywhere_returns_none_not_a_fabricated_key():
     falls back to record_llm_usage's fresh-uuid legacy behavior."""
     response = types.SimpleNamespace(content="hi")
     llm = types.SimpleNamespace(_client=types.SimpleNamespace(last_response=None))
-    assert extract_stable_request_id(llm, response, "gemini") is None
+    assert extract_stable_request_id(response, "gemini") is None
 
 
-def test_no_llm_object_returns_none():
+def test_a_response_with_no_id_returns_none():
     response = types.SimpleNamespace(content="hi")
-    assert extract_stable_request_id(None, response, "anthropic") is None
+    assert extract_stable_request_id(response, "anthropic") is None
 
 
 def test_empty_string_id_is_not_treated_as_stable():
     response = types.SimpleNamespace(id="")
     llm = types.SimpleNamespace(_client=types.SimpleNamespace(last_response=None))
-    assert extract_stable_request_id(llm, response, "openai") is None
+    assert extract_stable_request_id(response, "openai") is None
+
+
+def test_a_client_last_response_is_never_read():
+    """A client is shared: its last_response can be another completion's."""
+    response = types.SimpleNamespace(content="hi", _client=types.SimpleNamespace(
+        last_response=types.SimpleNamespace(id="msg_other")))
+    assert extract_stable_request_id(response, "anthropic") is None
 
 
 def test_namespaced_by_provider_so_cross_provider_ids_cannot_collide():
     raw_id = "same-literal-id"
-    llm = types.SimpleNamespace(_client=types.SimpleNamespace(
-        last_response=types.SimpleNamespace(id=raw_id)
-    ))
-    response = types.SimpleNamespace(content="hi")
-    key_a = extract_stable_request_id(llm, response, "openai")
-    key_b = extract_stable_request_id(llm, response, "anthropic")
+    response = types.SimpleNamespace(content="hi", id=raw_id)
+    key_a = extract_stable_request_id(response, "openai")
+    key_b = extract_stable_request_id(response, "anthropic")
     assert key_a != key_b
     assert key_a == f"resp:openai:{raw_id}"
     assert key_b == f"resp:anthropic:{raw_id}"
@@ -103,19 +87,7 @@ def test_stamped_response_attribute_is_preferred_over_response_id_and_last_respo
     llm = types.SimpleNamespace(_client=types.SimpleNamespace(
         last_response=types.SimpleNamespace(id="msg_last_response")
     ))
-    assert extract_stable_request_id(llm, response, "openai") == "resp:openai:msg_stamped"
-
-
-def test_absent_stamped_attribute_falls_back_to_old_logic():
-    """No `_polyrob_provider_response_id` on the response (e.g. a hand-built
-    test double, or a provider path that predates the stamp) -> falls through
-    to the pre-existing response.id / last_response fallback chain,
-    unchanged."""
-    response = types.SimpleNamespace(content="hi")  # no stamped attr, no .id
-    raw = types.SimpleNamespace(id="msg_from_last_response")
-    llm = types.SimpleNamespace(_client=types.SimpleNamespace(last_response=raw))
-    assert extract_stable_request_id(llm, response, "anthropic") == \
-        "resp:anthropic:msg_from_last_response"
+    assert extract_stable_request_id(response, "openai") == "resp:openai:msg_stamped"
 
 
 def test_concurrent_shared_client_prefers_stamped_response_over_last_response():
@@ -143,7 +115,7 @@ def test_concurrent_shared_client_prefers_stamped_response_over_last_response():
     raw_b = types.SimpleNamespace(id="msg_B")
     llm = types.SimpleNamespace(_client=types.SimpleNamespace(last_response=raw_b))
 
-    result = extract_stable_request_id(llm, response_a, "anthropic")
+    result = extract_stable_request_id(response_a, "anthropic")
 
     assert result == "resp:anthropic:msg_A"
     assert result != "resp:anthropic:msg_B"
@@ -162,8 +134,8 @@ def test_two_distinct_stamped_responses_never_collide_even_sharing_one_client():
     response_b = types.SimpleNamespace(content="b")
     response_b._polyrob_provider_response_id = "msg_B"
 
-    key_a = extract_stable_request_id(llm, response_a, "openai")
-    key_b = extract_stable_request_id(llm, response_b, "openai")
+    key_a = extract_stable_request_id(response_a, "openai")
+    key_b = extract_stable_request_id(response_b, "openai")
 
     assert key_a == "resp:openai:msg_A"
     assert key_b == "resp:openai:msg_B"
@@ -175,10 +147,7 @@ def test_resp_prefix_can_never_collide_with_uuid_hex_fallback():
     chars, no colons) -- structurally disjoint from `resp:...`."""
     import uuid
     fallback = uuid.uuid4().hex
-    llm = types.SimpleNamespace(_client=types.SimpleNamespace(
-        last_response=types.SimpleNamespace(id="msg_x")
-    ))
-    real = extract_stable_request_id(llm, types.SimpleNamespace(content="hi"), "anthropic")
+    real = extract_stable_request_id(types.SimpleNamespace(id="msg_x"), "anthropic")
     assert real != fallback
     assert real.startswith("resp:")
     assert not fallback.startswith("resp:")
@@ -196,13 +165,10 @@ async def test_meter_aux_llm_passes_extracted_provider_id_as_request_id():
         async def record_llm_usage(self, **kwargs):
             captured.update(kwargs)
 
-    raw = types.SimpleNamespace(id="msg_abc")
-    llm = types.SimpleNamespace(
-        model_name="claude-x", llm_provider="anthropic",
-        _client=types.SimpleNamespace(last_response=raw),
-    )
+    llm = types.SimpleNamespace(model_name="claude-x", llm_provider="anthropic")
     response = types.SimpleNamespace(
-        content="hi", usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
+        content="hi", usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        _polyrob_provider_response_id="msg_abc",
     )
 
     await meter_aux_llm(

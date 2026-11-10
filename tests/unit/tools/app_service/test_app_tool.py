@@ -274,3 +274,16 @@ def test_remove_is_refused_on_a_sub_agent_turn(tmp_path, owner_ctx, app_env, gre
     res = asyncio.run(tool.remove(RemoveParams(slug="demo-status"), execution_context=owner_ctx))
     assert res.error and "app_remove denied" in res.error
     assert tool._registry.get("demo-status", "owner-1") is not None
+
+
+def test_a_stuck_removal_shows_its_reason_and_only_that_reason():
+    from tools.app_service.tool import _health
+    stuck = "removal waits: the container teardown failed; retried every tick"
+    row = {"remove_requested": 1, "status": "failed", "last_failure_error": stuck}
+    assert _health(row) == f" — removal queued ({stuck})"
+    long = "removal waits: " + "x" * 300
+    assert _health({**row, "last_failure_error": long}) == f" — removal queued ({long[:160]})"
+    # An older unrelated failure note is not the removal's reason.
+    old = {"remove_requested": 1, "status": "failed", "last_failure_error": "health check failed"}
+    assert _health(old) == " — removal queued"
+    assert _health({"remove_requested": 1, "status": "running"}) == " — removal queued"

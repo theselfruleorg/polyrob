@@ -116,12 +116,11 @@ async def handle_truncated_output(agent: Any, input_messages: List[Any],
     cut at the output budget. Fail-open: any error returns the original result.
     """
     try:
-        from modules.llm.output_budget import (last_output_tokens, last_reasoning_tokens,
-                                               output_was_truncated)
-        if not output_was_truncated(getattr(agent, "llm", None)):
+        from modules.llm.call_result import output_was_truncated
+        facts = getattr(agent, "last_call_facts", None)
+        if not output_was_truncated(facts):
             return result
-        tokens = last_output_tokens(getattr(agent, "llm", None))
-        reasoning = last_reasoning_tokens(getattr(agent, "llm", None))
+        tokens, reasoning = facts.output_tokens, facts.reasoning_tokens
     except Exception:  # pragma: no cover - defensive
         return result
 
@@ -146,9 +145,16 @@ async def handle_truncated_output(agent: Any, input_messages: List[Any],
                    "with the cut named", tokens, shape)
     try:
         import asyncio
-        retry_messages = list(input_messages) + [build_truncation_note(tokens, reasoning)]
-        return await asyncio.wait_for(
-            agent._get_next_action_internal(retry_messages), timeout=timeout)
+        from modules.llm.call_scope import session_reasoning, session_reasoning_level
+        note = [build_truncation_note(tokens, reasoning)]
+        # A cut spent on reasoning repeats with reasoning on: the note did not stop it on
+        # prod 2026-11-07, and DeepInfra ignores a budget. Off is the lever it honours,
+        # for this one call.
+        level = "off" if reasoning_bound(tokens, reasoning) else session_reasoning_level()
+        with session_reasoning(level):
+            return await asyncio.wait_for(
+                agent._get_next_action_internal(input_messages, extra_messages=note),
+                timeout=timeout)
     except Exception as err:
         # ONE retry, and an honest fall-back to what we already have — a second
         # attempt would double the very cost this exists to bound.

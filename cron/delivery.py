@@ -296,20 +296,29 @@ ALREADY_TOLD_WINDOW_SEC = 7200
 
 
 def failed_run_notice(job: Any, outcome: str, reason: str, at: Any) -> Optional[str]:
-    """The ONE owner line for a failed run of an owner-armed job, or None.
+    """The ONE owner line for a failed run, or None.
 
     Routines review 2026-10-29: the 10-28 announce run failed SILENTLY — the
     agent had dropped ``deliver``, and a failed run never echoes on any sink.
     So the line goes out whatever ``deliver`` says, once per failure streak
-    (the run before this one did not fail), never for a job the agent wrote
-    (``core.cron_outcome.agent_armed``) or for the digest (its failure IS a send failure).
+    (the run before this one did not fail), never for the digest (its failure IS
+    a send failure). A recurring job the agent wrote
+    (``core.cron_outcome.agent_armed``) stays quiet: the agent can correct it, and
+    the failure limit tells the owner. A one-time job has no later run, so a
+    reminder the agent set always tells.
     """
     from core.cron_outcome import FAILED_OUTCOMES, agent_armed
     p = getattr(job, "payload", None) or {}
-    if outcome not in FAILED_OUTCOMES or agent_armed(p) or p.get("digest"):
+    recurring_agent_job = agent_armed(p) and not getattr(job, "one_shot", False)
+    if outcome not in FAILED_OUTCOMES or recurring_agent_job or p.get("digest"):
         return None
-    if (p.get("last_outcome") or {}).get("outcome") in FAILED_OUTCOMES:
-        return None  # told at the first failure of this streak
+    prior = p.get("last_outcome") or {}
+    # Told at the first failure of this streak. The count says it across a late skip
+    # or a cut; a provider outage keeps the count, so its own failed outcome says it.
+    # A resume starts a new streak (``resumed``), whose first failure is told again.
+    if int(prior.get("streak") or 0) > 0 or (
+            prior.get("outcome") in FAILED_OUTCOMES and not prior.get("resumed")):
+        return None
     name = " ".join(str(p.get("name") or getattr(job, "task", "") or "").split())[:60]
     when = at.strftime("%m-%d %H:%M") if hasattr(at, "strftime") else str(at or "")[5:16]
     why = f" ({reason})" if reason else ""
@@ -671,10 +680,15 @@ def _owner_email(task_agent: Any, job: Any) -> Optional[str]:
                 if addr:
                     return addr
             except Exception:
-                pass
-    # 2. single-owner env fallback (SSOT in core.instance)
+                logger.warning("cron: user_directory email lookup failed for job %s",
+                               getattr(job, "id", "?"), exc_info=True)
+    # 2. single-owner env fallback (SSOT in core.instance) — the OWNER tenant only
+    # (110 W0): another tenant's job never mails the operator's private address.
     try:
         from core.instance import resolve_owner_email
+        from core.surfaces.owner_address import is_owner_tenant
+        if not is_owner_tenant(str(getattr(job, "user_id", "") or "")):
+            return None
         return resolve_owner_email()
     except Exception:
         return None

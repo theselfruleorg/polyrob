@@ -142,3 +142,41 @@ def test_pending_status_supported(provider):
 def test_anon_refused(provider):
     assert asyncio.run(provider.note_create("", "no tenant", title="x")) is None
     assert asyncio.run(provider.note_list("")) == []
+
+
+def test_consolidation_keeps_a_note_read_after_its_select(provider, monkeypatch):
+    """The stale pass archives by id after a SELECT: a note the agent read between the two
+    must stay active (the UPDATE repeats the SELECT's predicates)."""
+    import modules.memory.sqlite_curated_store as cs
+    nid = asyncio.run(provider.note_create(USER, "an agent note", created_by="agent"))
+    old = int(time.time()) - 400 * 86400
+    execute_retry(provider.db_path, "UPDATE curated_memory SET updated_ts = ? WHERE id = ?",
+                  (old, nid))
+    real = cs.execute_retry
+
+    def racing(db, sql, params=(), **kw):
+        if sql.startswith("UPDATE curated_memory SET status = 'archived'"):
+            real(db, "UPDATE curated_memory SET access_count = 1 WHERE id = ?", (nid,))
+        return real(db, sql, params, **kw)
+    monkeypatch.setattr(cs, "execute_retry", racing)
+    out = provider.consolidate_notes(stale_before_ts=int(time.time()) - 86400)
+    assert out["archived_stale"] == []
+    assert asyncio.run(provider.note_get(USER, nid, bump_access=False))["status"] == "active"
+
+
+def test_the_dupe_pass_keeps_a_copy_when_the_kept_row_changed(provider, monkeypatch):
+    """The dupe pass archives a copy by id after a SELECT: if the KEPT row was edited
+    (or archived) between the two, the copy is the last one of the text and stays."""
+    import modules.memory.sqlite_curated_store as cs
+    keep = asyncio.run(provider.note_create(USER, "the same text", created_by="agent"))
+    copy = asyncio.run(provider.note_create(USER, "the same text", created_by="agent"))
+    real = cs.execute_retry
+
+    def racing(db, sql, params=(), **kw):
+        if sql.startswith("UPDATE curated_memory SET status = 'archived'"):
+            real(db, "UPDATE curated_memory SET content = 'edited' WHERE id = ?", (keep,))
+        return real(db, sql, params, **kw)
+    monkeypatch.setattr(cs, "execute_retry", racing)
+    out = provider.consolidate_notes(stale_before_ts=0)
+    assert out["archived_dupes"] == []
+    assert asyncio.run(provider.note_get(USER, copy, bump_access=False))["status"] == "active"

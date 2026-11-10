@@ -958,3 +958,97 @@ def post_write_notes(key: str, value: str, scope: str, *,
         except Exception:
             logger.debug("post_write_notes clamp echo failed", exc_info=True)
     return notes
+
+
+# ---------------------------------------------------------------------------
+# The ONE `/config` grammar (113 W4 item 4, D-3)
+# ---------------------------------------------------------------------------
+
+#: Every seat's `/config` words: the chat apps, the terminal and `polyrob config`.
+CONFIG_VERBS = ("list", "get", "set", "unset", "explain", "search", "check")
+
+#: The one usage line.
+CONFIG_USAGE = ("Usage: /config [list [group]] | get <key> | explain <key> | "
+                "search <words> | set <key> <value> [--confirm] | unset <key> | check")
+
+#: Words a `set` line may carry after the value; never part of the value.
+_SET_FLAGS = ("--confirm", "--global")
+
+
+@dataclass(frozen=True)
+class ConfigCommand:
+    """One parsed `/config` line. ``error`` set = answer it and do nothing."""
+    verb: str
+    key: str = ""
+    value: str = ""
+    #: The `search` words, or the `list` group.
+    query: str = ""
+    confirm: bool = False
+    error: str = ""
+
+
+def parse_config_command(args) -> ConfigCommand:
+    """``/config …`` words → :class:`ConfigCommand`. Pure; never raises.
+
+    No words = ``list``. A word that is not one of :data:`CONFIG_VERBS` is an
+    error that names the one usage line, so no seat guesses at a meaning."""
+    words = [str(a) for a in (args or []) if str(a).strip()]
+    verb = words[0].lower() if words else "list"
+    rest = words[1:]
+    if verb not in CONFIG_VERBS:
+        return ConfigCommand(verb, error=f"Unknown /config word '{verb}'.\n{CONFIG_USAGE}")
+    if verb == "list":
+        return ConfigCommand(verb, query=rest[0] if rest else "")
+    if verb == "check":
+        return ConfigCommand(verb)
+    if verb == "search":
+        if not rest:
+            return ConfigCommand(verb, error="Usage: /config search <words>")
+        return ConfigCommand(verb, query=" ".join(rest))
+    if verb in ("get", "explain", "unset"):
+        if not rest:
+            return ConfigCommand(verb, error=f"Usage: /config {verb} <key>")
+        return ConfigCommand(verb, key=rest[0])
+    value = " ".join(p for p in rest[1:] if p not in _SET_FLAGS).strip()
+    if not rest or not value:
+        return ConfigCommand(verb, error="Usage: /config set <key> <value> [--confirm]")
+    return ConfigCommand(verb, key=rest[0], value=value, confirm="--confirm" in rest[1:])
+
+
+def check_findings(*, user_id: Optional[str], home_dir) -> list:
+    """`/config check` on every seat: the home env file against the flag
+    catalog, and every invalid stored preference. Names keys, never values."""
+    from core.paths import env_file_candidates
+    from core.prefs import check_env_files, find_invalid_preferences
+    findings = list(check_env_files([env_file_candidates()[0].path]))
+    for key, err in find_invalid_preferences(home_dir, user_id):
+        findings.append(f"preferences.toml: {key}: {err}")
+    return findings
+
+
+def unset_value(key: str, *, surface: str = "local") -> SetResult:
+    """Remove *key* from :func:`home_env_path` — the counterpart of a flag
+    :func:`set_value`. Only the box's own seats (``surface="local"``: the
+    terminal, ``polyrob config unset``) remove a line; a remote seat is told
+    where it runs. A preference has no unset: it is set to the wanted value."""
+    from core.prefs import PREF_SCHEMA
+    key = str(key or "").strip()
+    if surface != "local":
+        return SetResult(False, "refused",
+                         f"unset runs on the box itself: `polyrob config unset {key}` "
+                         "in a shell, or /config unset in the terminal. Nothing was changed.")
+    if key in PREF_SCHEMA:
+        return SetResult(False, "refused",
+                         f"{key} is a preference, which has no unset: set it to the "
+                         f"value you want with /config set {key} <value>.")
+    from core.env_file import read_env_file, remove_env_var
+    path = home_env_path()
+    if remove_env_var(path, key):
+        return SetResult(True, "written", f"Removed {key} from {path}", store=str(path))
+    legacy = legacy_project_env_path()
+    if legacy.exists() and key in read_env_file(legacy):
+        return SetResult(False, "refused",
+                         f"{key} is not set in {path}. It is set in {legacy}, but polyrob "
+                         "does not load that file, so it has no effect — delete the line "
+                         "by hand if you want it gone.")
+    return SetResult(False, "invalid", f"{key} is not set in {path}")

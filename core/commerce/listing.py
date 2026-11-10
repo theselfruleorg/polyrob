@@ -75,4 +75,20 @@ def a2a_pricing(manifests: List[OfferManifest]) -> List[Dict[str, Any]]:
              "pricing": m.pricing_kind, "assets": [a for a, _ in m.rails]} for m in manifests]
 
 
-__all__ = ["a2a_pricing", "a2a_skill", "input_schema", "json_ld", "public_offer"]
+def a2a_order_part(message: Any) -> Any:
+    """The order data part of an A2A ``message`` (``{"offer_id"|"order_id", …}``), or
+    ``None``. The ONE predicate: the A2A RPC answers such a message as an order (no
+    compute task), and the x402 middleware therefore does not bill it as one (110 W0)."""
+    if not isinstance(message, dict):
+        return None
+    for part in message.get("parts") or ():
+        if isinstance(part, dict) and part.get("kind") == "data" and isinstance(
+                part.get("data"), dict):
+            d = part["data"]
+            if "offer_id" in d or "order_id" in d:
+                return d
+    return None
+
+
+__all__ = ["a2a_order_part", "a2a_pricing", "a2a_skill", "input_schema", "json_ld",
+           "public_offer"]

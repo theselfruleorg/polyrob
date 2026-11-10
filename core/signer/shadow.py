@@ -9,6 +9,9 @@ Every comparison is one line of ``<wallet dir>/signer_shadow.jsonl``:
 
 * ``agree`` — the signer would have signed it too;
 * ``disagree`` — the signer would have refused (its code + reason);
+* ``needs_approval`` — the signer's guard passed the send and its policy asks for
+  the owner's on-box approval (an unpriced send, a send above
+  ``approve_above_usd``). Expected by design: counted, never a disagreement;
 * ``unreachable`` — no answer (the signer is down or slow);
 * ``no_intent`` — the transaction reached the signing point without a recorded
   ``tx_guard`` authorization (a remote signer would refuse it).
@@ -28,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 #: ``agent_only`` (090): the signer refused a fetched text it cannot prove; expected,
 #: and not a disagreement for the cut-over.
-KINDS = ("agree", "disagree", "unreachable", "no_intent", "agent_only")
+KINDS = ("agree", "disagree", "unreachable", "no_intent", "agent_only", "needs_approval")
 _MAX_BYTES = 5 * 1024 * 1024
 _VERDICT_TIMEOUT_SEC = 20.0
 _lock = threading.Lock()
@@ -85,6 +88,8 @@ def summary(days: float = 7.0, *, now: Optional[float] = None) -> Dict[str, Any]
                     if ts < cutoff:
                         continue
                     kind = e.get("kind")
+                    if kind == "disagree" and e.get("code") == "approval_required":
+                        kind = "needs_approval"   # a row written before the kind existed
                     if kind in counts:
                         counts[kind] += 1
                         first_ts = ts if first_ts is None else min(first_ts, ts)
@@ -196,10 +201,12 @@ class ShadowEvmSigner:
         except Exception as exc:
             from core.signer.client import SignerRefused
             if isinstance(exc, SignerRefused):
-                log_comparison("disagree", digest=digest, chain=getattr(intent, "chain", None),
+                from core.signer.protocol import APPROVAL_REQUIRED
+                kind = "needs_approval" if exc.code == APPROVAL_REQUIRED else "disagree"
+                log_comparison(kind, digest=digest, chain=getattr(intent, "chain", None),
                        code=exc.code, reason=exc.reason,
                        amount_usd=exc.extra.get("amount_usd"))
-                return "disagree"
+                return kind
             log_comparison("unreachable", digest=digest, reason=f"{type(exc).__name__}: {exc}")
             return "unreachable"
         log_comparison("agree", digest=digest, chain=getattr(intent, "chain", None),
@@ -283,7 +290,7 @@ def signer_verdict_summary(state_dir: str, days: float = 7.0, *,
     import sqlite3
     now = time.time() if now is None else now
     cutoff = now - days * 86400
-    counts = {"agree": 0, "disagree": 0}
+    counts = {"agree": 0, "disagree": 0, "needs_approval": 0}
     path = os.path.join(str(state_dir), "signer.sqlite")
     if not os.path.isfile(path):
         return {"readable": False, "error": f"{path} not found", "counts": counts}
@@ -291,15 +298,18 @@ def signer_verdict_summary(state_dir: str, days: float = 7.0, *,
         db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=10)
         try:
             rows = db.execute(
-                "SELECT allowed, COUNT(*), MIN(ts) FROM decisions "
-                "WHERE op = 'evm.verdict' AND ts >= ? GROUP BY allowed", (cutoff,)).fetchall()
+                "SELECT allowed, code, COUNT(*), MIN(ts) FROM decisions "
+                "WHERE op = 'evm.verdict' AND ts >= ? GROUP BY allowed, code",
+                (cutoff,)).fetchall()
         finally:
             db.close()
     except sqlite3.Error as exc:
         return {"readable": False, "error": f"{type(exc).__name__}: {exc}", "counts": counts}
     first_ts: Optional[float] = None
-    for allowed, n, first in rows:
-        counts["agree" if allowed else "disagree"] += int(n)
+    from core.signer.protocol import APPROVAL_REQUIRED
+    for allowed, code, n, first in rows:
+        counts["agree" if allowed else "needs_approval" if code == APPROVAL_REQUIRED
+               else "disagree"] += int(n)
         if first is not None:
             first_ts = float(first) if first_ts is None else min(first_ts, float(first))
     return {"readable": True, "counts": counts, "since": first_ts, "days": days}

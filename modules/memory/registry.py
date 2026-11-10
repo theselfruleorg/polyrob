@@ -132,7 +132,7 @@ async def memory_prefetch(query: str, *, session_id: str, user_id: Optional[str]
 async def memory_search(query: str, *, session_id: str = "", user_id: Optional[str] = None,
                         limit: int = 5, sort: Optional[str] = None,
                         before_id: Optional[int] = None, with_ids: bool = False,
-                        raise_errors: bool = False, **reader) -> str:
+                        with_age: bool = False, raise_errors: bool = False, **reader) -> str:
     """Route an agent-initiated recall (discover/browse) through the active provider.
 
     Unlike ``memory_prefetch`` (automatic, fixed top_k, rank-only), this exposes the
@@ -157,6 +157,8 @@ async def memory_search(query: str, *, session_id: str = "", user_id: Optional[s
         kwargs["before_id"] = before_id
     if with_ids and "with_ids" in params:
         kwargs["with_ids"] = with_ids
+    if with_age and "with_age" in params:
+        kwargs["with_age"] = with_age
     kwargs.update(_scope_kwargs(provider.search, session_id))
     kwargs.update(_reader_kwargs(provider.search, reader))
     try:
@@ -172,7 +174,7 @@ async def memory_search(query: str, *, session_id: str = "", user_id: Optional[s
 #: ``memory_sync_turn`` outcomes (D4, review 2026-10-13). Only ``INSERTED`` is a
 #: new row; the ``memory_write`` event is recorded for that one alone.
 SYNC_INSERTED = "inserted"
-SYNC_DUPLICATE = "duplicate"     # exact duplicate: collapsed into a ts refresh
+SYNC_DUPLICATE = "duplicate"     # exact duplicate: the existing row stands as it is
 SYNC_SKIPPED = "skipped"         # nothing to store (filtered / anon / Null provider)
 SYNC_REFUSED_CAP = "refused_cap" # the tenant storage ceiling refused the row
 SYNC_FAILED = "failed"
@@ -267,6 +269,21 @@ async def memory_record_episode(episode, *, session_id: str,
         logger.warning("memory_record_episode failed: %s", e)
 
 
+async def memory_update_episode_meta(*, user_id: Optional[str], session_id: str, ts: int,
+                                     patch: dict) -> bool:
+    """Route a guarded meta update of one episode to the active provider. False when nothing
+    was written. No-throw."""
+    provider = get_memory_registry().active()
+    if provider is None or not provider.is_external:
+        return False
+    try:
+        return bool(provider.update_episode_meta(user_id=user_id, session_id=session_id, ts=ts,
+                                                 patch=patch))
+    except Exception as e:
+        logger.warning("memory_update_episode_meta failed: %s", e)
+        return False
+
+
 async def memory_recall_episodes(*, user_id: Optional[str] = None,
                                  since_ts: Optional[int] = None,
                                  until_ts: Optional[int] = None,
@@ -304,25 +321,34 @@ async def memory_recall_episodes(*, user_id: Optional[str] = None,
 # Mirror memory_search: no-throw, delegate to .active(), safe defaults on error.
 
 async def kb_search(query: str, *, user_id: Optional[str] = None,
-                    collection: Optional[str] = None, limit: int = 8) -> str:
-    """Route a KB search through the active provider. '' on no-provider / error.
+                    collection: Optional[str] = None, limit: int = 8,
+                    stamp: bool = True) -> str:
+    """Route a KB search through the active provider. '' on no provider; a read that
+    failed raises (every caller names it), because '' means "nothing matched".
 
     ``collection=None`` searches every collection the tenant has (097: the KB
-    has full access — the owner never sorts documents into collections)."""
+    has full access — the owner never sorts documents into collections).
+    ``stamp=False`` is the automatic prefetch: it is no read of the document, so
+    the written-documents age-out clock stays where it is."""
     provider = get_memory_registry().active()
     if provider is None:
         return ""
     try:
-        return await provider.kb_search(query, user_id=user_id,
-                                        collection=collection, limit=limit)
+        # A provider that predates the parameter gets the call it always got.
+        kwargs = {}
+        if not stamp and "stamp" in inspect.signature(provider.kb_search).parameters:
+            kwargs["stamp"] = False
+        return await provider.kb_search(query, user_id=user_id, collection=collection,
+                                        limit=limit, **kwargs)
     except Exception as e:
         logger.warning("kb_search failed: %s", e)
-        return ""
+        raise
 
 
 async def kb_list_sources(*, user_id: Optional[str] = None,
                           collection: Optional[str] = None) -> list:
-    """Route a KB source listing through the active provider. [] on error."""
+    """Route a KB source listing through the active provider. [] on no provider; a read
+    that failed raises, because [] means "no sources"."""
     provider = get_memory_registry().active()
     if provider is None:
         return []
@@ -330,7 +356,7 @@ async def kb_list_sources(*, user_id: Optional[str] = None,
         return await provider.kb_list_sources(user_id=user_id, collection=collection)
     except Exception as e:
         logger.warning("kb_list_sources failed: %s", e)
-        return []
+        raise
 
 
 async def kb_remove(*, user_id: Optional[str] = None, collection: str,

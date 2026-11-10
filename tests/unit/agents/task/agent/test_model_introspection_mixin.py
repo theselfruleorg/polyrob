@@ -31,5 +31,4 @@ def test_extract_model_name_falls_back_to_class_name():
     class WeirdLLM:
         pass
 
-    out = _Host()._extract_model_name(WeirdLLM())
-    assert out in ("WeirdLLM", "unknown") or isinstance(out, str)
+    assert _Host()._extract_model_name(WeirdLLM()) == "WeirdLLM"

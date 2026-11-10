@@ -28,18 +28,15 @@ _NAME_RE = re.compile(r"['\"](" + "|".join(_NAMES) + r")['\"]")
 _THRESHOLD = 4  # distinct provider names as string literals
 
 ALLOWLISTED_PROVIDER_AWARE_FILES = frozenset({
+    "modules/llm/cache_hints.py",         # per-provider cache behaviour, not a provider list
     # seam files: derivations (three kill-switch literal sites left with the switch)
     "core/config.py",
     "modules/llm/llm_client_registry.py",
     "modules/llm/llm_factory.py",
-    "modules/llm/model_registry.py",
     # S4 (2026-08-29): ModelProvider enum + canonical-name/cache-multiplier tables moved
     # here out of model_registry.py — per-provider behaviour tables, not a provider list.
     "modules/llm/model_types.py",
-    "tools/controller/registry/schema_generators.py",
-    "tools/controller/registry/service.py",
     # per-provider behavior (not provider lists)
-    "agents/task/constants.py",           # MODEL_FAMILY_INSTRUCTIONS + aux router
     # S5 (2026-08-29): the per-provider token-usage/response-shape helpers moved out
     # of agents/task/utils.py into the LLM layer — behaviour table, not a list.
     "modules/llm/usage_extract.py",

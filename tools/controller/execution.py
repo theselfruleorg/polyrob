@@ -144,7 +144,9 @@ class ExecutionMixin:
 		try:
 			try:
 				details = self.get_action_details(action_type)
-				tool = str(getattr(details, "tool", "") or "") or "unknown"
+				# A registered action with no tool id is a core action; "unknown"
+				# stays for an action the registry cannot map.
+				tool = "unknown" if details is None else str(getattr(details, "tool", "") or "") or "core"
 			except Exception:
 				tool = "unknown"
 			ms = None
@@ -373,7 +375,7 @@ class ExecutionMixin:
 						self.logger.info(f"🤖 Sub-agent action '{action_type}' - timeout: {action_timeout}s")
 					else:
 						action_timeout = TimeoutConfig.get_tool_timeout(tool_name)
-						if action_type == 'present_choice':
+						if action_type == 'owner_ask':
 							from tools.controller.card_actions import choice_action_timeout
 							action_timeout = choice_action_timeout(action_params, action_timeout)
 

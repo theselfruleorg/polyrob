@@ -132,3 +132,22 @@ def test_close_fails_pending_with_error_not_cancel():
         with pytest.raises(MCPConnectionError):
             fut.result()
     asyncio.run(go())
+
+
+class _BrokenPipe(io.StringIO):
+    def readline(self, *a):
+        raise OSError("broken pipe")
+
+
+def test_stdio_read_error_marks_peer_lost_not_silence():
+    """A pipe error ends the reader thread: the transport is lost, never an idle
+    'no message' on every later call."""
+    async def go():
+        t = _stdio_with_stdout()
+        t.process.stdout = _BrokenPipe()
+        with pytest.raises(MCPConnectionError):
+            await t.receive_message(timeout=1)
+        assert t.is_peer_lost
+        with pytest.raises(MCPConnectionError):
+            await t.receive_message(timeout=0.05)
+    asyncio.run(go())

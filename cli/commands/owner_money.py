@@ -17,6 +17,7 @@ import json
 import click
 
 from cli._admin_home import as_root_option
+from cli.commands._options import json_option
 
 
 def _run(coro_factory):
@@ -140,7 +141,7 @@ def refunded(request_id, tx_hash, note):
 @click.option("--user", default=None, help="One tenant's deposits (default: all).")
 @click.option("--onchain", is_flag=True,
               help="Also read each deposit address balance on chain now (ETHEREUM_RPC_URL).")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def deposits(user, onchain, as_json):
     """Reconcile credited deposits, their sweeps and the balance marks (read-only).
 

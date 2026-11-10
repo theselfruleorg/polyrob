@@ -2,19 +2,23 @@
 
 CO-F6: LLMContextLengthError must checkpoint + emergency-prune (never a blind
 provider-fallback retry with the same oversized history).
-CO-F5: a tool-originated '429'/'rate limit' string must NOT be classified as
-fatal by `_is_fatal_step_error` — it should reach `_handle_step_error`'s
-graceful rate-limit branch (circuit breaker / fallback / backoff) instead of
-halting the session immediately.
+Only a typed LLM error gets a provider fallback or a permanent halt: an application
+error's text decides neither.
 """
 import logging
+import sqlite3
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 from agents.task.agent.service import Agent
-from agents.task.agent.core.step import _is_fatal_step_error
-from core.exceptions import LLMContextLengthError
+from core.exceptions import (
+    LLMAuthenticationError,
+    LLMConfigError,
+    LLMContextLengthError,
+    LLMError,
+    LLMPermanentError,
+)
 
 
 def _build_agent():
@@ -76,29 +80,36 @@ async def test_context_length_error_increments_consecutive_failures_each_call():
     assert a.state.stopped is False
 
 
-def test_tool_429_is_not_fatal():
-    assert _is_fatal_step_error("tool returned 429 too many requests", billing_failover_enabled=False) is False
+@pytest.mark.parametrize("error", [
+    RuntimeError("tool returned 429 too many requests"),
+    RuntimeError("rate limit exceeded, please retry"),
+    RuntimeError("browser connection closed"),
+    RuntimeError("timeout reading the llm notes file"),
+    sqlite3.OperationalError("no such column: billing_total"),
+    NameError("name 'billing' is not defined"),
+    TypeError("insufficient_quota is not a str"),
+], ids=lambda e: str(e)[:24])
+@pytest.mark.asyncio
+async def test_an_application_error_gets_no_provider_fallback_and_no_halt(error):
+    a = _build_agent()
+    a.state.consecutive_failures = 1
+    a.max_failures = 5
+    a.retry_delay = 0
+    await a._handle_step_error(error)
+    a._attempt_llm_fallback_in_handler.assert_not_awaited()
+    a.state.request_stop.assert_not_called()
 
 
-def test_rate_limit_string_is_not_fatal():
-    assert _is_fatal_step_error("rate limit exceeded, please retry", billing_failover_enabled=False) is False
-
-
-def test_auth_error_is_still_fatal():
-    assert _is_fatal_step_error("invalid api key provided", billing_failover_enabled=False) is True
-
-
-def test_authentication_error_is_still_fatal():
-    assert _is_fatal_step_error("authentication failed", billing_failover_enabled=False) is True
-
-
-def test_quota_exceeded_is_still_fatal():
-    assert _is_fatal_step_error("quota exceeded for this account", billing_failover_enabled=False) is True
-
-
-def test_billing_without_failover_is_still_fatal():
-    assert _is_fatal_step_error("billing issue on account", billing_failover_enabled=False) is True
-
-
-def test_billing_with_failover_enabled_is_not_fatal():
-    assert _is_fatal_step_error("billing issue on account", billing_failover_enabled=True) is False
+@pytest.mark.parametrize("error", [
+    LLMAuthenticationError("bad key"),
+    LLMPermanentError("model not found"),
+    LLMConfigError("no key"),
+    LLMError("Error code: 402 - insufficient_quota"),
+], ids=lambda e: type(e).__name__)
+@pytest.mark.asyncio
+async def test_a_typed_permanent_error_halts(error, monkeypatch):
+    monkeypatch.setenv("BILLING_FAILOVER_ENABLED", "0")
+    a = _build_agent()
+    a.max_failures = 5
+    await a._handle_step_error(error)
+    a.state.request_stop.assert_called_once()

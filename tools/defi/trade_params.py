@@ -4,7 +4,7 @@ Split out of ``trade_tool.py`` (W9). ``trade_tool`` re-exports every name here,
 so ``from tools.defi.trade_tool import SwapParams`` keeps working.
 """
 from decimal import Decimal
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Any, List, Literal, Optional
 
 from pydantic import (BaseModel, BeforeValidator, Field, PlainSerializer,
                       WithJsonSchema)
@@ -35,9 +35,9 @@ def _supply_out(value) -> str:
 #: The ONE supply type for both deploy verbs.
 #:
 #: ⚠️ The schema is a plain ``string``, not ``anyOf [number, string]``: the
-#: Gemini converter (``modules/llm/gemini_client.py`` ``dict_to_schema``) reads
-#: only ``type`` and drops ``anyOf``, which left the property TYPELESS. A
-#: string is the exact form anyway, and the validator still takes a JSON number
+#: Gemini converter (``modules/llm/gemini_parts.py`` ``json_schema_to_glm``) has no
+#: union and keeps the first non-null branch, which would type the property as a
+#: number. A string is the exact form anyway, and the validator still takes a JSON number
 #: from a model that sends one (no provider here runs strict tool schemas).
 #: The serializer dumps the exact plain digits, so ``model_dump()`` stays
 #: ``json.dumps``-safe (history files, cards) and 1e9 and 1000000000 dump and
@@ -393,10 +393,15 @@ class LpRemoveParams(LpCollectParams):
 class CallParams(BaseModel):
     chain: ChainName = Field(..., description=_chain_field_description("call"))
     to: str = Field(..., description="CONTRACT ADDRESS being called (0x…)")
-    calldata: str = Field(..., description=(
+    calldata: str = Field("", description=(
         "ABI-encoded calldata, 0x-prefixed: the 4-byte selector followed by the "
-        "encoded arguments. Build it yourself or take it from a protocol's own "
-        "transaction-preparation endpoint."))
+        "encoded arguments. Or leave it empty and give function + args."))
+    function: Optional[str] = Field(None, description=(
+        "Instead of calldata: the function signature, e.g. \"mint(address,string)\"; "
+        "the tool encodes it with args. Give calldata OR function, not both."))
+    args: Optional[List[Any]] = Field(None, description=(
+        "function: the arguments in order (addresses as 0x strings, integers as "
+        "numbers or decimal strings, bytes as 0x hex)."))
     value: float = Field(0.0, ge=0, description=(
         "NATIVE value to send with the call, in whole coin units (0.01 = 0.01 "
         "ETH, converted at 18 decimals) — NOT wei. Declare it — an undeclared "

@@ -169,11 +169,19 @@ class SqliteMemoryProvider(KeywordRecallMixin, CuratedNotesStoreMixin, KbStoreMi
         consistent across the two halves). The D8 cap is applied HERE for the same
         reason — a truncated FTS row must match its embedded twin byte-for-byte."""
         u, a = strip_turn_fences(user_content, assistant_content)  # 070 W1.5: no fence is stored
-        content = ("" if not (a or "").strip() else a.strip() if cls._store_answer_only()
-                   else f"User: {u}\nAssistant: {a}".strip())
         from core.secret_scrub import scrub_secret_shapes
-        content = scrub_secret_shapes(content)
         cap = cls._row_cap()
+        a = scrub_secret_shapes((a or "").strip())
+        if not a or cls._store_answer_only():
+            content = a
+        else:
+            # The findings outlive a long question: a head cut stored only the task
+            # text, and the [unverified] mark of the findings went with them.
+            u = scrub_secret_shapes(u or "")
+            frame = len("User: \nAssistant: ")
+            if cap > 0 and len(u) + len(a) + frame > cap:
+                u = u[:max(cap - len(a) - frame, 0)]
+            content = f"User: {u}\nAssistant: {a}".strip()
         if cap > 0 and len(content) > cap:
             content = content[:cap]
         return content
@@ -190,7 +198,7 @@ class SqliteMemoryProvider(KeywordRecallMixin, CuratedNotesStoreMixin, KbStoreMi
     async def sync_turn(self, user_content: str, assistant_content: str, *,
                         session_id: str, user_id=None, scope=None):
         """Returns True when a new row was inserted, False when the write was an
-        exact duplicate (collapsed into a ts refresh), None on early-out — so the
+        exact duplicate (nothing changed), None on early-out — so the
         vector subclass can skip embedding a collapsed dup. Callers through the
         registry ignore the return value (ABC contract stays None-compatible)."""
         content = self._compose_stored_content(user_content, assistant_content)
@@ -205,15 +213,15 @@ class SqliteMemoryProvider(KeywordRecallMixin, CuratedNotesStoreMixin, KbStoreMi
     def _sync_turn_blocking(self, norm_user: str, session_id: str, content: str,
                             label: str = "") -> bool:
         """Write one memory row + its provenance stamp (B2). Exact duplicates
-        collapse: an existing (user, content_hash) provenance row gets its ts
-        refreshed instead of inserting a twin — the store stops growing on
-        repeated identical findings. Provenance failures never lose the memory
-        row (fail-open, like every other leg of this provider). Returns True on
-        a real insert, False on a dup collapse."""
+        collapse: an existing (user, content_hash) provenance row stands as it is,
+        with its first date, so a repeated claim does not look new and the store
+        stops growing on identical findings. Provenance failures never lose the
+        memory row (fail-open, like every other leg of this provider). Returns True
+        on a real insert, False on a dup collapse."""
         import hashlib
         content_hash = hashlib.sha256(content.encode("utf-8", "replace")).hexdigest()
         # 025: with scopes ON the dedup key is per-scope — a scoped finding must
-        # never collapse into a ts refresh of a SHARED twin (a quarantine bypass).
+        # never collapse into a SHARED twin (a quarantine bypass).
         on = _scope.scopes_enabled()
         try:
             dup = execute_retry(
@@ -222,10 +230,6 @@ class SqliteMemoryProvider(KeywordRecallMixin, CuratedNotesStoreMixin, KbStoreMi
                 + ("AND scope = ? " if on else "") + "AND content_hash = ? LIMIT 1",
                 (norm_user,) + ((label,) if on else ()) + (content_hash,), fetch="one")
             if dup is not None:
-                execute_retry(
-                    self.db_path,
-                    "UPDATE mem_provenance SET ts = ? WHERE mem_rowid = ?",
-                    (int(time.time()), dup["mem_rowid"]))
                 return False
         except Exception as e:  # dedup probe failure -> fall through to plain insert
             logger.debug("mem dedup probe skipped: %s", e)
@@ -244,7 +248,8 @@ class SqliteMemoryProvider(KeywordRecallMixin, CuratedNotesStoreMixin, KbStoreMi
     async def search(self, query: str, *, user_id=None, session_id: str = None,
                      limit: int = 5, sort: str = None, before_id: int = None,
                      with_ids: bool = False, scope=None, demote_automation: bool = True,
-                     prefer_job_id: str = None, prefer_goal_id: str = None) -> str:
+                     prefer_job_id: str = None, prefer_goal_id: str = None,
+                     drop_unverified: bool = False, with_age: bool = False) -> str:
         """Tenant-scoped recall (UP-09). Two shapes inferred from args:
 
         - **discover** (`query` has terms): FTS5 MATCH over a sanitized OR-query,
@@ -262,6 +267,9 @@ class SqliteMemoryProvider(KeywordRecallMixin, CuratedNotesStoreMixin, KbStoreMi
         `before_id`); default False keeps the legacy exact ``"- {content}"``
         format byte-identical for direct callers that don't request it.
 
+        An explicit search has no age limit: ``with_age`` shows the age of each row,
+        and ``drop_unverified`` is the same rule as an owner-chat prefetch.
+
         Returns newline-joined "- {content}" snippets, or "" on no results / refusal.
         A READ FAILURE RAISES (D3, review 2026-10-13): "" means "nothing matched",
         never "the store could not be read" — every caller names the failure.
@@ -275,11 +283,12 @@ class SqliteMemoryProvider(KeywordRecallMixin, CuratedNotesStoreMixin, KbStoreMi
                 self._keyword_rows,
                 query, norm_user=self._norm_user(user_id), limit=limit, sort=sort,
                 before_id=before_id, scope=scope, demote_automation=demote_automation,
-                prefer_job_id=prefer_job_id, prefer_goal_id=prefer_goal_id)
+                prefer_job_id=prefer_job_id, prefer_goal_id=prefer_goal_id,
+                drop_unverified=drop_unverified)
         except Exception as e:
             logger.warning("sqlite memory search failed: %s", e)
             raise
-        return self._format_recall_rows(rows, with_ids=with_ids)
+        return self._format_recall_rows(rows, with_ids=with_ids, with_age=with_age)
 
     async def prefetch(self, query: str, *, session_id: str, user_id=None, scope=None,
                        demote_automation: bool = True, prefer_job_id: str = None,
@@ -296,21 +305,11 @@ class SqliteMemoryProvider(KeywordRecallMixin, CuratedNotesStoreMixin, KbStoreMi
                 self._keyword_rows, query, norm_user=self._norm_user(user_id),
                 limit=self.top_k, exclude_session_id=session_id, scope=scope,
                 demote_automation=demote_automation, prefer_job_id=prefer_job_id,
-                prefer_goal_id=prefer_goal_id, max_age_days=max_age_days, drop_unverified=drop_unverified)
+                prefer_goal_id=prefer_goal_id, max_age_days=max_age_days, drop_unverified=drop_unverified, weak_floor=True)
         except Exception as e:
             logger.warning("sqlite memory prefetch failed: %s", e)
             raise  # D3: an unreadable store is not an empty one
         return self._format_recall_rows(rows)
 
-    # ---- notes substrate (C1, 2026-07-11) ------------------------------------
-    # curated_memory promoted to first-class notes: title/tags/[[wikilinks]]/
-    # provenance/status lifecycle. All verbs tenant-scoped and fail-open; caps
-    # ride the existing MEMORY_TOOL_MAX_ENTRIES/MAX_CHARS knobs (archived notes
-    # do NOT count against the entry cap — archiving frees space).
-
-
     _NOTE_FIELDS = ("id, title, content, tags, links, source, created_ts, "
                     "updated_ts, access_count, status, created_by")
-
-
-    # ---- KB (knowledge-base) storage methods (Task 5) ----------------------

@@ -91,8 +91,10 @@ def parse_card_action(payload: dict, *, user_directory: Any = None,
     chat_type = (chat_types or {}).get(chat_id) or "group"
     source = SessionSource(surface_id="feishu", chat_id=chat_id,
                            chat_type="dm" if chat_type == "dm" else "group")
-    user_id = None
-    if user_directory is not None:
+    # A press is routed as the presser typing: the same tenant as their typed line.
+    from core.instance import owner_surface_alias
+    user_id = owner_surface_alias(author, "feishu")
+    if not user_id and user_directory is not None:
         try:
             user_id = user_directory.resolve_internal(author, "feishu")
         except Exception:

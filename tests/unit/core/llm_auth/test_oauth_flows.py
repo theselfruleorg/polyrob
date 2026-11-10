@@ -389,6 +389,29 @@ class TestRegistry:
         monkeypatch.setattr(store, "get_provider", racing_get)
         assert reg.refresh_if_needed("myplan", spec, store=store) is None
 
+    def test_refresh_never_writes_over_a_reconnect_made_during_the_post(self, tmp_path):
+        """The token POST runs outside the store's flock: a re-connect (or another
+        process's refresh) written meanwhile must stand, not be overwritten by a merge
+        of the entry read before the POST."""
+        from core.llm_auth.flows.refresh import refresh_token
+        from core.llm_auth.store import AuthStore
+
+        spec = OAuthSpec(auth_url="https://x.test/d", token_url="https://x.test/t",
+                         client_id="c", grant="device_code")
+        store = AuthStore(str(tmp_path / "auth.json"))
+        store.set_provider("myplan", {
+            "access_token": "old", "refresh_token": "r", "expires_at": time.time() - 1,
+        })
+
+        def post(url, form):
+            store.set_provider("myplan", {"access_token": "RECONNECTED", "refresh_token": "r9",
+                                          "expires_at": time.time() + 3600})
+            return {"access_token": "from-old-refresh", "expires_in": 3600}
+
+        assert refresh_token("myplan", spec, store=store, http_post=post) is None
+        entry = store.get_provider("myplan")
+        assert entry["access_token"] == "RECONNECTED" and entry["refresh_token"] == "r9"
+
     def test_disconnect_removes_the_entry(self, tmp_path, monkeypatch):
         import core.llm_auth.flows.registry as reg
         from core.llm_auth.store import AuthStore

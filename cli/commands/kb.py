@@ -20,6 +20,8 @@ import uuid
 
 import click
 
+from cli.commands._options import json_option
+
 
 # ---------------------------------------------------------------------------
 # Gate check
@@ -123,8 +125,8 @@ def kb():
               help="Vault output directory (opened directly in Obsidian).")
 @click.option("--since", "since", default=None,
               help="Only episodes newer than this (8h / 2d / ISO date).")
-@click.option("--user", "user", default="local", show_default=True,
-              help="Tenant to export.")
+@click.option("--user", "user", default=None,
+              help="Tenant to export (default: this box's owner principal).")
 def kb_export(out_dir: str, since, user: str):
     """Write notes/episodes/skills/identity/goals as a markdown vault."""
     from cli.commands.knowledge import run_export
@@ -205,7 +207,7 @@ async def _kb_add(path: str, collection: str, recursive: bool, globs) -> None:
 
 @kb.command("list")
 @click.option("--collection", default=None, help="Filter by collection (omit for all).")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def kb_list(collection, as_json: bool) -> None:
     """List ingested sources in the knowledge base."""
     _bootstrap()
@@ -279,7 +281,7 @@ async def _kb_remove(collection: str, source) -> None:
 @click.option("--collection", default=None,
               help="KB collection to search (default: every collection).")
 @click.option("--limit", default=8, show_default=True, type=int, help="Max results.")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def kb_search(query: str, collection: str, limit: int, as_json: bool) -> None:
     """Search the knowledge base for relevant content."""
     _bootstrap()

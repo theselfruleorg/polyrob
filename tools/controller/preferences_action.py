@@ -215,10 +215,10 @@ class PreferencesActionMixin:
 				kind="pref", source="preferences", created_by="agent")
 
 			if params.operation == "set":
-				if is_forged:
+				from core.security.owner_turn import is_owner_driven, is_owner_standing_run
+				if is_forged and not is_owner_standing_run(execution_context):
 					return ActionResult(
-						error=("preferences: set is not permitted for forged/autonomous "
-						      "turns (the owner must be in the loop)."),
+						error=("preferences: set is refused on a delegated or forged turn."),
 						include_in_memory=True)
 				if not params.key or params.value is None:
 					return ActionResult(error="set requires `key` and `value`.",
@@ -228,7 +228,11 @@ class PreferencesActionMixin:
 					err = unknown_pref_error(params.key, params.value)
 					return ActionResult(error=err, include_in_memory=True)
 
-				if spec.sensitivity == SENSITIVITY_GUARDED:
+				# budget.* raises money caps and shell.* loosens the host gate: these wait for
+				# the owner. The others apply at once on the owner's own clean turn.
+				if spec.sensitivity == SENSITIVITY_GUARDED and not (
+						params.key.split(".", 1)[0] in ("approvals", "outbound", "session")
+						and not is_forged and is_owner_driven(execution_context, self)):
 					from core.prefs import propose_pref_change
 					ok, result = propose_pref_change(user_id, params.key, params.value,
 					                                 data_dir, instance_id=instance_id)

@@ -1,6 +1,6 @@
 {
   "function": {
-    "description": "Edit a goal's title/body/priority/acceptance/tools (owner-only).",
+    "description": "Edit a goal's title/body/priority/acceptance/tools.",
     "name": "goal_update",
     "parameters": {
       "additionalProperties": false,
@@ -26,6 +26,17 @@
           "nullable": true,
           "type": "integer"
         },
+        "tier": {
+          "default": null,
+          "description": "Optional model tier for this work's runs — from the owner's chat only: 'heavy' for work that decides money (who is paid, how much, a winner) or is hard to undo; 'light' for bulk reads; 'default' = the normal model. <environment> names each tier's model. Requires 'why'.",
+          "enum": [
+            "default",
+            "heavy",
+            "light"
+          ],
+          "nullable": true,
+          "type": "string"
+        },
         "title": {
           "default": null,
           "minLength": 3,
@@ -39,6 +50,13 @@
           },
           "nullable": true,
           "type": "array"
+        },
+        "why": {
+          "default": null,
+          "description": "One line: why this tier. Required with 'tier'; shown in /status.",
+          "maxLength": 200,
+          "nullable": true,
+          "type": "string"
         }
       },
       "required": [

@@ -95,7 +95,7 @@ def test_model_recovery_uses_complete_adoption():
     agent.message_manager = SimpleNamespace(llm=old, set_runtime_identity=Mock())
     agent.logger = logging.getLogger("fallback-regression")
     agent.state = SimpleNamespace(llm_providers_failed=[])
-    agent._get_provider_from_model = lambda name: "anthropic" if "claude" in name else "openai"
+    agent._current_llm_provider = lambda name: "anthropic" if "claude" in name else "openai"
     agent._get_fallback_llm = AsyncMock(return_value=new)
     agent._emit_fallback_success_telemetry = Mock()
     agent._reconcile_native_tools = Mock()

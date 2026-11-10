@@ -69,6 +69,8 @@ def pack() -> PackSpec:
                              gate="polyrob_x:x_browser_gate"),
         ),
         hooks={"cron.delivery_channel": {"twitter": "polyrob_x.cron_delivery:deliver_post"},
+               # 109: the code storefront reads and answers public reply threads.
+               "commerce.thread_channel": {"x": "polyrob_x.commerce_thread:channel"},
                # `/x login|status` — the owner's one-tap OAuth re-login (verbs are
                # rows in core.verbs; the seats resolve the handler references).
                "owner.verbs": "polyrob_x.owner_verbs:OWNER_VERBS"},

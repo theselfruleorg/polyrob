@@ -12,6 +12,7 @@ from typing import Optional
 
 import click
 
+from cli.commands._options import json_option
 from agents.task.constants import TimeoutConfig
 
 
@@ -23,7 +24,7 @@ def subagents():
 
 
 @subagents.command("info")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def subagents_info(as_json: bool):
     """Show delegation capability and limits."""
     # Lazy import to avoid heavy tools import chain.
@@ -101,7 +102,7 @@ def _delegations(session_id=None, delegation_id=None):
 
 @subagents.command("list")
 @click.option("--session-id", help="Filter durable receipts by full session ID.")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def subagents_list(session_id: Optional[str], as_json: bool):
     """List persisted background delegation receipts, newest first."""
     rows = _delegations(session_id)
@@ -120,7 +121,7 @@ def subagents_list(session_id: Optional[str], as_json: bool):
 @subagents.command("show")
 @click.argument("delegation_id")
 @click.option("--session-id", help="Disambiguate a delegation ID reused in multiple sessions.")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def subagents_show(delegation_id: str, as_json: bool, session_id=None):
     """Show a persisted background delegation and its result."""
     rows = _delegations(session_id, delegation_id)

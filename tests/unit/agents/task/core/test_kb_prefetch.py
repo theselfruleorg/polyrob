@@ -224,3 +224,20 @@ def test_kb_auto_prefetch_explicit_env_wins():
     with patch.dict(os.environ, env, clear=True):
         from core.config_policy import AutonomyConfig
         assert AutonomyConfig.kb_auto_prefetch() is True
+
+
+# ---------------------------------------------------------------------------
+# Test: recalled text about a stored value is a lead (108 W3)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_recall_labels_a_stored_value_as_a_lead_outside_the_data_frame():
+    import agents.task.agent.core.memory_prefetch as mod
+    with (
+        patch("core.config_policy.AutonomyConfig.kb_auto_prefetch", return_value=False),
+        patch("modules.memory.registry.memory_prefetch", new=AsyncMock(return_value=MEMORY_CONTENT)),
+    ):
+        msg = await mod.build_prefetch_message(QUERY, session_id=SESSION_ID, user_id=USER_ID)
+    text = str(msg.content)
+    assert MEMORY_CONTENT in text
+    assert text.index("</untrusted_tool_result>") < text.index(mod.RECALL_LEAD_NOTE)

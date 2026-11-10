@@ -202,7 +202,6 @@ def skill_call(monkeypatch, tmp_path):
     from tools.controller.registry.service import Registry
     from tools.controller.service import Controller
     monkeypatch.setenv("SKILLS_WRITABLE", "true")
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "true")
     sm = SkillManager(skills_dir=tmp_path)
     monkeypatch.setattr("agents.task.agent.skill_manager.get_skill_manager", lambda: sm)
     monkeypatch.setattr("core.runtime_paths.data_dir_or_home", lambda *_a, **_k: str(tmp_path))

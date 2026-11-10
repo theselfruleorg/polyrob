@@ -842,9 +842,12 @@ def _default_user() -> str:
         return "local"
 
 
-@click.group("skill")
+@click.group("skill", hidden=True)
 def skill():
-    """Install and approve agent skills (single-skill install pipeline)."""
+    """Old name of `polyrob skills` (install, approve, info, remove, tap, search, update).
+
+    113 §2 item 10 (T-08): these verbs are mounted under `skills`; this group stays so
+    a script that types `polyrob skill …` keeps working."""
     from cli.commands._bootstrap import ensure_env_loaded
     ensure_env_loaded()
 
@@ -877,7 +880,7 @@ def skill_install(spec: str, ref: Optional[str], trust: str, user_id: Optional[s
     else:
         click.echo(click.style("[polyrob] ", fg="yellow")
                    + f"installed skill {res.name!r} to quarantine — run "
-                     f"`polyrob skill approve {res.name} --user {uid}` to activate.")
+                     f"`polyrob skills approve {res.name} --user {uid}` to activate.")
         click.echo(f"  staged: {res.staged_path}")
 
 

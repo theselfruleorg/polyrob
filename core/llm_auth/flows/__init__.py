@@ -1,4 +1,4 @@
-"""OAuth connect flows for LLM subscription seats (proposal 024, L2).
+"""OAuth connect flows for LLM subscription seats.
 
 Provider-AGNOSTIC by design. The flows are driven entirely by ``OAuthSpec``
 data (endpoints, client_id, scopes, grant, refresh skew) — this package ships

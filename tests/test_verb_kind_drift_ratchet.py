@@ -22,10 +22,16 @@ SOURCES = {"core/verb_policy_rows.py"}
 
 #: path -> reason. A literal in one of these files may name the derived verbs.
 ALLOWED = {
+    "tools/controller/registry/tool_order.py":
+        "COMMON_TOOLS_FIRST: the prefix order of tools[] for the prompt cache, a different property",
     "agents/task/agent/core/correspondent_gate.py":
         "_REPLY_ACTIONS: the D1 reply exemption reads call ARGUMENTS (code, per verb_policy doc)",
     "tools/code_exec/tool_rpc.py":
         "the tool-RPC denylist of loop-control verbs, a different property",
+    "core/security/untrusted_wrap.py":
+        "OWN_RECEIPT_ACTIONS: verbs whose result is the harness's own receipt, a different property",
+    "agents/task/runtime/tool_claims.py":
+        "the verbs that disprove a claim about a tool in the model's text, a different property",
     "cli/ui/dialog.py": "the CLI's rendering of the owner dialog (speech vs done), display only",
     "packs/x/polyrob_x/twitter_tool.py":
         "_LATE_MODELS: the late sender's param models; register_late_sender refuses a "

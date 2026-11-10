@@ -136,8 +136,8 @@ exposed address, and never ask the owner to show you the seed.
 - Then update on each change of state, not on a timer. State only causes you
   observed and recoveries you verified. Say "suspected" when it is a guess.
 - For a decision with a few clear options (roll back or hold), use
-  `present_choice` on a live owner turn. An autonomous run cannot wait, so use
-  `owner_ask` there and keep the safe state until the owner answers.
+  `owner_ask(question=…, options=[…])`. An autonomous run cannot wait, so keep the
+  safe state until the owner answers.
 - Never include a secret value, a full key or a seed phrase in any message,
   even to the owner.
 

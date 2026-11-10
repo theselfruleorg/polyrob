@@ -288,8 +288,9 @@ class TestDerivedSeams:
         from modules.llm.llm_manager import LLMManager
         assert LLMManager._build_fallback_hierarchy() == [
             ("openai_client", "gpt-5"),
-            ("anthropic_client", "claude-sonnet-4-5"),
+            ("anthropic_client", "claude-sonnet-5-5"),
             ("openrouter_client", "z-ai/glm-5.2"),
+            ("deepseek_client", "deepseek-flash"),
             ("gemini_client", "gemini-2.5-flash"),
         ]
 
@@ -403,7 +404,7 @@ class TestGenericClients:
 
     def test_anthropic_compat_client_zai(self, user_providers, monkeypatch):
         monkeypatch.setenv("ZAI_API_KEY", "zk-0123456789abcdef0123456789")
-        from modules.llm.compat_clients import AnthropicCompatClient
+        from modules.llm.compat_anthropic import AnthropicCompatClient
         client = AnthropicCompatClient(
             config=self._Cfg({"zai-coding": {"api_key": None}}), name="zai-coding_client"
         )
@@ -421,7 +422,7 @@ class TestGenericClients:
         ANTHROPIC_API_KEY to check (UX assessment 2026-08-07, gap 4)."""
         monkeypatch.delenv("ZAI_API_KEY", raising=False)
         from core.exceptions import ServiceError
-        from modules.llm.compat_clients import AnthropicCompatClient
+        from modules.llm.compat_anthropic import AnthropicCompatClient
         client = AnthropicCompatClient(
             config=self._Cfg({"zai-coding": {"api_key": None}}), name="zai-coding_client"
         )
@@ -437,11 +438,11 @@ class TestGenericClients:
         assert "ZAI_API_KEY" in msg
         assert "Anthropic" not in msg and "ANTHROPIC_API_KEY" not in msg
         # the seam every inherited message site renders through
-        assert client._PROVIDER_LABEL == client._spec.display_name
+        assert client.provider_label == client._spec.display_name
 
     def test_anthropic_compat_requires_key(self, user_providers):
         from core.exceptions import ServiceError
-        from modules.llm.compat_clients import AnthropicCompatClient
+        from modules.llm.compat_anthropic import AnthropicCompatClient
         client = AnthropicCompatClient(
             config=self._Cfg({"zai-coding": {"api_key": None}}), name="zai-coding_client"
         )

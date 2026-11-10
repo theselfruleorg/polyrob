@@ -16,7 +16,7 @@ duplicate model pickers (one way to pick the model: ``DEFAULT_PROVIDER`` +
 A per-provider ``POLYROB_<PROVIDER>_MODEL`` line is matched by pattern
 (:data:`RETIRED_PATTERNS`), not spelled.
 
-Moved into ``POLYROB_OVERRIDES`` (owner decision D7, 2026-10-10): the 50
+Moved into ``POLYROB_OVERRIDES`` (owner decision D7, 2026-10-10): the 49
 posture members (``core.config_policy.members.MEMBER_FLAGS``) are no longer env
 settings of their own. A direct line is ignored — never refused — and
 :func:`retired_flag_lines` names the exact replacement line
@@ -35,6 +35,16 @@ from typing import Mapping, Optional
 #: name -> the setting that replaces it ("" = nothing: the new behaviour is
 #: permanent and the line can be deleted).
 RETIRED_FLAGS: dict[str, str] = {
+    # X writes: the owner's turn or job posts; what to post is an owner rule
+    "TWITTER_REQUIRE_APPROVAL": "",
+    # skills: the owner's agent writes live skills; rollback undoes one
+    "SKILLS_WRITABLE_REQUIRE_REVIEW": "",
+    "SKILL_OVERWRITE_PROTECT": "",
+    # a stopped goal always tells the owner, in every posture (107 D2)
+    "GOAL_BLOCKER_ESCALATION": "",
+    # no reader: a write from the owner's clean turn applies, any other is a draft
+    "SELF_CONTEXT_REQUIRE_REVIEW": "",
+    "OWNER_DOC_REQUIRE_REVIEW": "",
     # legacy aliases — set the canonical name instead
     "WEBGATE_MULTITENANT": "POLYROB_POSTURE=multitenant",
     "OWNER_SURFACES": "OWNER_SURFACE",
@@ -83,6 +93,9 @@ RETIRED_FLAGS: dict[str, str] = {
     "TOOL_SCHEMA_STABLE_ORDER": "",
     "TOOL_USAGE_TELEMETRY": "",
     "TX_NOTIFY_ENABLED": "",
+    # Gemini caches implicitly; the explicit cachedContents code is deleted (106 D6)
+    "GEMINI_PROMPT_CACHE": "",
+    "GEMINI_CACHE_TTL_MIN": "",
     # 095 W8 — recall consolidation is deleted (its notes had no reader)
     "MEMORY_CONSOLIDATE": "",
     # 095 W9 — `memory_search` was a pure alias of `session_search`; one search verb
@@ -159,6 +172,19 @@ def refuse_retired_alias(name: str, env: Optional[Mapping[str, str]] = None) -> 
         )
 
 
+#: A retired gate whose old default was the opposite of the behaviour now in force: an
+#: operator who relied on it must read what changed, not "the default is permanent".
+RETIRED_GATE_NOTES: dict[str, str] = {
+    "TWITTER_REQUIRE_APPROVAL": (
+        "the owner's turn or job now posts to X with no tap; to see posts first, write that "
+        "in the owner rules, or set APPROVAL_PROVIDER=deny to stop every post"),
+    "SKILLS_WRITABLE_REQUIRE_REVIEW": (
+        "a skill the owner's agent writes is now live at once, and a rollback restores the earlier text"),
+    "SKILL_OVERWRITE_PROTECT": (
+        "an agent overwrite of a skill is now live at once, and a rollback restores the earlier text"),
+}
+
+
 def retired_flags_set(env: Optional[Mapping[str, str]] = None) -> list[tuple[str, str]]:
     """``[(name, replacement)]`` for every retired name *env* still sets."""
     import re
@@ -189,6 +215,9 @@ def retired_flag_lines(env: Optional[Mapping[str, str]] = None) -> list[str]:
         elif replacement:
             out.append(f"WARN retired flag {name} is set and ignored: use "
                        f"{replacement} instead, then delete the line")
+        elif name in RETIRED_GATE_NOTES:
+            out.append(f"WARN retired flag {name} is set and ignored: "
+                       f"{RETIRED_GATE_NOTES[name]} — delete the line")
         else:
             out.append(f"WARN retired flag {name} is set and ignored: its "
                        f"default is now permanent — delete the line")
@@ -198,7 +227,7 @@ def retired_flag_lines(env: Optional[Mapping[str, str]] = None) -> list[str]:
 
 
 __all__ = [
-    "RETIRED_FLAGS", "RETIRED_PATTERNS", "REFUSING_ALIASES", "RetiredFlagError",
+    "RETIRED_FLAGS", "RETIRED_GATE_NOTES", "RETIRED_PATTERNS", "REFUSING_ALIASES", "RetiredFlagError",
     "moved_into_overrides", "refuse_retired_alias", "retired_flags_set",
     "retired_flag_lines",
 ]

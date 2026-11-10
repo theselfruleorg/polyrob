@@ -1,12 +1,15 @@
 """The prompt-cache TTL seam and its session-class decision — F4 (2026-09-22).
 
-``modules/llm/cache_hints.py`` owns the stamp + the reader; the decision lives in
+``modules/llm/cache_hints.py`` owns the scope + the reader; the decision lives in
 ``agents/task/session_class.py`` because ``modules`` may not import ``agents``
 (the same split as the 057 output budget).
 """
 
+import asyncio
+
 import pytest
 
+from modules.llm.call_scope import set_cache_ttl
 from modules.llm.cache_hints import (
     apply_cache_ttl,
     cache_control_marker,
@@ -16,13 +19,11 @@ from modules.llm.cache_hints import (
 )
 
 
-class _Adapter:
-    def __init__(self, client=None):
-        self._client = client
-
-
-class _Client:
-    pass
+@pytest.fixture(autouse=True)
+def _clean_scope():
+    set_cache_ttl(None)
+    yield
+    set_cache_ttl(None)
 
 
 def test_setting_defaults_to_auto(monkeypatch):
@@ -55,27 +56,37 @@ def test_explicit_override_wins_over_session_class(monkeypatch, override, expect
     assert resolve_cache_ttl(autonomous=True) == expected
 
 
-def test_stamp_lands_on_adapter_and_client():
-    client = _Client()
-    adapter = _Adapter(client)
-    assert apply_cache_ttl(adapter, "1h") == "1h"
-    assert cache_ttl_for(adapter) == "1h"
-    assert cache_ttl_for(client) == "1h"
+def test_one_hour_reads_back():
+    assert apply_cache_ttl("1h") == "1h"
+    assert cache_ttl_for() == "1h"
 
 
 def test_five_minutes_reads_back_as_no_ttl():
     """5m IS the API default, so the reader hands back None and the client emits
     the bare marker — byte-identical to the pre-F4 request."""
-    client = _Client()
-    apply_cache_ttl(client, "5m")
-    assert cache_ttl_for(client) is None
+    apply_cache_ttl("5m")
+    assert cache_ttl_for() is None
 
 
-def test_unstamped_and_garbage_are_no_ops():
-    assert cache_ttl_for(None) is None
-    assert cache_ttl_for(_Client()) is None
-    assert apply_cache_ttl(None, "1h") is None
-    assert apply_cache_ttl(_Client(), "10m") is None
+def test_unscoped_and_garbage_are_no_ops():
+    assert cache_ttl_for() is None
+    assert apply_cache_ttl("10m") is None
+    assert cache_ttl_for() is None
+
+
+def test_a_cron_run_and_a_chat_keep_their_own_ttl():
+    """S4: two tasks on one client read their own window."""
+    async def _session(ttl, gate_set, gate_wait):
+        apply_cache_ttl(ttl)
+        gate_set.set()
+        await gate_wait.wait()
+        return cache_ttl_for()
+
+    async def _run():
+        chat_set, cron_set = asyncio.Event(), asyncio.Event()
+        return await asyncio.gather(_session("1h", chat_set, cron_set), _session("5m", cron_set, chat_set))
+
+    assert asyncio.run(_run()) == ["1h", None]
 
 
 def test_marker_shape():
@@ -91,14 +102,12 @@ def test_session_class_wrapper_uses_the_marker(monkeypatch):
 
     monkeypatch.delenv("ANTHROPIC_CACHE_TTL", raising=False)
     monkeypatch.setattr(autonomy_marker, "is_autonomous", lambda sid: False)
-    client = _Client()
-    assert session_class.apply_session_cache_ttl(client, "sess-1") == "1h"
-    assert cache_ttl_for(client) == "1h"
+    assert session_class.apply_session_cache_ttl("sess-1") == "1h"
+    assert cache_ttl_for() == "1h"
 
     monkeypatch.setattr(autonomy_marker, "is_autonomous", lambda sid: True)
-    cron = _Client()
-    assert session_class.apply_session_cache_ttl(cron, "cron-1") == "5m"
-    assert cache_ttl_for(cron) is None
+    assert session_class.apply_session_cache_ttl("cron-1") == "5m"
+    assert cache_ttl_for() is None
 
 
 def test_session_class_cache_ttl_fails_open_to_interactive(monkeypatch):
@@ -114,5 +123,4 @@ def test_session_class_cache_ttl_fails_open_to_interactive(monkeypatch):
     monkeypatch.setattr(autonomy_marker, "is_autonomous", _boom)
     assert session_class.budget_class_autonomous("sess-x") is False
     assert session_class.is_autonomous_session("sess-x") is True
-    client = _Client()
-    assert session_class.apply_session_cache_ttl(client, "sess-x") == "1h"
+    assert session_class.apply_session_cache_ttl("sess-x") == "1h"

@@ -61,7 +61,13 @@ def container(tmp_path):
 # polyrob_usage_summary
 # ---------------------------------------------------------------------------
 
-def test_usage_summary_happy_path_shape():
+def test_usage_summary_happy_path_shape(monkeypatch):
+    import modules.credits.usage_rollup as ur
+
+    async def _readable(user_id, *, session_id=None, since=None, db=None):
+        return {"user_id": user_id, "session_id": session_id, "api_cost_usd": 1.0,
+                "credits": 100.0, "calls": 2}
+    monkeypatch.setattr(ur, "usage_rollup", _readable)
     result = _call("polyrob_usage_summary", {}, "u1")
     assert result["isError"] is False
     assert result["content"][0]["type"] == "text"
@@ -88,6 +94,13 @@ def test_usage_summary_anonymous_user_gets_zeros():
     assert result["isError"] is False
     assert '"api_cost_usd": 0.0' in result["content"][0]["text"]
     assert '"calls": 0' in result["content"][0]["text"]
+
+
+def test_usage_summary_unreadable_is_an_error_not_zeros():
+    """No usage database in this process: the zeros are not a measurement."""
+    result = _call("polyrob_usage_summary", {}, "u1")
+    assert result["isError"] is True
+    assert "Usage could not be read (" in result["content"][0]["text"]
 
 
 def test_usage_summary_bad_session_id_type_is_error():

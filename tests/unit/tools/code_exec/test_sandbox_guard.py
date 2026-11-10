@@ -54,7 +54,7 @@ def test_server_exec_allowed_with_docker(monkeypatch):
 #
 # Since the 2026-09-16 identity cutover the agent runs as `polyrob-agent`, which is
 # deliberately NOT in the `docker` group (security-rollout: rootful Docker authority
-# removed until the rootless sandbox of proposal 053 lands). `coding.run_tests` still
+# removed; the rootless sandbox is the only daemon the agent may use). `coding.run_tests` still
 # reached `docker run -d` and failed with "permission denied while trying to connect
 # to the docker API" — an error that reads like a transient, so the agent retried
 # (16 failures across 4 attempts in the last 24 h). The guard now says the real
@@ -68,7 +68,7 @@ def test_docker_socket_unreachable_is_named(monkeypatch, tmp_path):
     monkeypatch.setenv("DOCKER_HOST", f"unix://{sock}")
     monkeypatch.setattr(g.os, "access", lambda p, m: False)
     reason = g.docker_socket_unreachable_reason("docker")
-    assert reason and "053" in reason and "not retry" in reason.lower()
+    assert reason and "rootless Docker daemon" in reason and "not retry" in reason.lower()
     assert str(sock) in reason
 
 
@@ -101,4 +101,4 @@ def test_blocked_reason_names_the_socket_before_docker_runs(monkeypatch, tmp_pat
     monkeypatch.setenv("DOCKER_HOST", f"unix://{sock}")
     monkeypatch.setattr(g.os, "access", lambda p, m: False)
     reason = g.code_exec_execution_blocked_reason()
-    assert reason and "053" in reason
+    assert reason and "rootless Docker daemon" in reason

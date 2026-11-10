@@ -451,7 +451,8 @@ def step_9_approval_lane(c: GuardContext) -> Optional[Decision]:
                 lane="owner_queue", amount_usd=amount_usd,
                 sim_gas_used=deltas.gas_used, deploy=deploy_facts,
                 agent_id=registered_agent_id, position_token_id=position_token_id)
-    if c.owner_only and not owner_direct and not owner_granted:
+    _valued = c.unverified_within_caps and c.valuation_basis == "low_confidence"
+    if c.owner_only and not owner_direct and not owner_granted and not _valued:
         # A send the owner confirmed with "send anyway" (no spend-grade price):
         # never the autonomous lane, whatever its estimate.
         return Decision(False, (
@@ -460,8 +461,10 @@ def step_9_approval_lane(c: GuardContext) -> Optional[Decision]:
             lane="owner_queue", amount_usd=amount_usd,
             sim_gas_used=deltas.gas_used, deploy=deploy_facts,
             agent_id=registered_agent_id, position_token_id=position_token_id)
-    _ceiling = _tg.autonomous_max_usd(*_tg.ceiling_scope(execution_context))
-    if amount_usd > _ceiling and not owner_direct and not owner_granted:
+    _ceiling = (float(c.approve_above_usd) if c.approve_above_usd is not None
+                else _tg.autonomous_max_usd(*_tg.ceiling_scope(execution_context)))
+    # `not <=`: a NaN ceiling asks, never allows (M09).
+    if not amount_usd <= _ceiling and not owner_direct and not owner_granted:
         return Decision(False, (
             f"owner approval required: ${amount_usd:.4f} is above the autonomous "
             f"ceiling ${_ceiling:.2f}"),

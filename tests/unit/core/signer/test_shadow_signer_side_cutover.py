@@ -26,7 +26,7 @@ def test_a_clean_signer_week_is_ready(tmp_path):
     _log(st, True)
     ok, why, counts = signer_cutover_ready(st.state_dir, now=NOW)
     assert ok, why
-    assert counts == {"agree": 2, "disagree": 0}
+    assert counts == {"agree": 2, "disagree": 0, "needs_approval": 0}
 
 
 def test_a_signer_refusal_blocks_the_cutover(tmp_path):

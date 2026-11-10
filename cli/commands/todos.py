@@ -18,6 +18,7 @@ from typing import List
 
 import click
 
+from cli.commands._options import json_option
 TODO_MD_FILE = "todo.md"
 
 #: C50: the two todo lists are different objects with different lifetimes, and
@@ -76,7 +77,7 @@ def todos():
 
 @todos.command("list")
 @click.option("--file", "todo_file", default=TODO_MD_FILE, help="Todo file path.")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def todos_list(todo_file: str, as_json: bool):
     """List todos from the workspace todo file."""
     path = Path(todo_file)
@@ -112,7 +113,7 @@ def todos_list(todo_file: str, as_json: bool):
 @todos.command("add")
 @click.argument("text")
 @click.option("--file", "todo_file", default=TODO_MD_FILE, help="Todo file path.")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def todos_add(text: str, todo_file: str, as_json: bool):
     """Add a new todo item (appended; existing content preserved)."""
     path = Path(todo_file)
@@ -130,7 +131,7 @@ def todos_add(text: str, todo_file: str, as_json: bool):
 @todos.command("done")
 @click.argument("index", type=int)
 @click.option("--file", "todo_file", default=TODO_MD_FILE, help="Todo file path.")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def todos_done(index: int, todo_file: str, as_json: bool):
     """Mark a todo as complete (1-based index)."""
     path = Path(todo_file)
@@ -172,7 +173,7 @@ def todos_done(index: int, todo_file: str, as_json: bool):
 
 @todos.command("clear")
 @click.option("--file", "todo_file", default=TODO_MD_FILE, help="Todo file path.")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def todos_clear(todo_file: str, as_json: bool):
     """Clear completed todos (non-item lines preserved)."""
     path = Path(todo_file)
@@ -216,7 +217,7 @@ def todos_clear(todo_file: str, as_json: bool):
 
 @todos.command("stats")
 @click.option("--file", "todo_file", default=TODO_MD_FILE, help="Todo file path.")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def todos_stats(todo_file: str, as_json: bool):
     """Show todo statistics."""
     path = Path(todo_file)

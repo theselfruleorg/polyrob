@@ -4,7 +4,7 @@
 and this instance acts through an account ONLY when its treasury owns the NFT. A money verb
 given ``account=<token-bound account>`` or ``nft=<collection>#<id>`` resolves it HERE, then
 builds a ``TxIntent.via_account`` for ``tx_guard`` (the ONE authorizer, which re-reads the owner,
-the lock, the code pins and ``state()`` in its own pre-flight), books the result against the
+the lock (AccountV3 only), the code pins and ``state()`` in its own pre-flight), books the result against the
 account (the ``account`` column) and appends a signed entry to the account's journal.
 
 :func:`resolve` refuses (``NftAccountError``) unless — read now, fail closed:

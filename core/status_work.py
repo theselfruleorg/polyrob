@@ -68,6 +68,43 @@ def _open_goals_and_stops(sec: Section, user_id: str, goals_db: str, now: float)
         sec.data["stops_reason"] = f"{type(e).__name__}: {_clip(e, 120)}"
 
 
+def _model_route_lines(sec: Section, tele: Section) -> None:
+    """112 W2: the last model tiers chosen (by the agent, or stored on a job/goal by an owner
+    turn) and why — newest first, at most three."""
+    from core.event_kinds import MODEL_ROUTED
+    keep = 3  # the newest three; /status is a summary, the event log holds all
+    routes = [r["attrs"] or {} for r in _tele_rows(tele, MODEL_ROUTED)][:keep]
+    sec.data["model_routes"] = [{k: a.get(k) for k in ("kind", "tier", "model", "why")}
+                                for a in routes]
+    if routes:
+        sec.lines.append("model choices (newest first): " + "; ".join(
+            f"{a.get('kind')} → {a.get('tier')} {a.get('model') or '?'}"
+            + (f" ({_clip(a.get('why'), 60)})" if a.get("why") else "") for a in routes))
+
+
+#: A ``goal_hold_unreadable`` row younger than this raises the CRIT (the board writes
+#: one row per 10 minutes while the read keeps failing).
+_HOLD_UNREADABLE_FRESH_S = 900
+
+
+def _hold_unreadable_item(sec: Section, tele: Section, ready: int, now: float) -> None:
+    """The board could not read its open asks, so it serves no goal (fail-closed):
+    a CRIT while the record is fresh and this tenant has a ready goal."""
+    if not tele.available or not ready:
+        return
+    from core.event_kinds import GOAL_HOLD_UNREADABLE
+    rows = _tele_rows(tele, GOAL_HOLD_UNREADABLE)
+    if not rows or now - float(rows[0].get("ts") or 0) >= _HOLD_UNREADABLE_FRESH_S:
+        return
+    err = _clip((rows[0].get("attrs") or {}).get("error") or "no error was recorded", 120)
+    sec.health.append(HealthItem(
+        key="goals_held_unreadable", severity=SEVERITY_CRIT,
+        text=(f"no goal runs: the open-ask read failed {_age(rows[0]['ts'], now)} ago "
+              f"({err}); {ready} ready goal(s) wait"),
+        remedy="check goals.db (disk, lock, a bad ask row in the log); goals run again "
+               "on the first good read"))
+
+
 def _work_section(user_id: str, goals_db: str, tele: Section, now: float) -> Section:
     sec = Section(name="work")
     counts = {r["status"]: int(r["n"]) for r in _rows(
@@ -113,6 +150,7 @@ def _work_section(user_id: str, goals_db: str, tele: Section, now: float) -> Sec
         sec.data["runs_window"] = by
         sec.lines.append("24h goal runs: " + (", ".join(f"{k}={v}" for k, v in sorted(by.items()))
                                              or "none"))
+        _model_route_lines(sec, tele)
         # 057 WS-C: a pre-emption is a first-class outcome — the 16 yields of
         # 2026-09-19 were counted by hand because nothing rendered them.
         yielded = [r for r in runs if (r["attrs"] or {}).get("outcome") == "yielded"]
@@ -147,6 +185,7 @@ def _work_section(user_id: str, goals_db: str, tele: Section, now: float) -> Sec
                             + "; mark read-only jobs `polyrob job edit <id> --no-preempts`")))
     else:
         sec.lines.append(f"24h goal-run counts unavailable ({tele.reason})")
+    _hold_unreadable_item(sec, tele, ready, now)
     for a in asks:
         age = _age(a["created_at"], now)
         blocks = f", blocks {len(a['blocks'])} goal(s)" if a["blocks"] else ""

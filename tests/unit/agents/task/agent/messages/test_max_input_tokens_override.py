@@ -20,7 +20,7 @@ class _Host(TokenCounterMixin):
 def test_env_override_caps_budget(monkeypatch):
     monkeypatch.setenv("TASK_MAX_INPUT_TOKENS", "10000")
     host = _Host()
-    max_input, safe_input, _ = host._calculate_token_limits(None, None)
+    max_input, safe_input, _ = host._calculate_token_limits(None)
     assert max_input == 10000
     assert safe_input == int(10000 * (1 - RobustParseConfig.SAFETY_MARGIN_PERCENT))
 
@@ -28,7 +28,7 @@ def test_env_override_caps_budget(monkeypatch):
 def test_explicit_override_beats_env(monkeypatch):
     monkeypatch.setenv("TASK_MAX_INPUT_TOKENS", "10000")
     host = _Host()
-    max_input, _, _ = host._calculate_token_limits(None, 50000)
+    max_input, _, _ = host._calculate_token_limits(50000)
     assert max_input == 50000
 
 
@@ -36,5 +36,5 @@ def test_unset_env_falls_through_to_auto(monkeypatch):
     monkeypatch.delenv("TASK_MAX_INPUT_TOKENS", raising=False)
     host = _Host()
     # Grok 4.3 has a large window — auto-calc must be far above any small cap.
-    max_input, _, _ = host._calculate_token_limits(None, None)
+    max_input, _, _ = host._calculate_token_limits(None)
     assert max_input > 100000

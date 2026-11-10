@@ -529,3 +529,23 @@ async def test_a_delivered_send_clears_an_aged_dead_mark(router, tmp_path):
     assert await r.send_message(chat_id="555", text="channel post", surface_id="telegram")
     store.mark("telegram", "555", "chat_not_found")   # one later failure
     assert store.get("telegram", "555")["fail_count"] == 1   # a fresh single mark, not a second
+
+
+@pytest.mark.asyncio
+async def test_a_line_from_a_chat_the_person_left_carries_its_name(tmp_path):
+    """113: after /new, the main chat's late answer says it is from main; the
+    focused chat's lines carry nothing, and a preview is never prefixed."""
+    from core.surfaces import chats
+    base = "agent:main:telegram:dm:555:u_abc"
+    reg = SessionChatRegistry(str(tmp_path / "chat.db"))
+    reg.bind(base, "sess_main", "u_abc", "telegram", "555")
+    side = chats.open_chat(reg, base_key=base, user_id="u_abc", surface_id="telegram",
+                           chat_id="555", label="side")["session_key"]
+    reg.bind(side, "sess_side", "u_abc", "telegram", "555")
+    r, surf = MessageRouter(reg), _RecordingSurface()
+    r.subscribe("telegram", surf)
+    await r.publish(OutboundMessage(session_key=base, text="late answer", partial=False))
+    await r.publish(OutboundMessage(session_key=side, text="here", partial=False))
+    await r.publish(OutboundMessage(session_key=base, text="pre", partial=True, stream_id="s"))
+    assert [m.text for m in surf.sent] == ["[main] late answer", "here"]
+    assert [m.text for m in surf.streamed] == ["pre"]

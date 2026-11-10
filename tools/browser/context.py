@@ -527,6 +527,8 @@ class BrowserContext:
 				self.session.current_page = page
 
 		context.on('page', on_page)
+		from tools.browser.interaction import attach_dialog_handler
+		attach_dialog_handler(context, self)
 
 	async def get_session(self) -> BrowserSession:
 		"""Lazy initialization of the browser and related components"""
@@ -979,6 +981,10 @@ class BrowserContext:
 				pixels_above=pixels_above,
 				pixels_below=pixels_below,
 			)
+			if focus_element == -1:
+				# A fresh read (not a highlight pass) is the state the next action
+				# resolves its index against: after a navigation the old map is another page's.
+				session.cached_state = self.current_state
 
 			return self.current_state
 		except Exception as e:
@@ -1425,140 +1431,26 @@ class BrowserContext:
 		)
 
 		try:
+			# Every wait here is bounded: the Playwright default is 30 s per call.
 			if isinstance(current_frame, FrameLocator):
-				element_handle = await current_frame.locator(css_selector).element_handle()
+				element_handle = await current_frame.locator(css_selector).first.element_handle(timeout=5000)
 				return element_handle
 			else:
-				# Try to scroll into view if hidden
 				element_handle = await current_frame.query_selector(css_selector)
 				if element_handle:
-					await element_handle.scroll_into_view_if_needed()
+					try:  # a hidden element stays usable (a file input, a covered field)
+						await element_handle.scroll_into_view_if_needed(timeout=3000)
+					except Exception:
+						pass
 					return element_handle
 				return None
 		except Exception as e:
 			logger.error(f'Failed to locate element: {str(e)}')
 			return None
 
-	async def _input_text_element_node(self, element_node: DOMElementNode, text: str):
-		"""
-		Input text into an element with proper error handling and state management.
-		Handles different types of input fields and ensures proper element state before input.
-		"""
-		try:
-			# Highlight before typing
-			if element_node.highlight_index is not None:
-				await self._update_state(focus_element=element_node.highlight_index)
-
-			page = await self.get_current_page()
-			element_handle = await self.get_locate_element(element_node)
-
-			if element_handle is None:
-				raise BrowserError(f'Element: {repr(element_node)} not found')
-
-			# Enhanced element readiness check with multiple attempts
-			max_attempts = 3
-			for attempt in range(max_attempts):
-				try:
-					# Wait for element to be stable and visible
-					await element_handle.wait_for_element_state('stable', timeout=3000)
-					await element_handle.wait_for_element_state('visible', timeout=3000)
-					await element_handle.scroll_into_view_if_needed(timeout=3000)
-					
-					# Additional wait for potential dynamic enabling
-					await page.wait_for_timeout(200)
-					
-					# Check if element is enabled
-					is_enabled = await element_handle.is_enabled()
-					if not is_enabled:
-						# Wait a bit more for element to become enabled
-						await page.wait_for_timeout(500)
-						is_enabled = await element_handle.is_enabled()
-					
-					if is_enabled:
-						break
-					elif attempt == max_attempts - 1:
-						logger.warning(f'Element not enabled after {max_attempts} attempts, continuing anyway')
-				except Exception as e:
-					if attempt == max_attempts - 1:
-						logger.warning(f'Element readiness check failed: {str(e)}, continuing anyway')
-					else:
-						await page.wait_for_timeout(500)  # Wait before retry
-
-			# Get element properties to determine input method
-			is_contenteditable = await element_handle.get_property('isContentEditable')
-
-			# Multiple strategies for text input with progressively more aggressive approaches
-			strategies = [
-				# Strategy 1: Standard approach
-				lambda: self._input_strategy_standard(element_handle, text, is_contenteditable),
-				# Strategy 2: Click first, then input
-				lambda: self._input_strategy_click_first(element_handle, text, is_contenteditable),
-				# Strategy 3: Force focus and clear before input
-				lambda: self._input_strategy_force_focus(element_handle, text, is_contenteditable),
-				# Strategy 4: JavaScript-based input as last resort
-				lambda: self._input_strategy_javascript(element_handle, text, page)
-			]
-
-			last_error = None
-			for i, strategy in enumerate(strategies):
-				try:
-					await strategy()
-					logger.debug(f'Text input successful using strategy {i + 1}')
-					return
-				except Exception as e:
-					last_error = e
-					logger.debug(f'Input strategy {i + 1} failed: {str(e)}')
-					if i < len(strategies) - 1:
-						# Wait before trying next strategy
-						await page.wait_for_timeout(200)
-
-			# If all strategies failed, raise the last error
-			raise last_error
-
-		except Exception as e:
-			logger.debug(f'Failed to input text into element: {repr(element_node)}. Error: {str(e)}')
-			raise BrowserError(f'Failed to input text into index {element_node.highlight_index}')
-
-	async def _input_strategy_standard(self, element_handle, text, is_contenteditable):
-		"""Standard input strategy"""
-		if await is_contenteditable.json_value():
-			await element_handle.evaluate('el => el.textContent = ""')
-			await element_handle.type(text, delay=5)
-		else:
-			await element_handle.fill(text)
-
-	async def _input_strategy_click_first(self, element_handle, text, is_contenteditable):
-		"""Click element first, then input text"""
-		await element_handle.click(timeout=5000)
-		if await is_contenteditable.json_value():
-			await element_handle.evaluate('el => el.textContent = ""')
-			await element_handle.type(text, delay=5)
-		else:
-			await element_handle.fill(text)
-
-	async def _input_strategy_force_focus(self, element_handle, text, is_contenteditable):
-		"""Force focus and clear before input"""
-		await element_handle.focus()
-		await element_handle.evaluate('el => { el.select(); el.value = ""; }')
-		await element_handle.type(text, delay=5)
-
-	async def _input_strategy_javascript(self, element_handle, text, page):
-		"""JavaScript-based input as last resort"""
-		await element_handle.evaluate(f'''
-			el => {{
-				el.focus();
-				el.value = "{text}";
-				el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-				el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-			}}
-		''')
-		# Small delay to let any change handlers run
-		await page.wait_for_timeout(100)
-
-	async def _click_element_node(self, element_node: DOMElementNode) -> Optional[str]:
-		"""
-		Optimized method to click an element using xpath.
-		"""
+	async def _click_element_node(self, element_node: DOMElementNode, button: str = 'left',
+								  click_count: int = 1) -> Optional[str]:
+		"""Click an element; returns the saved path when the click started a download."""
 		page = await self.get_current_page()
 
 		try:
@@ -1596,10 +1488,13 @@ class BrowserContext:
 					await self._check_and_handle_navigation(page)
 
 			try:
-				return await perform_click(lambda: element_handle.click(timeout=1500))
+				return await perform_click(lambda: element_handle.click(
+					timeout=1500, button=button, click_count=click_count))
 			except (URLNotAllowedError, DownloadRefused) as e:
 				raise e
 			except Exception:
+				if button != 'left' or click_count != 1:
+					raise  # the script fallback below is a plain click only
 				try:
 					return await perform_click(lambda: page.evaluate('(el) => el.click()', element_handle))
 				except (URLNotAllowedError, DownloadRefused) as e:

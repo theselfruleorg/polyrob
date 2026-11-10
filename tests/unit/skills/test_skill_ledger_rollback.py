@@ -11,8 +11,6 @@ V2 = "# Deploy\n\nStep one: build the tree. Step two: ship it with deploy_when_i
 
 @pytest.fixture
 def sm(tmp_path, monkeypatch):
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
-    monkeypatch.setenv("SKILL_OVERWRITE_PROTECT", "false")
     return SkillManager(skills_dir=tmp_path)
 
 
@@ -59,18 +57,21 @@ def test_rollback_refuses_an_unknown_sha_and_names_the_archive(sm):
     assert not res.ok and "is not archived" in res.errors[0]
 
 
-def test_agent_rollback_of_an_active_skill_is_a_pending_draft(sm, monkeypatch):
-    monkeypatch.setenv("SKILL_OVERWRITE_PROTECT", "true")
+def test_agent_rollback_is_active_at_once_untrusted_rollback_is_a_draft(sm, monkeypatch):
     sm.create_skill("deploy", V1, user_id="u1", created_by="user")
     sm.create_skill("deploy", V2, user_id="u1", created_by="user", action="edit")
-    res = sm.rollback_skill("deploy", user_id="u1", created_by="agent")
+    active = sm.skills_dir / "user_u1" / "deploy" / "SKILL.md"
+    res = sm.rollback_skill("deploy", user_id="u1", created_by="untrusted_turn")
     assert res.ok and res.pending
-    assert (sm.skills_dir / "user_u1" / "deploy" / "SKILL.md").read_text() == V2
+    assert active.read_text() == V2   # an untrusted turn never touches the active body
+    res = sm.rollback_skill("deploy", user_id="u1", created_by="agent")
+    assert res.ok and not res.pending
+    assert active.read_text() == V1
 
 
 def test_background_delete_must_name_a_live_absorber(sm):
     sm.create_skill("umbrella", V1, user_id="u1", created_by="user")
-    sm.create_skill("narrow", V2, user_id="u1", created_by="background_review")  # a draft
+    sm.create_skill("narrow", V2, user_id="u1", created_by="agent")  # active
     res = sm.archive_skill("narrow", user_id="u1", created_by="background_review")
     assert not res.ok and "absorbed_into" in res.errors[0]
     res = sm.archive_skill("narrow", user_id="u1", created_by="background_review",

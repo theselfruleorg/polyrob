@@ -68,18 +68,6 @@ def _make_stub():
 class TestSupportsVisionFallback:
     """The base helper _resolve_supports_vision(model_type) must exist."""
 
-    def test_model_not_in_registry_returns_true(self):
-        """Unknown model → assume vision supported (matches 4 provider defaults)."""
-        stub = _make_stub()
-        with patch(
-            "modules.llm.llm_client.get_model_config", return_value=None
-        ):
-            result = stub._resolve_supports_vision("some-unknown-model-xyz")
-        assert result is True, (
-            "When the model is not in the registry, _resolve_supports_vision "
-            "must return True (the common provider fallback)."
-        )
-
     def test_model_in_registry_vision_true(self):
         """Registry says vision=True → returns True."""
         stub = _make_stub()

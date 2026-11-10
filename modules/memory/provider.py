@@ -10,7 +10,7 @@ Interface shape (from Reference ``MemoryProvider(ABC)``):
 - lifecycle ........ ``is_available``, ``initialize``, ``shutdown``
 - stateless ........ ``get_tool_schemas``
 - stateful ......... ``prefetch``, ``sync_turn``, ``search``
-- optional hooks ... ``on_session_end``, ``on_pre_compress`` (default no-ops; wired)
+- optional hooks ... ``on_session_end`` (default no-op; wired)
 """
 from __future__ import annotations
 
@@ -110,9 +110,6 @@ class MemoryProvider(ABC):
     async def on_session_end(self, *, session_id: str, **kwargs: Any) -> None:
         return None
 
-    async def on_pre_compress(self, *, session_id: str, **kwargs: Any) -> None:
-        return None
-
     # --- KB (knowledge-base) storage — default no-ops (Task 5) -------------
     # Non-abstract: every provider satisfies the interface without implementing.
     # Concrete KB storage lives in SqliteMemoryProvider; NullMemoryProvider
@@ -134,7 +131,7 @@ class MemoryProvider(ABC):
         return False
 
     async def kb_search(self, query: str, *, user_id, collection: Optional[str] = None,
-                        limit: int = 8) -> str:
+                        limit: int = 8, stamp: bool = True) -> str:
         return ""
 
     async def kb_list_sources(self, *, user_id, collection: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -167,6 +164,11 @@ class MemoryProvider(ABC):
     def mark_episode_surfaced(self, *, session_id: str, user_id: Optional[str] = None) -> None:
         """Mark episode(s) as surfaced/delivered. Default: no-op."""
         return None
+
+    def update_episode_meta(self, *, user_id: Optional[str], session_id: str, ts: int,
+                            patch: Dict[str, Any]) -> bool:
+        """Set keys in one episode's meta. Default: no store, nothing written."""
+        return False
 
 
 class NullMemoryProvider(MemoryProvider):

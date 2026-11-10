@@ -16,6 +16,8 @@ as a function:
 - ADVISORY only: it reports; it never edits anything. Precedence decides the
   outcome at run time (a later owner rule outranks rail prose — owner decision
   Q1, 2026-09-23); the sweep is how the owner SEES what the rule overrides.
+- :func:`conflict_check` is the same test run the other way: EVERY active owner
+  rule against enabled job text, live goal text and pinned skills, with both quotes.
 
 Pure core: stdlib + other ``core`` modules; skill texts are passed in.
 """
@@ -43,6 +45,7 @@ class SweepHit:
     where: str
     line: str
     shared: Tuple[str, ...]
+    rule: str = ""
 
     def render(self) -> str:
         return (f"[{self.surface}] {self.where}: \"{self.line[:160]}\" "
@@ -74,7 +77,7 @@ def _terms(text: str) -> set:
 
 def _scan(rule: str, surface: str, where: str, text: str) -> List[SweepHit]:
     """Each rule LINE against each surface line (a multi-line rule is several rules)."""
-    rules = [(_prohibits(r), _terms(r)) for r in (rule or "").splitlines() if r.strip()]
+    rules = [(r.strip(), _prohibits(r), _terms(r)) for r in (rule or "").splitlines() if r.strip()]
     hits: List[SweepHit] = []
     seen = set()
     for raw in (text or "").splitlines():
@@ -83,13 +86,13 @@ def _scan(rule: str, surface: str, where: str, text: str) -> List[SweepHit]:
             continue
         ban = _prohibits(line)
         terms = _terms(line)
-        for rule_ban, rule_terms in rules:
+        for rule_line, rule_ban, rule_terms in rules:
             if ban == rule_ban:
                 continue  # both forbid, or both allow: they agree
             shared = rule_terms & terms
             if len(shared) >= MIN_OVERLAP:
                 seen.add(line)
-                hits.append(SweepHit(surface, where, line, tuple(sorted(shared))))
+                hits.append(SweepHit(surface, where, line, tuple(sorted(shared)), rule_line))
                 break
     return hits
 
@@ -200,7 +203,13 @@ def same_subject_lines(new_text: str, skill_id: str, rules_text: str) -> List[st
 def pinned_by_a_rail(skill_id: str, user_id: str, cron_db: str, goals_db: str) -> bool:
     """Whether an enabled cron job or a live goal of this tenant pins ``skill_id``
     (``payload.skills``) — i.e. the skill holds a lane's programme terms."""
+    return skill_id in pinned_skill_ids(user_id, cron_db, goals_db)
+
+
+def pinned_skill_ids(user_id: str, cron_db: str, goals_db: str) -> List[str]:
+    """Every skill an enabled cron job or a live goal of this tenant pins, in order."""
     from core.config_policy.rigs import pinned_skills
+    out: List[str] = []
     marks = ",".join("?" for _ in _LIVE_GOAL_STATUSES)
     queries = ((cron_db, "SELECT payload FROM cron_jobs WHERE enabled=1 AND user_id=?",
                 (str(user_id),)),
@@ -216,9 +225,9 @@ def pinned_by_a_rail(skill_id: str, user_id: str, cron_db: str, goals_db: str) -
                 payload = json.loads(r.get("payload") or "{}")
             except ValueError:
                 continue
-            if isinstance(payload, dict) and skill_id in pinned_skills(payload):
-                return True
-    return False
+            if isinstance(payload, dict):
+                out += [sid for sid in pinned_skills(payload) if sid not in out]
+    return out
 
 
 def render_sweep(result: dict, rule: str) -> str:
@@ -238,6 +247,92 @@ def render_sweep(result: dict, rule: str) -> str:
     return "\n".join(lines)
 
 
+#: The most candidates one conflict check returns (the rest are counted).
+CHECK_MAX_HITS = 40
+#: A state word says nothing about WHICH job a line is about.
+_STATE_TERMS = frozenset({"job", "jobs", "cron", "cronjob", "lane", "off", "hold", "enabled",
+                          "disabled", "paused", "stopped", "cancelled", "canceled"})
+
+
+def _subject_terms(text: str) -> set:
+    """Content words with a plural ``s`` dropped, state words left out."""
+    return {w[:-1] if w.endswith("s") else w for w in _terms(text)} - _STATE_TERMS
+
+
+def _state_line_pairs(rule_lines: List[str], rails: List[Tuple[str, str]]) -> List[dict]:
+    """Each active line that holds a job's state, with the job lines on its subject.
+    The prohibition test cannot see "the buyback is OFF": it has no prohibition word."""
+    from core.doc_claims import job_state_claim
+    out: List[dict] = []
+    for rule in rule_lines:
+        if not job_state_claim(rule):
+            continue
+        subject = _subject_terms(rule)
+        quotes = []
+        for where, text in rails:
+            line = next((l.strip() for l in (text or "").splitlines()
+                         if subject & _subject_terms(l)), "")
+            if line:
+                quotes.append((where, line))
+        out.append({"rule": rule, "quotes": quotes})
+    return out
+
+
+def conflict_check(*, user_id: str, data_dir: str, instance_id: str, cron_db: str,
+                   goals_db: str, skills: Optional[Iterable[Tuple[str, str]]] = None) -> dict:
+    """Every active owner rule against enabled job text, live goal text and pinned
+    skills. Deterministic and read-only; a hit is a CANDIDATE that shares words, not a
+    judged conflict. ``{"hits", "more", "state_lines", "counts", "notes"}``. An unreadable
+    source is named in ``notes``: "could not read" never renders as "no conflict"."""
+    from core.doc_claims import active_rule_lines, strip_stamp
+    from core.instance import is_unreadable_note, load_owner_doc
+    uid = str(user_id or "")
+    out = {"hits": [], "more": 0, "state_lines": [], "notes": [],
+           "counts": {"rules": 0, "rails": 0, "skills": 0}}
+    doc = load_owner_doc(data_dir, uid, instance_id)
+    if doc.startswith("[BLOCKED") or is_unreadable_note(doc):
+        out["notes"].append("owner rules: could not read them, so nothing was checked")
+        return out
+    rule_lines = [strip_stamp(l).strip() for l in active_rule_lines(doc)]
+    rails, notes = _rail_texts(uid, cron_db, goals_db)
+    out["notes"] += notes
+    bodies = list(skills or [])
+    if skills is None:
+        out["notes"].append("skills: not provided by the caller — not checked")
+    out["counts"] = {"rules": len(rule_lines), "rails": len(rails), "skills": len(bodies)}
+    rule = "\n".join(rule_lines)
+    hits: List[SweepHit] = []
+    for where, text in rails:
+        hits += _scan(rule, "rail_prose", where, text)
+    for sid, body in bodies:
+        hits += _scan(rule, "skills", f"skill {sid}", body)
+    out["hits"] = hits[:CHECK_MAX_HITS]
+    out["more"] = max(0, len(hits) - CHECK_MAX_HITS)
+    out["state_lines"] = _state_line_pairs(rule_lines, rails)
+    return out
+
+
+def render_conflict_check(result: dict) -> str:
+    """One block with both quotes of each candidate."""
+    hits, states = result.get("hits") or [], result.get("state_lines") or []
+    c = result.get("counts") or {}
+    total = len(hits) + result.get("more", 0) + len(states)
+    lines = [f"Rule check: {total} candidate(s) from {c.get('rules', 0)} active rule(s), "
+             f"{c.get('rails', 0)} job or goal text(s), {c.get('skills', 0)} pinned skill(s)."]
+    for s in states:
+        lines.append(f"- owner.md holds a job's state: \"{s['rule'][:240]}\"; the job row wins.")
+        lines += [f"  {where} says: \"{quote[:240]}\"" for where, quote in s["quotes"]]
+    for h in hits:
+        lines.append(f"- owner rule: \"{h.rule[:240]}\"\n  {h.where} says: \"{h.line[:240]}\" "
+                     f"(shares: {', '.join(h.shared[:4])})")
+    if result.get("more"):
+        lines.append(f"- … +{result['more']} more")
+    lines += [f"Note: {n}" for n in result.get("notes") or []]
+    lines.append("Advisory only — nothing was changed. A candidate shares words; read both "
+                 "quotes before you call it a conflict.")
+    return "\n".join(lines)
+
+
 def rail_instruction_lines(task: str, payload: Optional[dict] = None) -> List[str]:
     """How an owner seat shows a job's prose: as the SCOPED instruction it is."""
     lines = ["instruction (the rail's own — a later owner rule outranks it):"]
@@ -249,4 +344,5 @@ def rail_instruction_lines(task: str, payload: Optional[dict] = None) -> List[st
 
 
 __all__ = ["SweepHit", "sweep", "render_sweep", "rail_instruction_lines", "MIN_OVERLAP",
-           "same_subject_lines", "pinned_by_a_rail"]
+           "same_subject_lines", "pinned_by_a_rail", "pinned_skill_ids", "conflict_check",
+           "render_conflict_check"]

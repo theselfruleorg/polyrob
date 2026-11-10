@@ -215,3 +215,27 @@ def _orphan(store, job_id):
     execute_retry(store.db_path, "UPDATE cron_jobs SET run_owner=? WHERE id=?",
                   ("999999|gone|" + __import__("core.state.proc", fromlist=["x"]).boot_id(),
                    job_id))
+
+
+def test_an_unreadable_money_class_is_logged_and_refuses_an_early_run(monkeypatch, caplog):
+    # Before: a classification that raised read as "not money" with no line, so an
+    # agent turn could run a money job early.
+    import logging
+    import core.skills.catalog  # noqa: F401 — registers its probe first, so ours stays
+    from core.money import classify
+    from cron.jobs import is_money_job
+    from tools.cronjob_tools import _early_run_refusal
+
+    def boom(payload):
+        raise RuntimeError("skill index unreadable")
+    monkeypatch.setattr(classify, "_MONEY_SKILL_PROBE", boom)
+    job = CronJob(id="job1", task="t", schedule_spec="1h", user_id="u1",
+                  next_run_at=None, payload={"skills": ["x"]})
+    with caplog.at_level(logging.WARNING):
+        assert is_money_job(job) is False
+        assert is_money_job(job, unknown=True) is True
+        assert classify.is_money_class(job.payload) is False
+    assert "money class unknown" in caplog.text
+    refusal = _early_run_refusal(job) or ""
+    assert "its class could not be read, so it is treated as a money job" in refusal
+    assert "is a money job" not in refusal

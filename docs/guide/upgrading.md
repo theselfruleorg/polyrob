@@ -105,6 +105,23 @@ polyrob config check
 
 ## 3. Version notes
 
+### Upgrading to 1.7.7
+
+No database migration.
+
+- **Skills go live at once.** `SKILLS_WRITABLE_REQUIRE_REVIEW` and `SKILL_OVERWRITE_PROTECT` are gone. A skill your agent writes is active with no tap, and a rollback restores the earlier text. Older drafts stay in `/pending` until you decide. A chat that holds someone else's message, or a group, still lands a draft.
+- **`goal_ask` and `present_choice` are gone.** The agent uses `owner_ask` for every question. If your own skills or owner rules use an old name, change it to `owner_ask`.
+- **`TWITTER_REQUIRE_APPROVAL` is gone.** A line that sets it does nothing, and `polyrob doctor` names it. Your own turn or job posts to X with no tap. To see posts first, write that in your owner rules.
+- **Jobs stop and say so.** A job pauses after 3 failures in a row, a run that a crash cut does not repeat by itself, and a money job more than 1 hour late does not run. Each tells you. `GOAL_BLOCKER_ESCALATION` is gone: every goal stop reaches you once.
+- **Native Anthropic needs `anthropic>=1.6`.** `GEMINI_PROMPT_CACHE` and `GEMINI_CACHE_TTL_MIN` are gone. Reinstall your extras if you pin them yourself.
+- **`bot.db` uses SQLite's write-ahead log (WAL).** The change happens at the first start. Two files, `bot.db-wal` and `bot.db-shm`, appear beside the database. If you copy the database by hand, stop the agent first or use `sqlite3 bot.db ".backup <file>"`.
+- **`/new` opens a separate chat.** In a direct chat or the terminal it stops nothing, and the chat you leave keeps its work. `/chats` lists your chats and `/chat <number or name>` moves you. `/task` still works as the old form.
+- **Some commands have one name now.** `/recap`, `/halt`, `/jobs` and `/sessions` still work as old names of `/journey`, `/pause`, `/job` and `/chats`. The terminal's `/quiet` is `/brief`. `polyrob skill` and `polyrob surface` are `polyrob skills` and `polyrob surfaces`, and `polyrob run --continue` is the new name of `--resume`.
+- **With pairing off, a paired sender has no access.** This is now the same on every chat app. The paired list stays for when you turn pairing on again. `/pair approve` needs `<surface> <code>`.
+- **An order's invoice settles only with a transaction hash.** `/settle` on an order invoice with no hash is refused and says so.
+- **New chats start on your `/model … default`.** With none set, the operator pin applies, then the first provider that has a key. No model name is preferred by the code.
+- **Signer: the limits are the bound.** A priced send inside `per_tx_usd` and `daily_usd` is signed with no approval on the server. To ask sooner, set `[caps] approve_above_usd` in `signer.toml`.
+
 ### Upgrading to 1.7.6
 
 No database migration.
@@ -378,8 +395,8 @@ falls through to `local` on both axes. It never was an isolatable tenant.
 
 ### Upgrading from 1.2.0 or older
 
-- **Signal identifies people by UUID.** A phone-only Signal envelope is refused. Re-pair
-  the owner and re-approve contacts by their UUIDs, and review phone-based block or allow
+- **Signal identifies people by UUID.** A phone-only Signal envelope is refused. Set
+  `OWNER_SIGNAL_ID` to the owner's UUID and re-approve contacts by their UUIDs, and review phone-based block or allow
   records before you turn the surface on. Older phone-based conversations stay separate.
 
 ## 4. Upgrading a profile, and upgrading a deployment

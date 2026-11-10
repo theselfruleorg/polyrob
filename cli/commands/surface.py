@@ -1,4 +1,7 @@
-"""polyrob surface — operator controls for per-surface circuit breakers.
+"""polyrob surfaces pause|resume|state — operator controls for per-surface circuit breakers.
+
+113 §2 item 10 (T-08): these verbs are mounted under ``polyrob surfaces``; the
+``polyrob surface`` group stays as a hidden old name.
 
 The worker process owns an in-memory SurfaceCircuitBreaker that auto-opens after
 K consecutive failures. The CLI process is SEPARATE, so pause/resume are persisted
@@ -6,15 +9,16 @@ to a tiny SQLite table (data/surface_state.db) that the worker reads on each
 is_open() call (when its breaker is built with a CircuitStore attached).
 
 Commands:
-    polyrob surface list              Show all known surfaces and their paused state.
-    polyrob surface pause <id>        Pause a surface (writes to the store).
-    polyrob surface resume <id>       Resume a surface (clears the stored flag).
+    polyrob surfaces state             Show all known surfaces and their paused state.
+    polyrob surfaces pause <id>        Pause a surface (writes to the store).
+    polyrob surfaces resume <id>       Resume a surface (clears the stored flag).
 """
 import os
 
 import click
 
 from cli._admin_home import as_root_option
+from cli.commands._options import json_option
 
 
 def _data_dir(write: "bool | None" = None) -> str:
@@ -40,9 +44,9 @@ def _warn_if_breaker_inert() -> None:
             "so this is recorded but has NO effect until you enable it.", fg="yellow"))
 
 
-@click.group()
+@click.group(hidden=True)
 def surface():
-    """Inspect and control per-surface circuit breakers."""
+    """Old name of `polyrob surfaces state|pause|resume` (per-surface circuit breakers)."""
     from cli.commands._bootstrap import ensure_env_loaded
     ensure_env_loaded()
 
@@ -131,12 +135,14 @@ def _surface_status_rows() -> list:
 
 
 @surface.command("list")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 @click.option("--status", "with_status", is_flag=True,
               help="Per-surface health: enabled flag, pause state, dead targets, "
                    "owner-address reachability (030 WS-G3).")
 def list_surfaces(as_json: bool, with_status: bool):
     """List surfaces and their persisted paused state."""
+    from cli.commands._bootstrap import ensure_env_loaded
+    ensure_env_loaded()
     if with_status:
         rows = _surface_status_rows()
         if as_json:
@@ -193,6 +199,8 @@ def list_surfaces(as_json: bool, with_status: bool):
 @as_root_option
 def pause_surface(surface_id: str):
     """Pause a surface — the worker will skip it until resumed."""
+    from cli.commands._bootstrap import ensure_env_loaded
+    ensure_env_loaded()  # mounted under `surfaces` too, whose group loads no env
     _store(write=True).pause(surface_id)
     click.echo(click.style(f"paused: {surface_id}", fg="yellow"))
     click.echo(click.style("worker will defer outbound messages for this surface", dim=True))
@@ -204,6 +212,8 @@ def pause_surface(surface_id: str):
 @as_root_option
 def resume_surface(surface_id: str):
     """Resume a paused surface — the worker will start delivering again."""
+    from cli.commands._bootstrap import ensure_env_loaded
+    ensure_env_loaded()
     _store(write=True).resume(surface_id)
     click.echo(click.style(f"resumed: {surface_id}", fg="green"))
     _warn_if_breaker_inert()

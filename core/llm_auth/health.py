@@ -1,4 +1,4 @@
-"""Credential health (proposal 024, L1).
+"""Credential health.
 
 Three states. For metered keys, exhaustion is an anomaly; for subscriptions it
 is the NORMAL daily condition — the fallback hierarchy must route around a
@@ -22,6 +22,11 @@ HEALTH_EXHAUSTED = "exhausted"
 _VALID_STATES = (HEALTH_OK, HEALTH_RATE_LIMITED, HEALTH_EXHAUSTED)
 
 
+def token_expired(expires_at: Any, now: float) -> bool:
+    """True when a token's ``expires_at`` has passed. A token with none never expires."""
+    return expires_at is not None and now >= float(expires_at)
+
+
 def effective_state(health: Optional[Dict[str, Any]], now: Optional[float] = None) -> str:
     """The state a consumer should act on: a lapsed ``retry_after`` heals a
     ``rate_limited``/``exhausted`` stamp back to ``ok``."""
@@ -43,13 +48,13 @@ def is_usable(health: Optional[Dict[str, Any]], now: Optional[float] = None) -> 
     return effective_state(health, now) == HEALTH_OK
 
 
-# ⚠ NOT YET WIRED (024 L1.5, 2026-08-11). `stamp_from_error_verdict` still has
+# ⚠ NOT YET WIRED. `stamp_from_error_verdict` still has
 # zero callers, so stored health never leaves "ok" and the READ path below —
-# now consumed by `profiles.credential_status` / `usable_providers_with_
+# consumed by `profiles.credential_status` / `usable_providers_with_
 # credentials` / `polyrob doctor` — is correct but always reports healthy.
 #
 # It was NOT wired here because the obvious call site is agent-tier
-# (`agents/task/agent/core/error_recovery.py`, right after `classify_error`),
+# (`agents/task/agent/core/error_recovery.py::_handle_step_error`),
 # and importing this package from `agents/` is a PERMANENT non-goal pinned by
 # tests/unit/core/llm_auth/test_agent_unreachable.py. Reaching it through a
 # core-tier hop would pass that AST scan while defeating its purpose, so the
@@ -70,7 +75,7 @@ def stamp_from_error_verdict(
 ) -> bool:
     """Map an ``core.error_classifier`` verdict onto a credential health stamp.
 
-    The one hook the LLM error path calls (024 §4.1): CREDIT_DEATH → exhausted,
+    The one hook the LLM error path calls: CREDIT_DEATH → exhausted,
     RATE_LIMIT → rate_limited, anything else → no stamp. Fail-open: a store
     problem never worsens the original LLM error.
     """

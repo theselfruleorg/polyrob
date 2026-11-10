@@ -19,6 +19,7 @@ from typing import Optional
 import click
 
 from cli._admin_home import as_root_option
+from cli.commands._options import json_option
 
 
 def _service(*, write: "bool | None" = None):
@@ -117,7 +118,7 @@ def _create(svc, *, task: str, schedule_spec: str, tenant: str,
     from core.cron_lanes import schedule_notes
     from cron.service import next_run_text
     click.echo(f"scheduled {click.style(created.id, bold=True)} — next run "
-               f"{next_run_text(created)}")
+               f"{next_run_text(created, clock=True)}")
     for note in schedule_notes(created):
         click.echo(f"  {note}")
     _warn_if_cron_off()
@@ -252,7 +253,7 @@ def _warn_if_digest_off() -> None:
               help="List jobs across all tenants AND include cancelled rows")
 @click.option("--cancelled", "show_cancelled", is_flag=True, default=False,
               help="Include cancelled jobs (hidden by default).")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def list_jobs(user: Optional[str], all_tenants: bool, show_cancelled: bool,
               as_json: bool):
     """List scheduled jobs: next run, last outcome, who wrote each.
@@ -483,6 +484,8 @@ def edit(job_id: str, max_duration: Optional[int], schedule: Optional[str],
         updates["preempts"] = bool(preempts)
     if post_spacing_hours is not None:
         updates["post_spacing_hours"] = float(post_spacing_hours) or None
+    if schedule is not None:
+        updates["exact_time"] = True  # the owner typed this time: no tool moves it
     if tools is not None:
         updates["tools"] = _tool_ids
     if model_name is not None:
@@ -609,10 +612,11 @@ def pause(job_id: str, user: Optional[str]):
     svc = _service(write=True)
     tenant = _tenant(user)
     job_id = _resolve_job_id(svc, job_id, tenant)
+    cut = svc.cut_note(job_id, user_id=tenant)
     if not svc.pause(job_id, user_id=tenant, via="cli"):
         row = svc.store.get(job_id, user_id=tenant)
         raise click.ClickException(f"job {job_id} is {row.status if row else 'gone'} — nothing to pause")
-    click.echo(f"paused {job_id} — `polyrob job resume {job_id[:8]}` to resume")
+    click.echo(f"paused {job_id} — `polyrob job resume {job_id[:8]}` to resume.{cut}")
 
 
 @job.command("resume")

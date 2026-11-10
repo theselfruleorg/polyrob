@@ -1,6 +1,6 @@
 {
   "function": {
-    "description": "Record the OWNER's durable facts and STANDING RULES — timezone, projects, how they want you to operate (owner.md in your identity directory, ≤24000 chars). A standing rule in prose (\"never post to X\"): `owner_doc_manage`, a DRAFT until the owner confirms it. A directive that changes a rule replaces it the same turn (replace_rule), not a second rule. Not on/off states or job ids: \"stop Z for good\" is `cronjob_cancel`/`goal_cancel` forever=true. action='read' returns it with its path — never search the disk for it. action='update' replaces the whole doc; action='patch' edits the ACTIVE rules by exact-string replace; action='replace_rule' (rule_start=<first words of ONE active rule>, new_string=<the new rule>, none = retire it) replaces that rule in place; the old text moves under '## Superseded' (off the cap). Every write needs reason= (one sentence for the owner: why this change) and reports the chars left. Pass source= ('owner said', 'measured') and observed_at=YYYY-MM-DD to stamp new lines (counts toward the cap); a line CLAIMING a world fact (broken, since …) may be refused without a source. action='sweep' content=<a rule> lists standing instructions (owner rules, SOUL, skills, job/goal text, `kind: instruction` docs) that seem to contradict it; advisory; every write is swept too.",
+    "description": "Record the OWNER's STANDING RULES: how they want you to operate, and durable facts such as the timezone (owner.md in your identity directory, ≤24000 chars). A standing rule in prose (\"never post to X\"): `owner_doc_manage`, a DRAFT until the owner confirms it. A directive that changes a rule replaces it the same turn (replace_rule), not a second rule. A job's state (on/off, schedule, id, progress) lives in the job (`cronjob_*`), never here: \"stop Z for good\" is `cronjob_cancel`/`goal_cancel` forever=true. A write is refused when a new or changed line names a job id or claims a job's on or off state. action='read' returns it with its path — never search the disk for it. action='update' replaces the whole doc; action='patch' edits the ACTIVE rules by exact-string replace; action='replace_rule' (rule_start=<first words of ONE active rule>, new_string=<the new rule>, none = retire it) replaces that rule in place; the old text moves under '## Superseded' (off the cap; '## History' is also off the cap and frozen). Every write needs reason= (one sentence for the owner: why this change) and reports the chars left. Pass source= ('owner said', 'measured') and observed_at=YYYY-MM-DD to stamp new lines (counts toward the cap); a line CLAIMING a world fact (broken, since …) may be refused without a source. action='sweep' content=<a rule> lists standing instructions (owner rules, SOUL, skills, job/goal text, `kind: instruction` docs) that seem to contradict it; advisory; every write is swept too. action='sweep_all' checks every active rule against enabled job text and pinned skills, with both quotes.",
     "name": "owner_doc_manage",
     "parameters": {
       "additionalProperties": false,
@@ -12,7 +12,8 @@
             "replace_rule",
             "read",
             "promote",
-            "sweep"
+            "sweep",
+            "sweep_all"
           ],
           "type": "string"
         },

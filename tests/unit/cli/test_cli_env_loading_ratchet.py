@@ -30,7 +30,7 @@ SEAM_MARKERS = (
 #: (auth.py was exempt while its parallel-session work was in flight on
 #: 2026-08-14; wired + removed 2026-08-15.)
 EXEMPT = {
-    "_options.py", "_session_control.py",  # helpers, no independently invocable commands
+    "_options.py", "_session_control.py", "_session_store.py",  # helpers, no independently invocable commands
     "__init__.py",
     "_errors.py",
     "_grouped.py",
@@ -39,7 +39,7 @@ EXEMPT = {
     # Helpers with no click command, called from `polyrob doctor` / `polyrob apps
     # install`, whose callbacks already loaded the env ladder.
     "doctor_host.py", "doctor_data_home.py", "doctor_env_copies.py", "doctor_sandbox.py",
-    "doctor_apps.py", "apps_install.py",
+    "doctor_apps.py", "doctor_models.py", "apps_install.py",
 }
 
 

@@ -136,7 +136,7 @@ async def test_the_next_compaction_updates_the_owner_block_instead_of_losing_it(
 
 	seen = {}
 
-	async def _fake_run(self, messages, prior_summary, llm):
+	async def _fake_run(self, messages, prior_summary, llm, **_kw):
 		seen["prior"] = prior_summary
 		seen["messages"] = messages
 		return ("## Owner instructions still in force (verbatim, dated)\n- stop the daily post\n"

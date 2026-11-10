@@ -35,7 +35,6 @@ from polyrob_x.twitter_tool import (
 
 def _tool(monkeypatch):
     monkeypatch.setenv("TWITTER_ENABLED", "true")
-    monkeypatch.setenv("TWITTER_REQUIRE_APPROVAL", "false")
     t = object.__new__(TwitterTool)
     t.logger = logging.getLogger("tw-cooldown-test")
     t.name = "twitter"

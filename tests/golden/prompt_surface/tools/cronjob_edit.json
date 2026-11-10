@@ -18,9 +18,31 @@
           "nullable": true,
           "type": "string"
         },
+        "exact_time": {
+          "default": null,
+          "description": "True: this job keeps its exact minute (see cronjob_schedule). False: it may move again.",
+          "nullable": true,
+          "type": "boolean"
+        },
+        "expect": {
+          "additionalProperties": true,
+          "default": null,
+          "description": "Replace what a run must do (see cronjob_schedule); {} clears it.",
+          "nullable": true,
+          "properties": {},
+          "type": "object"
+        },
         "job_id": {
           "description": "The id of the cron job to edit.",
           "type": "string"
+        },
+        "kb_holdout_pct": {
+          "default": null,
+          "description": "OWNER TURN ONLY: replace the job's KB holdout percent (see cronjob_schedule); 0 clears it.",
+          "maximum": 100,
+          "minimum": 0,
+          "nullable": true,
+          "type": "integer"
         },
         "max_duration_seconds": {
           "default": null,
@@ -86,6 +108,14 @@
           "nullable": true,
           "type": "string"
         },
+        "script": {
+          "additionalProperties": true,
+          "default": null,
+          "description": "Replace the job's script (see cronjob_schedule); {} clears it.",
+          "nullable": true,
+          "properties": {},
+          "type": "object"
+        },
         "skills": {
           "default": null,
           "description": "Replace the pinned skill ids ([] clears them).",
@@ -102,6 +132,33 @@
           "nullable": true,
           "properties": {},
           "type": "object"
+        },
+        "tier": {
+          "default": null,
+          "description": "Optional model tier for this work's runs — from the owner's chat only: 'heavy' for work that decides money (who is paid, how much, a winner) or is hard to undo; 'light' for bulk reads; 'default' = the normal model. <environment> names each tier's model. Requires 'why'.",
+          "enum": [
+            "default",
+            "heavy",
+            "light"
+          ],
+          "nullable": true,
+          "type": "string"
+        },
+        "tools": {
+          "default": null,
+          "description": "New exact tool ids for this job's runs; [] clears them. A money tool needs a rig or the owner.",
+          "items": {
+            "type": "string"
+          },
+          "nullable": true,
+          "type": "array"
+        },
+        "why": {
+          "default": null,
+          "description": "One line: why this tier. Required with 'tier'; shown in /status.",
+          "maxLength": 200,
+          "nullable": true,
+          "type": "string"
         },
         "write_verb": {
           "additionalProperties": true,

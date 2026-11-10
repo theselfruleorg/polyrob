@@ -13,7 +13,8 @@ starts a fresh session. Boundaries:
            answer to a 10:00 question, not a cold start). `with_agent_activity`
            fills `last_outbound_at` from the owner thread.
   - daily: the wall-clock crossed the local reset hour since last activity.
-  - both:  whichever fires first (default).  none: never reset (legacy behavior).
+  - both:  whichever fires first.  none: never reset (legacy behavior).
+The default mode is `idle` (`SurfaceConfig.session_reset_mode`).
 
 Pure + `now` injected → unit-testable without a clock. Fail-safe: any odd input
 returns (False, ...) so a policy bug can never spuriously wipe a live conversation.
@@ -74,6 +75,18 @@ def should_start_fresh(
             return (False, "bad-clock")
 
     return (False, "continue")
+
+
+def idle_gap_seconds(row: Optional[dict], *, now: float) -> Optional[float]:
+    """Seconds since the chat's last activity (the newer of ``updated_at`` and
+    ``last_outbound_at``), for the line that tells the person the chat started fresh
+    (113 W0). None when the row has no usable stamp. Pure; never raises."""
+    try:
+        stamps = [float(v) for v in ((row or {}).get("updated_at"),
+                                     (row or {}).get("last_outbound_at")) if v is not None]
+        return max(0.0, float(now) - max(stamps)) if stamps else None
+    except (TypeError, ValueError):
+        return None
 
 
 def with_agent_activity(row: Optional[dict], container: Any) -> Optional[dict]:

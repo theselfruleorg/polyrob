@@ -296,7 +296,11 @@ class SignerService:
             simulate_fn=self._simulate_fn, price_fn=self._price_fn,
             fallback_price_fn=self._fallback_price_fn,
             rpc_is_pinned_fn=self._rpc_is_pinned_fn,
-            halted_fn=self.store.paused, entry_paused_fn=lambda: False)
+            halted_fn=self.store.paused, entry_paused_fn=lambda: False,
+            # The caps are the bound: a priced send asks on the box only above
+            # signer.toml's own value, never above the agent's chat dial.
+            approve_above_usd=self.config.approve_above_usd,
+            unverified_within_caps=self.config.unverified_sends == "caps")
 
     @staticmethod
     def _passes(decision) -> bool:
@@ -672,7 +676,8 @@ class SignerService:
     def _op_journal_sign(self, body, peer_uid):
         """EIP-191 over EXACTLY one account journal template (``account_journal``) by the
         operational EVM key — the NFT owner that signs the entry. Any other bytes refuse: the
-        owner key is an ERC-1271 signer of every account it owns, so this op signs nothing else."""
+        owner key is an ERC-1271 signer of every AccountV3 it owns (a PolyrobAccount signs
+        nothing), so this op signs nothing else."""
         protocol.check_keys(body, required=("message",))
         from core.wallet.account_journal import is_journal_template
         message = body["message"]

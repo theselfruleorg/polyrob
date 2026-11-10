@@ -103,7 +103,7 @@ cli/
 - **Sub-agent output is suppressed** in the transcript (a producer-side concern;
   the surface carries no agent id).
 - **Tool calls are visible by default** (`→ name(args)` / `✓ name·dur·preview`);
-  `/quiet` mutes them, `/verbose` shows the raw trace. Args/previews are
+  `/brief` mutes them, `/verbose` shows the raw trace. Args/previews are
   secret-scrubbed before display (`cli/ui/secrets.py`).
 
 ## Related

@@ -383,6 +383,7 @@ def test_an_interrupted_apply_is_rolled_back_at_the_next_start(home):
                     reexec=lambda: calls.append("exec"), echo=lambda *_: None)
     assert did == "rolled_back" and calls == ["abc", "exec"]
     assert lc.read_request(data_home=home).update_result["boot_failed"]
+    assert lc.read_request(data_home=home).update_result["interrupted"]
 
 
 def test_apply_records_the_commit_before_anything_moves(home):
@@ -596,3 +597,32 @@ def test_a_long_update_error_keeps_its_cause_at_the_end():
     assert len(out) <= 300 and out.startswith("…")
     assert out.endswith("RuntimeError: migration v1_15_0 did not verify")
     assert _error_tail("short") == "short" and _error_tail(None) == "unknown error"
+
+
+def _announce_update(home, result):
+    from cli.commands._lifecycle import announce_boot
+    _exiting_update(home, **result)
+    lc.record_boot(data_home=home)
+    return asyncio.run(announce_boot(object(), home))
+
+
+def test_a_failed_boot_rollback_is_never_reported_as_rolled_back(home, sent):
+    """EP-6: the owner read "so I rolled it back" when the rollback had failed."""
+    text = _announce_update(home, {"ok": False, "boot_failed": True, "rolled_back": False,
+                                   "to_version": "1.4.0",
+                                   "rollback": {"ok": False, "errors": ["code: conflict"]}})
+    assert "rolled it back" not in text
+    assert "did not complete" in text and "code: conflict" in text
+
+
+def test_an_interrupted_apply_reads_as_interrupted(home, sent):
+    text = _announce_update(home, {"ok": False, "boot_failed": True, "interrupted": True,
+                                   "rolled_back": True, "to_version": "1.4.0"})
+    assert "was interrupted, so I rolled it back" in text
+
+
+def test_an_update_that_never_started_says_nothing_changed(home, sent):
+    """EP-7: a check failure moved nothing; it was not "rolled back"."""
+    text = _announce_update(home, {"ok": False, "failed_step": "check", "error": "offline",
+                                   "rolled_back": False, "not_applied": True})
+    assert "Nothing was changed" in text and "rolled back" not in text

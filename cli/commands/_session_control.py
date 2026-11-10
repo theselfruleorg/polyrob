@@ -4,16 +4,16 @@ import click
 from core.session_control import CANCELLED_ALREADY, SessionControl
 
 
-async def control_live_session(task_agent, user_id, session_id, command):
-    info = task_agent.session_manager.get_session_info(session_id)
-    if not info or info.get("user_id") != user_id:
+async def control_live_session(info, directory, user_id, session_id, command):
+    """*info* / *directory*: the session's metadata and tree in the admin home
+    (``cli.commands._session_store.read_session``); None when there is none."""
+    if not info or directory is None or info.get("user_id") != user_id:
         raise click.ClickException(f"Session {session_id} not found for this user.")
-    from agents.task.path import pm
-    store = SessionControl(pm().get_session_root(session_id, user_id))
+    store = SessionControl(directory)
     state = await store.request_and_wait(command)
     if state is None:
         if command == "resume" and info.get("status") in {"suspended", "failed", "completed"}:
-            click.echo(f"No live run. Continue with: polyrob run --resume {session_id}")
+            click.echo(f'No live run. Continue with: polyrob run --continue {session_id} "your message"')
             return
         raise click.ClickException(
             "No live control endpoint for this session. Its stored status was not changed. "
@@ -27,3 +27,18 @@ async def control_live_session(task_agent, user_id, session_id, command):
         return
     click.echo(f"Session {session_id}: {command} requested; awaiting a step boundary. "
                "An in-flight operation may still finish. Inspect with polyrob session show " + session_id)
+
+
+async def queue_resume_message(task_agent, orchestrator, session_id, user_id, text, typed_text=None):
+    """113 W0: `polyrob run --continue ID "message"` — the message becomes the chat's next
+    line, on the same queue a chat surface uses, before the run starts. The terminal is
+    an owner seat, so the line joins the owner thread (via ``repl``)."""
+    typed = text if typed_text is None else typed_text
+    await orchestrator.submit_user_message(
+        agent_id=None, text=text, kind="comment", metadata={"typed_text": typed})
+    try:
+        from core.surfaces.owner_thread import record_owner_in
+        record_owner_in(getattr(task_agent, "container", None), str(user_id or ""), typed,
+                        via="repl", session_id=session_id)
+    except Exception:
+        pass

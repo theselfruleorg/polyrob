@@ -99,6 +99,10 @@ def log_file_name(argv: Optional[list] = None) -> str:
     return "bot.log"
 
 
+#: The stamp of every log line. The date is part of it: the rotated files reach
+#: back about 14 days, and a line with a time alone cannot be placed.
+LOG_DATEFMT = '%Y-%m-%d %H:%M:%S'
+
 # ---------------------------------------------------------------------------
 # Internal state flag to ensure we only configure the *root* logger once.
 # Re-entering setup_logging for component loggers should NOT re-attach handlers
@@ -402,14 +406,14 @@ def setup_logging(
         def _standard_formatter() -> ComfyFormatter:
             return ComfyFormatter(
                 f'[%(asctime)s] %(levelname)s %(name)s: %(message)s',
-                datefmt='%H:%M:%S'
+                datefmt=LOG_DATEFMT
             )
 
         standard_formatter = _standard_formatter()
         
         http_formatter = HTTPFormatter(
             '[%(asctime)s] %(levelname)s %(name)s: %(message)s',
-            datefmt='%H:%M:%S'
+            datefmt=LOG_DATEFMT
         )
         
         # -------------------------------------------------------------------

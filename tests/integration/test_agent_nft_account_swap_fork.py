@@ -84,9 +84,9 @@ def fork(monkeypatch, tmp_path):
     treasury = Account.create().address
     for a in (owner, treasury):
         _rpc("anvil_setBalance", [a, hex(10 ** 18)])
-    account = erc6551.account_address(8453, parent, token_id)
+    account = erc6551.account_address(8453, parent, token_id, implementation=erc6551.ACCOUNT_V3_IMPL)
     if len(_rpc("eth_getCode", [account, "latest"])) <= 2:
-        _send(owner, erc6551.REGISTRY, erc6551.encode_create_account(8453, parent, token_id))
+        _send(owner, erc6551.REGISTRY, erc6551.encode_create_account(8453, parent, token_id, implementation=erc6551.ACCOUNT_V3_IMPL))
     _send(owner, parent, abi.encode_call(
         "transferFrom", [{"type": "address"}, {"type": "address"}, {"type": "uint256"}],
         [owner, treasury, token_id]))

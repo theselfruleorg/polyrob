@@ -24,6 +24,8 @@ BLOCK_MAX_CHARS = {
     "filesystem": 650,
     # 093 C3: the missing-capability rule, owner seats only (~64 tokens).
     "harness": 300,
+    # 112 W3: money or many-read work from the owner's chat → a heavy goal (~110 tokens).
+    "owner_work": 500,
     "identity": 250,
     "input_format": 350,
     # 093 review: + the owner-seat /mcp add line (owner_add, ~20 tokens).
@@ -33,13 +35,13 @@ BLOCK_MAX_CHARS = {
     # programme: its pinned skill), the other bullets trimmed to pay for it.
     # 095 W4: + "applies from your next step, unless 'list' says next session"
     # (the state-delta channel); W4 removed more than it added (owner seat -56).
-    "owner_instructions": 1150,
+    "owner_instructions": 1190,
     "response_format": 1850,
     "rules": 650,
     "security": 950,
     # 095 W10: + a lane's pinned skill outranks owner.md on its programme terms.
     "source_precedence": 3350,
-    "subtask_delegation": 650,
+    "subtask_delegation": 600,  # 112 W3: trimmed while it gained "that decide no money"
     "surface": 2700,
     "room_admin": 560,
     "using_your_tools": 750,

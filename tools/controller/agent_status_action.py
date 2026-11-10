@@ -200,7 +200,7 @@ def _owner_line(agent, execution_context) -> str:
 	import os
 	bound = resolve_owner_principal(default_to_instance=False)
 	if not bound:
-		kind = "unpaired (no owner bound on this install)"
+		kind = "unbound (no owner bound on this install)"
 	elif bound == resolve_instance_id():
 		kind = "bound to this instance's own tenant"
 	else:
@@ -220,9 +220,8 @@ def _owner_line(agent, execution_context) -> str:
 		seat = f"unavailable ({type(exc).__name__})"
 	user_id = getattr(execution_context, "user_id", None)
 	if user_id is not None:
-		from core.instance import is_owner
-		who = "the owner" if is_owner(user_id, owner_principal=resolve_owner_principal()) \
-			else "not the owner"
+		from core.instance import is_owner_uid
+		who = "the owner" if is_owner_uid(user_id, allow_local=False) else "not the owner"
 	else:
 		who = "unknown"
 	return (f"owner: {kind}; reachable on {', '.join(reach) or 'no configured surface'}; "

@@ -43,34 +43,70 @@ async def test_requires_user(monkeypatch):
     assert res.error and "tenant" in res.error.lower()
 
 
-@pytest.mark.asyncio
-async def test_sub_agent_author_is_quarantined_even_review_off(monkeypatch, tmp_path):
-    """CRITICAL regression: a sub-agent (background-review) author must be detected via
-    execution_context.is_sub_agent/role and ALWAYS quarantined — even with
-    SKILLS_WRITABLE_REQUIRE_REVIEW=false. (The old message_kind/_turn_kind signal was
-    dead code → forged authors could auto-activate.)"""
-    import types
+def _sub_agent_call(monkeypatch, tmp_path, ctx):
     from agents.task.agent.skill_manager import SkillManager
     monkeypatch.setenv("SKILLS_WRITABLE", "true")
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
-
     sm = SkillManager(skills_dir=tmp_path)
     monkeypatch.setattr("agents.task.agent.skill_manager.get_skill_manager", lambda: sm)
-
     c = _bare_controller()
     c._register_skill_manage_action()
     action = c.registry.registry.actions["skill_manage"]
-    ctx = types.SimpleNamespace(user_id="u1", is_sub_agent=True, role="leaf")
     params = action.param_model(
         action="create", skill_id="auto-skill", when="When a run repeats this",
+        reason="test reason",
         content="# Auto Skill\n\nA reusable procedure distilled from the run, long enough.\n",
     )
-    res = await action.function(params, execution_context=ctx)
+    return action.function(params, execution_context=ctx)
+
+
+@pytest.mark.asyncio
+async def test_sub_agent_author_on_a_non_owner_tenant_stays_a_draft(monkeypatch, tmp_path):
+    """A sub-agent (background-review) author on a tenant that is not the owner is
+    detected via execution_context and lands a draft."""
+    import types
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "someone-else")
+    ctx = types.SimpleNamespace(user_id="u1", is_sub_agent=True, role="leaf")
+    res = await _sub_agent_call(monkeypatch, tmp_path, ctx)
     assert res.extracted_content and "pending review" in res.extracted_content
     # 2026-10-14: "saved (pending review)" read as done — the agent told the owner a
     # promo-bounty rule was "Fixed" while it sat in .pending. Say it is inert.
     assert "NOT YET IN EFFECT" in res.extracted_content
     assert "saved (pending review)" not in res.extracted_content
     # proof on disk: pending, NOT active
+    assert (tmp_path / "user_u1" / ".pending" / "auto-skill" / "SKILL.md").exists()
+    assert not (tmp_path / "user_u1" / "auto-skill" / "SKILL.md").exists()
+
+
+@pytest.mark.asyncio
+async def test_sub_agent_author_on_the_owner_tenant_is_active(monkeypatch, tmp_path):
+    import types
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
+    ctx = types.SimpleNamespace(user_id="u1", is_sub_agent=True, role="leaf")
+    res = await _sub_agent_call(monkeypatch, tmp_path, ctx)
+    assert res.error is None, res.error
+    assert (tmp_path / "user_u1" / "auto-skill" / "SKILL.md").exists()
+    assert not (tmp_path / "user_u1" / ".pending" / "auto-skill").exists()
+
+
+@pytest.mark.asyncio
+async def test_room_turn_on_the_owner_tenant_stays_a_draft(monkeypatch, tmp_path):
+    import types
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
+    monkeypatch.setattr("core.security.owner_turn.is_room_turn", lambda ctx: True)
+    ctx = types.SimpleNamespace(user_id="u1", is_sub_agent=False, role="orchestrator", metadata={})
+    res = await _sub_agent_call(monkeypatch, tmp_path, ctx)
+    assert res.extracted_content and "pending review" in res.extracted_content
+    assert (tmp_path / "user_u1" / ".pending" / "auto-skill" / "SKILL.md").exists()
+    assert not (tmp_path / "user_u1" / "auto-skill" / "SKILL.md").exists()
+
+
+@pytest.mark.asyncio
+async def test_correspondent_tainted_session_stays_a_draft(monkeypatch, tmp_path):
+    import types
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
+    monkeypatch.setattr("core.security.taints.correspondent_tainted", lambda orch: True)
+    ctx = types.SimpleNamespace(user_id="u1", is_sub_agent=False, role="orchestrator", metadata={})
+    res = await _sub_agent_call(monkeypatch, tmp_path, ctx)
+    assert res.extracted_content and "pending review" in res.extracted_content
     assert (tmp_path / "user_u1" / ".pending" / "auto-skill" / "SKILL.md").exists()
     assert not (tmp_path / "user_u1" / "auto-skill" / "SKILL.md").exists()

@@ -43,7 +43,7 @@ def test_malformed_toml_fails_open(tmp_path, caplog):
     # level (which another test module running earlier in the same session
     # can lower/raise, making the WARNING record invisible depending on run
     # order — see owner-UX P1 T10 review).
-    caplog.set_level(logging.WARNING, logger="core.prefs")
+    caplog.set_level(logging.WARNING, logger="core.prefs_io")
     p = preferences_path(tmp_path, "u1")
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("this is [not toml", encoding="utf-8")
@@ -255,3 +255,84 @@ def test_hand_edited_injection_payload_dropped_on_load(tmp_path):
     assert "style.language" not in prefs
     assert "digest.quiet_hours" not in prefs
     assert prefs["style.verbosity"] == "terse"  # good keys survive
+
+
+def _break(tmp_path):
+    p = preferences_path(tmp_path, "u1")
+    p.write_text("this is [not toml", encoding="utf-8")
+    return p
+
+
+def test_a_write_over_an_unreadable_file_refuses_and_keeps_it(tmp_path):
+    """ST-1: a typo in a hand edit used to make the next write a one-key file."""
+    from core.prefs import PrefsUnreadable
+    import pytest
+    assert write_preference(tmp_path, "u1", "budget.wallet_daily_usd", 5)[0]
+    assert write_preference(tmp_path, "u1", "goals.daily_quota", "4")[0]
+    p = _break(tmp_path)
+    ok, err = write_preference(tmp_path, "u1", "style.verbosity", "terse")
+    assert not ok and "unreadable" in err and "Nothing was written" in err
+    assert p.read_text(encoding="utf-8") == "this is [not toml"
+    with pytest.raises(PrefsUnreadable):
+        load_preferences(tmp_path, "u1", strict=True)
+    assert not [f for f in p.parent.iterdir() if f.name.endswith(".tmp")]
+
+
+def test_an_unreadable_file_keeps_the_last_good_values_in_force(tmp_path):
+    """ST-1: the owner's tighter cap and an owner-disabled loop never loosen."""
+    from core import prefs
+    from core.prefs import display_effective, effective_autonomy_switch, resolve
+    assert write_preference(tmp_path, "u1", "budget.wallet_daily_usd", 5)[0]
+    assert write_preference(tmp_path, "u1", "autonomy.self_wake", False)[0]
+    load_preferences(tmp_path, "u1")
+    _break(tmp_path)
+    assert resolve("budget.wallet_daily_usd", "u1", tmp_path, env_value=100.0) == 5
+    assert effective_autonomy_switch("autonomy.self_wake", True, "u1", tmp_path) is False
+    value, source = display_effective("budget.wallet_daily_usd", "u1", tmp_path)
+    assert value == 5 and "UNREADABLE" in source
+    # A new process (no cache): the last good copy the write left still holds.
+    prefs._CACHE.clear()
+    assert resolve("budget.wallet_daily_usd", "u1", tmp_path, env_value=100.0) == 5
+    # Fixed by hand: the file is read again and the report clears.
+    preferences_path(tmp_path, "u1").write_text("[budget]\nwallet_daily_usd = 7.0\n",
+                                                encoding="utf-8")
+    value, source = display_effective("budget.wallet_daily_usd", "u1", tmp_path)
+    assert value == 7.0 and "UNREADABLE" not in source
+
+
+def _hand_edit(path, text):
+    import os
+    path.write_text(text, encoding="utf-8")
+    st = path.stat()
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 2_000_000_000))  # a later mtime
+
+
+def test_a_valid_hand_edit_refreshes_the_last_good_copy(tmp_path):
+    """A /config write left 200 in the copy; the owner hand-edited 20; a later typo
+    must keep 20 in force, never the looser 200 (the copy was only refreshed by a
+    /config write)."""
+    from core import prefs
+    from core.prefs_io import backup_path
+    assert write_preference(tmp_path, "u1", "budget.defi_autonomous_usd", 200)[0]
+    p = preferences_path(tmp_path, "u1")
+    _hand_edit(p, "[budget]\ndefi_autonomous_usd = 20.0\n")
+    assert load_preferences(tmp_path, "u1")["budget.defi_autonomous_usd"] == 20.0
+    assert "20.0" in backup_path(p).read_text(encoding="utf-8")
+    prefs._CACHE.clear()                       # a restart
+    _hand_edit(p, "[budget]\ndefi_autonomous_usd = 2O\n")
+    assert load_preferences(tmp_path, "u1")["budget.defi_autonomous_usd"] == 20.0
+
+
+def test_a_broken_file_warns_once_per_file_state(tmp_path, caplog):
+    from core import prefs
+    caplog.set_level(logging.WARNING, logger="core.prefs_io")
+    assert write_preference(tmp_path, "u1", "goals.daily_quota", "4")[0]
+    p = _break(tmp_path)
+    prefs._CACHE.clear()
+    for _ in range(3):
+        assert load_preferences(tmp_path, "u1")["goals.daily_quota"] == 4
+    warned = [r for r in caplog.records if "unreadable" in r.message]
+    assert len(warned) == 1
+    _hand_edit(p, "still [not toml")
+    load_preferences(tmp_path, "u1")
+    assert len([r for r in caplog.records if "unreadable" in r.message]) == 2

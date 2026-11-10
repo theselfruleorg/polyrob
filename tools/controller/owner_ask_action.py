@@ -1,28 +1,29 @@
-"""061 WS-3 — `owner_ask`: a decision an autonomous run needs is an ASK, never a
-question in a message.
+"""061 WS-3 — `owner_ask`: the ONE verb the agent uses to ask the owner anything.
 
 Controller-level (registered from ``service.py`` like ``avatar_action``, since
 ``action_registration.py`` is at its size ceiling) so EVERY session can reach it
-regardless of loaded tools — the exit-rail cron loads no ``goal`` tool, so
-``goal_ask`` was unreachable and it asked "A or B?" in a ``send_message`` that no
-run could ever receive an answer to.
+regardless of loaded tools. The harness picks the form, so the model never has to
+know which session it is in:
 
-Two verbs in one action:
-- ``question=…`` raises a durable, deduplicated ask on the board, stamped with
-  the rail that asked (``payload.rail_id``), and tells the owner ONCE through the
+- ``question=…, options=[…]`` in a live owner turn: a card, and the call WAITS for
+  the pick in this turn (``card_actions.ask_choice``). A card that cannot reach the
+  owner falls through to the durable ask.
+- ``question=…`` otherwise: a durable, deduplicated ask on the board, stamped with
+  the rail that asked (``payload.rail_id``), and the owner is told ONCE through the
   delivery rail (recorded in the owner thread with the ask id). The answer rides
   the rail's next run (``agents/task/goals/rail_answers.py``) or the dependent
-  goal's ``owner_unblocked``.
+  goal's ``owner_unblocked``. ``blocks_goal_ids`` holds goals until the answer.
 - ``answer=…`` (a GENUINE owner turn of the owner tenant only — H04) decides the ask — the "anything from
   the chat" directive applied to asks: typing "A" works, ``/fulfill`` stays.
 """
 import logging
 import re
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
 from agents.task.agent.views import ActionResult
+from tools.controller.card_actions import DEFAULT_WAIT_S, MAX_WAIT_S, ask_choice
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,33 @@ def ask_options(question: str) -> Dict[str, str]:
     return out
 
 
+def _lettered(options: List[str]) -> Dict[str, str]:
+    """``{"A": first, "B": second, …}``: the durable form of an ``options=`` list."""
+    return {"ABCDEF"[i]: " ".join(str(o).split())[:200] for i, o in enumerate(options)}
+
+
+def _live_owner_turn(session_id: str) -> bool:
+    """A person is in this turn to tap. An unreadable marker reads as autonomous:
+    the durable ask always reaches the owner, a wait may never end."""
+    try:
+        from core.autonomy_marker import is_autonomous
+        return not is_autonomous(session_id)
+    except Exception:
+        return False
+
+
+def _hold_refusal(execution_context, session_id: str, goal_ids: List[str]) -> Optional[str]:
+    """A run may hold only its own goal; the owner's own turn may hold any."""
+    from core.autonomy_marker import goal_for_session
+    from core.security.owner_turn import is_genuine_owner_turn
+    if not goal_ids or is_genuine_owner_turn(execution_context):
+        return None
+    own_goal = goal_for_session(session_id)
+    if any(goal_id != own_goal for goal_id in goal_ids):
+        return "Refused: a run may hold only its own goal for an owner decision."
+    return None
+
+
 def _is_leaf(execution_context) -> bool:
     return bool(getattr(execution_context, "is_sub_agent", False)) or \
         str(getattr(execution_context, "role", "") or "") == "leaf"
@@ -111,10 +139,8 @@ def _owner_answer_refusal(controller, execution_context, user_id: str) -> Option
         from tools.controller.turn_origin import _is_forged_or_autonomous_turn
         if execution_context is None or _is_forged_or_autonomous_turn(execution_context, controller):
             return msg
-        from core.config_policy import local_mode_enabled
-        from core.instance import is_owner_local_safe, resolve_owner_principal
-        if not is_owner_local_safe(user_id, owner_principal=resolve_owner_principal(),
-                                   local_enabled=local_mode_enabled()):
+        from core.instance import is_owner_uid
+        if not is_owner_uid(user_id):
             return msg + " This tenant is not the owner."
     except Exception:
         return msg
@@ -192,11 +218,22 @@ def register_owner_ask_action(controller) -> None:
         question: Optional[str] = Field(
             None, max_length=600,
             description=("RAISE: the decision or resource you need from the owner, as ONE "
-                         "question answerable in a word or two (name the options: 'A) … or "
-                         "B) …'). Durable, deduplicated, shown on every owner seat; the answer "
-                         "reaches this rail's next run. In an autonomous run, never ask this "
-                         "in a message instead."))
+                         "question answerable in a word or two. Durable, deduplicated, shown "
+                         "on every owner seat; the answer reaches this rail's next run. In an "
+                         "autonomous run, never ask this in a message instead."))
         why: str = Field("", max_length=1200, description="RAISE: one line of context.")
+        options: Optional[List[str]] = Field(
+            None, min_length=2, max_length=6,
+            description=("RAISE: 2 to 6 short options (each at most 80 characters). In a live "
+                         "owner turn the owner gets buttons or a numbered prompt and this call "
+                         "WAITS and returns the pick. In an autonomous run they become tap "
+                         "answers on the durable ask."))
+        wait_seconds: int = Field(
+            DEFAULT_WAIT_S, ge=10, le=MAX_WAIT_S,
+            description="RAISE with options, live owner turn: how long to wait for the pick.")
+        blocks_goal_ids: Optional[List[str]] = Field(
+            None, description=("RAISE: goals to HOLD until the owner answers, then re-arm. A "
+                               "run may hold only its own goal. Never waits in this turn."))
         answer: Optional[str] = Field(
             None, max_length=2000,
             description=("ANSWER (owner turn only): the owner's decision, QUOTED from their "
@@ -207,11 +244,11 @@ def register_owner_ask_action(controller) -> None:
         approved: bool = Field(True, description="ANSWER: False records a decline.")
 
     @controller.registry.action(
-        "Ask the OWNER for a decision the durable way, or record the owner's answer to "
-        "an open ask. question=… raises (any session, never a leaf); answer=… decides "
-        "(a genuine owner turn only). In an autonomous (goal/cron) run, a decision you "
-        "need from the owner is an owner_ask, never a question in a message. In a live "
-        "chat turn with the owner, offer the options with present_choice instead.",
+        "The ONE way to ask the OWNER for a decision, or to record the owner's answer to "
+        "an open ask. question=… raises (any session, never a leaf); with options=[…] in "
+        "a live owner turn it waits and returns the pick. answer=… decides (a genuine "
+        "owner turn only). In an autonomous (goal/cron) run, a decision you need from "
+        "the owner is an owner_ask, never a question in a message.",
         param_model=OwnerAskAction,
     )
     async def owner_ask(params: OwnerAskAction, execution_context=None) -> ActionResult:
@@ -267,10 +304,22 @@ def register_owner_ask_action(controller) -> None:
                                        f"decide it with a tap; do NOT message them about it. Skip "
                                        f"the buy and continue."),
                     include_in_memory=True)
+            holds = [str(g) for g in (params.blocks_goal_ids or []) if str(g).strip()]
+            refusal = _hold_refusal(execution_context, sid, holds)
+            if refusal:
+                return ActionResult(error=refusal, include_in_memory=True)
+            if params.options and not holds and _live_owner_turn(sid):
+                picked = await ask_choice(controller, execution_context, user_id, question,
+                                          list(params.options), why=(params.why or "").strip(),
+                                          wait_seconds=params.wait_seconds)
+                if picked is not None:
+                    return picked
             rail_id, rail_kind = _rail(sid)
             from core.goal_vocab import ASK_OPEN
             before = {a.id for a in board.asks(user_id=user_id, status=ASK_OPEN)}
-            options = ask_options(question)
+            options = _lettered(params.options) if params.options else ask_options(question)
+            if params.options:
+                question = f"{question} " + " or ".join(f"{k}) {v}" for k, v in options.items())
             extra = {"origin": "agent", "session_id": sid,
                      "rail_id": rail_id, "rail_kind": rail_kind}
             if options:
@@ -278,7 +327,7 @@ def register_owner_ask_action(controller) -> None:
                 extra["options"] = options
             ask = board.create_ask(
                 user_id=user_id, what=question, why=(params.why or "").strip(),
-                extra_payload=extra)
+                blocks_goal_ids=holds, extra_payload=extra)
             short = str(ask.id)[:12]
             if ask.id in before:
                 return ActionResult(
@@ -311,7 +360,8 @@ def register_owner_ask_action(controller) -> None:
             return ActionResult(
                 extracted_content=(f"Raised owner ask `{ask.id}` ({rail_kind or 'session'} rail). It stays "
                                    f"visible on every owner seat until answered; {_answer_route(rail_kind)} "
-                                   f"Do NOT also message the owner about it; "
+                                   + (f"Held until the answer: {', '.join(holds)}. " if holds else "")
+                                   + f"Do NOT also message the owner about it; "
                                    f"continue with the conservative reading and log skips against ask {short}."),
                 include_in_memory=True)
 

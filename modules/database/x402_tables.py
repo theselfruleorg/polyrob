@@ -6,6 +6,18 @@ import logging
 logger = logging.getLogger('database.x402_tables')
 
 
+async def _payment_request_cols(db, log, what: str):
+    """``PRAGMA table_info(x402_payment_requests)`` rows ([] = no table yet), or
+    None when the store could not be read — unreadable is never "not present":
+    the step is skipped with a warning and the next boot retries it."""
+    try:
+        return await db.fetch_all("PRAGMA table_info(x402_payment_requests)")
+    except Exception as exc:
+        log.warning("  could not read x402_payment_requests (%s) — %s skipped; "
+                    "the next boot retries", exc, what)
+        return None
+
+
 async def dedupe_and_create_tx_hash_unique_index(db, log: logging.Logger) -> None:
     """Shared by `X402Tables.create_tables()` and migration v1.6.0
     (`migrations/versions/v1_6_0_x402_tx_hash_unique.py`) — the single
@@ -37,10 +49,9 @@ async def dedupe_and_create_tx_hash_unique_index(db, log: logging.Logger) -> Non
     without raising — degrade, never crash boot. Idempotent: a duplicate-free
     DB (including a fresh one) touches zero rows and just creates the index.
     """
-    try:
-        table_cols = await db.fetch_all("PRAGMA table_info(x402_payment_requests)")
-    except Exception:
-        table_cols = None
+    table_cols = await _payment_request_cols(db, log, "the tx_hash unique index")
+    if table_cols is None:
+        return
     if not table_cols:
         log.info(
             "  x402_payment_requests table not present yet — skipping "
@@ -139,10 +150,9 @@ async def normalize_tx_hash_case(db, log: logging.Logger) -> None:
     zero rows. Degrades (logs, does not raise) on any unexpected DB error —
     never crashes boot or the migration run.
     """
-    try:
-        table_cols = await db.fetch_all("PRAGMA table_info(x402_payment_requests)")
-    except Exception:
-        table_cols = None
+    table_cols = await _payment_request_cols(db, log, "the transaction_hash case backfill")
+    if table_cols is None:
+        return
     if not table_cols:
         log.info(
             "  x402_payment_requests table not present yet — skipping "
@@ -270,10 +280,9 @@ async def dedupe_and_create_subscription_pending_unique_index(db, log: logging.L
     duplicate-free DB (including a fresh one) touches zero rows and just
     creates the index.
     """
-    try:
-        table_cols = await db.fetch_all("PRAGMA table_info(x402_payment_requests)")
-    except Exception:
-        table_cols = None
+    table_cols = await _payment_request_cols(db, log, "the subscription pending-unique index")
+    if table_cols is None:
+        return
     if not table_cols:
         log.info(
             "  x402_payment_requests table not present yet — skipping "
@@ -567,10 +576,9 @@ async def add_payment_asset_columns(db, log) -> None:
     as ``usdc-base``, so no backfill is needed and no historical row changes
     meaning.
     """
-    try:
-        table_cols = await db.fetch_all("PRAGMA table_info(x402_payment_requests)")
-    except Exception:
-        table_cols = None
+    table_cols = await _payment_request_cols(db, log, "the 046 asset columns")
+    if table_cols is None:
+        return
     if not table_cols:
         log.info("  x402_payment_requests not present yet — skipping the 046 "
                  "asset columns (self-heals once the table exists)")
@@ -606,10 +614,9 @@ _INVOICE_STATE_COLUMNS = (
 async def add_invoice_state_columns(db, log) -> None:
     """Add the 098 W1 invoice-state columns + claim index, idempotently.
     Shared by `X402Tables.create_tables()` and migration v1.12.0."""
-    try:
-        table_cols = await db.fetch_all("PRAGMA table_info(x402_payment_requests)")
-    except Exception:
-        table_cols = None
+    table_cols = await _payment_request_cols(db, log, "the invoice-state columns")
+    if table_cols is None:
+        return
     if not table_cols:
         return
     existing = {c["name"] for c in table_cols}
