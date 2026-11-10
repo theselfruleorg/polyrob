@@ -22,11 +22,14 @@ a flock so two ``--rollback`` (or a future apply) can't race each other.
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import sqlite3
 import threading
 from pathlib import Path
 from typing import Iterable, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class UpdateLockHeld(RuntimeError):
@@ -82,7 +85,8 @@ def workspace_lock_busy(lock_dir: Optional[Path] = None) -> bool:
 
     Uses the CLI's ``POLYROB_WORKSPACE_LOCK_DIR`` convention when ``lock_dir`` is not
     given. Inert (returns False) when no lock is configured — the SQLite probe is then
-    the only signal.
+    the only signal. Only a TimeoutError means "held"; any other error is RAISED (an
+    update guard must not read "unknown" as "free"), and each caller names it.
     """
     root = str(lock_dir) if lock_dir else os.environ.get("POLYROB_WORKSPACE_LOCK_DIR")
     if not root:
@@ -90,19 +94,16 @@ def workspace_lock_busy(lock_dir: Optional[Path] = None) -> bool:
     lock_path = os.path.join(root, "workspace.turn.lock")
     if not os.path.exists(lock_path):
         return False
-    try:
-        from core.file_lock import SafeFileLock
+    from core.file_lock import SafeFileLock
 
-        probe = SafeFileLock(lock_path, timeout=0)
-        try:
-            probe.acquire()
-        except Exception:
-            return True  # held by someone else
-        else:
-            probe.release()
+    try:
+        with SafeFileLock(lock_path, timeout=0):
             return False
-    except Exception:
-        return False
+    except TimeoutError:
+        return True  # held by someone else
+    except Exception as exc:
+        logger.warning("workspace lock probe failed on %s: %s", lock_path, exc)
+        raise
 
 
 # Persistent server/agent subcommands. A running one of these can open the DBs at any
@@ -397,8 +398,11 @@ def active_use_reasons(
     reasons: List[str] = []
     for p in dbs_in_use(db_paths):
         reasons.append(f"database in use by another process: {p.name} ({p})")
-    if workspace_lock_busy(lock_dir):
-        reasons.append("a POLYROB session/turn is running (workspace.turn.lock held)")
+    try:
+        if workspace_lock_busy(lock_dir):
+            reasons.append("a POLYROB session/turn is running (workspace.turn.lock held)")
+    except Exception as exc:
+        reasons.append(f"the workspace turn lock could not be checked ({type(exc).__name__}: {exc})")
     try:
         if server_process_alive():
             reasons.append("a POLYROB server/agent process is running (stop it before rollback)")

@@ -194,7 +194,8 @@ _OUTPUTS_KEPT, _OUTPUT_CHARS = 5, 100
 _TX_KEPT = 5
 _META_BUDGET = 3200          # the store drops a meta over 4000 chars whole
 PREVIOUS_RUNS_KEPT = 5       # R16: a compact track record, this job only
-PREVIOUS_RUNS_MAX_CHARS = 2000
+PREVIOUS_RUNS_MAX_CHARS = 2000   # 108 W3: the whole block, frame and job sheet included
+_RUN_HEAD_CHARS = 110        # one run when the block has no room for its detail
 
 # C-3 (2026-10-14 review): a run's note for the next run sat at char 1,267 of a
 # 1,601-char done text and the block rendered the first 300 chars. The summary
@@ -288,19 +289,29 @@ def did_something(facts: dict) -> bool:
 SIGNAL_SOURCES = ("receipt", "owner", "judge", "self", "none")
 
 
+def verified_state(value: Any) -> Optional[bool]:
+    """``meta["verified"]`` as one answer: a cron run's bool or a goal's word. ``None`` when
+    nothing checked the run."""
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip()
+    return (text == "verified") if text else None
+
+
 def signal_source(meta: dict, *, useful: bool, run: Any = None,
                   summary: Optional[str] = None) -> str:
     """The most trusted signal this run record carries (:data:`SIGNAL_SOURCES`).
 
-    ``owner`` = the caller stamped ``meta["owner_verdict"]``; ``judge`` = a
-    goal's ``meta["verified"]``; ``self`` = only the agent's own done text or
-    summary. Never raises."""
+    ``owner`` = ``meta["owner_verdict"]`` holds a confirm or a correct (a neutral
+    reply says nothing about the run); ``judge`` = ``meta["verified"]``, a goal's
+    judge or a cron job's ``expect`` check; ``self`` = only the agent's own done
+    text or summary. Never raises."""
     try:
         if useful:
             return "receipt"
-        if str((meta or {}).get("owner_verdict") or "").strip():
+        if str((meta or {}).get("owner_verdict") or "").strip() not in ("", "neutral"):
             return "owner"
-        if str((meta or {}).get("verified") or "").strip():
+        if verified_state((meta or {}).get("verified")) is not None:
             return "judge"
         if str(getattr(run, "done_text", "") or "").strip() or str(summary or "").strip():
             return "self"
@@ -309,28 +320,34 @@ def signal_source(meta: dict, *, useful: bool, run: Any = None,
     return "none"
 
 
-def rail_lane(rail: str, data_dir: Optional[str] = None) -> str:
-    """The job's or goal's lane (``core.cron_lanes.job_lane`` of its payload),
-    read from its live store; ``""`` when there is no lane or no store."""
+def rail_payload(rail: str, data_dir: Optional[str] = None) -> dict:
+    """The payload of a job or goal, from its live store; ``{}`` when it is gone."""
     import os
     from core.runtime_paths import cron_db_path, goals_db_path
     kind, _, ident = (rail or "").partition(":")
     if kind not in ("cron", "goal") or not ident:
-        return ""
+        return {}
     db = cron_db_path(data_dir) if kind == "cron" else goals_db_path(data_dir)
     if not os.path.exists(db):
-        return ""
+        return {}
     table = "cron_jobs" if kind == "cron" else "goals"
     try:
         from core.sqlite_util import execute_retry
-        from core.cron_lanes import job_lane
         rows = execute_retry(db, f"SELECT payload FROM {table} WHERE id=?", (ident,),
                              fetch="all") or []
         payload = _json.loads(rows[0][0] or "{}") if rows else {}
-        return job_lane(payload)
+        return payload if isinstance(payload, dict) else {}
     except Exception:
-        logger.debug("rail lane unreadable for %s", rail, exc_info=True)
-        return ""
+        logger.debug("rail payload unreadable for %s", rail, exc_info=True)
+        return {}
+
+
+def rail_lane(rail: str, data_dir: Optional[str] = None) -> str:
+    """The job's or goal's lane (``core.cron_lanes.job_lane`` of its payload);
+    ``""`` when there is no lane or no store."""
+    from core.cron_lanes import job_lane
+    payload = rail_payload(rail, data_dir)
+    return job_lane(payload) if payload else ""
 
 
 def _skill_generations(skills: list, user_id: Optional[str]) -> dict:
@@ -353,6 +370,8 @@ def _fit_meta(meta: dict) -> dict:
     m = dict(meta)
     if len(_json.dumps(m)) > _META_BUDGET:
         m.pop("skill_gens", None)
+    if len(_json.dumps(m)) > _META_BUDGET:
+        m.pop("compaction_summary", None)   # lossy: what the run did outranks it
     for key in ("outputs", "sent", "skills_loaded", "tx", "errors"):
         while len(_json.dumps(m)) > _META_BUDGET and m.get(key):
             m[key] = list(m[key])[:-1]
@@ -417,6 +436,9 @@ async def record_run(*, regime: str, kind: str, session_id: Optional[str],
                 lane = rail_lane(rail_id)
                 if lane:
                     m["lane"] = lane
+            compacted = getattr(run, "compaction_summary", "")
+            if isinstance(compacted, str) and compacted:
+                m["compaction_summary"] = compacted   # 108 W7: bounded by the compactor
             gens = _skill_generations(getattr(run, "skills_loaded", None) or [], user_id)
             if gens:
                 m["skill_gens"] = gens
@@ -482,16 +504,23 @@ def _track_record(e: Any, meta: dict) -> str:
         spend = f"${float(getattr(e, 'spend_usd', 0) or 0):.2f}"
     except (TypeError, ValueError):
         spend = "$?"
+    verdict = str(meta.get("owner_verdict") or "").strip()
     return (f"verified={_flag(meta.get('verified'))} useful={_flag(meta.get('useful'))} "
-            f"stop={_flag(meta.get('stop_reason'))} skills={skills} {spend}")
+            + (f"owner_verdict={verdict} " if verdict else "")
+            + f"stop={_flag(meta.get('stop_reason'))} skills={skills} {spend}")
+
+
+def _run_head(e: Any) -> str:
+    meta = getattr(e, "meta", None) or {}
+    outcome = str(getattr(e, "outcome", None) or "?").upper()
+    reason = meta.get("reason") or ""
+    return (f"- {_hhmm_utc(getattr(e, 'ts', None))} {outcome} {_track_record(e, meta)}"
+            + (f" ({_one_line(reason, 120)})" if reason else ""))
 
 
 def _render_run(e: Any) -> str:
     meta = getattr(e, "meta", None) or {}
-    outcome = str(getattr(e, "outcome", None) or "?").upper()
-    reason = meta.get("reason") or ""
-    head = (f"- {_hhmm_utc(getattr(e, 'ts', None))} {outcome} {_track_record(e, meta)}"
-            + (f" ({_one_line(reason, 120)})" if reason else ""))
+    head = _run_head(e)
     summary = " ".join(str(getattr(e, "summary", None) or "").split())
     # C-3: the run's tool errors FIRST (``refusals`` = a legacy row's key), then
     # the summary clipped head+tail.
@@ -509,53 +538,103 @@ def _render_run(e: Any) -> str:
     return "\n".join(lines)
 
 
-async def render_previous_runs(*, user_id: Optional[str], rail_id: str, regime: str,
-                               limit: int = PREVIOUS_RUNS_KEPT) -> str:
-    """The ``<previous-runs>`` block for the NEXT run of ``rail_id``, or ``""``.
+def _fit_runs(rows: list, budget: int) -> list:
+    """Every run gets its outcome line, the oldest leaving first if even those do not fit.
+    The detail of the runs goes to the newest while the budget lasts."""
+    short = [_one_line(_run_head(e), _RUN_HEAD_CHARS) for e in rows]
+    while len(short) > 1 and sum(len(h) + 1 for h in short) > budget:
+        short.pop()
+    spare = budget - sum(len(h) + 1 for h in short)
+    out = []
+    for e, head in zip(rows, short):
+        full = _render_run(e)
+        extra = len(full) - len(head)
+        if extra <= spare:
+            out.append(full)
+            spare -= max(extra, 0)
+        elif spare > 1:
+            out.append(full[:len(head) + spare - 1] + "…")
+            spare = 0
+        else:
+            out.append(head)
+    return out
 
-    Gated by the regime seam (``run_record``). Fail-open: an unreadable store
-    renders one honest line, never an empty block that reads as "first run"."""
-    if not rail_id or not run_record_on(regime):
-        return ""
-    try:
-        from modules.memory.registry import memory_recall_episodes
-        rows = await memory_recall_episodes(user_id=user_id, thread_key=rail_id,
-                                            limit=limit, order="newest", raise_errors=True)
-        if len(rows) < limit:
-            kind = rail_id.split(":", 1)[0]
-            legacy = _own_rows(await memory_recall_episodes(
-                user_id=user_id, kind=kind, limit=60, order="newest",
-                raise_errors=True), rail_id)
-            seen = {getattr(e, "session_id", None) for e in rows}
-            rows = list(rows) + [e for e in legacy if getattr(e, "session_id", None) not in seen]
-            rows.sort(key=lambda e: float(getattr(e, "ts", 0) or 0), reverse=True)
-            rows = rows[:limit]
-    except Exception as e:
-        logger.warning("previous-runs read failed for %s", rail_id, exc_info=True)
-        return (f'<previous-runs rail="{rail_id}">\nCould not read this '
-                f"{'job' if rail_id.startswith('cron:') else 'goal'}'s earlier runs "
-                f"({type(e).__name__}). Do not assume this is the first run: check what "
-                f"is already done (ledger, sent messages) before you act.\n</previous-runs>")
-    if not rows:
-        return ""
-    data, used = [], 0
-    for e in rows:
-        line = _render_run(e)
-        if used + len(line) > PREVIOUS_RUNS_MAX_CHARS and data:
-            break
-        data.append(line)
-        used += len(line) + 1
-    body = "\n".join(data)
+
+def _frame(rail_id: str, lead: str, body: str) -> str:
     try:
         from core.security.untrusted_wrap import wrap_untrusted
         body = wrap_untrusted("previous_runs", body)
     except Exception:
         pass
+    return f'<previous-runs rail="{rail_id}">\n{lead}\n{body}\n</previous-runs>'
+
+
+async def _read_own_runs(user_id: Optional[str], rail_id: str, limit: int) -> list:
+    from modules.memory.registry import memory_recall_episodes
+    rows = await memory_recall_episodes(user_id=user_id, thread_key=rail_id,
+                                        limit=limit, order="newest", raise_errors=True)
+    if len(rows) < limit:
+        kind = rail_id.split(":", 1)[0]
+        legacy = _own_rows(await memory_recall_episodes(
+            user_id=user_id, kind=kind, limit=60, order="newest",
+            raise_errors=True), rail_id)
+        seen = {getattr(e, "session_id", None) for e in rows}
+        rows = list(rows) + [e for e in legacy if getattr(e, "session_id", None) not in seen]
+        rows.sort(key=lambda e: float(getattr(e, "ts", 0) or 0), reverse=True)
+        rows = rows[:limit]
+    return rows
+
+
+async def render_previous_runs(*, user_id: Optional[str], rail_id: str, regime: str,
+                               limit: int = PREVIOUS_RUNS_KEPT,
+                               data_dir: Optional[str] = None) -> str:
+    """The ``<previous-runs>`` block for the NEXT run of ``rail_id``, or ``""``. For a cron
+    job it is the job sheet: its outcomes plus what ``job_sheet.job_sections`` reads.
+
+    Gated by the regime seam (``run_record``). At most :data:`PREVIOUS_RUNS_MAX_CHARS`,
+    frame included. It carries stored times only, never the clock of this run. Fail-open:
+    an unreadable store renders one honest line, never an empty block that reads as
+    "first run"."""
+    if not rail_id or not run_record_on(regime):
+        return ""
     what = "job" if rail_id.startswith("cron:") else "goal"
-    return (f'<previous-runs rail="{rail_id}">\n'
-            f"Your own last {len(data)} run(s) of this {what}, newest first. What a run "
-            f"sent, posted or signed HAPPENED — do not do it again; continue from where "
-            f"it stopped. A PARTIAL run stopped before done().\n{body}\n</previous-runs>")
+    rows, read_error = [], None
+    try:
+        rows = await _read_own_runs(user_id, rail_id, limit)
+    except Exception as e:
+        logger.warning("previous-runs read failed for %s", rail_id, exc_info=True)
+        read_error = type(e).__name__
+    sections, has_facts = [], False
+    if what == "job":
+        from agents.task.agent.core.job_sheet import job_sections
+        sections, has_facts = job_sections(job_id=rail_id.split(":", 1)[1], user_id=user_id,
+                                           data_dir=data_dir)
+    if not rows and not read_error and not has_facts:
+        return ""
+    if read_error:
+        lead = (f"Could not read this {what}'s earlier runs ({read_error}). Do not assume this "
+                f"is the first run: check what is already done (ledger, sent messages) before "
+                f"you act.")
+    else:
+        lead = (f"Your own last {len(rows)} run(s) of this {what}, newest first. What a run "
+                f"sent, posted or signed HAPPENED — do not do it again; continue from where "
+                f"it stopped. A PARTIAL run stopped before done().")
+    if sections:
+        lead += " The stores wrote this sheet: read no file for these facts."
+    if read_error and not sections:
+        return f'<previous-runs rail="{rail_id}">\n{lead}\n</previous-runs>'
+    tail = "\n".join(sections)
+    room = PREVIOUS_RUNS_MAX_CHARS - len(_frame(rail_id, lead, tail)) - 1
+    runs = "\n".join(_fit_runs(rows, room)) if rows else ""
+    if not rows and not read_error:
+        runs = "no earlier run recorded"
+    body = "\n".join(x for x in (runs, tail) if x)
+    out = _frame(rail_id, lead, body)
+    # The frame rewrites a delimiter that the data names, so a row can grow it.
+    while len(out) > PREVIOUS_RUNS_MAX_CHARS and body:
+        body = body[:max(0, len(body) - (len(out) - PREVIOUS_RUNS_MAX_CHARS) - 1)]
+        out = _frame(rail_id, lead, body)
+    return out
 
 
 # ── Per-lane outcome rates (095 W11 step 4) ──────────────────────────────────
@@ -596,9 +675,10 @@ async def lane_outcome_rates(*, user_id: Optional[str], days: int = LANE_RATE_DA
         if isinstance(meta.get("useful"), bool):
             d["useful_n"] += 1
             d["useful"] += int(meta["useful"])
-        if meta.get("verified"):
+        verified = verified_state(meta.get("verified"))
+        if verified is not None:
             d["verified_n"] += 1
-            d["verified"] += int(str(meta["verified"]) == "verified")
+            d["verified"] += int(verified)
     return sorted(lanes.values(), key=lambda d: (-d["runs"], d["lane"]))
 
 

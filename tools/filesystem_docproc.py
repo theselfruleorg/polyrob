@@ -19,6 +19,7 @@ import aiohttp
 from bs4 import BeautifulSoup  # type: ignore
 
 from core.exceptions import APIError, ServiceError
+from modules.llm.billing_guard import fresh_credential
 from tools.controller.views import DocProcessAction, DocAnalyzeAction
 
 
@@ -52,21 +53,13 @@ class DocProcessingMixin:
                     # FIXED: Get intelligent max_tokens from model registry
                     max_tokens_value = params.max_tokens if hasattr(params, 'max_tokens') else None
                     if max_tokens_value is None:
-                        try:
-                            from modules.llm.model_registry import get_model_config
-                            # Try to get model name from params or use a default
-                            model_name = getattr(params, 'model', None) or getattr(params, 'model_name', None)
-                            if model_name:
-                                model_config = get_model_config(model_name)
-                                if model_config and model_config.max_completion_tokens:
-                                    max_tokens_value = model_config.max_completion_tokens
-                        except Exception:
-                            pass
+                        from modules.llm.model_registry import get_model_config
+                        # Try to get model name from params or use a default
+                        model_name = getattr(params, 'model', None) or getattr(params, 'model_name', None)
+                        max_tokens_value = (get_model_config(model_name).max_completion_tokens
+                                            if model_name else 8000)
 
-                        # Fallback to conservative default instead of 1000
-                        if max_tokens_value is None:
-                            max_tokens_value = 8000
-
+                    await fresh_credential(self.llm_client)
                     enhanced = await self.llm_client.generate_response(
                         prompt=prompt,
                         max_tokens=max_tokens_value,
@@ -290,6 +283,8 @@ class DocProcessingMixin:
 
             # Prepare analysis prompt
             prompt = self._get_analysis_prompt(text, analysis_type)
+
+            await fresh_credential(self.llm_client)
 
             # Process with or without rate limiting
             if rate_limiter:

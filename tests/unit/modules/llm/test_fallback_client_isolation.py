@@ -32,8 +32,10 @@ async def test_fallback_builds_on_isolated_client_not_shared(monkeypatch):
     mgr.clients = {"openai_client": main_client}
     mgr.llm_config = {"openai": {"api_key": "k", "model": "gpt-5"}}
 
-    # Force a same-provider, different-model failover.
+    # Force a same-provider, different-model failover: the rung's model is the only
+    # model of the family on this provider.
     mgr.FALLBACK_HIERARCHY = [("openai_client", "gpt-5-mini")]
+    monkeypatch.setattr("modules.llm.llm_manager.AVAILABLE_MODELS", {})
 
     # Shared client passes the cheap health check.
     async def _healthy(client):

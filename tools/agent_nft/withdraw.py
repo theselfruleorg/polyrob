@@ -142,9 +142,12 @@ async def revoke_all(tool, params, execution_context) -> Any:
         return tool._ar(error=f"the approval scan did not complete ({exc}) — the table is "
                               f"INCOMPLETE, not empty. Nothing was broadcast.")
     if not rows:
+        version = profile.version_for_account(held.token_id, held.account)
+        why = (f" ({erc6551.POLYROB_NO_APPROVALS}; {erc6551.POLYROB_RESIDUALS})"
+               if version is not None and version.is_polyrob else "")
         return tool._ar(content=(f"no open approvals on {held.account} ({held.label}) — scanned "
                                  f"blocks {profile.deploy_block}..{head}, kinds "
-                                 f"{', '.join(erc6551.APPROVAL_KINDS)} (complete). Nothing to revoke."))
+                                 f"{', '.join(erc6551.APPROVAL_KINDS)} (complete){why}. Nothing to revoke."))
     # Any contract can emit an Approval naming the account. Call only into rows an owner's
     # transaction granted, unless the caller opts in; list the rest (never drop them).
     lines = []

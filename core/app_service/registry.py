@@ -43,19 +43,25 @@ STATUS_PAUSED = "paused"
 ALL_STATUSES = (STATUS_PENDING, STATUS_APPROVED, STATUS_DEPLOYING, STATUS_LIVE,
                 STATUS_FAILED, STATUS_STOPPED, STATUS_PAUSED)
 #: The app lifecycle table (098 S1, CO-21). ``stopped`` is the owner's stop;
-#: only an owner/agent request leaves it (the address stays approved).
+#: only an owner/agent request leaves it (the address stays approved). Every status
+#: write below checks its edge here. Self-edges: a re-request rewrites the config of a
+#: ``pending``/``approved`` row; ``stopped -> stopped`` is the supervisor clearing a
+#: stopped row's container and a removal flagging one (``remove_requested``).
+#: ``live -> approved`` is a redeploy on the approved config; ``paused -> pending`` a
+#: re-request that moved the config while paused.
 from core.state.machine import StateMachine as _SM  # noqa: E402
 
 APP_MACHINE = _SM(
     "app_service", states=frozenset(ALL_STATUSES), initial=frozenset({STATUS_PENDING}),
     transitions={
-        STATUS_PENDING: {STATUS_APPROVED, STATUS_STOPPED, STATUS_FAILED},
-        STATUS_APPROVED: {STATUS_DEPLOYING, STATUS_PENDING, STATUS_STOPPED, STATUS_FAILED},
+        STATUS_PENDING: {STATUS_PENDING, STATUS_APPROVED, STATUS_STOPPED, STATUS_FAILED},
+        STATUS_APPROVED: {STATUS_APPROVED, STATUS_DEPLOYING, STATUS_PENDING, STATUS_STOPPED,
+                          STATUS_FAILED},
         STATUS_DEPLOYING: {STATUS_LIVE, STATUS_FAILED, STATUS_STOPPED, STATUS_PAUSED},
-        STATUS_LIVE: {STATUS_FAILED, STATUS_PAUSED, STATUS_STOPPED},
-        STATUS_PAUSED: {STATUS_APPROVED, STATUS_STOPPED, STATUS_FAILED},
+        STATUS_LIVE: {STATUS_APPROVED, STATUS_FAILED, STATUS_PAUSED, STATUS_STOPPED},
+        STATUS_PAUSED: {STATUS_APPROVED, STATUS_PENDING, STATUS_STOPPED, STATUS_FAILED},
         STATUS_FAILED: {STATUS_PENDING, STATUS_APPROVED, STATUS_STOPPED},
-        STATUS_STOPPED: {STATUS_PENDING, STATUS_APPROVED},
+        STATUS_STOPPED: {STATUS_STOPPED, STATUS_PENDING, STATUS_APPROVED},
     })
 
 #: Every state a stop may leave (098 CO-21): all but ``stopped``.
@@ -342,6 +348,10 @@ class AppServiceRegistry:
                 f"the new configuration — a running public address is never reconfigured "
                 f"without a new owner approval")
         status = STATUS_APPROVED if approved else STATUS_PENDING
+        if not APP_MACHINE.check(existing["status"], status,
+                                 ctx={"slug": slug, "via": "upsert_request"}):
+            raise ValueError(f"{slug!r} is {existing['status']}; it cannot be requested again "
+                             f"from that state")
         # An approved redeploy PERSISTS the (possibly derived) fingerprint, so an
         # old row is migrated on its first write. A request that differs leaves
         # the approved fingerprint/config alone: it still records what the owner
@@ -421,6 +431,8 @@ class AppServiceRegistry:
         return describe_change(fields)
 
     def claim(self, slug: str, user_id: str, from_status: str, to_status: str) -> bool:
+        if not APP_MACHINE.check(from_status, to_status, ctx={"slug": slug, "via": "claim"}):
+            return False
         rc = execute_retry(
             self.db_path,
             "UPDATE app_services SET status=?, updated_at=? WHERE slug=? AND user_id=? AND status=?",
@@ -438,6 +450,9 @@ class AppServiceRegistry:
         froms = tuple(from_states)
         if not froms or any(f not in ALL_STATUSES for f in froms):
             raise ValueError(f"bad from_states {froms!r}")
+        froms = APP_MACHINE.require_sources(status, froms, ctx={"slug": slug, "via": "set_status"})
+        if not froms:
+            return False
         marks = ",".join("?" * len(froms))
         rc = execute_retry(
             self.db_path,
@@ -462,7 +477,10 @@ class AppServiceRegistry:
 
     def record_failed(self, slug: str, user_id: str, *, error: str,
                       from_states: Sequence[str] = (STATUS_DEPLOYING, STATUS_LIVE)) -> bool:
-        froms = tuple(from_states)
+        froms = APP_MACHINE.require_sources(STATUS_FAILED, tuple(from_states),
+                                            ctx={"slug": slug, "via": "record_failed"})
+        if not froms:
+            return False
         marks = ",".join("?" * len(froms))
         rc = execute_retry(
             self.db_path,
@@ -531,6 +549,9 @@ class AppServiceRegistry:
         # One guarded write (098 S2): the edge is from the status just read;
         # every status may move to ``stopped`` (stopped -> stopped only flags).
         for _ in range(3):
+            if not APP_MACHINE.check(row["status"], STATUS_STOPPED,
+                                     ctx={"slug": slug, "via": "request_remove"}):
+                return "changed"
             rc = execute_retry(
                 self.db_path,
                 "UPDATE app_services SET status=?, remove_requested=COALESCE(remove_requested, ?), "
@@ -543,6 +564,17 @@ class AppServiceRegistry:
             if row is None:
                 return "missing"
         return "changed"
+
+    def record_removal_wait(self, slug: str, user_id: str, error: str) -> bool:
+        """Why a queued removal did not finish this tick, on the row the owner reads
+        (``/apps show``). A note, never a status write; True when the text changed."""
+        rc = execute_retry(
+            self.db_path,
+            "UPDATE app_services SET last_failure_error=?, updated_at=? WHERE slug=? AND "
+            "user_id=? AND status=? AND remove_requested IS NOT NULL "
+            "AND COALESCE(last_failure_error, '') != ?",
+            ((error or "")[:500], time.time(), slug, user_id, STATUS_STOPPED, (error or "")[:500]))
+        return rc == 1
 
     def delete_removed(self, slug: str, user_id: str) -> bool:
         """The supervisor's last step of a removal: delete the row (and its

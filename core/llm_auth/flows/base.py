@@ -1,4 +1,4 @@
-"""Shared flow types, the gate, and the injectable HTTP seam (024 L2)."""
+"""Shared flow types, the gate, and the injectable HTTP seam."""
 from __future__ import annotations
 
 import json
@@ -20,6 +20,10 @@ DEFAULT_FLOW_TIMEOUT_SEC = 600.0
 HTTP_TIMEOUT_SEC = 30.0
 
 
+#: The ``code`` of a FlowError that says nothing of the grant: the endpoint was out of reach.
+TRANSIENT_CODE = "flow_transient"
+
+
 class FlowError(LLMAuthError):
     """A connect flow could not complete. Message is user-facing and must never
     contain a token (see ``_safe_error_body``)."""
@@ -28,7 +32,7 @@ class FlowError(LLMAuthError):
 def oauth_enabled(env=None) -> bool:
     """Gate for the OAuth connect flows — ``LLM_OAUTH_ENABLED``, default OFF.
 
-    Off EVERYWHERE including local (024 §7.4), unlike most local-profile flags:
+    Off EVERYWHERE including local, unlike most local-profile flags:
     connecting a subscription seat is a deliberate owner act with a terms-of-
     service dimension, so it is never switched on as a side effect of running in
     local mode.
@@ -119,10 +123,11 @@ def post_form(url: str, fields: Dict[str, str], *, timeout: float = HTTP_TIMEOUT
             return json.loads(raw)
         except ValueError:
             raise FlowError(
-                f"{url} returned HTTP {exc.code}: {_safe_error_body(raw)}"
+                f"{url} returned HTTP {exc.code}: {_safe_error_body(raw)}",
+                code=TRANSIENT_CODE if exc.code == 429 or exc.code >= 500 else "auth_error",
             ) from None
     except urllib.error.URLError as exc:
-        raise FlowError(f"could not reach {url}: {exc.reason}") from None
+        raise FlowError(f"could not reach {url}: {exc.reason}", code=TRANSIENT_CODE) from None
     try:
         return json.loads(raw)
     except ValueError:
@@ -151,10 +156,11 @@ def post_json(url: str, fields: Dict[str, str], *, timeout: float = HTTP_TIMEOUT
             return json.loads(raw)
         except ValueError:
             raise FlowError(
-                f"{url} returned HTTP {exc.code}: {_safe_error_body(raw)}"
+                f"{url} returned HTTP {exc.code}: {_safe_error_body(raw)}",
+                code=TRANSIENT_CODE if exc.code == 429 or exc.code >= 500 else "auth_error",
             ) from None
     except urllib.error.URLError as exc:
-        raise FlowError(f"could not reach {url}: {exc.reason}") from None
+        raise FlowError(f"could not reach {url}: {exc.reason}", code=TRANSIENT_CODE) from None
     try:
         return json.loads(raw)
     except ValueError:

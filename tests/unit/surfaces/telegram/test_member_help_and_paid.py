@@ -126,11 +126,23 @@ def test_a_room_admins_help_names_only_what_the_admin_can_do(env, priced):
         assert owner_only not in out
 
 
-def test_a_dm_help_is_byte_identical(env, priced):
+def test_the_owners_dm_help_is_byte_identical(env, priced):
     from surfaces.telegram.harness import _help_text
     out = _cmd(_Agent(str(env)),
-               _result("/help", chat_role=None, chat_type="dm", chat_id="55"))
+               _result("/help", chat_role=None, chat_type="dm", chat_id="55",
+                       user_id="alice"))
     assert out == _help_text()
+
+
+def test_a_non_owner_dm_help_is_the_lifecycle_rows(env, priced):
+    """113 W7 F-05: a non-owner DM read the owner catalog; each verb said Owner only."""
+    from surfaces.telegram.help_scope import LIFECYCLE_VERBS
+    out = _cmd(_Agent(str(env)),
+               _result("/help", chat_role=None, chat_type="dm", chat_id="55"))
+    for verb in LIFECYCLE_VERBS:
+        assert f"\n{verb}" in out
+    for owner_only in ("/wallet", "/trade", "/config", "/status", "/task"):
+        assert f"\n{owner_only} " not in out
 
 
 def test_help_with_a_verb_still_works_for_the_owner(env, priced):

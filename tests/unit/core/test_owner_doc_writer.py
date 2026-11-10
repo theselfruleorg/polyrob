@@ -20,7 +20,6 @@ def test_empty_and_anon_refused(tmp_path):
 
 
 def test_agent_propose_requires_review_lands_pending(tmp_path, monkeypatch):
-    monkeypatch.setenv("OWNER_DOC_REQUIRE_REVIEW", "true")
     w = OwnerDocWriter(tmp_path)
     res = w.propose("Owner prefers terse replies.", user_id="u1", created_by="agent")
     assert res.ok and res.pending
@@ -45,7 +44,6 @@ def test_identity_subversion_rejected(tmp_path):
 
 
 def test_forged_author_always_pending_even_review_off(tmp_path, monkeypatch):
-    monkeypatch.setenv("OWNER_DOC_REQUIRE_REVIEW", "false")
     w = OwnerDocWriter(tmp_path)
     res = w.propose("Owner uses metric units.", user_id="u1", created_by="background_review")
     assert res.ok and res.pending  # forced quarantine
@@ -53,7 +51,6 @@ def test_forged_author_always_pending_even_review_off(tmp_path, monkeypatch):
 
 
 def test_forged_author_cannot_patch_active(tmp_path, monkeypatch):
-    monkeypatch.setenv("OWNER_DOC_REQUIRE_REVIEW", "false")
     w = OwnerDocWriter(tmp_path)
     w.propose("Owner name: Alex.", user_id="u1", created_by="user", pending=False)
     res = w.patch(user_id="u1", old_string="Alex", new_string="Sam",
@@ -126,7 +123,6 @@ def test_promote_of_a_sourced_rewrite_keeps_the_draft_stamps(tmp_path, monkeypat
     '[from: owner said 2026-09-20]' was refused 'this line makes a durable claim
     with no provenance'. The owner-review gate must accept a sourced draft, and
     stamp the owner's approval onto anything the draft left bare."""
-    monkeypatch.setenv("OWNER_DOC_REQUIRE_REVIEW", "true")
     w = OwnerDocWriter(tmp_path)
     w.propose("NOTIFY ON EVERY REBUY: every executed tranche is announced.",
               user_id="u1", created_by="user", pending=False, source="owner said",

@@ -175,8 +175,8 @@ def test_find_invalid_preferences_redacts_long_value(tmp_path):
 
 def test_check_env_files_suggests_the_key_with_its_words_reordered(tmp_path):
     """The typo audit uses the shared scorer: plain difflib picked
-    APPROVAL_REQUIRED_TOOLS for TWITTER_APPROVAL_REQUIRED (prod 2026-10-10)."""
+    APPROVAL_REQUIRED_TOOLS for CORRESPONDENT_APPROVAL_REQUIRED (prod 2026-10-10)."""
     envfile = tmp_path / ".env"
-    envfile.write_text("TWITTER_APPROVAL_REQUIRED=true\n")
+    envfile.write_text("CORRESPONDENT_APPROVAL_REQUIRED=true\n")
     findings = check_env_files([envfile])
-    assert findings and "did you mean TWITTER_REQUIRE_APPROVAL?" in findings[0], findings
+    assert findings and "did you mean CORRESPONDENT_REQUIRE_APPROVAL?" in findings[0], findings

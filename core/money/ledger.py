@@ -332,7 +332,8 @@ class SpendLedger:
                submission_ref: Optional[str] = None,
                account: Optional[str] = None,
                native_raw: Optional[int] = None,
-               receipt_state: Optional[str] = None) -> None:
+               receipt_state: Optional[str] = None,
+               deferred_positions: Optional[list] = None) -> None:
         """Record one completed spend.
 
         ``receipt_state`` (098 TS-23): ``"pending_receipt"`` when the verb booked
@@ -367,6 +368,13 @@ class SpendLedger:
         write is tenant-scoped via the ambient exec identity the action batch
         binds (``core/exec_identity.py``) — the same fallback the durable spend
         telemetry uses, since PolicyGate is a shared singleton with no context.
+
+        ``deferred_positions`` (MW-5): the same deltas for a ``pending_receipt``
+        swap, STORED on the entry (plain dicts, the account stamped like
+        ``positions``) with the tenant they belong to (``position_uid``) and NOT
+        applied. The receipt resolver applies them once, in the one process
+        whose resolution moved the entry to ``confirmed``; a revert or an
+        unknown outcome writes nothing.
         """
         amount_usd = _nonnegative_finite(amount_usd)
         if idempotency_key:
@@ -393,6 +401,8 @@ class SpendLedger:
             entry["native_raw"] = int(native_raw)
         if receipt_state:
             entry["receipt_state"] = str(receipt_state)
+        if deferred_positions:
+            self._stamp_deferred(entry, deferred_positions, account)
         self._audit.append(entry)
         # Release the submission interlock only after a DURABLE cap charge.
         # A plain-list test/embedded sink cannot prove persistence.
@@ -425,6 +435,26 @@ class SpendLedger:
                 # spend. The spend above stands regardless.
                 logger.debug("position-store write skipped (fail-open)",
                              exc_info=True)
+
+    @staticmethod
+    def _stamp_deferred(entry: dict, deltas: list, account: Optional[str]) -> None:
+        """Put *deltas* on *entry* for the receipt resolver (see :meth:`record`).
+        Fail-open, like the position write it stands for: no tenant, or a delta
+        that is not a dataclass, stores nothing."""
+        try:
+            import dataclasses
+            from core.exec_identity import current_exec_identity
+            uid, _sid = current_exec_identity()
+            if not uid:
+                return
+            if account:
+                deltas = [dataclasses.replace(p, account=str(account).lower())
+                          for p in deltas]
+            entry["deferred_positions"] = [dataclasses.asdict(p) for p in deltas]
+            entry["position_uid"] = str(uid)
+        except Exception:
+            entry.pop("deferred_positions", None)
+            logger.warning("deferred position deltas not stored", exc_info=True)
 
     def note_receipt(self, entry: dict, state: str, *, block: Optional[int] = None) -> bool:
         """098 TS-23: append the ONE receipt resolution of a ``pending_receipt``

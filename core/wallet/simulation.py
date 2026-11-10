@@ -377,9 +377,11 @@ def simulate(tx: dict, *, holder: str, chain: str,
 
     tx_entry = entries[tx_index]
     if str(tx_entry.get("status")) not in ("0x1", "1"):
+        named = _account_revert_name(tx_entry)
         return Deltas(ok=False, error=(
             f"the transaction REVERTS in simulation "
-            f"({tx_entry.get('error') or 'status 0'})"))
+            f"({tx_entry.get('error') or 'status 0'})"
+            + (f" — the PolyrobAccount refused it on chain: {named}" if named else "")))
 
     # The tx's own event log — the only view that covers tokens and spenders
     # the caller did NOT declare. A missing log SET (key absent, not an empty
@@ -468,11 +470,28 @@ def simulate(tx: dict, *, holder: str, chain: str,
                   watched_native_deltas=watched)
 
 
+def _account_revert_name(entry) -> Optional[str]:
+    """The PolyrobAccount custom error (``erc6551.POLYROB_ACCOUNT_ERRORS``) a reverted call
+    carries in its revert data (``error.data`` or ``returnData``), or None."""
+    err = entry.get("error")
+    candidates = [err.get("data")] if isinstance(err, dict) else []
+    candidates.append(entry.get("returnData"))
+    try:
+        from core.wallet import erc6551
+    except Exception:  # noqa: BLE001 — no crypto extra: no name, the revert still refuses
+        return None
+    for data in candidates:
+        named = erc6551.polyrob_account_error(data) if isinstance(data, str) else None
+        if named:
+            return named
+    return None
+
+
 def _sender_movements(raw_logs, sender: str) -> Tuple[str, ...]:
     """Every log whose INDEXED topics name *sender* (050 §7.3; measured, not judged since 069 v4).
 
     Deliberately wider than :func:`_holder_events`: it does not parse the event,
-    it only asks whether the signer appears in it. AccountV3's own `execute` emits
+    it only asks whether the signer appears in it. An ERC-6551 account's own `execute` (AccountV3, PolyrobAccount) emits
     no event, so a clean account call produces none of these.
     """
     word = "0x" + "0" * 24 + str(sender).lower().removeprefix("0x")

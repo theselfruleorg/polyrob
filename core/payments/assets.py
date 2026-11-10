@@ -106,7 +106,32 @@ def _builtins() -> Dict[str, PaymentAsset]:
                      address=_SOLANA_USDC_DEVNET, decimals=6, symbol="USDC",
                      rail="svm_reference", source="builtin"),
     )
-    return {r.asset_id: r for r in rows}
+    out = {r.asset_id: r for r in rows}
+    for r in _pinned_dollar_rows():
+        out.setdefault(r.asset_id, r)
+    return out
+
+
+def _pinned_dollar_rows() -> List[PaymentAsset]:
+    """109 W1: every USD stablecoin ``core/wallet/chains.py`` pins on a money-enabled
+    EVM chain (its ``usdc`` and ``stables``) is payable as ``<symbol>-<chain>``, e.g.
+    ``usdg-robinhood``. The pins are code-reviewed and verified on chain, so no
+    operator or agent step is needed and no token can be introduced this way: an
+    address that only CALLS itself a dollar is never here (085 M-2)."""
+    from core.wallet.chains import all_rows
+    rows: List[PaymentAsset] = []
+    for row in all_rows():
+        if row.family != "evm" or not row.money_enabled:
+            continue
+        pins = ([(row.usdc, "USDC", 6)] if row.usdc else []) + [
+            (addr, sym, int(dec)) for addr, sym, _name, dec in row.stables]
+        for addr, sym, dec in pins:
+            if addr:
+                rows.append(PaymentAsset(
+                    asset_id=f"{sym.lower()}-{row.name}", chain=row.name,
+                    address=addr.lower(), decimals=dec, symbol=sym,
+                    rail="onchain_scan", source="builtin"))
+    return rows
 
 
 def solana_default_asset_id(network: Optional[str] = None) -> str:

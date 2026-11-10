@@ -68,3 +68,10 @@ def test_start_refuses_a_chat_pin_alone(tmp_path, monkeypatch):
     from polyrob.app.bootstrap import load_env
     with pytest.raises(RetiredFlagError, match="DEFAULT_MODEL"):
         load_env("development")
+
+
+def test_a_retired_gate_says_what_changed_not_that_the_default_holds():
+    from core.config_policy import retired_flags as rf
+    for name, note in rf.RETIRED_GATE_NOTES.items():
+        lines = [x for x in rf.retired_flag_lines({name: "true"}) if name in x]
+        assert lines and note in lines[0] and "default is now permanent" not in lines[0]

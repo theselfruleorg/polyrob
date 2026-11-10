@@ -69,7 +69,9 @@ def _move_policy(home: str, surface: str, old: str, new: str) -> bool:
 
 def _move_focus(home: str, surface: str, old: str, new: str) -> None:
     from core.surfaces import room_focus
-    data = room_focus._read(home)
+    data = room_focus._read(home, for_write=True)
+    if data is None:
+        return               # an unreadable file is not rewritten (it holds other pointers)
     changed = False
     for entry in data.values():
         if isinstance(entry, dict) and entry.get("surface") == surface and str(entry.get("chat_id")) == old:

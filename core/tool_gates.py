@@ -417,6 +417,9 @@ REFUSAL_KINDS: Dict[str, RefusalKind] = {
         "NON_WRITE_ACTIONS", False,
         "'{action}' is an unclassified {effect} write (EXTERNAL_WRITE_STRICT), so it "
         "does not run until a code change classifies it"),
+    "repeat_act": _k(
+        "", "agent", "next-turn", "another post", False,
+        "already replied to this post on {date}{ref}; skip it"),
     "retry_wall": _k(
         "", "agent", "next-turn", "change the call, or the owner's next message", False,
         "you made the SAME call {attempts} times in this turn and it failed each time. "

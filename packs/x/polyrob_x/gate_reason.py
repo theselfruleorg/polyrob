@@ -22,8 +22,6 @@ def owner_gap_reason(tool: Any, execution_context: Any) -> str:
             return "a room turn is not the owner asking"
         if not is_owner_tenant(execution_context):
             return "this turn is not the owner's"
-        if tool._require_approval():
-            return "TWITTER_REQUIRE_APPROVAL is on"
     except Exception:
         tool.logger.debug("twitter owner-gap reason failed", exc_info=True)
     return ""

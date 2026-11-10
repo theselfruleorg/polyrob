@@ -17,7 +17,7 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, Mapping, Optional
 
-from core.state.files import atomic_write_json, file_lock, read_json
+from core.state.files import atomic_write_json, file_lock, read_json_strict
 from core.state.machine import StateMachine
 
 JOURNAL = StateMachine(
@@ -46,7 +46,11 @@ class PhaseJournal:
     # -- reads -----------------------------------------------------------------
 
     def read(self) -> Optional[Dict[str, Any]]:
-        data = read_json(self.path, None)
+        """The entry, or None when there is no journal. An existing journal that
+        cannot be read raises ``UnreadableStateFile``: it may hold an unfinished
+        operation, so it never reads as "nothing pending" and ``begin`` never
+        writes over it."""
+        data = read_json_strict(self.path, None)
         return data if isinstance(data, dict) and data.get("op") else None
 
     def pending(self) -> Optional[Dict[str, Any]]:
@@ -97,6 +101,22 @@ class PhaseJournal:
 
     def failed(self, err: Any) -> Dict[str, Any]:
         return self._update(lambda e: e.__setitem__("error", str(err)[:2000]), "failed")
+
+    def claim(self, expect_owner: str, new_owner: str) -> Optional[Dict[str, Any]]:
+        """Take over an unfinished operation (a compare-and-set on its owner): under
+        the lock, the entry must still be ``running`` and still name
+        ``expect_owner``. Returns the entry now owned by ``new_owner``, or None
+        when another caller took it first or it finished — so two recoverers of
+        one crashed operation never both act on it."""
+        with file_lock(self.path):
+            entry = self.read()
+            if (not entry or entry.get("state") != "running"
+                    or str(entry.get("owner") or "") != str(expect_owner or "")):
+                return None
+            entry["owner"] = str(new_owner or "")
+            entry["updated_at"] = time.time()
+            atomic_write_json(self.path, entry)
+            return entry
 
     def clear(self) -> None:
         """Remove a finished journal (an unfinished one stays: use ``failed``)."""

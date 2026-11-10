@@ -72,7 +72,8 @@ def test_the_console_api_run_holds_the_gate():
     src = (REPO / "api/task_http_api.py").read_text()
     assert "from core.surfaces.owner_turn import surface_owner_turn" in src
     assert 'with surface_owner_turn(kind="console_chat"' in src
-    assert "await agent.run_session(_user_id, _session_id)" in src
+    # The run goes through the refusal-naming wrapper, which awaits run_session.
+    assert "await _run_naming_refusal(agent, _user_id, _session_id)" in src
 
 
 def test_the_email_surface_is_covered_by_the_shared_executor():

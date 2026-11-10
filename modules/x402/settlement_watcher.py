@@ -165,6 +165,9 @@ class SettlementWatcher(SettlementScanMixin, SettlementNotifyMixin,
             logger.warning("settlement watcher: stale-settling sweep failed", exc_info=True)
         try:
             await self._reap_wakes()  # 098 MO-04: a claimed wake that never landed
+        except Exception:
+            logger.warning("settlement watcher: wake reap failed", exc_info=True)
+        try:
             settled = await invoicing.settled_unnotified_invoices(db=self._db)
         except Exception:
             logger.warning("settlement watcher: settled poll failed", exc_info=True)

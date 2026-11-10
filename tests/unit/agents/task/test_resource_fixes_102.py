@@ -244,4 +244,4 @@ def test_an_unknown_model_warns_once(caplog):
     with caplog.at_level(logging.WARNING, logger="modules.llm.model_registry"):
         for _ in range(3):
             reg.get_model("no-such-model-id")
-    assert sum("not found in registry" in r.getMessage() for r in caplog.records) == 1
+    assert sum("no catalog row" in r.getMessage() for r in caplog.records) == 1

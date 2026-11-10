@@ -1,11 +1,9 @@
-"""Registry of LLM clients and available models.
-
-DEPRECATED: Model lists now sourced from model_registry.py for single source of truth.
-This file is kept for backward compatibility with create_llm_client() function.
-"""
+"""Registry of LLM clients and available models: ``create_llm_client``, and the model lists
+that ``model_registry`` supplies."""
 
 from typing import List
-from modules.llm.model_registry import get_registry, ModelProvider
+from modules.llm.model_registry import get_registry
+from modules.llm.model_types import PROVIDER_BY_NAME
 
 def _get_models_for_provider(provider: str) -> List[str]:
     """Get available models for a provider from model_registry.
@@ -17,18 +15,7 @@ def _get_models_for_provider(provider: str) -> List[str]:
         List of model names for the provider
     """
     try:
-        # Map provider names to ModelProvider enum
-        provider_map = {
-            'openai': ModelProvider.OPENAI,
-            'anthropic': ModelProvider.ANTHROPIC,
-            'gemini': ModelProvider.GOOGLE,
-            'google': ModelProvider.GOOGLE,
-            'deepseek': ModelProvider.DEEPSEEK,
-            'openrouter': ModelProvider.OPENROUTER,
-            'nvidia': ModelProvider.NVIDIA,
-        }
-
-        provider_enum = provider_map.get(provider.lower())
+        provider_enum = PROVIDER_BY_NAME.get(provider.lower())
         if not provider_enum:
             return []
 
@@ -42,7 +29,7 @@ def _get_models_for_provider(provider: str) -> List[str]:
 class _LazyAvailableModels:
     """Dict-like provider→models view (values are real ``list``s).
 
-    Proposal 024 (L0): unions the model_registry-backed lists with models
+    Unions the model_registry-backed lists with models
     DECLARED by ProviderSpec rows (``providers.yaml`` ``models:`` keys), so a
     user-declared provider's models are listable/ownable everywhere downstream
     (``polyrob model``, openai-compat ``_provider_owning``, config_store).
@@ -108,7 +95,7 @@ AVAILABLE_MODELS = _LazyAvailableModels()
 # are a business/policy decision, not a capability question.
 # Update manually when default model preferences change.
 DEFAULT_MODELS = {
-    'anthropic': 'claude-sonnet-4-5',
+    'anthropic': 'claude-sonnet-5-5',
     'openai': 'gpt-5',
     'gemini': 'gemini-2.5-flash',
     'deepseek': 'deepseek-flash',  # V4.1 Flash, 1M ctx, thinking on by default
@@ -138,7 +125,7 @@ def get_default_model(provider: str) -> str:
         pinned = None
     if pinned:
         return pinned
-    # Proposal 024: a ProviderSpec may declare its own default (providers.yaml
+    # A ProviderSpec may declare its own default (providers.yaml
     # ``default_model:`` — a new provider like ollama, or an explicit owner
     # override of a built-in). Built-in specs carry default_model=None, so with
     # no user file this is byte-identical to the DEFAULT_MODELS policy literal.
@@ -170,7 +157,7 @@ _CLIENT_MODULES = {
     'GeminiClient': ('modules.llm.gemini_client', 'provider.gemini'),
     'OpenRouterClient': ('modules.llm.openrouter_client', None),
     'NvidiaClient': ('modules.llm.nvidia_client', None),
-    # Proposal 024 generic clients — serve any ProviderSpec whose transport
+    # Generic clients — serve any ProviderSpec whose transport
     # is OpenAI- or Anthropic-compatible (user-declared providers.yaml rows).
     'OpenAICompatClient': ('modules.llm.compat_clients', None),
     'AnthropicCompatClient': ('modules.llm.compat_anthropic', 'provider.anthropic'),
@@ -193,23 +180,25 @@ def resolve_client_class(class_name: str):
     return getattr(importlib.import_module(module_name), class_name)
 
 
-def create_llm_client(name: str, config, container=None, model_type=None):
+def create_llm_client(name: str, config, container=None, model_type=None, isolated=False):
     """Create LLM client based on configuration.
 
     Args:
-        name: Name of the client (anthropic, openai, llama, deepseek, gemini, openrouter)
+        name: Name of the client (a ``PROVIDER_CONFIG`` key)
         config: Bot configuration
         container: Optional dependency container
         model_type: Optional model type override
+        isolated: A client one session owns. It stays out of the container, and its
+            first real call proves the key, so it makes no validation call.
 
     Returns:
         Initialized LLM client instance
     """
     # Resolve the client class from PROVIDER_CONFIG (single source of truth),
-    # importing ONLY the module the provider names. ⚠️ 058 T7.2: this used to
-    # import all eight client classes eagerly, so with the Gemini / Anthropic
-    # SDKs behind extras an OpenRouter deployment (prod) would have died at its
-    # first client build with an ImportError for an SDK it never uses.
+    # importing ONLY the module the provider names. ⚠️ Never import all client
+    # classes eagerly: with the Gemini / Anthropic SDKs behind extras an
+    # OpenRouter deployment would die at its first client build with an
+    # ImportError for an SDK it never uses.
     from modules.llm.model_registry import PROVIDER_CONFIG
 
     if name not in PROVIDER_CONFIG:
@@ -251,7 +240,11 @@ def create_llm_client(name: str, config, container=None, model_type=None):
     # Set model type if provided or available
     if client_model:
         client.model_type = client_model
-        
+
+    if isolated:
+        client._skip_validate = True
+        return client
+
     # Register in container if available
     if container:
         # Check if service already exists

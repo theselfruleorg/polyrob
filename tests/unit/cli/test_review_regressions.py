@@ -112,15 +112,15 @@ def test_resume_rejects_ignored_overrides():
 
 
 @pytest.mark.asyncio
-async def test_empty_session_json(monkeypatch):
-    from cli.commands.session import _session_list
+async def test_empty_session_json(monkeypatch, tmp_path):
+    from cli.commands import session as sess
     import contextlib
-    container = SimpleNamespace(get_agent=lambda name: SimpleNamespace(
-        session_manager=SimpleNamespace(get_all_sessions=lambda: [])))
-    monkeypatch.setattr("cli.commands.session.cli_container", AsyncMock(return_value=container))
+    monkeypatch.setattr(sess, "_data_root", lambda write=False: tmp_path / "sessions")
+    monkeypatch.setattr(sess, "_admin_home", lambda write=False: tmp_path)
+    monkeypatch.setattr(sess, "ensure_env_loaded", lambda: None)
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        await _session_list(False, True)
+        sess._session_list(False, True)
     assert json.loads(out.getvalue()) == []
 
 

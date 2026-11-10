@@ -58,3 +58,17 @@ def test_only_a_provider_error_gives_no_error_line():
     ta = _task_agent("failures", [_item("LLM call failed: 500", with_action=False)])
     text = session_turn_end_notice(ta, "s1")
     assert text and "Last tool error" not in text
+
+
+def test_a_refusal_step_names_the_category_and_gives_no_continue_hint():
+    """A refusal step has no model output, but its halt line is owner text: the chat
+    seat names it, and does not ask for "continue" (that re-sends the refused request)."""
+    from core.exceptions import REFUSAL_HALT_PREFIX
+    refusal = (f"{REFUSAL_HALT_PREFIX}the model declined this request (category: cyber). "
+               "Nothing was retried on another model.")
+    ta = _task_agent("error", [_item("cronjob_edit: bad id"),
+                               _item(refusal, with_action=False)])
+    text = session_turn_end_notice(ta, "s1", failed=True)
+    assert text.startswith("⚠️ My turn ended early: the model declined this request (category: cyber)")
+    assert "Say continue" not in text
+    assert "cronjob_edit" not in text

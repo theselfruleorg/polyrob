@@ -105,7 +105,8 @@ async def guarded_call(tool, *, execution_context, verb: str, intent, inner_to: 
         # CLI1: a cancel during the wait records the broadcast first (one seam).
         from tools.defi.receipt_wait import await_receipt_or_record
         receipt = await await_receipt_or_record(rail, tx_hash, gate=gate, record_kw=rec)
-        gate.record(**rec)
+        from tools.defi.receipt_wait import book_after_receipt
+        book_after_receipt(gate, receipt, **rec)
     tool._last_receipt = (tx_hash, receipt, decision)
     status = {"success": "confirmed", "pending": "in flight"}.get(receipt.status, "REVERTED")
     out = header + f"  tx:       {tx_hash} ({status})"

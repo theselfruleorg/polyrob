@@ -140,10 +140,9 @@ event feed, which no longer receives new DMs. Use `twitter_get_dms` /
 
 Every X write (a post, a thread, a reply, a DM) goes through the same owner rule:
 
-- **A genuine owner turn may post.** With `TWITTER_REQUIRE_APPROVAL` ON (the
-  default) the agent asks you once more before the write; OFF, your request is the
-  approval. A session that holds a correspondent's message (someone who is not you)
-  always needs a real approval, whatever the flag says.
+- **A genuine owner turn may post.** Your request is the approval. A chat that holds
+  someone else's message always needs a real approval. A rule
+  such as "show me each post first" goes in your owner rules, not in a setting.
 - **A standing cron job or goal posts without a per-run approval.**
 - **Any other autonomous run waits in the run for your tap.** It queues the ask (a Telegram
   card, or `/pending`) and waits inside the X action's own timeout. If you do not
@@ -183,7 +182,7 @@ Enable the tool with `X_BROWSER_ENABLED=true`. Its dedicated verbs are:
   visible name, or conversation ID.
 - `x_dm`: send in an existing visible conversation. This is approval-gated and
   blocked for delegated/forged turns.
-- `x_post`: publish a post, also approval-gated.
+- `x_post`: publish a post, with no tap on your own turn or job.
 - `x_reply`: reply under an existing post (status URL or id) — the lane the API tier refuses for non-mentioners; approval-gated like `x_post`.
 
 What counts as proof that an `x_post` or an `x_reply` landed is in

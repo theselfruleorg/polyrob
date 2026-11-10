@@ -30,7 +30,7 @@ def test_click_inventory_contains_p1_commands():
 def test_slash_inventory_contains_core_operator_commands():
     names = {row["name"] for row in slash_command_inventory()}
 
-    assert {"status", "session", "sessions", "tools", "usage"}.issubset(names)
+    assert {"status", "session", "chats", "tools", "usage"}.issubset(names)
 
 
 def test_slash_inventory_contains_p1_parity_commands():

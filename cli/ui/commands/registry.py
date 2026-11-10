@@ -132,7 +132,12 @@ class Command:
     Attributes:
         name:      Canonical name (no leading slash), e.g. ``"status"``.
         handler:   The handler callable (sync or async).
-        help:      One-line help text shown by ``/help``.
+        help:      One-line help text shown by ``/help``. For a verb with a row
+                   in ``core.verbs.VERB_TABLE`` the registry takes the ROW's
+                   text (one meaning per verb on every seat); this value is
+                   then only the fallback for a verb with no row.
+        own_help:  The REASON this command keeps its own ``help`` although
+                   the table has a row. Empty = the table's text.
         aliases:   Alternative invocation names (no leading slash).
         usage:     Optional argument-usage hint shown in ``/help``.
         group:     One of :data:`GROUP_ORDER` — which grouped-``/help``
@@ -152,6 +157,22 @@ class Command:
     help_long: str = ""
     elsewhere: str = ""
     raw_arguments: bool = False
+    own_help: str = ""
+
+
+def _with_table_help(command: Command) -> Command:
+    """The verb table's one-line meaning for a verb it has a row for."""
+    if command.own_help:
+        return command
+    try:
+        from core.verbs import verb_for
+        row = verb_for("/" + command.name)
+    except Exception:  # pragma: no cover — the table is always importable
+        return command
+    if row is None or row.name != "/" + command.name or row.help == command.help:
+        return command
+    from dataclasses import replace
+    return replace(command, help=row.help)
 
 
 class CommandRegistry:
@@ -173,6 +194,7 @@ class CommandRegistry:
         """
         if command.name in self._commands or command.name in self._aliases:
             raise ValueError(f"Duplicate command name: {command.name!r}")
+        command = _with_table_help(command)
         self._commands[command.name] = command
         for alias in command.aliases:
             if alias in self._commands or alias in self._aliases:

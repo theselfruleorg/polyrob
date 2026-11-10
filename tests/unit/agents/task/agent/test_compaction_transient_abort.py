@@ -13,7 +13,8 @@ import logging
 
 import pytest
 
-from core.exceptions import LLMRateLimitError
+from core.exceptions import LLMConnectionError, LLMRateLimitError
+from modules.llm.call_scope import anchored_input_tokens, call_scope, call_timeout_param, scoped_max_retries
 from modules.llm.messages import AIMessage, HumanMessage
 from agents.task.agent.messages.compactor import CompactorMixin
 from agents.task.agent.message_manager.views import (
@@ -71,3 +72,39 @@ async def test_non_transient_failure_uses_static_fallback():
     result = await h.llm_compact_history()
     assert result is True                       # static fallback performed
     assert len(h.history.messages) < before     # middle was compacted
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exc", [TimeoutError(), LLMConnectionError("OpenRouter: Request timed out.")])
+async def test_a_summary_timeout_is_reported_to_the_step(exc):
+    h = _Harness(_RaisingLLM(exc))
+    _fill(h)
+    assert await h.llm_compact_history() is False
+    assert h.last_summary_report == {"timed_out": True}
+
+
+@pytest.mark.asyncio
+async def test_another_transient_failure_is_not_a_timeout():
+    h = _Harness(_RaisingLLM(LLMRateLimitError("429 slow down")))
+    h.last_summary_report = None
+    _fill(h)
+    assert await h.llm_compact_history() is False
+    assert h.last_summary_report is None
+
+
+class _ScopeReader:
+    async def ainvoke(self, messages, **kwargs):
+        self.seen = (call_timeout_param(), anchored_input_tokens(), scoped_max_retries())
+        return AIMessage(content="ok")
+
+
+@pytest.mark.asyncio
+async def test_a_summary_call_owns_its_budget_with_no_sdk_retry_and_no_step_anchor():
+    llm = _ScopeReader()
+    h = _Harness(llm)
+    h.calculate_llm_timeout = lambda: 240.0
+    with call_scope(timeout=30.0, input_tokens=9000):
+        await h._bounded_summary_call(llm, [HumanMessage(content="x")], tools=None)
+        assert anchored_input_tokens() == 9000
+    assert llm.seen == ({"timeout": 240.0}, None, 0)
+    assert call_timeout_param() == {}

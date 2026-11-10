@@ -103,9 +103,9 @@ surfaces/
   never the owner "obey" queue.
 - **Owner-by-email is off** — a `From:` header is forgeable (`forgeable=True` in
   the catalog), so every email sender is correspondent or denied.
-- **Owner alias** (the configured owner id IS the owner principal, no pairing
-  row) is Telegram only (`alias_owner=True`). On the other surfaces the owner is
-  recognised through a pairing row. Widening that is a reviewed security change.
+- **Owner alias** — the configured owner id (`OWNER_<SURFACE>_ID`) IS the owner
+  principal on every surface whose sender id the platform signs (`alias_owner=True`,
+  never `forgeable`). A pairing gives the owner TIER under the sender's own tenant.
 - **Transport only.** Adapters handle fetch/send/dedup/rate-limit; access policy
   and the capability gate live in `core/surfaces/` and
   `agents/task/agent/core/correspondent_gate.py`.

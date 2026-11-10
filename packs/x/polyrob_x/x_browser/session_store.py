@@ -62,7 +62,7 @@ class XSessionStore:
         set to None in ``extra`` is removed."""
         from polyrob.sdk import file_lock
         with file_lock(str(self._store._path)):
-            self._store._data = self._store._load()
+            self._store._data = self._store._load(strict=True)  # unreadable: raise, never replace
             record = self.load_checked(user_id) or {
                 "created_at": datetime.now(timezone.utc).isoformat()}
             if storage_state is not None:

@@ -354,9 +354,17 @@ def _boot_message(req: lc.LifecycleRequest, boot: dict, now: float) -> tuple[str
                     f"(was {lc.version_label(req.from_version, req.from_sha)}) — took {took} s."
                     + _seed_note())
         if res.get("boot_failed"):
+            what = (f"The update to {res.get('to_version') or 'the new version'} "
+                    + ("was interrupted" if res.get("interrupted") else "did not start"))
+            if res.get("rolled_back"):
+                return (lc.OUTCOME_BOOT_FAILED,
+                        f"⚠️ {what}, so I rolled it back. Back online on {label}.")
+            errors = "; ".join(str(e) for e in ((res.get("rollback") or {}).get("errors") or []))
             return (lc.OUTCOME_BOOT_FAILED,
-                    f"⚠️ The update to {res.get('to_version') or 'the new version'} did not "
-                    f"start, so I rolled it back. Back online on {label}.")
+                    f"⚠️ {what}, and the rollback did not complete"
+                    + (f" ({_error_tail(errors)})" if errors else "")
+                    + ". Run `polyrob update --rollback` on the host. "
+                    f"Back online on {label}.")
         if res.get("no_update"):
             return (lc.OUTCOME_BACK_ONLINE,
                     f"✅ Already on the latest version — restarted. Back online on {label}.")
@@ -364,7 +372,8 @@ def _boot_message(req: lc.LifecycleRequest, boot: dict, now: float) -> tuple[str
             return (lc.OUTCOME_UPDATE_FAILED,
                     f"⚠️ The update failed at the '{res.get('failed_step') or 'apply'}' step: "
                     f"{_error_tail(res.get('error'))}. "
-                    + ("It was rolled back. " if res.get("rolled_back") else
+                    + ("Nothing was changed. " if res.get("not_applied") else
+                       "It was rolled back. " if res.get("rolled_back") else
                        "The rollback was incomplete — run `polyrob update --list-snapshots`. ")
                     + f"Back online on {label}.")
         return (lc.OUTCOME_UPDATE_FAILED,

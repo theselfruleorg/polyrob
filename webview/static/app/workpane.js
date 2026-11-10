@@ -33,6 +33,7 @@
  *    043 template carries an inline script.
  */
 import { narrationLine, mmss, isControllerVerb } from './transcript.js';
+import { getJson } from './http.js';
 
 /** The feed event types that ARE an action, matching the transcript's set. */
 const TOOL_TYPES = new Set(['tool_result', 'tool_execution', 'tool_started']);
@@ -461,11 +462,12 @@ export function renderTimeline(root, state, events, copy, opts = {}) {
 
 const ACTIVITY_DEBOUNCE_MS = 5000;
 
-async function getJson(url) {
+// 113 W5 (C-09): http.js::getJson is the one read helper. An HTTP refusal or a
+// failed fetch reads as unreadable (`null`), never as empty.
+async function readOrNull(url) {
   try {
-    const resp = await fetch(url, { credentials: 'include' });
-    if (!resp.ok) return null; // an HTTP refusal reads as unreadable, not empty
-    return await resp.json();
+    const res = await getJson(url);
+    return res.ok ? res.body : null;
   } catch (err) {
     return null;
   }
@@ -473,12 +475,12 @@ async function getJson(url) {
 
 async function loadFiles(sessionId, filesRoot, stateNode, copy, view) {
   const id = encodeURIComponent(sessionId);
-  const tree = (path, depth = 1) => getJson(
+  const tree = (path, depth = 1) => readOrNull(
     `/api/session/${id}/workspace/tree?depth=${depth}${path ? `&path=${encodeURIComponent(path)}` : ''}`);
   // THIS chat's files are the ledger's rows; the tree feeds only "From you"
   // (inbound/) and the one folder link with its count.
   const [arts, inbound, folder] = await Promise.all([
-    getJson(`/api/webgate/artifacts?session_id=${id}`),
+    readOrNull(`/api/webgate/artifacts?session_id=${id}`),
     tree('inbound'),
     tree(''),
   ]);
@@ -496,7 +498,7 @@ async function loadFiles(sessionId, filesRoot, stateNode, copy, view) {
 
 async function loadTimeline(sessionId, tlRoot, stateNode, asideNode, copy) {
   const id = encodeURIComponent(sessionId);
-  const data = await getJson(`/api/session/${id}/feed/events?limit=300`);
+  const data = await readOrNull(`/api/session/${id}/feed/events?limit=300`);
   const events = data && Array.isArray(data.events) ? data.events : (data === null ? null : []);
   renderTimeline(tlRoot, stateNode, events, copy);
   if (asideNode) {

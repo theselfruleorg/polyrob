@@ -43,7 +43,7 @@ VALID_TOOL_IDS = set(_classified_ids()) - {'tool_manage', 'worker_manage'}
 
 #: The frontmatter keys that make a skill a RULE (gate, rank, prerequisites).
 _RULE_KEYS = ("polyrob-triggers", "polyrob-priority", "polyrob-auto-activate", "polyrob-requires",
-              "polyrob-owner-only")
+              "polyrob-owner-only", "polyrob-money-class")
 
 
 def _int_or(value: Any, default: int) -> int:
@@ -73,6 +73,10 @@ def rule_from_frontmatter(meta: Optional[dict]) -> Optional[dict]:
     # or a correspondent's seat (``gate_allows(third_party=True)``). Absent = false.
     if parse_bool(md.get("polyrob-owner-only", "false")):
         rule["owner_only"] = True
+    # 112 W3: a skill whose runs DECIDE money (who is paid, how much): a goal/job that pins
+    # it is money-class (``core.money.classify``). Read from builtin and pack scopes only.
+    if parse_bool(md.get("polyrob-money-class", "false")):
+        rule["money_class"] = True
     requires = md.get("polyrob-requires")
     if requires:
         ids: Any = requires
@@ -247,3 +251,36 @@ def gate_allows(rule: Optional[dict], tool_ids, *, listing: bool = False,
     if listing and tool_ids is None:
         return True
     return money_tool_gate_ok(triggers, tool_ids or [])
+
+
+#: (skill dir, SKILL.md mtime) -> money_class; a shipped skill changes only on deploy.
+_MONEY_CLASS_CACHE: Dict[Tuple[str, float], bool] = {}
+
+
+def pinned_money_class(payload: Optional[dict]) -> bool:
+    """112 W3: whether *payload* pins a skill that declares ``polyrob-money-class: 'true'``.
+
+    Builtin and pack scopes ONLY: a skill the agent authored (the user scope) or a
+    project skill never buys money-class (heavy model, tick priority) for its own run.
+    Fail-closed to False."""
+    from core.config_policy.rigs import pinned_skills
+    for sid in pinned_skills(payload if isinstance(payload, dict) else {}):
+        try:
+            found = scopes.resolve(sid, None)
+            if found is None or not (found.scope == "builtin" or found.scope.startswith("pack:")):
+                continue
+            path = Path(found.path) / "SKILL.md"
+            key = (str(path), path.stat().st_mtime)
+            if key not in _MONEY_CLASS_CACHE:
+                meta, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
+                rule = rule_from_frontmatter(meta) or {}
+                _MONEY_CLASS_CACHE[key] = bool(rule.get("money_class"))
+            if _MONEY_CLASS_CACHE[key]:
+                return True
+        except Exception:
+            logger.debug("money-class read failed for pinned skill %s", sid, exc_info=True)
+    return False
+
+
+from core.money.classify import register_money_skill_probe as _register_probe  # noqa: E402
+_register_probe(pinned_money_class)

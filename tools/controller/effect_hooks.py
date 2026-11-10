@@ -1,6 +1,6 @@
 """Controller hooks that classify, gate and record every outward act (proposal 033).
 
-Two hooks, both registered in ``Controller.__init__`` — never post-hoc on an
+Three hooks, all registered in ``Controller.__init__`` — never post-hoc on an
 instance, because a delegated sub-agent builds a fresh ``Controller`` and a fresh
 ``HookPipeline`` (``agents/task/agent/sub_agent_manager.py``), so a hook attached
 to a parent would never cover delegated work.
@@ -12,6 +12,10 @@ to a parent would never cover delegated work.
   A refusal is recorded as ``outcome="denied"``, so a blocked write is more
   visible than an allowed one. Under ``EXTERNAL_WRITE_STRICT`` a write verb with
   no explicit classification row is refused as well.
+- **repeat** (pre, ``fail_mode="open"``): a verb that declares a subject
+  (``VerbPolicy.subject``) acts once per subject in the window. The refusal is a
+  fact with no ask; the owner typing passes. A verb with no subject never reads
+  the log, so money stays with ``tx_guard``.
 - **record** (post, ``fail_mode="open"``): one ``external_write`` row per
   outward act, on success AND on the error/timeout path
   (``Controller._observe_error_result``), which is why ``outcome`` is real.
@@ -22,15 +26,14 @@ Turn origin cannot be computed in ``core/`` (the autonomy marker lives in
 NOTE: no ``from __future__ import annotations`` in this package — it stringizes
 the registry's first-param annotations.
 """
+import asyncio
+import json
 import logging
 import re
+import time
+import types
 
 logger = logging.getLogger(__name__)
-
-#: The parameter names that carry the content or the addressee of a write, in
-#: the order the dedup fingerprint prefers them. Only a HASH ever leaves here.
-_FINGERPRINT_KEYS = ("text", "body", "content", "message", "tweet", "to",
-                     "target", "slug", "url", "code", "command")
 
 
 def resolve_action_tool(controller, action_name):
@@ -109,13 +112,41 @@ def _target(params):
     return "unknown"
 
 
+def _declared_subject(action_name):
+    """The subject field a verb declares (``VerbPolicy.subject``), or ``""``."""
+    from core.verb_policy import VERB_POLICY
+    row = VERB_POLICY.get(str(action_name or ""))
+    return row.subject if row is not None else ""
+
+
+def _subject(controller, action_name, params):
+    """What this act answers: the declared field, read from the params, else through the
+    verb's own param model, so a property such as ``XReplyAction.status_id`` normalizes the
+    value. ``""`` for a verb with no subject, or when the params do not name one."""
+    field = _declared_subject(action_name)
+    if not field:
+        return ""
+    value = params.get(field) if isinstance(params, dict) else getattr(params, field, None)
+    if value is None and isinstance(params, dict):
+        details = controller.get_action_details(action_name)
+        model = getattr(details, "param_model", None)
+        value = getattr(model(**params), field, None) if model is not None else None
+    return str(value or "").strip()
+
+
 def _fingerprint(params):
-    p = _params_dict(params)
-    for key in _FINGERPRINT_KEYS:
-        v = p.get(key)
-        if isinstance(v, str) and v:
-            return v[:400]
-    return ""
+    """Every param that holds a value, so two rows share a ``dedup`` only when the calls
+    match: the same text to two addressees differs, and a verb's own param names
+    (``texts``, ``tweet_id``, a swap's amounts) count. Only a HASH ever leaves here."""
+    p = {k: v for k, v in _params_dict(params).items() if v not in (None, "", [], {})}
+    return json.dumps(p, sort_keys=True, default=str) if p else ""
+
+
+def _lists_only(action_name, params):
+    """``message(action="posts")`` reads the post ledger. It sends nothing, so it is no act."""
+    if action_name != "message":
+        return False
+    return str(_params_dict(params).get("action") or "").strip().lower() == "posts"
 
 
 def _outcome(result):
@@ -128,11 +159,17 @@ def _outcome(result):
 #: is never stored; these are references to quote and to check.
 _REF_PATTERNS = (re.compile(r"\b0x[0-9a-fA-F]{64}\b"),
                  re.compile(r"\b(?:tweet_id|post_id|message_id)\W{1,4}([\w-]{4,64})"))
+#: A public post's receipt names its new id in words or in a permalink. Social rows only: a
+#: ``message`` receipt quotes the sent text, which may hold a link to anybody's post.
+_SOCIAL_REF_PATTERNS = (re.compile(r"/status/(\d{4,})"),
+                        re.compile(r"\btweet (\d{4,})"),
+                        re.compile(r"\bthread: (\d{4,})"))
 
 
-def _result_ref(result):
+def _result_ref(result, effect=""):
     text = str(getattr(result, "extracted_content", "") or "")[:4000]
-    for pattern in _REF_PATTERNS:
+    patterns = _REF_PATTERNS + (_SOCIAL_REF_PATTERNS if effect == "social" else ())
+    for pattern in patterns:
         match = pattern.search(text)
         if match:
             return match.group(match.lastindex or 0)
@@ -142,7 +179,12 @@ def _result_ref(result):
 def _record(controller, action_name, params, execution_context, tool_id, verdict, outcome,
             result=None):
     from core.effects import record_external_write
-    ref = _result_ref(result)
+    ref = _result_ref(result, verdict.effect)
+    try:
+        subject = _subject(controller, action_name, params)
+    except Exception:
+        logger.warning("effect record: no subject for %s", action_name, exc_info=True)
+        subject = ""
     record_external_write(
         effect=verdict.effect, tool=tool_id or "", action=action_name,
         target=_target(params), surface=_surface(execution_context),
@@ -150,8 +192,31 @@ def _record(controller, action_name, params, execution_context, tool_id, verdict
         confidence=verdict.confidence, outcome=outcome,
         user_id=str(getattr(execution_context, "user_id", "") or ""),
         session_id=str(getattr(execution_context, "session_id", "") or ""),
-        fingerprint=_fingerprint(params),
+        fingerprint=_fingerprint(params), subject=subject,
         extra={"ref": ref} if ref else None)
+
+
+def record_approved_send(action_name, params, *, user_id, ok, text):
+    """A late owner approval sends through no Controller, so the post-hook never sees that
+    act (``approval_queue.run_approved_outbound``). Its row is written here, with its subject,
+    so the repeat check knows the post went out. Fail-open."""
+    try:
+        from core.effects import classify_effect, record_external_write
+        from core.verb_policy import VERB_POLICY
+        row = VERB_POLICY.get(action_name)
+        verdict = classify_effect(row.tool, action_name) if row is not None else None
+        if verdict is None:
+            return
+        ref = _result_ref(types.SimpleNamespace(extracted_content=text), verdict.effect) if ok else ""
+        record_external_write(
+            effect=verdict.effect, tool=row.tool or "", action=action_name,
+            target=_target(params), surface="owner_approval", autonomous=False,
+            confidence=verdict.confidence, outcome="ok" if ok else "error",
+            user_id=str(user_id or ""), fingerprint=_fingerprint(params),
+            subject=str(params.get(row.subject) or "").strip() if row.subject else "",
+            extra={"ref": ref} if ref else None)
+    except Exception:
+        logger.warning("approved send of %s: no row", action_name, exc_info=True)
 
 
 def make_effect_record_hook(controller):
@@ -162,7 +227,7 @@ def make_effect_record_hook(controller):
     async def _effect_record_hook(action_name, params, result, execution_context):
         try:
             tool_id, verdict = _classify(controller, action_name)
-            if verdict is None:
+            if verdict is None or _lists_only(action_name, params):
                 return
             _record(controller, action_name, params, execution_context,
                     tool_id, verdict, _outcome(result), result)
@@ -207,4 +272,49 @@ def make_effect_gate_hook(controller):
     return _effect_gate_hook
 
 
-__all__ = ["make_effect_gate_hook", "make_effect_record_hook", "resolve_action_tool"]
+def make_repeat_act_hook(controller):
+    """pre_tool_call: refuse a second good act on one declared subject.
+
+    Register with ``fail_mode="open"``: the check reads telemetry, and a read fault must not
+    stop the post, so it logs and allows. ``is_owner_driven`` is the wrong predicate here:
+    it passes a standing job's main run, which is the run that repeats.
+    """
+    async def _repeat_act_hook(action_name, params, execution_context):
+        if not _declared_subject(action_name):
+            return None
+        try:
+            subject = _subject(controller, action_name, params)
+            from core.security.owner_turn import is_owner_typing
+            if not subject or is_owner_typing(execution_context, controller):
+                return None
+            from core.effects import last_good_act_on
+            user_id = (getattr(execution_context, "user_id", None)
+                       or getattr(controller, "user_id", "") or "")
+            prior = await asyncio.to_thread(last_good_act_on, subject, user_id=str(user_id))
+        except Exception:
+            logger.warning("repeat check failed for %s (fail-open)", action_name, exc_info=True)
+            return None
+        if prior is None:
+            logger.warning("repeat check: the event log is unreadable; %s passes", action_name)
+            return None
+        if not prior:
+            return None
+        from core.tool_gates import refusal_text
+        ref = str(prior["attrs"].get("ref") or "")
+        reason = refusal_text(
+            "repeat_act", date=time.strftime("%Y-%m-%d", time.gmtime(prior["ts"])),
+            ref=f" ({ref})" if ref else "")
+        try:
+            tool_id, verdict = _classify(controller, action_name)
+            if verdict is not None:
+                _record(controller, action_name, params, execution_context,
+                        tool_id, verdict, "denied")
+        except Exception:
+            logger.debug("repeat denial record failed (fail-open)", exc_info=True)
+        return reason
+
+    return _repeat_act_hook
+
+
+__all__ = ["make_effect_gate_hook", "make_effect_record_hook", "make_repeat_act_hook",
+           "record_approved_send", "resolve_action_tool"]

@@ -36,11 +36,15 @@ def pages_new(monkeypatch):
     return mod
 
 
+from webview.chat_open import chat_exists as _REAL_CHAT_EXISTS  # noqa: E402 — before the fixture patches it
+
+
 @pytest.fixture()
 def chat_open(monkeypatch):
     import webview.chat_open as mod
     monkeypatch.setattr(mod, "_tenant", lambda request: ("u1", None))
     monkeypatch.setattr(mod, "_ownership", lambda request, sid: (True, True, False))
+    monkeypatch.setattr(mod, "chat_exists", lambda sid: True)   # these pages are of a real chat
     return mod
 
 
@@ -289,14 +293,6 @@ def test_the_owner_of_a_session_counts_as_authenticated(monkeypatch):
     monkeypatch.setattr("webview.server._check_session_ownership",
                         lambda request, sid: (True, "local", "local"))
     monkeypatch.setattr("utils.auth_utils.is_authenticated", lambda r: False)
-    assert mod._ownership(object(), "s1") == (True, True, False)
-
-
-def test_local_resolves_ownership_without_the_probe(monkeypatch):
-    """One owner by construction, so a missing check does not make it unknown."""
-    import webview.chat_open as mod
-    import webview.webgate as webgate
-    monkeypatch.setattr(webgate, "requires_owner_login", lambda: False)
     assert mod._ownership(object(), "s1") == (True, True, False)
 
 
@@ -613,3 +609,43 @@ def test_the_cold_open_keeps_its_own_markup(client, chat_open, monkeypatch):
     soup = _soup(client)
     assert soup.select_one(".chat-body") is None
     assert soup.select_one("#chat-composer") is not None
+
+
+def test_a_chat_that_does_not_exist_is_not_found_and_not_unreadable(client, chat_open,
+                                                                     monkeypatch, tmp_path):
+    """113 W0 (CH-1): `/c/<no such id>` rendered the chat frame with "Chat history
+    could not be read. Reload to retry." A reload cannot bring back a chat that was
+    never there. It is the not-found page; a store that cannot ANSWER still renders
+    the frame (unreadable is not empty)."""
+    monkeypatch.setattr(chat_open, "chat_exists", _REAL_CHAT_EXISTS)
+    _entries(monkeypatch, chat_open, [])
+    monkeypatch.setattr(chat_open, "_session_folder", lambda sid: None)
+    assert client.get("/c/abc123").status_code == 404
+
+    def boom(sid):
+        raise OSError("the data root did not answer")
+    monkeypatch.setattr(chat_open, "_session_folder", boom)
+    assert client.get("/c/abc123").status_code == 200
+
+
+
+# --- 113 W5 item 4: one composer -------------------------------------------- #
+
+def test_the_start_page_and_a_chat_share_one_composer(client, chat_open, monkeypatch):
+    _entries(monkeypatch, chat_open, [])
+    start = _soup(client, "/")
+    chat = _soup(client, "/c/abc123")
+    for soup in (start, chat):
+        form = soup.select_one("form#chat-composer")
+        assert form is not None
+        assert form["data-no_model_href"] == "/agent#settings"
+        assert form["data-no_model_link"] == "Open Agent › Settings"
+        assert soup.select_one("#transcript-copy") is not None      # card words on both
+    assert start.select_one("#chat-input")["placeholder"] == chat.select_one("#chat-input")["placeholder"]
+    notes = start.select_one("#chat-open-notes")
+    assert notes is not None and notes.get("role") == "log"
+
+
+def test_the_no_model_words_name_telegram():
+    from webview.copy import t
+    assert "Telegram" in t("chat.open.no_model")

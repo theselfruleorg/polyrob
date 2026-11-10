@@ -170,7 +170,24 @@ def test_the_paired_owner_press_routes_as_owner(tmp_path):
     store = PairingStore(str(tmp_path / "pairing.db"))
     assert store.approve(store.request(pressed.identity.user_id)) == pressed.identity.user_id
     assert resolve_access_tier(_Container(str(tmp_path)), pressed.identity,
+                               env={"POLYROB_OWNER_USER_ID": "u_owner", "POLYROB_REQUIRE_PAIRING": "1"}) == AccessTier.OWNER
+
+
+def test_the_configured_owner_press_routes_as_owner(tmp_path, monkeypatch):
+    """A press is routed as the presser typing: the configured owner's press is the
+    owner principal's tenant and tier (110: no pairing)."""
+    from tools.user_directory import UserDirectory
+    monkeypatch.setenv("OWNER_FEISHU_ID", OWNER)
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u_owner")
+    directory = UserDirectory(str(tmp_path / "users.db"))
+    pressed = parse_card_action(_press(operator=OWNER), user_directory=directory,
+                                chat_types={"oc_dm1": "dm"})
+    assert pressed.identity.user_id == "u_owner"
+    assert resolve_access_tier(_Container(str(tmp_path)), pressed.identity,
                                env={"POLYROB_OWNER_USER_ID": "u_owner"}) == AccessTier.OWNER
+    stranger = parse_card_action(_press(operator=STRANGER), user_directory=directory,
+                                 chat_types={"oc_dm1": "dm"})
+    assert stranger.identity.user_id != "u_owner"
 
 
 def test_the_harness_learns_chat_types_and_routes_a_press(monkeypatch):

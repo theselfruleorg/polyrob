@@ -28,7 +28,8 @@ browser install is needed. Full browser automation is opt-in
 
 `polyrob setup` (the wizard — `polyrob init` is the same command) also binds an **owner** — the identity that autonomy, approvals
 and self-evolution answer to. Interactively it asks for an instance id and an
-owner id. To script it:
+owner id; on a re-run each question offers the value already saved, so Enter keeps it.
+To script it:
 
 ```bash
 polyrob init --no-prompt --owner aria --instance-id aria --openai-key sk-...
@@ -234,7 +235,7 @@ polyrob run "analyze the code in ./src for security issues"
 polyrob run "go to producthunt.com, find the top 3 AI tools, build a comparison table"
 ```
 
-Each `polyrob run` is a fresh session. `--resume <id>` continues one. A fresh
+Each `polyrob run` is a fresh session. `--continue <id> "message"` continues one. A fresh
 session still reads the tail of your conversation (the owner thread), so it is
 a new workspace, not a memory cliff — see [conversation.md](conversation.md).
 

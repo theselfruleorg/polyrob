@@ -1,5 +1,5 @@
-"""095 W13 — the background reviewer runs AFTER a goal / cron run, on a trusted
-outcome signal, patch-first, drafts only, never on an owner or self document."""
+"""095 W13, 108 W6 — the background reviewer runs AFTER a goal / cron run, on a bad
+signal only, patch-first, never on an owner or self document."""
 import asyncio
 import types
 
@@ -15,6 +15,14 @@ def review_on(monkeypatch):
     monkeypatch.setenv("BACKGROUND_REVIEW_ENABLED", "true")
     monkeypatch.setenv("SKILLS_WRITABLE", "true")
     monkeypatch.setattr(br, "_drafts_since", lambda user_id, since_ts: [])
+    monkeypatch.setattr(br, "lane_skill_blocks", lambda *a, **k: "")
+
+    async def _no_measure(*a, **k):
+        return 0
+    import agents.task.agent.core.lane_measure as LM
+    import modules.skills.skill_usage as SU
+    monkeypatch.setattr(LM, "record_changes", _no_measure)
+    monkeypatch.setattr(SU, "get_skill_usage_store", lambda *a, **k: None)
 
 
 class _Mgr:
@@ -37,7 +45,7 @@ def _task_agent(mgr, *, sub=False):
     return types.SimpleNamespace(get_orchestrator=lambda sid: orch)
 
 
-_VERIFIED_GOAL = {"signal_source": "judge", "verified": "verified", "useful": False,
+_VERIFIED_GOAL = {"signal_source": "judge", "verified": "unverified", "useful": False,
                   "skills_loaded": ["report-writing"], "skill_gens": {"report-writing": 3},
                   "lane": "report-writing"}
 
@@ -48,12 +56,12 @@ def _review(task_agent, regime=GOAL, meta=None, outcome="done", pinned=None):
         outcome=outcome, meta=_VERIFIED_GOAL if meta is None else meta, pinned=pinned))
 
 
-def test_reviewer_runs_after_verified_goal_run(review_on):
+def test_reviewer_runs_after_a_failed_verified_goal_run(review_on):
     mgr = _Mgr()
     assert _review(_task_agent(mgr), pinned=["lane-skill"]) is True
     (call,) = mgr.calls
     assert call["parent_llm"] == "AUX"  # the aux (judge) model, not the main one
-    assert "verified=verified" in call["task"] and "signal=judge" in call["task"]
+    assert "verified=unverified" in call["task"] and "signal=judge" in call["task"]
     assert "report-writing@g3" in call["task"]  # loaded skills with patch generation
     assert "FIRST PINNED SKILL OF THIS RUN: lane-skill" in call["task"]
 
@@ -81,13 +89,38 @@ def test_reviewer_runs_outside_the_run_budget(review_on):
     asyncio.run(_flow())
 
 
-@pytest.mark.parametrize("signal", ["self", "none", "", None])
-def test_reviewer_skips_self_signal_runs(review_on, signal):
+@pytest.mark.parametrize("meta", [
+    {"signal_source": "judge", "verified": "verified", "useful": False},
+    {"signal_source": "judge", "verified": True, "useful": False},
+    {"signal_source": "receipt", "useful": True},
+    {"signal_source": "owner", "owner_verdict": "confirm", "useful": False},
+    {"signal_source": "self", "useful": False},
+    {"signal_source": "none"},
+])
+def test_a_plain_success_gets_no_review(review_on, meta):
     mgr = _Mgr()
-    meta = dict(_VERIFIED_GOAL, signal_source=signal)
-    assert br.review_after_run_due(GOAL, meta) is False
+    assert br.review_after_run_due(GOAL, meta, "done") is False
+    assert br.review_after_run_due(CRON, meta, "done") is False
     assert _review(_task_agent(mgr), meta=meta) is False
     assert mgr.calls == []
+
+
+@pytest.mark.parametrize("meta, outcome, signal", [
+    ({"owner_verdict": "correct", "useful": True}, "done", "owner_correct"),
+    ({"verified": False, "useful": True}, "done", "verified_failed"),
+    ({"verified": "unverified"}, "done", "verified_failed"),
+    ({"stop_reason": "max_steps", "signal_source": "self"}, "partial", "run_error"),
+    ({"error": "a tool raised"}, "failed", "run_error"),
+    ({}, "failed", "run_error"),
+])
+def test_each_bad_signal_earns_a_review(meta, outcome, signal):
+    assert br.review_signal(meta, outcome) == signal
+    assert br.review_after_run_due(CRON, meta, outcome) is True
+
+
+@pytest.mark.parametrize("stop", ["cancelled", "control", "awaiting_reply"])
+def test_an_owner_stop_or_a_pause_is_not_a_run_error(stop):
+    assert br.review_signal({"stop_reason": stop, "error": "cut"}, "failed") == ""
 
 
 def test_reviewer_prefers_patch_of_loaded_skill():
@@ -96,7 +129,7 @@ def test_reviewer_prefers_patch_of_loaded_skill():
     assert patch < pinned < create
     assert "action='patch'" in p and "expected_sha256" in p
     assert "smallest span" in p
-    assert "draft" in p
+    assert "live for the next run" in p
 
 
 def test_reviewer_never_writes_owner_or_self_docs(monkeypatch):
@@ -134,20 +167,6 @@ def test_inline_reviewer_skips_room_and_correspondent(monkeypatch, orch_attr):
     assert br.BackgroundReviewMixin._bg_review_should_fire(host, True) is False
 
 
-def test_cron_needs_useful_or_a_classified_failure():
-    receipt = {"signal_source": "receipt", "useful": True}
-    assert br.review_after_run_due(CRON, receipt) is True
-    owner_failed = {"signal_source": "owner", "useful": False, "stop_reason": "max_steps"}
-    assert br.review_after_run_due(CRON, owner_failed) is True
-    owner_quiet = {"signal_source": "owner", "useful": False, "stop_reason": "cancelled"}
-    assert br.review_after_run_due(CRON, owner_quiet) is False
-    assert br.review_after_run_due(CRON, None) is False
-
-
-def test_goal_without_verdict_or_receipt_is_not_reviewed():
-    assert br.review_after_run_due(GOAL, {"signal_source": "owner", "useful": False}) is False
-
-
 def test_gates_still_apply(monkeypatch):
     monkeypatch.setenv("BACKGROUND_REVIEW_ENABLED", "false")
     monkeypatch.setenv("SKILLS_WRITABLE", "true")
@@ -161,16 +180,15 @@ def test_a_leaf_session_is_never_the_reviewed_agent(review_on):
     assert mgr.calls == []
 
 
-def test_one_owner_line_per_review_that_drafted(review_on, monkeypatch):
+def test_a_review_adds_no_second_row_to_a_change(review_on, monkeypatch):
+    """One change, one row: the patch row is the owner's line; the reviewer adds nothing."""
     monkeypatch.setattr(br, "_drafts_since",
                         lambda user_id, since_ts: ["patch report-writing"])
     seen = []
     import core.self_events as se
     monkeypatch.setattr(se, "emit_self_modification", lambda **kw: seen.append(kw))
     _review(_task_agent(_Mgr()))
-    (ev,) = seen
-    assert ev["action"] == "propose" and ev["created_by"] == "background_review"
-    assert "patch report-writing" in ev["note"] and ev["item_id"] == "report-writing"
+    assert seen == []
 
 
 def test_no_owner_line_when_nothing_was_drafted(review_on, monkeypatch):

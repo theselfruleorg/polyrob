@@ -11,8 +11,7 @@ This module provides:
 Lazy package (PEP 562): the provider clients and adapters import their SDKs
 (openai/anthropic/google) at module load, so importing `modules.llm` (or any leaf such
 as `modules.llm.profiles`) must NOT eager-import them. Every public name resolves on first
-attribute access via __getattr__, keeping leaf imports SDK-free for the CLI and server boot
-(P0c, 2026-06-26 runtime-architecture finalization).
+attribute access via __getattr__, keeping leaf imports SDK-free for the CLI and server boot.
 """
 
 from typing import TYPE_CHECKING
@@ -31,8 +30,7 @@ _register(".messages", "BaseMessage", "SystemMessage", "HumanMessage", "AIMessag
 _register(".model_registry", "ModelConfig", "ModelProvider", "ModelPricing",
           "ModelCapabilities", "get_model_config", "register_custom_model",
           "get_all_models", "calculate_cost")
-_register(".token_counter", "TokenUsage", "count_tokens", "count_messages_tokens",
-          "track_usage", "estimate_cost")
+_register(".token_counter", "TokenUsage", "count_tokens", "count_messages_tokens")
 _register(".llm_manager", "LLMManager")
 _register(".llm_client", "LLMClient")
 _register(".openai_client", "OpenAIClient")
@@ -55,8 +53,7 @@ if TYPE_CHECKING:  # static analysis / IDEs only — no runtime import
     from .model_registry import (ModelConfig, ModelProvider, ModelPricing,
                                  ModelCapabilities, get_model_config,
                                  register_custom_model, get_all_models, calculate_cost)
-    from .token_counter import (TokenUsage, count_tokens, count_messages_tokens,
-                                track_usage, estimate_cost)
+    from .token_counter import TokenUsage, count_tokens, count_messages_tokens
     from .llm_manager import LLMManager
     from .llm_client import LLMClient
     from .openai_client import OpenAIClient

@@ -15,6 +15,11 @@ import pytest
 from agents.task.goals.board import GoalBoard
 from agents.task.goals.dispatcher import GoalDispatcher
 
+@pytest.fixture(autouse=True)
+def _cron_on(monkeypatch):
+    # 107 WS-7: with cron off no tick runs a job, so a job holds no goal.
+    monkeypatch.setenv("CRON_ENABLED", "true")
+
 
 @pytest.fixture
 def evlog(tmp_path, monkeypatch):

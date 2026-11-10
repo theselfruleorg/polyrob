@@ -69,6 +69,13 @@ def display_status_readonly() -> bool:
                     if history:
                         current = history[-1]["version"]
         except sqlite3.Error as exc:
+            if (isinstance(exc, sqlite3.OperationalError)
+                    and "readonly database" in str(exc).lower()):
+                # A read of a WAL file must create its -shm next to it.
+                print(f"Could not read {path}: it is a WAL database, and a read "
+                      f"needs to write {path.parent}. Run as the service user or "
+                      f"as a user that can write {path.parent}.")
+                return False
             logger.error("Could not read migration status from %s: %s", path, exc)
             return False
 

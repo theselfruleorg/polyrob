@@ -3,6 +3,8 @@ import asyncio
 
 import click
 
+from cli.commands._options import json_option
+
 
 @click.group(invoke_without_command=True)
 @click.pass_context
@@ -31,8 +33,7 @@ def model(ctx):
 
 
 @model.command("list")
-@click.option("--json", "as_json", is_flag=True,
-              help="Emit providers + usable models as JSON.")
+@json_option(help="Emit providers + usable models as JSON.")
 def model_list(as_json: bool):
     """List available models and provider API key status."""
     asyncio.run(_model_list(as_json=as_json))

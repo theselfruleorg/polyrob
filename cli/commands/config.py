@@ -43,6 +43,7 @@ from typing import Optional
 
 import click
 
+from cli.commands._options import json_option
 from core.paths import polyrob_home
 from core.prefs import (
     PREF_SCHEMA,
@@ -326,20 +327,14 @@ def unset_cmd(key, is_global):
     "present but unusable" line). It edits the home .env — the one file the
     CLI loads (the same file `set` writes).
     """
-    from core.env_file import remove_env_var
+    # 113 W4 item 4: the ONE unset (``core.config_service.unset_value``) the
+    # terminal's `/config unset` runs too.
+    from core.config_service import unset_value
 
-    path = _env_path(True)
-    if remove_env_var(path, key):
-        click.echo(f"Removed {key} from {path}")
-        return
-    legacy = _env_path(False)
-    if key.strip() in _read_env_file(legacy):
-        raise click.ClickException(
-            f"{key} is not set in {path}. It is set in {legacy}, but polyrob "
-            f"does not load that file, so it has no effect — delete the line by "
-            f"hand if you want it gone."
-        )
-    raise click.ClickException(f"{key} is not set in {path}")
+    res = unset_value(key, surface="local")
+    if not res.ok:
+        raise click.ClickException(res.message)
+    click.echo(res.message)
 
 
 # --- `config migrate` — the explicit replacement for the retired backfill -----
@@ -597,8 +592,7 @@ def _is_changed(info) -> bool:
               help="Tenant user id for preference keys (default: resolved identity)")
 @click.option("--home", "home_dir_opt", default=None, hidden=True,
               help="Override the preferences data home (test/ops only)")
-@click.option("--json", "as_json", is_flag=True, default=False,
-              help="Machine-readable output")
+@json_option(help="Machine-readable output")
 def get_cmd(key, user_id, home_dir_opt, as_json):
     """Effective value + source + description for one key (secrets masked)."""
     from core import config_service
@@ -629,8 +623,7 @@ def get_cmd(key, user_id, home_dir_opt, as_json):
               help="Tenant user id for preference keys (default: resolved identity)")
 @click.option("--home", "home_dir_opt", default=None, hidden=True,
               help="Override the preferences data home (test/ops only)")
-@click.option("--json", "as_json", is_flag=True, default=False,
-              help="Machine-readable output")
+@json_option(help="Machine-readable output")
 def list_cmd(group_filter, changed, user_id, home_dir_opt, as_json):
     """Compact listing of every setting (prefs first, then env flags)."""
     from core import config_service
@@ -669,8 +662,7 @@ def list_cmd(group_filter, changed, user_id, home_dir_opt, as_json):
               help="Tenant user id for preference keys (default: resolved identity)")
 @click.option("--home", "home_dir_opt", default=None, hidden=True,
               help="Override the preferences data home (test/ops only)")
-@click.option("--json", "as_json", is_flag=True, default=False,
-              help="Machine-readable output")
+@json_option(help="Machine-readable output")
 def search_cmd(text, user_id, home_dir_opt, as_json):
     """Fuzzy name+description search across prefs and the env-flag catalog."""
     from core import config_service
@@ -696,8 +688,7 @@ def search_cmd(text, user_id, home_dir_opt, as_json):
               help="Tenant user id for preference keys (default: resolved identity)")
 @click.option("--home", "home_dir_opt", default=None, hidden=True,
               help="Override the preferences data home (test/ops only)")
-@click.option("--json", "as_json", is_flag=True, default=False,
-              help="Machine-readable output")
+@json_option(help="Machine-readable output")
 def explain_cmd(key, user_id, home_dir_opt, as_json):
     """Full provenance chain for one key (`git config --show-origin` style)."""
     from core import config_service

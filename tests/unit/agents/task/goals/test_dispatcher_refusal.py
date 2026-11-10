@@ -180,3 +180,47 @@ def test_genuine_done_run_is_recorded_as_success():
     asyncio.run(disp._run_goal(goal))
     assert board.successes, "a run that called done() must be recorded as success"
     assert not board.failures
+
+
+def test_a_model_refusal_names_the_refusal_and_blocks_on_the_first_run():
+    """A model refusal (or a safety filter) halts with "Stopped: …": the board names it,
+    and the goal blocks at once — a retry gets the same answer."""
+    from types import SimpleNamespace
+    from core.exceptions import REFUSAL_HALT_PREFIX
+
+    class _RefusedAgent:
+        async def create_session(self, *, user_id, request):
+            return {"id": "s-ref"}
+
+        async def run_session(self, user_id, session_id):
+            return (f"Session failed: {REFUSAL_HALT_PREFIX}the model declined this request "
+                    "(category: cyber). Nothing was retried on another model.")
+
+        deliver_self_wake = None
+
+    class _Board(_FakeBoard):
+        def __init__(self):
+            super().__init__()
+            self.blocked = []
+
+        def record_failure(self, gid, error=None, session_id=None, claim_token=None):
+            super().record_failure(gid, error=error, session_id=session_id)
+            return SimpleNamespace(id=gid, status="ready", claim_token=claim_token,
+                                   payload={}, consecutive_failures=1, max_retries=3)
+
+        def block_from_ready(self, gid, *, error):
+            self.blocked.append((gid, error))
+            return True
+
+        def get(self, gid):
+            return SimpleNamespace(id=gid, status="blocked", claim_token=None,
+                                   payload={}, consecutive_failures=1, max_retries=3)
+
+    board = _Board()
+    disp = GoalDispatcher(board, _RefusedAgent())
+    asyncio.run(disp._run_goal(Goal(id="g-ref", user_id="u1", title="refused goal")))
+    assert not board.successes
+    gid, error = board.failures[0]
+    assert error.startswith("llm_refused: "), error
+    assert "declined this request (category: cyber)" in error
+    assert board.blocked and board.blocked[0][0] == "g-ref"

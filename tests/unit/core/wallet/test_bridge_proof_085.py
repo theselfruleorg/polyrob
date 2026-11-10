@@ -130,10 +130,14 @@ class _Provider:
         return self.state, "filled"
 
 
-def _evm_await(monkeypatch, *, balances, paid, db, bid, created_at):
+def _evm_await(monkeypatch, *, balances, paid, db, bid, created_at, rise=None):
+    """``rise`` is the balance rise AT the delivering block (default: the
+    last live balance, which is the rise over a zero baseline)."""
     monkeypatch.setattr(bridge_status, "read_out_txs", lambda rid: ["0x" + "1" * 64])
     monkeypatch.setattr(bg, "evm_tx_inflow",
                         lambda h, r, c, n, **k: (paid, int(time.time())))
+    at_block = balances[-1] if rise is None else rise
+    monkeypatch.setattr(bg, "evm_block_rise", lambda h, r, c, n, **k: (7, at_block))
     prove = bg.arrival_prover("0xreq", EVM_RECIPIENT, None, "base", bridge_id=bid,
                               dest_chain_id=8453, created_at=created_at,
                               min_out_raw=FLOOR, db_path=db)
@@ -165,11 +169,50 @@ def test_an_unrelated_balance_rise_without_a_delivering_tx_is_not_arrival(
 
 
 def test_a_delivering_tx_without_the_balance_rise_is_not_arrival(monkeypatch, db):
-    """The balance delta stays as the second check."""
+    """The balance rise AT the delivering block stays as the second check."""
+    bid, created = _row(db, "0xreq")
+    out = _evm_await(monkeypatch, balances=[FLOOR], paid=FLOOR, db=db, bid=bid,
+                     created_at=created, rise=0)
+    assert out.state == bg.STATE_IN_FLIGHT
+    out = _evm_await(monkeypatch, balances=[FLOOR], paid=FLOOR, db=db, bid=bid,
+                     created_at=created, rise=FLOOR - 1)
+    assert out.state == bg.STATE_IN_FLIGHT
+
+
+def test_an_arrival_spent_before_the_next_pass_stays_proven(monkeypatch, db):
+    """The wallet spent the arrived asset: the live balance is back at the
+    baseline, but the rise at the delivering block proves the arrival."""
     bid, created = _row(db, "0xreq")
     out = _evm_await(monkeypatch, balances=[0], paid=FLOOR, db=db, bid=bid,
-                     created_at=created)
-    assert out.state == bg.STATE_IN_FLIGHT
+                     created_at=created, rise=FLOOR)
+    assert out.state == bg.STATE_ARRIVED
+
+
+def test_an_unreadable_block_rise_is_not_proven(monkeypatch, db):
+    bid, created = _row(db, "0xreq")
+    monkeypatch.setattr(bridge_status, "read_out_txs", lambda rid: ["0x" + "1" * 64])
+    monkeypatch.setattr(bg, "evm_tx_inflow",
+                        lambda h, r, c, n, **k: (FLOOR, int(time.time())))
+    monkeypatch.setattr(bg, "evm_block_rise", lambda *a, **k: None)
+    prove = bg.arrival_prover("0xreq", EVM_RECIPIENT, None, "base", bridge_id=bid,
+                              dest_chain_id=8453, created_at=created,
+                              min_out_raw=FLOOR, db_path=db)
+    assert prove() is None and prove.measured == FLOOR
+
+
+def test_evm_block_rise_reads_the_token_balance_at_n_and_n_minus_1():
+    calls = []
+
+    def rpc(method, params):
+        calls.append((method, params))
+        if method == "eth_getTransactionReceipt":
+            return {"status": "0x1", "blockNumber": "0x10"}
+        tag = params[1]
+        return hex(500) if tag == "0x10" else hex(200)
+    assert bg.evm_block_rise("0xh", EVM_RECIPIENT, USDC_BASE, "base", rpc=rpc) == (16, 300)
+    assert [c[1][1] for c in calls if c[0] == "eth_call"] == ["0x10", "0xf"]
+    assert calls[1][1][0]["to"] == USDC_BASE
+    assert calls[1][1][0]["data"].endswith(EVM_RECIPIENT.lower()[2:])
 
 
 def test_evm_tx_inflow_sums_only_token_transfers_to_the_recipient(monkeypatch):
@@ -276,6 +319,7 @@ def _evm_await_hashes(monkeypatch, *, hashes, balances, paid, db, bid, created_a
     monkeypatch.setattr(bridge_status, "read_out_txs", lambda rid: hashes)
     monkeypatch.setattr(bg, "evm_tx_inflow",
                         lambda h, r, c, n, **k: (paid, int(time.time())))
+    monkeypatch.setattr(bg, "evm_block_rise", lambda h, r, c, n, **k: (7, balances[-1]))
     prove = bg.arrival_prover("0xreq", EVM_RECIPIENT, None, "base", bridge_id=bid,
                               dest_chain_id=8453, created_at=created_at,
                               min_out_raw=FLOOR, db_path=db)

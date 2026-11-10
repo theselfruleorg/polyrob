@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any, Dict, List, Optional
 
+from core.event_kinds import GOAL_HOLD_UNREADABLE
+from core.event_log import emit as _emit_event
 from core.sqlite_util import execute_retry
 from core.goal_vocab import (
     KIND_ASK, ASK_OPEN, ASK_FULFILLED, ASK_REJECTED, ASK_OBSOLETE,
@@ -42,13 +45,18 @@ def _widen(blocks):
 # The board's logger name, so a log filter on agents.task.goals.board still sees these.
 logger = logging.getLogger("agents.task.goals.board")
 
+#: A failed open-ask read is recorded for ``/status`` at most once per this window.
+_UNREADABLE_RENOTE_S = 600.0
+#: The monotonic time of the last ``goal_hold_unreadable`` row (process-wide).
+_last_unreadable_emit = [0.0]
+
 #: How many owner decisions a goal keeps on ``payload.owner_answers`` (newest last).
 _OWNER_ANSWERS_KEPT = 5
 
 
-def create_auto_unblock_ask(board: Any, goal: Any) -> Any:
+def create_auto_unblock_ask(board: Any, goal: Any, *, why: Optional[str] = None) -> Any:
     """The dispatcher's automatic "Unblock goal: …" ask for a blocked *goal*."""
-    why = getattr(goal, "last_failure_error", None) or "repeated failures"
+    why = why or getattr(goal, "last_failure_error", None) or "repeated failures"
     return board.create_ask(user_id=goal.user_id, what=f"Unblock goal: {goal.title}",
                             why=why, blocks_goal_ids=[goal.id],
                             extra_payload={ASK_AUTO_UNBLOCK: True})
@@ -65,7 +73,8 @@ class BoardAsksMixin:
     # owner" is a failed run, the goal goes straight back to ``ready``, and the
     # dispatcher served it again (7 re-fires in 75 min, ~$0.42, an overclaim the
     # judge had to reject, and a ping per run). The hold lives in the ready
-    # selection so every caller (the dispatcher, the views) sees the same board. Fail-open: an unreadable ask set holds nothing.
+    # selection so every caller (the dispatcher, the views) sees the same board. Fail-closed: an
+    # unreadable ask set holds every goal for this read (an open ask may name it).
 
     def _held_by_open_ask(self) -> Dict[str, str]:
         """goal_id -> ask_id for every goal an OPEN ask names (all tenants; goal
@@ -78,23 +87,52 @@ class BoardAsksMixin:
         ) or []
         held: Dict[str, str] = {}
         for r in rows:
+            # One bad row holds nothing and never raises: a raise here fails the
+            # whole read closed and freezes every goal of every tenant.
             try:
-                ids = (json.loads(r["payload"] or "{}") or {}).get("blocks_goal_ids") or []
+                payload = json.loads(r["payload"] or "{}") or {}
             except (ValueError, TypeError):
+                payload = None
+            ids = payload.get("blocks_goal_ids") if isinstance(payload, dict) else None
+            if ids is not None and not isinstance(ids, list):
+                ids = None
+            if ids is None:
+                if not isinstance(payload, dict):
+                    logger.warning("open ask %s: payload is not an object; it holds no goal",
+                                   r["id"])
+                elif "blocks_goal_ids" in payload:
+                    logger.warning("open ask %s: blocks_goal_ids is not a list; it holds "
+                                   "no goal", r["id"])
                 continue
             for gid in ids:
-                if gid:
+                if gid and isinstance(gid, (str, int)):
                     held.setdefault(str(gid), str(r["id"]))
         return held
+
+    @staticmethod
+    def _note_unreadable(error: Exception, ready: int) -> None:
+        """The owner-visible record of a failed open-ask read (``/status`` raises a
+        CRIT from it): one row per ``_UNREADABLE_RENOTE_S``, never more."""
+        now = time.monotonic()
+        last = _last_unreadable_emit[0]
+        if last and now - last < _UNREADABLE_RENOTE_S:
+            return
+        _last_unreadable_emit[0] = now
+        _emit_event(GOAL_HOLD_UNREADABLE, source="goal_board", attrs={
+            "error": f"{type(error).__name__}: {error}"[:200], "ready": int(ready)})
 
     def _drop_held(self, goals: List[Goal]) -> List[Goal]:
         if not goals:
             return goals
         try:
             held = self._held_by_open_ask()
-        except Exception:
-            logger.debug("hold-by-ask read failed (fail-open: nothing held)", exc_info=True)
-            return goals
+        except Exception as e:
+            # An open ask may name any of these goals, and a goal served past its ask
+            # re-runs into the same owner decision: hold them all until the next read.
+            logger.warning("hold-by-ask read failed: no goal is served this tick",
+                           exc_info=True)
+            self._note_unreadable(e, len(goals))
+            return []
         if not held:
             return goals
         kept: List[Goal] = []

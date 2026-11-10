@@ -37,6 +37,7 @@ it again before you act on it.
 | What | Where |
 |---|---|
 | A rule the owner states ("never post X") | `owner_doc_manage` (a draft the owner confirms) |
+| A job's on/off state, schedule, id or progress | the job itself (`cronjob_*`), never `owner_doc_manage` |
 | A typed setting (reply length, digest, quotas) | `preferences(operation="set", …)` |
 | What YOU learned about your own work | `self_context_manage` |
 | A procedure you will run again | `skill_manage` (see `skill-authoring`) |

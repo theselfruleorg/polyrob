@@ -386,7 +386,8 @@ class TaskAgentLifecycleMixin:
         try:
             balance_mgr = self.container.get_service('balance_manager')
             if not balance_mgr:
-                logger.warning("Balance manager not available - skipping credit check")
+                # An install with no credit rail has no balance manager: not a fault.
+                logger.debug("Balance manager not available - skipping credit check")
                 return
 
             has_credits = await balance_mgr.has_sufficient_balance(user_id, min_credits)

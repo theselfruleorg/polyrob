@@ -8,7 +8,7 @@ import agents.task.agent.core.background_review as br
 
 @pytest.mark.asyncio
 async def test_in_flight_key_released_when_cancelled_before_start(monkeypatch):
-    monkeypatch.setattr(br, "review_after_run_due", lambda regime, meta: True)
+    monkeypatch.setattr(br, "review_after_run_due", lambda regime, meta, outcome="": True)
     br._REVIEWS_IN_FLIGHT.discard("u1")
     br.schedule_review_after_run(object(), user_id="u1", rail_id="cron:j", regime="x")
     assert "u1" in br._REVIEWS_IN_FLIGHT
@@ -48,3 +48,36 @@ async def test_inline_review_not_spawned_twice_while_running():
     await asyncio.sleep(0)
     assert runs == [1, 1]
     gate.set()
+
+
+@pytest.mark.asyncio
+async def test_a_correction_review_waits_for_the_running_review_instead_of_being_lost(monkeypatch):
+    """The verdict marks a run corrected once: a correction review skipped while another
+    review ran was never made. It waits for that review and then runs."""
+    gate = asyncio.Event()
+    ran = []
+
+    async def first(*_a, **_k):
+        ran.append("run")
+        await gate.wait()
+        return True
+
+    async def correction(*_a, **_k):
+        ran.append("verdict")
+        return True
+
+    monkeypatch.setattr(br, "review_after_run_due", lambda regime, meta, outcome="": True)
+    monkeypatch.setattr(br, "review_after_run", first)
+    monkeypatch.setattr(br, "review_after_verdict", correction)
+    br._REVIEWS_IN_FLIGHT.discard("u2")
+    br.schedule_review_after_run(object(), user_id="u2", rail_id="cron:j", regime="x")
+    await asyncio.sleep(0)
+    episode = type("E", (), {"user_id": "u2"})()
+    br.schedule_review_after_verdict(object(), None, episode=episode, rail_id="cron:j", meta={})
+    await asyncio.sleep(0)
+    assert ran == ["run"]
+    gate.set()
+    for _ in range(6):
+        await asyncio.sleep(0)
+    assert ran == ["run", "verdict"]
+    assert "u2" not in br._REVIEWS_IN_FLIGHT and "u2" not in br._QUEUED_REVIEWS

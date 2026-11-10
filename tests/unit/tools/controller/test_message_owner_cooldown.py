@@ -253,3 +253,39 @@ def test_an_empty_autonomous_send_is_a_validation_error_not_a_cooldown(monkeypat
     assert res.error and not res.extracted_content
     assert "text" in res.error and "empty" in res.error
     assert "already reached" not in res.error
+
+
+# --- 2026-11-06: reworded copies and bursts (prod hero run, ~30 sends in 5 min) ---
+from tools.controller.turn_origin import _is_paraphrase_of_any
+
+
+_HERO = ("Hero post is live: X thread 2118659803333419410, TG channel msg 83, Den msg 4028. "
+         "Ledger lines are in my earlier message, please paste them into the three files.")
+
+
+def test_paraphrase_of_a_sent_message_is_detected():
+    again = ("Ladder hero is live. X thread 2118659803333419410, TG channel msg 83, Den msg 4028. "
+             "Ledger lines are in my earlier message; please paste them into the three files.")
+    assert _is_paraphrase_of_any(again, [_HERO])
+
+
+def test_materially_new_report_is_not_a_paraphrase():
+    new = ("Credit is 11.27 dollars after the top-up, the service is healthy and the next "
+           "content job is the 18:30 contest post which waits for the posting cooldown.")
+    assert not _is_paraphrase_of_any(new, [_HERO])
+
+
+def test_short_messages_only_match_on_exact_hash():
+    assert not _is_paraphrase_of_any("done, all good", ["done, all good now"])
+
+
+def test_burst_of_owner_messages_is_refused_even_when_each_is_new(monkeypatch):
+    monkeypatch.setenv("OWNER_MESSAGE_COOLDOWN_SEC", "7200")
+    import core.surfaces.owner_thread as ot
+    monkeypatch.setattr(ot, "recent_outbound_bodies",
+                        lambda container, user_id, since, **kw: [f"distinct report number {i} about topic {i*7}" for i in range(8)])
+    res = _autonomous_owner_resend_cooldown_refusal(
+        _AUTONOMOUS_CTX, _Controller(), container=_FakeContainer(_FakeStore()), user_id="alice",
+        surface="telegram", target="owner", owner_targets=_OWNER_TARGETS,
+        text="a brand new sentence with entirely different words about nothing seen before today")
+    assert res is not None and res.error

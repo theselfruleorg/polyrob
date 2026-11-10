@@ -27,10 +27,21 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+_DAILY_CAP_HEAD = "- rolling 24h cap:"
+_DAILY_CAP_FACT = re.compile(rf"^{_DAILY_CAP_HEAD} (?P<cap>\S+) \(used [^,)]*, left [^)]*\)$")
+
+
+def daily_cap_fact(line: str) -> Optional[str]:
+    """The cap in a rendered rolling-cap line, not the spend inside it. None when *line* is
+    not that line."""
+    found = _DAILY_CAP_FACT.match(line)
+    return found["cap"] if found else None
 
 #: The largest ticket (USD) a buy may carry when no independent price agrees
 #: with the route and the token is not trusted (owner pin, own launch, the
@@ -131,7 +142,7 @@ def render_spend_limits(lim: SpendLimits) -> List[str]:
         used = ("used: unreadable" if lim.used_24h_usd is None else
                 f"used {_usd(lim.used_24h_usd)}, left "
                 f"{_usd(max(0.0, lim.daily_usd - lim.used_24h_usd))}")
-        out.append(f"- rolling 24h cap: {_usd(lim.daily_usd)} ({used})")
+        out.append(f"{_DAILY_CAP_HEAD} {_usd(lim.daily_usd)} ({used})")
     else:
         out.append("- rolling 24h cap: unreadable — do not state a number")
     if lim.tiered_lane is False:

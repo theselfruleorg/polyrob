@@ -129,6 +129,10 @@ class VerbPolicy:
     #: A PUBLIC read a deterministic cron read job may run with no turn context
     #: (``cron/read_job.READ_VERBS``).
     read_job: bool = False
+    #: The param (or a property of the param model) that names what this public
+    #: act answers: one post gets one such act (``effect_hooks.make_repeat_act_hook``).
+    #: Only a ``social`` verb may declare it: money keeps ``tx_guard``.
+    subject: str = ""
 
     def __post_init__(self) -> None:
         for field in ("simulatable", "risk_reducing", "correspondent_blocked", "room_denied",
@@ -144,6 +148,8 @@ class VerbPolicy:
             raise ValueError(f"VerbPolicy {self.name}: a read_job verb is a read")
         if not self.name or self.name != self.name.strip():
             raise ValueError(f"VerbPolicy: bad action name {self.name!r}")
+        if self.subject and self.effect != "social":
+            raise ValueError(f"VerbPolicy {self.name}: only a social verb declares a subject")
         if self.effect not in EFFECT_VALUES:
             raise ValueError(f"VerbPolicy {self.name}: unknown effect {self.effect!r}")
         object.__setattr__(self, "approval", frozenset(self.approval))

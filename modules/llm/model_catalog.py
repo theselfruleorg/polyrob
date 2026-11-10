@@ -1,9 +1,11 @@
-"""Built-in model CATALOG — the data half of the model registry (current as of Dec 2025).
+"""Built-in model CATALOG — the data half of the model registry.
 
-Split out of ``modules/llm/model_registry.py`` (S4, 2026-08-29). This module holds ONLY
-``ModelConfig`` rows; ``ModelRegistry._initialize_models`` calls ``register_builtin_models``
-with its ``_register_model`` bound method. Pricing math lives in ``model_pricing``; the
-enum/dataclasses in ``model_types``.
+``ModelRegistry._initialize_models`` calls ``register_builtin_models`` with its
+``_register_model`` bound method; ``catalog_lookup`` reads the same rows with no registry.
+Pricing math lives in ``model_pricing``; the
+enum/dataclasses in ``model_types``. ``devtools/catalog_diff.py`` checks the OpenRouter
+rows against the live list. A catalog price is an estimate; ``billed_cost_usd`` is the
+spend truth.
 """
 from typing import Callable
 
@@ -13,9 +15,7 @@ from modules.llm.model_types import ModelCapabilities, ModelConfig, ModelPricing
 def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
     """Register every built-in model through *register* (one ``ModelConfig`` per call)."""
 
-    # ========================================
     # OPENAI MODELS
-    # ========================================
 
     # GPT-5.1 Series (Released Nov 12, 2025)
     # Source: https://openai.com/index/gpt-5-1-for-developers/
@@ -247,38 +247,36 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
     # ========================================
     # ANTHROPIC MODELS
     # Source: https://docs.anthropic.com/en/docs/about-claude/models
-    # DEPRECATED ALIASES: Claude 3.x names are mapped onto the 4.5 models below
-    # for backward compatibility.
     # ========================================
 
     # ----------------------------------------
-    # CURRENT LINEUP (Fable 5 / Opus 4.6-4.8 / Sonnet 4.6-5)
-    # All 1M-context natively (no beta header — cross-checked vs the live
-    # OpenRouter anthropic mirror, 2026-07-14) and 128K max output. Extended
+    # CURRENT LINEUP (Fable 5 / Opus 4.6-4.8 / Sonnet 4.6-5); Opus 5.5, Sonnet 5.5
+    # and Haiku 5.5 are in model_catalog_recent.py.
+    # All 1M-context natively (no beta header) and 128K max output. Extended
     # thinking is ADAPTIVE on these models — `budget_tokens` is rejected (400)
     # on Fable 5 / Opus 4.7-4.8 / Sonnet 5 and deprecated on Opus 4.6 /
     # Sonnet 4.6 — so `thinking_budget_tokens` is left unset (adaptive/effort
     # is the control, get_thinking_config() returns {} => no thinking params
-    # sent, byte-identical to today). max_completion_tokens kept at the 64000
-    # family convention (128K output would require streaming). Pricing from
-    # the claude-api model catalog (cached 2026-06-24).
+    # sent). max_completion_tokens kept at the 64000 family convention on rows
+    # older than Fable 5.1. Pricing from the claude-api model catalog.
     # ----------------------------------------
 
-    # F9 (063 WS-4, 2026-09-23): `supports_mid_conversation_tool_changes` is the
+    # `supports_mid_conversation_tool_changes` is the
     # ONE table that answers "may this model be sent `defer_loading` tools and
     # `tool_addition` messages" (beta mid-conversation-tool-changes-2026-07-01).
-    # Available on Claude Opus 5 onward — Opus 5, Fable 5, Fable 5.1 and the
-    # Mythos 5 family. Deliberately NOT set on Opus 4.8 or older, on Sonnet 4.6,
-    # or on Sonnet 5 (unverified — treated as unsupported).
+    # Available on Opus 5.5, Opus 5, Opus 4.8, Fable 5, Fable 5.1 and Sonnet 5.5
+    # (claude-api prompt-caching reference). NOT on Sonnet 5, Sonnet 4.6, Opus 4.7
+    # or older.
 
-    # Claude Fable 5 - most capable widely-released model (thinking always on)
+    # Claude Fable 5 - thinking always on, cache read $1/MTok.
     register(ModelConfig(
         name="claude-fable-5",
         provider=ModelProvider.ANTHROPIC,
         context_window=1000000,
         max_completion_tokens=64000,
-        pricing=ModelPricing(input_price=10.00, output_price=50.00),
+        pricing=ModelPricing(input_price=10.00, cached_input_price=1.00, output_price=50.00),
         capabilities=ModelCapabilities(
+            supports_vision=True,
             supports_thinking=True,  # always-on adaptive; budget_tokens rejected
             supports_mid_conversation_tool_changes=True,
         ),
@@ -296,23 +294,24 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
         pricing=ModelPricing(
             input_price=10.00, output_price=50.00, cached_input_price=0.25),
         capabilities=ModelCapabilities(
+            supports_vision=True,
             supports_thinking=True,  # always-on adaptive; budget_tokens rejected
-            supports_mid_conversation_tool_changes=True,
+            supports_mid_conversation_tool_changes=True, preserves_thinking=True,
         ),
         chars_per_token=5.0,
         aliases=["claude-fable-5.1", "fable-5-1", "fable-5.1"]
     ))
 
-    # Claude Opus 5 - the current flagship Opus and the first model with
-    # mid-conversation tool changes. Also the fallback target for any unknown
-    # `claude-opus-*` id (F31 family chain in model_registry.py).
+    # Claude Opus 5 - the fallback target for any unknown `claude-opus-*` id
+    # (family chain in model_registry.py).
     register(ModelConfig(
         name="claude-opus-5",
         provider=ModelProvider.ANTHROPIC,
         context_window=1000000,
         max_completion_tokens=64000,
-        pricing=ModelPricing(input_price=5.00, output_price=25.00),
+        pricing=ModelPricing(input_price=5.00, cached_input_price=0.50, output_price=25.00),
         capabilities=ModelCapabilities(
+            supports_vision=True,
             supports_thinking=True,  # adaptive; budget_tokens rejected (400)
             supports_mid_conversation_tool_changes=True,
         ),
@@ -320,15 +319,17 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
         aliases=["claude-opus5", "opus-5", "claude-5-opus"]
     ))
 
-    # Claude Opus 4.8 - most capable Opus-tier (current flagship Opus)
+    # Claude Opus 4.8
     register(ModelConfig(
         name="claude-opus-4-8",
         provider=ModelProvider.ANTHROPIC,
         context_window=1000000,
         max_completion_tokens=64000,
-        pricing=ModelPricing(input_price=5.00, output_price=25.00),
+        pricing=ModelPricing(input_price=5.00, cached_input_price=0.50, output_price=25.00),
         capabilities=ModelCapabilities(
+            supports_vision=True,
             supports_thinking=True,  # adaptive; budget_tokens rejected (400)
+            supports_mid_conversation_tool_changes=True,
         ),
         chars_per_token=5.0,
         aliases=["claude-opus-4.8", "claude-4.8-opus", "opus-4.8", "opus-4-8"]
@@ -342,6 +343,7 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
         max_completion_tokens=64000,
         pricing=ModelPricing(input_price=5.00, output_price=25.00),
         capabilities=ModelCapabilities(
+            supports_vision=True,
             supports_thinking=True,  # adaptive; budget_tokens rejected (400)
         ),
         chars_per_token=5.0,
@@ -356,22 +358,22 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
         max_completion_tokens=64000,
         pricing=ModelPricing(input_price=5.00, output_price=25.00),
         capabilities=ModelCapabilities(
+            supports_vision=True,
             supports_thinking=True,  # adaptive (budget_tokens deprecated here)
         ),
         chars_per_token=5.0,
         aliases=["claude-opus-4.6", "opus-4.6", "opus-4-6"]
     ))
 
-    # Claude Sonnet 5 - near-Opus quality on coding/agentic at Sonnet cost.
-    # Standard pricing $3/$15 (intro $2/$10 through 2026-08-31); the standard
-    # rate is used here so cost estimates never under-bill during the intro.
+    # Claude Sonnet 5 - the previous Sonnet.
     register(ModelConfig(
         name="claude-sonnet-5",
         provider=ModelProvider.ANTHROPIC,
         context_window=1000000,
         max_completion_tokens=64000,
-        pricing=ModelPricing(input_price=3.00, output_price=15.00),
+        pricing=ModelPricing(input_price=2.00, cached_input_price=0.20, output_price=10.00),
         capabilities=ModelCapabilities(
+            supports_vision=True,
             supports_thinking=True,  # adaptive on by default; budget_tokens rejected
         ),
         chars_per_token=5.0,
@@ -386,6 +388,7 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
         max_completion_tokens=64000,
         pricing=ModelPricing(input_price=3.00, output_price=15.00),
         capabilities=ModelCapabilities(
+            supports_vision=True,
             supports_thinking=True,  # adaptive (budget_tokens deprecated here)
         ),
         chars_per_token=5.0,
@@ -393,7 +396,7 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
     ))
 
     # ----------------------------------------
-    # LEGACY LINEUP (still active; default anthropic model = claude-sonnet-4-5)
+    # LEGACY LINEUP (claude-sonnet-4-5 retires 2026-11-30)
     # ----------------------------------------
 
     # Claude 4.5 Series
@@ -401,85 +404,50 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
         name="claude-sonnet-4-5",
         provider=ModelProvider.ANTHROPIC,
         context_window=200000,  # 1M with beta header
-        max_completion_tokens=64000,  # FIXED: Anthropic max is 64000, not 65536
+        max_completion_tokens=64000,  # Anthropic max is 64000
         pricing=ModelPricing(input_price=3.00, output_price=15.00),
         capabilities=ModelCapabilities(
+            supports_vision=True,
             supports_thinking=True,  # Extended thinking supported
-            thinking_budget_tokens=64000,  # UP-07 (was AnthropicClient.EXTENDED_THINKING_MODELS)
+            thinking_budget_tokens=64000,
         ),
         chars_per_token=5.0,
         knowledge_cutoff="2025-01",
-        aliases=[
-            # Current aliases
-            "claude-sonnet-4.5", "claude-4.5-sonnet", "claude-sonnet-4", "claude-sonnet-4-5-20250929",
-            # DEPRECATED Claude 3.5 Sonnet aliases (maps to 4.5 for backward compat)
-            "claude-3-5-sonnet-20241022", "claude-3-5-sonnet-20240620",
-            "claude-3-5-sonnet-latest", "claude-3-5-sonnet", "claude-3.5-sonnet",
-            "claude-3-sonnet-20240229", "claude-3-sonnet"
-        ]
+        aliases=["claude-sonnet-4.5", "claude-4.5-sonnet", "claude-sonnet-4-5-20250929"]
     ))
 
     register(ModelConfig(
         name="claude-haiku-4-5",
         provider=ModelProvider.ANTHROPIC,
         context_window=200000,
-        max_completion_tokens=64000,  # FIXED: Anthropic max is 64000, not 65536
+        max_completion_tokens=64000,  # Anthropic max is 64000
         pricing=ModelPricing(input_price=1.00, output_price=5.00),
         capabilities=ModelCapabilities(
+            supports_vision=True,
             supports_thinking=True,  # Extended thinking supported
-            thinking_budget_tokens=64000,  # UP-07 (was AnthropicClient.EXTENDED_THINKING_MODELS)
+            thinking_budget_tokens=64000,
         ),
         chars_per_token=5.0,
         knowledge_cutoff="2025-02",
-        aliases=[
-            # Current aliases
-            "claude-haiku-4.5", "claude-4.5-haiku", "claude-haiku-4-5-20251001",
-            # DEPRECATED Claude 3.5 Haiku aliases (maps to 4.5 for backward compat)
-            "claude-3-5-haiku-20241022", "claude-3-5-haiku-latest", "claude-3-5-haiku",
-            "claude-3.5-haiku", "claude-3-haiku-20240307", "claude-3-haiku"
-        ]
+        aliases=["claude-haiku-4.5", "claude-4.5-haiku", "claude-haiku-4-5-20251001"]
     ))
 
-    # Claude Opus 4.5 - NEW Premium model (Nov 2025)
-    # Maximum intelligence with practical performance
+    # Claude Opus 4.5
     register(ModelConfig(
         name="claude-opus-4-5",
         provider=ModelProvider.ANTHROPIC,
         context_window=200000,
-        max_completion_tokens=64000,  # FIXED: Anthropic max is 64000, not 65536
+        max_completion_tokens=64000,  # Anthropic max is 64000
         pricing=ModelPricing(input_price=5.00, output_price=25.00),
         capabilities=ModelCapabilities(
+            supports_vision=True,
             supports_thinking=True,  # Extended thinking supported
-            thinking_budget_tokens=64000,  # UP-07 (was AnthropicClient.EXTENDED_THINKING_MODELS)
+            thinking_budget_tokens=64000,
         ),
         chars_per_token=5.0,
         knowledge_cutoff="2025-03",
-        aliases=[
-            # Current aliases
-            "claude-opus-4.5", "claude-4.5-opus", "claude-opus-4-5-20251101",
-            # DEPRECATED Claude 3 Opus aliases (maps to 4.5 for backward compat)
-            "claude-3-opus-20240229", "claude-3-opus", "claude-3.0-opus"
-        ]
+        aliases=["claude-opus-4.5", "claude-4.5-opus", "claude-opus-4-5-20251101"]
     ))
-
-    # Claude Opus 4.1 - Specialized reasoning (legacy)
-    register(ModelConfig(
-        name="claude-opus-4-1",
-        provider=ModelProvider.ANTHROPIC,
-        context_window=200000,
-        max_completion_tokens=32768,  # 32K output
-        pricing=ModelPricing(input_price=15.00, output_price=75.00),
-        capabilities=ModelCapabilities(
-            supports_thinking=True,
-            thinking_budget_tokens=32768,  # UP-07 (was AnthropicClient.EXTENDED_THINKING_MODELS)
-        ),
-        chars_per_token=5.0,
-        knowledge_cutoff="2025-01",
-        aliases=["claude-4-opus", "claude-opus-4", "claude-opus-4.1", "claude-opus-4-1-20250805"]
-    ))
-
-    # Claude 3.x Series - REMOVED (deprecated Oct 2025)
-    # Deprecated model names are now aliases to Claude 4.5 models above
 
     # ========================================
     # GOOGLE GEMINI MODELS (December 2025)
@@ -648,7 +616,7 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
     ))
 
     # ========================================
-    # DEEPSEEK MODELS — DeepSeek's own API (verified 2026-10-27)
+    # DEEPSEEK MODELS — DeepSeek's own API (verified)
     # Source: https://api-docs.deepseek.com/quick_start/pricing + GET /models
     # Prices are OFF-PEAK; weekdays 01:00-04:00 and 06:00-10:00 UTC bill 2x —
     # DeepSeekClient reports the exact charge as billed_cost_usd.
@@ -669,7 +637,8 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
             supports_streaming=True, supports_json_mode=True, supports_thinking=True,
         ),
         aliases=["deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash",
-                 "deepseek-v4.1-flash", "deepseek-4.1-flash"]
+                 "deepseek-v4.1-flash", "deepseek-4.1-flash"],
+        served_aliases=("deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash"),
     ))
 
     # DeepSeek V4 Pro — the larger model, text only.
@@ -699,16 +668,17 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
     # ----------------------------------------
 
     # GLM-5.3 - newest Z.AI flagship (1M ctx, 128K max output). Native tools +
-    # reasoning + structured outputs, TEXT-ONLY (verified live 2026-09-15: given a
+    # reasoning + structured outputs, TEXT-ONLY (verified live: given a
     # base64 image on the z.ai Anthropic endpoint it narrated a URL it could not
     # fetch rather than reading the pixels — so vision here would be a hallucination
-    # licence, not a capability). Specs from the OpenRouter models API; price = 2026-10-14 DeepInfra list.
+    # licence, not a capability). Price = DeepInfra, the first upstream in the production
+    # order; Z.AI and most others charge 1.40/0.26/4.40.
     register(ModelConfig(
         name="z-ai/glm-5.3",
         provider=ModelProvider.OPENROUTER,
-        context_window=1310720,  # 1.31M tokens (OpenRouter API is authoritative)
+        context_window=1048576,
         max_completion_tokens=131072,  # z.ai rejects max_tokens>131072 (live probe)
-        pricing=ModelPricing(input_price=0.56, cached_input_price=0.125, output_price=2.5),
+        pricing=ModelPricing(input_price=0.5625, cached_input_price=0.125, output_price=2.5),
         capabilities=ModelCapabilities(
             supports_vision=False,  # text->text
             supports_function_calling=True,
@@ -716,6 +686,7 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
             supports_streaming=True,
             supports_json_mode=True,
             supports_thinking=True,
+            reasoning_mandatory=True,
             thinking_budget_tokens=32000,
         ),
         knowledge_cutoff="2026-06",
@@ -723,18 +694,18 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
     ))
 
     # GLM-5.3-Flash - the cheap tier of the 5.3 generation and POLYROB's aux model
-    # on a z.ai seat (AUX_MODEL_MAP). 320B MoE / 18B active, ~18x cheaper per token
-    # than GLM-5.3 on the metered market, same 1M ctx.
+    # on a z.ai seat (the spec's aux_model). 320B MoE / 18B active, same 1M ctx. Price = most
+    # upstreams, DeepInfra and Z.AI included.
     # ⚠️ Unlike every other GLM row here it IS multimodal (text/image/video in) —
-    # live-verified 2026-09-15 on api.z.ai/api/anthropic, where it read an 8x8 PNG
+    # live-verified on api.z.ai/api/anthropic, where it read an 8x8 PNG
     # correctly while GLM-5.3 could not. It is the only vision-capable model a
     # GLM-Coding-Plan deployment has.
     register(ModelConfig(
         name="z-ai/glm-5.3-flash",
         provider=ModelProvider.OPENROUTER,
-        context_window=1310720,  # 1.31M tokens
+        context_window=1048576,
         max_completion_tokens=131072,  # z.ai rejects max_tokens>131072 (live probe)
-        pricing=ModelPricing(input_price=0.075, cached_input_price=0.015, output_price=0.25),
+        pricing=ModelPricing(input_price=0.15, cached_input_price=0.03, output_price=0.5),
         capabilities=ModelCapabilities(
             supports_vision=True,  # image + video input (z.ai VLM row)
             supports_function_calling=True,
@@ -751,13 +722,13 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
     # GLM-5.2 - current Z.AI flagship on OpenRouter (default for `--provider
     # openrouter`). 1M context, native tools + reasoning + structured outputs,
     # text-only. OpenAI-compatible via OpenRouter (no client change needed).
-    # Specs/pricing verified against the live OpenRouter models API (2026-06-18).
+    # Specs/pricing verified against the live OpenRouter models API.
     register(ModelConfig(
         name="z-ai/glm-5.2",
         provider=ModelProvider.OPENROUTER,
         context_window=1048576,  # 1.05M tokens (OpenRouter API is authoritative)
-        max_completion_tokens=32768,  # OpenRouter top_provider cap (re-verified 2026-07-14; was 262144)
-        pricing=ModelPricing(input_price=0.93, cached_input_price=0.18, output_price=3.00),  # OpenRouter models API re-verified 2026-07-14 (was 1.20/4.10)
+        max_completion_tokens=32768,  # OpenRouter top_provider cap (re-verified)
+        pricing=ModelPricing(input_price=0.93, cached_input_price=0.18, output_price=3.00),  # OpenRouter models API
         capabilities=ModelCapabilities(
             supports_vision=False,  # text->text
             supports_function_calling=True,
@@ -771,14 +742,14 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
         aliases=["glm", "glm-5.2", "glm5.2", "z-ai/glm"]
     ))
 
-    # GLM-5 - balanced Gen-5 GLM (203K ctx). Cheaper/faster alternative to the
-    # 5.2 flagship; same native tools + reasoning + structured outputs, text-only.
+    # GLM-5 - balanced Gen-5 GLM (203K ctx). Native tools + reasoning + structured
+    # outputs, text-only. Price = Z.AI, the live list row.
     register(ModelConfig(
         name="z-ai/glm-5",
         provider=ModelProvider.OPENROUTER,
         context_window=202752,  # 203K tokens
         max_completion_tokens=131072,  # family cap (OpenRouter API authoritative)
-        pricing=ModelPricing(input_price=0.60, output_price=1.92),
+        pricing=ModelPricing(input_price=1.0, cached_input_price=0.2, output_price=3.2),
         capabilities=ModelCapabilities(
             supports_vision=False,
             supports_function_calling=True,
@@ -799,7 +770,7 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
         provider=ModelProvider.OPENROUTER,
         context_window=202752,  # 203K tokens
         max_completion_tokens=131072,  # 128K max output
-        pricing=ModelPricing(input_price=0.40, output_price=1.75),
+        pricing=ModelPricing(input_price=0.4, cached_input_price=0.11, output_price=1.75),
         capabilities=ModelCapabilities(
             supports_vision=False,
             supports_function_calling=True,
@@ -814,13 +785,13 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
     ))
 
     # GLM-5.1 - Gen-5 GLM between 5 and 5.2 (203K ctx). Native tools +
-    # reasoning + structured outputs, text-only. Verified 2026-07-14.
+    # reasoning + structured outputs, text-only. Price = Z.AI, the live list row.
     register(ModelConfig(
         name="z-ai/glm-5.1",
         provider=ModelProvider.OPENROUTER,
         context_window=202752,  # 203K tokens
         max_completion_tokens=128000,
-        pricing=ModelPricing(input_price=0.966, cached_input_price=0.1794, output_price=3.036),
+        pricing=ModelPricing(input_price=1.4, cached_input_price=0.26, output_price=4.4),
         capabilities=ModelCapabilities(
             supports_vision=False,
             supports_function_calling=True,
@@ -834,12 +805,12 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
         aliases=["glm-5.1", "glm5.1"]
     ))
 
-    # GLM-5-Turbo - faster/cheaper Gen-5 GLM (262K ctx). Native tools +
-    # reasoning + structured outputs, text-only. Verified 2026-07-14.
+    # GLM-5-Turbo - faster Gen-5 GLM (203K ctx). Native tools + reasoning +
+    # structured outputs, text-only.
     register(ModelConfig(
         name="z-ai/glm-5-turbo",
         provider=ModelProvider.OPENROUTER,
-        context_window=262144,  # 262K tokens
+        context_window=202752,
         max_completion_tokens=131072,
         pricing=ModelPricing(input_price=1.20, cached_input_price=0.24, output_price=4.00),
         capabilities=ModelCapabilities(
@@ -856,7 +827,7 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
     ))
 
     # GLM-4.7-Flash - cheapest GLM tier (203K ctx), speed-optimized, text-only.
-    # Native tools; reasoning off on the flash tier. Verified 2026-07-14.
+    # Native tools; reasoning off on the flash tier. Verified.
     register(ModelConfig(
         name="z-ai/glm-4.7-flash",
         provider=ModelProvider.OPENROUTER,
@@ -879,16 +850,13 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
     # https://openrouter.ai/provider/xai
     # ----------------------------------------
 
-    # Grok 4.3 - current xAI flagship on OpenRouter (default for `--provider
-    # openrouter`). xAI deprecated grok-4.1-fast (404s with a "switch to Grok
-    # 4.3" message), so 4.3 is the preferred entry. Context/pricing mirror the
-    # recent grok family; the OpenRouter API enforces the authoritative limits.
+    # Grok 4.3 - xAI on OpenRouter, the OpenRouter API enforces the limits.
     register(ModelConfig(
         name="x-ai/grok-4.3",
         provider=ModelProvider.OPENROUTER,
-        context_window=1000000,  # 1M tokens (OpenRouter re-verified 2026-07-14; was 2M)
+        context_window=1000000,  # 1M tokens (OpenRouter re-verified)
         max_completion_tokens=30000,
-        pricing=ModelPricing(input_price=1.25, cached_input_price=0.20, output_price=2.50),  # OpenRouter models API verified 2026-06-20, cache read re-verified 2026-07-14
+        pricing=ModelPricing(input_price=1.25, cached_input_price=0.20, output_price=2.50),  # OpenRouter models API
         capabilities=ModelCapabilities(
             supports_vision=True,
             supports_function_calling=True,
@@ -900,9 +868,8 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
         aliases=["grok-4.3", "grok-43", "grok"]
     ))
 
-    # Grok 4.5 - newest xAI flagship on OpenRouter (created most-recently in the
-    # live models API, 2026-07-14). 500K ctx, multimodal, native tools + reasoning.
-    # Specs/pricing verified vs GET https://openrouter.ai/api/v1/models (2026-07-14).
+    # Grok 4.5 - newest xAI flagship on OpenRouter. 500K ctx, multimodal, native
+    # tools + reasoning.
     register(ModelConfig(
         name="x-ai/grok-4.5",
         provider=ModelProvider.OPENROUTER,
@@ -941,116 +908,6 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
         aliases=["grok-4.20", "grok-420", "grok-4-20"]
     ))
 
-    # Grok 4.1 Fast - DEPRECATED by xAI (kept for back-compat / historical ids;
-    # OpenRouter now 404s this model and recommends Grok 4.3 above).
-    # Created: Nov 19, 2025 | 2M context, web search, reasoning toggle
-    register(ModelConfig(
-        name="x-ai/grok-4.1-fast",
-        provider=ModelProvider.OPENROUTER,
-        context_window=2000000,  # 2M tokens
-        max_completion_tokens=30000,  # Verified from OpenRouter docs
-        pricing=ModelPricing(input_price=0.20, output_price=0.50),  # $0.40/$1.00 above 128k
-        capabilities=ModelCapabilities(
-            supports_vision=True,
-            supports_function_calling=True,
-            supports_streaming=True,
-            supports_json_mode=True,
-            supports_thinking=True  # Reasoning can be toggled
-        ),
-        knowledge_cutoff="2025-11",
-        aliases=["grok-4.1-fast", "grok-4-1-fast", "grok-41-fast"]
-    ))
-
-    # Grok 4 Fast - Multimodal with 2M context
-    # Created: Sep 19, 2025 | Non-reasoning and reasoning flavors
-    register(ModelConfig(
-        name="x-ai/grok-4-fast",
-        provider=ModelProvider.OPENROUTER,
-        context_window=2000000,  # 2M tokens
-        max_completion_tokens=30000,  # Verified from OpenRouter docs
-        pricing=ModelPricing(input_price=0.20, output_price=0.50),  # $0.40/$1.00 above 128k
-        capabilities=ModelCapabilities(
-            supports_vision=True,
-            supports_function_calling=True,
-            supports_streaming=True,
-            supports_json_mode=True,
-            supports_thinking=True  # Reasoning can be toggled
-        ),
-        knowledge_cutoff="2025-09",
-        aliases=["grok-4-fast", "grok4-fast"]
-    ))
-
-    # Grok 4 - Reasoning model (mandatory reasoning)
-    # Created: Jul 9, 2025 | 256K context, reasoning always on
-    register(ModelConfig(
-        name="x-ai/grok-4",
-        provider=ModelProvider.OPENROUTER,
-        context_window=256000,  # 256K tokens
-        max_completion_tokens=32768,  # Not specified, conservative estimate
-        pricing=ModelPricing(input_price=3.00, output_price=15.00),  # $6/$30 above 128k
-        capabilities=ModelCapabilities(
-            supports_vision=True,
-            supports_function_calling=True,
-            supports_thinking=True,  # Always on, cannot be disabled
-            supports_streaming=True,
-            supports_json_mode=True
-        ),
-        knowledge_cutoff="2025-07",
-        aliases=["grok-4", "grok4"]
-    ))
-
-    # Grok Code Fast 1 - Agentic coding specialist
-    # Created: Aug 26, 2025 | 256K context, visible reasoning traces
-    register(ModelConfig(
-        name="x-ai/grok-code-fast-1",
-        provider=ModelProvider.OPENROUTER,
-        context_window=256000,  # 256K tokens - verified
-        max_completion_tokens=10000,  # Verified from OpenRouter docs
-        pricing=ModelPricing(input_price=0.20, output_price=1.50),
-        capabilities=ModelCapabilities(
-            supports_function_calling=True,
-            supports_thinking=True,  # Visible reasoning traces
-            supports_streaming=True,
-            supports_json_mode=True
-        ),
-        knowledge_cutoff="2025-08",
-        aliases=["grok-code-fast", "grok-code-1", "grok-code"]
-    ))
-
-    # Grok 3 - Enterprise model with deep domain knowledge
-    # Created: Jun 10, 2025 | Finance, healthcare, law, science
-    register(ModelConfig(
-        name="x-ai/grok-3",
-        provider=ModelProvider.OPENROUTER,
-        context_window=131072,  # 131K tokens - verified
-        max_completion_tokens=32768,
-        pricing=ModelPricing(input_price=3.00, output_price=15.00),  # Higher above 128k
-        capabilities=ModelCapabilities(
-            supports_function_calling=True,
-            supports_streaming=True,
-            supports_json_mode=True
-        ),
-        knowledge_cutoff="2025-06",
-        aliases=["grok-3", "grok3"]
-    ))
-
-    # Grok 3 Mini - Lightweight thinking model
-    # Created: Jun 10, 2025 | Fast, logic-based tasks
-    register(ModelConfig(
-        name="x-ai/grok-3-mini",
-        provider=ModelProvider.OPENROUTER,
-        context_window=131072,  # 131K tokens - verified
-        max_completion_tokens=32768,
-        pricing=ModelPricing(input_price=0.30, output_price=0.50),
-        capabilities=ModelCapabilities(
-            supports_function_calling=True,
-            supports_thinking=True,  # Thinks before responding
-            supports_streaming=True
-        ),
-        knowledge_cutoff="2025-06",
-        aliases=["grok-3-mini", "grok3-mini"]
-    ))
-
     # ----------------------------------------
     # KIMI MODELS (Moonshot AI via OpenRouter)
     # 1T params MoE, 32B active per forward pass
@@ -1063,8 +920,8 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
         name="moonshotai/kimi-k2-0905",
         provider=ModelProvider.OPENROUTER,
         context_window=262144,  # 262K tokens - verified (extended)
-        max_completion_tokens=100352,  # models.dev openrouter limit.output (2026-08-15)
-        pricing=ModelPricing(input_price=0.39, output_price=1.90),
+        max_completion_tokens=98304,
+        pricing=ModelPricing(input_price=0.6, output_price=2.5),
         capabilities=ModelCapabilities(
             supports_vision=False,  # TEXT-ONLY - no image support
             supports_function_calling=True,
@@ -1081,8 +938,8 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
         name="moonshotai/kimi-k2",
         provider=ModelProvider.OPENROUTER,
         context_window=131072,  # 131K tokens - verified
-        max_completion_tokens=100352,  # models.dev openrouter limit.output (2026-08-15)
-        pricing=ModelPricing(input_price=0.456, output_price=1.84),
+        max_completion_tokens=98304,
+        pricing=ModelPricing(input_price=0.57, output_price=2.3),
         capabilities=ModelCapabilities(
             supports_vision=False,  # TEXT-ONLY - no image support
             supports_function_calling=True,
@@ -1100,7 +957,7 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
         provider=ModelProvider.OPENROUTER,
         context_window=262144,  # 262K tokens - verified
         max_completion_tokens=16384,  # Verified from OpenRouter docs
-        pricing=ModelPricing(input_price=0.45, output_price=2.35),
+        pricing=ModelPricing(input_price=0.6, cached_input_price=0.15, output_price=2.5),
         capabilities=ModelCapabilities(
             supports_vision=False,  # TEXT-ONLY - no image support
             supports_function_calling=True,
@@ -1142,51 +999,14 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
     # NOTE: Most Qwen3 models are TEXT-ONLY. Only Qwen3-VL models support vision.
     # ----------------------------------------
 
-    # Qwen3 235B A22B - Flagship MoE model
-    # 235B total, 22B active per forward pass
-    register(ModelConfig(
-        name="qwen/qwen3-235b-a22b",
-        provider=ModelProvider.OPENROUTER,
-        context_window=131072,  # 131K with YaRN scaling - native 40K
-        max_completion_tokens=40960,  # Verified from OpenRouter docs
-        pricing=ModelPricing(input_price=0.455, output_price=1.82),  # OpenRouter models API verified 2026-06-20 (was 0.18/0.54 — ~3.4x too low)
-        capabilities=ModelCapabilities(
-            supports_vision=False,  # TEXT-ONLY - no image support
-            supports_function_calling=True,
-            supports_thinking=True,  # Dual mode: thinking/non-thinking
-            supports_streaming=True,
-            supports_json_mode=True
-        ),
-        knowledge_cutoff="2025-04",
-        aliases=["qwen3-235b-a22b", "qwen3-235b", "qwen-235b", "qwen3"]
-    ))
-
-    # Qwen3 Max - Updated flagship (Sep 2025)
-    # Major improvements in reasoning, 100+ languages
-    register(ModelConfig(
-        name="qwen/qwen3-max",
-        provider=ModelProvider.OPENROUTER,
-        context_window=256000,  # 256K tokens - verified
-        max_completion_tokens=32768,  # Verified from OpenRouter docs
-        pricing=ModelPricing(input_price=0.78, output_price=3.90),  # OpenRouter models API verified 2026-06-20 (was 1.20/6.00)
-        capabilities=ModelCapabilities(
-            supports_vision=False,  # TEXT-ONLY - no image support
-            supports_function_calling=True,
-            supports_streaming=True,
-            supports_json_mode=True
-        ),
-        knowledge_cutoff="2025-09",
-        aliases=["qwen3-max", "qwen-max"]
-    ))
-
     # Qwen3 Coder 480B A35B - Code generation specialist
     # Created: Jul 23, 2025 | 480B total, 35B active (8/160 experts)
     register(ModelConfig(
         name="qwen/qwen3-coder",
         provider=ModelProvider.OPENROUTER,
         context_window=262144,  # 262K tokens - verified
-        max_completion_tokens=65536,  # models.dev openrouter limit.output (2026-08-15)
-        pricing=ModelPricing(input_price=0.22, output_price=0.95),  # Higher above 128k
+        max_completion_tokens=65536,  # models.dev openrouter limit.output
+        pricing=ModelPricing(input_price=0.3, cached_input_price=0.1, output_price=1.0),
         capabilities=ModelCapabilities(
             supports_vision=False,  # TEXT-ONLY - no image support
             supports_function_calling=True,
@@ -1203,8 +1023,8 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
         name="qwen/qwen3-32b",
         provider=ModelProvider.OPENROUTER,
         context_window=131072,  # 131K with YaRN - native 40K
-        max_completion_tokens=40960,  # Verified from OpenRouter docs
-        pricing=ModelPricing(input_price=0.08, output_price=0.24),
+        max_completion_tokens=16384,
+        pricing=ModelPricing(input_price=0.09, cached_input_price=0.09, output_price=0.28),
         capabilities=ModelCapabilities(
             supports_vision=False,  # TEXT-ONLY - no image support
             supports_function_calling=True,
@@ -1222,7 +1042,7 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
         provider=ModelProvider.OPENROUTER,
         context_window=262144,  # 262K tokens - verified
         max_completion_tokens=32768,
-        pricing=ModelPricing(input_price=0.20, output_price=1.20),
+        pricing=ModelPricing(input_price=0.2, cached_input_price=0.1, output_price=1.2),
         capabilities=ModelCapabilities(
             supports_vision=True,  # Images and video
             supports_function_calling=True,
@@ -1235,20 +1055,15 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
     # ----------------------------------------
     # DEEPSEEK MODELS (via OpenRouter)
     # https://openrouter.ai/deepseek
-    # DeepSeek V3 with OpenRouter's tool calling support
     # ----------------------------------------
 
-    # DeepSeek Chat V3 via OpenRouter - Tool calling supported
-    # 671B total params, 37B active (MoE architecture)
+    # DeepSeek Chat V3 via OpenRouter.
     register(ModelConfig(
         name="deepseek/deepseek-chat",
         provider=ModelProvider.OPENROUTER,
-        context_window=128000,  # 128K context
+        context_window=163840,
         max_completion_tokens=8192,  # 8K output
-        pricing=ModelPricing(
-            input_price=0.14,  # OpenRouter pricing
-            output_price=0.28
-        ),
+        pricing=ModelPricing(input_price=0.32, output_price=0.89),
         capabilities=ModelCapabilities(
             supports_vision=False,  # Text only
             supports_function_calling=True,  # Tool calling via OpenRouter
@@ -1260,55 +1075,9 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
         aliases=["openrouter-deepseek", "openrouter-deepseek-chat", "deepseek-openrouter", "or-deepseek"]
     ))
 
-    # DeepSeek R1 Reasoning via OpenRouter
-    # Extended thinking with tool support
-    register(ModelConfig(
-        name="deepseek/deepseek-r1",
-        provider=ModelProvider.OPENROUTER,
-        context_window=128000,  # 128K context
-        max_completion_tokens=64000,  # 64K output for reasoning
-        pricing=ModelPricing(
-            input_price=0.55,  # Higher for reasoning
-            output_price=2.19
-        ),
-        capabilities=ModelCapabilities(
-            supports_vision=False,  # Text only
-            supports_function_calling=True,  # Tool calling via OpenRouter
-            supports_tools=True,
-            supports_thinking=True,  # Reasoning model
-            supports_streaming=True
-        ),
-        knowledge_cutoff="2025-12",
-        aliases=["openrouter-deepseek-r1", "deepseek-r1-openrouter", "or-deepseek-r1"]
-    ))
-
-    # DeepSeek R1 Distill Qwen 32B - Smaller reasoning model
-    # Distilled from R1 into Qwen 32B architecture
-    register(ModelConfig(
-        name="deepseek/deepseek-r1-distill-qwen-32b",
-        provider=ModelProvider.OPENROUTER,
-        context_window=131072,  # 131K context
-        max_completion_tokens=16384,  # 16K output
-        pricing=ModelPricing(
-            input_price=0.12,  # Cheaper distilled model
-            output_price=0.18
-        ),
-        capabilities=ModelCapabilities(
-            supports_vision=False,
-            supports_function_calling=True,
-            supports_tools=True,
-            supports_thinking=True,
-            supports_streaming=True
-        ),
-        knowledge_cutoff="2025-01",
-        aliases=["deepseek-r1-distill-qwen", "deepseek-r1-qwen-32b", "or-deepseek-r1-distill"]
-    ))
-
     # ========================================
-    # CURATED OPENROUTER SHORTLIST EXPANSION (2026-06-24)
-    # Models POLYROB has no native client for (OpenRouter's real value). Pricing +
-    # specs verified against the live OpenRouter models API on 2026-06-24
-    # (GET https://openrouter.ai/api/v1/models). Pinned in
+    # CURATED OPENROUTER SHORTLIST
+    # Models POLYROB has no native client for (OpenRouter's real value). Pinned in
     # tests/unit/modules/llm/test_openrouter_pricing_verified.py.
     # ========================================
 
@@ -1321,7 +1090,7 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
         provider=ModelProvider.OPENROUTER,
         context_window=262144,
         max_completion_tokens=32768,
-        pricing=ModelPricing(input_price=0.375, output_price=2.025),
+        pricing=ModelPricing(input_price=0.5, cached_input_price=0.15, output_price=2.5),
         capabilities=ModelCapabilities(
             supports_vision=True, supports_function_calling=True,
             supports_tools=True, supports_streaming=True,
@@ -1329,22 +1098,6 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
         ),
         knowledge_cutoff="2025-10",
         aliases=["kimi-k2.5", "kimi-k25", "or-kimi"]
-    ))
-
-    # MiniMax M2 — strong agentic-coding MoE; prompt-cache read priced.
-    register(ModelConfig(
-        name="minimax/minimax-m2",
-        provider=ModelProvider.OPENROUTER,
-        context_window=204800,
-        max_completion_tokens=131072,  # models.dev openrouter limit.output (2026-08-15)
-        pricing=ModelPricing(input_price=0.255, cached_input_price=0.03, output_price=1.0),
-        capabilities=ModelCapabilities(
-            supports_vision=False, supports_function_calling=True,
-            supports_tools=True, supports_streaming=True,
-            supports_json_mode=True, supports_thinking=True,
-        ),
-        knowledge_cutoff="2025-09",
-        aliases=["minimax-m2", "minimax2"]
     ))
 
     # GLM-4.6 — cheaper GLM tier below 5.2; native tools + reasoning, cache read priced.
@@ -1368,9 +1121,9 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
     register(ModelConfig(
         name="qwen/qwen3-coder-30b-a3b-instruct",
         provider=ModelProvider.OPENROUTER,
-        context_window=160000,
+        context_window=262144,
         max_completion_tokens=32768,
-        pricing=ModelPricing(input_price=0.07, output_price=0.27),
+        pricing=ModelPricing(input_price=0.07, output_price=0.6),
         capabilities=ModelCapabilities(
             supports_vision=False, supports_function_calling=True,
             supports_tools=True, supports_streaming=True, supports_json_mode=True,
@@ -1385,7 +1138,7 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
     register(ModelConfig(
         name="deepseek/deepseek-v3.2",
         provider=ModelProvider.OPENROUTER,
-        context_window=131072,
+        context_window=163840,
         max_completion_tokens=64000,
         pricing=ModelPricing(input_price=0.2288, output_price=0.3432),
         capabilities=ModelCapabilities(
@@ -1419,8 +1172,8 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
     # rate DOUBLES to 0.30/1.20 (cache read 0.006). Cost telemetry computed from this row
     # is therefore a FLOOR during those windows, not an exact charge — re-check against
     # `GET https://openrouter.ai/api/v1/models` before quoting a spend figure from it.
-    # Re-priced 2026-10-14 to the OpenRouter list (DeepInfra); billed_cost_usd is the
-    # spend truth and `polyrob doctor` prints the billed/catalog ratio (A-1).
+    # Priced to the OpenRouter list (DeepInfra); billed_cost_usd is the
+    # spend truth and `polyrob doctor` prints the billed/catalog ratio.
     register(ModelConfig(
         name="deepseek/deepseek-v4.1-flash",
         provider=ModelProvider.OPENROUTER,
@@ -1441,7 +1194,7 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
         provider=ModelProvider.OPENROUTER,
         context_window=131072,
         max_completion_tokens=16384,
-        pricing=ModelPricing(input_price=0.1, output_price=0.32),
+        pricing=ModelPricing(input_price=0.1, cached_input_price=0.1, output_price=0.32),
         capabilities=ModelCapabilities(
             supports_vision=False, supports_function_calling=True,
             supports_tools=True, supports_streaming=True, supports_json_mode=True,
@@ -1454,9 +1207,9 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
     register(ModelConfig(
         name="mistralai/mistral-small-3.2-24b-instruct",
         provider=ModelProvider.OPENROUTER,
-        context_window=128000,
+        context_window=256000,
         max_completion_tokens=16384,
-        pricing=ModelPricing(input_price=0.075, output_price=0.2),
+        pricing=ModelPricing(input_price=0.075, cached_input_price=0.01, output_price=0.2),
         capabilities=ModelCapabilities(
             supports_vision=True, supports_function_calling=True,
             supports_tools=True, supports_streaming=True, supports_json_mode=True,
@@ -1469,9 +1222,9 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
     register(ModelConfig(
         name="qwen/qwen3-30b-a3b-instruct-2507",
         provider=ModelProvider.OPENROUTER,
-        context_window=131072,
+        context_window=262144,
         max_completion_tokens=32000,
-        pricing=ModelPricing(input_price=0.04815, output_price=0.193),
+        pricing=ModelPricing(input_price=0.1, cached_input_price=0.1, output_price=0.3),
         capabilities=ModelCapabilities(
             supports_vision=False, supports_function_calling=True,
             supports_tools=True, supports_streaming=True, supports_json_mode=True,
@@ -1488,7 +1241,7 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
         provider=ModelProvider.OPENROUTER,
         context_window=131072,
         max_completion_tokens=32768,
-        pricing=ModelPricing(input_price=0.039, output_price=0.18),
+        pricing=ModelPricing(input_price=0.039, cached_input_price=0.015, output_price=0.18),
         capabilities=ModelCapabilities(
             supports_vision=False, supports_function_calling=True,
             supports_tools=True, supports_streaming=True,
@@ -1498,31 +1251,14 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
         aliases=["gpt-oss-120b", "gpt-oss"]
     ))
 
-    # Nous Hermes-4 70B (open model via OpenRouter). NOTE: OpenRouter does NOT
-    # advertise the `tools` parameter for Hermes-4, so supports_tools=False →
-    # the agent uses the JSON-from-text fallback (not native tool calls).
-    register(ModelConfig(
-        name="nousresearch/hermes-4-70b",
-        provider=ModelProvider.OPENROUTER,
-        context_window=131072,
-        max_completion_tokens=16384,
-        pricing=ModelPricing(input_price=0.13, output_price=0.4),
-        capabilities=ModelCapabilities(
-            supports_vision=False, supports_function_calling=False,
-            supports_tools=False, supports_streaming=True,
-            supports_json_mode=True, supports_thinking=True,
-        ),
-        knowledge_cutoff="2024-12",
-        aliases=["hermes-4-70b", "hermes4-70b"]
-    ))
-
-    # Nous Hermes-4 405B (larger variant). Same no-native-tools caveat as 70B.
+    # Nous Hermes-4 405B. OpenRouter does NOT advertise the `tools` parameter, so
+    # supports_tools=False: the agent uses the JSON-from-text fallback.
     register(ModelConfig(
         name="nousresearch/hermes-4-405b",
         provider=ModelProvider.OPENROUTER,
         context_window=131072,
         max_completion_tokens=16384,
-        pricing=ModelPricing(input_price=1.0, output_price=3.0),
+        pricing=ModelPricing(input_price=1.0, cached_input_price=0.2, output_price=3.0),
         capabilities=ModelCapabilities(
             supports_vision=False, supports_function_calling=False,
             supports_tools=False, supports_streaming=True,
@@ -1540,7 +1276,7 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
         provider=ModelProvider.OPENROUTER,
         context_window=256000,
         max_completion_tokens=32768,
-        pricing=ModelPricing(input_price=0.08, output_price=0.5),
+        pricing=ModelPricing(input_price=0.25, cached_input_price=0.12, output_price=0.75),
         capabilities=ModelCapabilities(
             supports_vision=True, supports_function_calling=True,
             supports_tools=True, supports_streaming=True, supports_json_mode=True,

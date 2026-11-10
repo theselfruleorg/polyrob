@@ -1,8 +1,7 @@
-"""Auth-shaped error taxonomy for LLM credentials (proposal 024, L1).
+"""Auth-shaped error taxonomy for LLM credentials.
 
-Extends the existing ``LLMAuthenticationError`` family (Tier-0 error taxonomy,
-2026-07-22) with the fields an auth layer proves necessary in practice: a stable
-``code``, the owning ``provider``, and ``relogin_required`` — so a refresh
+Extends the existing ``LLMAuthenticationError`` family (Tier-0 error taxonomy) with the fields an auth layer needs:
+a stable ``code``, the owning ``provider``, and ``relogin_required`` — so a refresh
 failure ("connect the account again") is never conflated with a transient
 throttle (HTTP 429), which must NOT tell the user to log in again.
 """

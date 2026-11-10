@@ -27,7 +27,7 @@ import logging
 import time
 from typing import Any, Awaitable, Callable, Generic, Mapping, Optional, TypeVar, Union
 
-from core.state.machine import StateMachine
+from core.state.machine import IllegalTransition, StateMachine
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +145,11 @@ class ResourceLifecycle(Generic[T]):
     # -- transitions (caller holds no lock; each takes the resource lock) ----
 
     def _move(self, to: str) -> None:
-        LIFECYCLE.check(self._state, to, ctx={"resource": self.name})
+        """Refuse a forbidden edge — never assign it. Production (non-strict)
+        logs the edge and raises too, so no caller goes on from a state the
+        table does not allow."""
+        if not LIFECYCLE.check(self._state, to, ctx={"resource": self.name}):
+            raise IllegalTransition(LIFECYCLE.name, self._state, to)
         self._state = to
 
     async def _teardown_handle(self) -> None:
@@ -183,11 +187,16 @@ class ResourceLifecycle(Generic[T]):
         return handle
 
     async def _enter_degraded(self, error: Optional[BaseException]) -> None:
-        await self._teardown_handle()
-        self._move(DEGRADED)
-        self.attempts += 1
-        self.last_error = error
-        self.next_attempt_at = self._clock() + self.backoff()
+        try:
+            await self._teardown_handle()
+        finally:
+            # A cancel during the teardown await (fail(), restart(), a failed
+            # probe) must not leave READY with no handle: READY -> STARTING is
+            # not an edge, so every later start would raise for ever.
+            self._move(DEGRADED)
+            self.attempts += 1
+            self.last_error = error
+            self.next_attempt_at = self._clock() + self.backoff()
 
     async def start(self) -> T:
         """Create the handle (idempotent: READY returns it). A failed create
@@ -266,8 +275,13 @@ class ResourceLifecycle(Generic[T]):
     def adopt(self, handle: T) -> None:
         """Record a handle created outside :meth:`start` (sync construction
         paths) as READY. Only from NEW/DEGRADED/CLOSED; the caller owns ordering."""
-        if self._state == READY:
-            raise RuntimeError(f"{self.name}: adopt over a live handle")
+        if self._state not in (NEW, DEGRADED, CLOSED) or self._handle is not None:
+            raise RuntimeError(f"{self.name}: adopt only from new/degraded/closed "
+                               f"with no live handle (state {self._state})")
+        if self._lock is not None and self._lock.locked():
+            # A start/stop is mid-await: its own create would overwrite (and leak)
+            # the adopted handle.
+            raise RuntimeError(f"{self.name}: adopt while a start or stop runs")
         self._move(STARTING)
         self._handle = handle
         self._move(READY)

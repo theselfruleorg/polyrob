@@ -129,3 +129,14 @@ def test_resolve_creator_correspondent_tier_hook_overrides_owner_surface():
     even for a surface_id ("telegram") that would otherwise resolve owner."""
     src = _FakeSessionSource("telegram", tier="correspondent")
     assert resolve_creator(None, src) == "correspondent"
+
+
+def test_a_room_session_is_labelled_group_not_owner():
+    """113 (M-6): the label of a room session said "you". A direct chat keeps "owner"."""
+    import types
+    room = types.SimpleNamespace(surface_id="telegram", chat_id="-100", chat_type="group")
+    direct = types.SimpleNamespace(surface_id="telegram", chat_id="1", chat_type="dm")
+    assert resolve_creator(None, room) == "group"
+    assert resolve_creator(None, direct) == "owner"
+    assert resolve_creator(None, types.SimpleNamespace(surface_id="telegram")) == "owner"
+    assert resolve_creator("cron", room) == "cron"          # an explicit label still wins

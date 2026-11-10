@@ -419,3 +419,47 @@ async def test_agentmail_read_accepts_a_gmail_message_id():
     # A path-changing character is still refused before any request.
     bad = await tool.email_read(EmailReadAction(uid="<a/../b@x>"))
     assert bad.error == "email_read: invalid uid"
+
+
+# --- AgentMail: email_list searched only the newest N, and has no folders ------
+
+def _agentmail_tool(summaries):
+    class _AM:
+        address = "agent@example.test"
+        asked = []
+
+        async def list_messages(self, limit=25):
+            self.asked.append(limit)
+            return list(summaries)
+
+    tool = _tool()
+    tool.provider = "agentmail"
+    tool.agentmail = _AM()
+
+    async def _noop():
+        return None
+    tool.ensure_imap = _noop
+    return tool
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("folder", ["INBOX", "[Gmail]/Spam"])
+async def test_agentmail_list_with_no_match_says_only_the_newest_were_searched(folder):
+    rows = [{"message_id": f"<m{i}@example.test>", "from": "a@example.test",
+             "subject": "weekly digest", "timestamp": "t"} for i in range(3)]
+    tool = _agentmail_tool(rows)
+    res = await tool.email_list(EmailListAction(folder=folder, subject_contains="activation"))
+    assert res.error is None
+    text = res.extracted_content
+    assert "holds none" not in text and "folder was read" not in text
+    assert "newest 3" in text
+    if folder != "INBOX":
+        assert "no folders" in text
+
+
+@pytest.mark.asyncio
+async def test_agentmail_list_names_the_scan_on_a_match():
+    rows = [{"message_id": "<m1@example.test>", "from": "a@example.test",
+             "subject": "activation code", "timestamp": "t"}]
+    res = await _agentmail_tool(rows).email_list(EmailListAction(subject_contains="activation"))
+    assert "newest 1" in res.extracted_content and "<m1@example.test>" in res.extracted_content

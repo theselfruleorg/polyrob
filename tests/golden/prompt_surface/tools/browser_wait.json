@@ -1,0 +1,26 @@
+{
+  "function": {
+    "description": "Wait for a number of seconds, or until a text is on the page (seconds is then the limit). At most 30 seconds.",
+    "name": "browser_wait",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for waiting for time or for a text.",
+      "properties": {
+        "seconds": {
+          "default": null,
+          "description": "How long to wait (the limit when a text is given); at most 30",
+          "nullable": true,
+          "type": "number"
+        },
+        "text": {
+          "default": null,
+          "description": "Wait until this text is on the page",
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

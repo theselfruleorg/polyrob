@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import os
@@ -7,6 +8,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from core.config_policy import compaction_prompt_guard
+from core.exceptions import LLMRefusalError
 from core.state.files import atomic_write_json
 from modules.llm.messages import (
     AIMessage,
@@ -18,7 +20,10 @@ from modules.llm.messages import (
     make_control_message,
 )
 
+from agents.task.agent.messages import compaction_safety
 from agents.task.agent.messages.retrieval import drop_usage_anchor
+from modules.llm.call_result import replayed_reasoning
+from modules.llm.call_scope import call_scope
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +79,10 @@ def _transient_compaction_errors() -> tuple:
 
 
 _TRANSIENT_COMPACTION_ERRORS = _transient_compaction_errors()
+
+
+class _WarmShapeRefused(Exception):
+	"""This client cannot serve the warm summariser shape: go on with the cold one."""
 
 # Compaction payload tuning (Reference-parity upgrade — see
 # docs/REFERENCE_VS_ROB_CONTEXT_SYSTEM_2026-06.md §9).
@@ -189,13 +198,11 @@ def _is_owner_instructions(msg: Any) -> bool:
 	        and _OWNER_INSTRUCTIONS_MARKER in str(getattr(msg, "content", ""))[:200])
 
 
-def _completion_tokens(llm: Any, response: Any) -> Optional[int]:
+def _completion_tokens(response: Any) -> Optional[int]:
 	"""103: the output of one summary call, for the event. None when it cannot be read."""
 	try:
-		from modules.llm.aux_metering import _llm_identity
 		from modules.llm.usage_extract import extract_token_usage
-		_, provider = _llm_identity(llm, response)
-		return (extract_token_usage(response, provider) or {}).get("completion_tokens")
+		return (extract_token_usage(response) or {}).get("completion_tokens")
 	except Exception:
 		return None
 
@@ -334,8 +341,8 @@ class CompactorMixin:
 		backwards as far as needed so no ``AIMessage(tool_calls)`` -> ``ToolMessage``
 		pair is split. Out of the cut head it ALSO keeps (E-A1, 2026-10-13): the
 		latest ``<compacted-history>`` summary, the latest owner-instructions block,
-		the owner's latest genuine message (when the tail holds none), and one dated
-		``[HISTORY CUT]`` note. Nothing else in ``history.messages`` survives.
+		the owner's latest genuine message (when the tail holds none), one anchor block
+		and one dated ``[HISTORY CUT]`` note. Nothing else in ``history.messages`` survives.
 
 		The system prompt and the initial task are NOT part of that budget and are
 		not at risk: they live in the FOUNDATION (``_system_message`` /
@@ -460,6 +467,11 @@ class CompactorMixin:
 		ledger_msg = self._action_ledger_message()
 		if ledger_msg is not None:
 			carried.append(ledger_msg)
+		if not any(compaction_safety.is_anchor_message(m) for m in tail_msgs):
+			anchors_msg = self._anchor_message(
+				[m.message if hasattr(m, 'message') else m for m in dropped], [])
+			if anchors_msg is not None:
+				carried.append(anchors_msg)
 		carried.append(make_control_message(_PRUNE_NOTE.format(when=when),
 		                                    MessageOrigin.SYSTEM_NOTE))
 		user_msg = latest_current_request(dropped, tail_msgs, owner_authority=False)
@@ -669,22 +681,6 @@ class CompactorMixin:
 	# ------------------------------------------------------------------ #
 	# LLM compaction
 	# ------------------------------------------------------------------ #
-	async def _run_pre_compress_hook(self) -> None:
-		"""Invoke the active memory provider's on_pre_compress hook (P1-4).
-
-		Lets a provider persist anything in the volatile message tail that hasn't been
-		promoted to durable memory before compaction summarizes it away. Fail-open: a
-		hook error never blocks compaction. No-op under the default NullMemoryProvider.
-		"""
-		try:
-			from modules.memory.registry import get_memory_registry
-			provider = get_memory_registry().active()
-			if provider is None or not getattr(provider, "is_external", False):
-				return
-			await provider.on_pre_compress(session_id=getattr(self, "session_id", "") or "")
-		except Exception as e:
-			self.logger.debug(f"on_pre_compress hook skipped: {e}")
-
 	async def llm_compact_history(self) -> bool:
 		"""LLM-driven compaction of message history.
 
@@ -701,22 +697,10 @@ class CompactorMixin:
 			True if compaction (or static fallback) was performed, False otherwise.
 		"""
 		original_tokens = self.history.total_tokens
+		self.compaction_rewrote_history = False
 
-		# F15: the cheapest pass first. Demote long OLD tool results to one line +
-		# a pointer, then RE-MEASURE: if that alone brings the context back under
-		# the band that called us, the expensive LLM summariser never runs and the
-		# raw conversation survives intact (DSH compaction-basic:323-327).
-		if self.age_old_tool_results():
-			usage_now = self._context_usage_percent_or_none()
-			if usage_now is not None and usage_now < AGEING_ENOUGH_PCT:
-				self._record_compaction_savings(original_tokens, self.history.total_tokens)
-				self.logger.info(
-					f"✅ Ageing old tool results was enough: {original_tokens:,} → "
-					f"{self.history.total_tokens:,} tokens ({usage_now:.1f}% of the window, "
-					f"under {AGEING_ENOUGH_PCT}%) — skipping the LLM summariser"
-				)
-				return True
-
+		# The guards read the bytes the provider holds. A guard that says no leaves
+		# the history as it is, so a skipped compaction costs no cache.
 		original_messages = [m.message for m in self.history.messages]
 		original_count = len(original_messages)
 
@@ -772,6 +756,25 @@ class CompactorMixin:
 		# C2: snapshot the raw trajectory before we mutate it.
 		self._write_compaction_checkpoint(original_messages)
 
+		# F15: the cheapest pass first. Demote long OLD tool results to one line +
+		# a pointer, then RE-MEASURE: if that alone brings the context back under
+		# the band that called us, the expensive LLM summariser never runs and the
+		# raw conversation survives intact (DSH compaction-basic:323-327).
+		if self.age_old_tool_results():
+			self.compaction_rewrote_history = True
+			usage_now = self._context_usage_percent_or_none()
+			if usage_now is not None and usage_now < AGEING_ENOUGH_PCT:
+				self._record_compaction_savings(original_tokens, self.history.total_tokens)
+				self.logger.info(
+					f"✅ Ageing old tool results was enough: {original_tokens:,} → "
+					f"{self.history.total_tokens:,} tokens ({usage_now:.1f}% of the window, "
+					f"under {AGEING_ENOUGH_PCT}%) — skipping the LLM summariser"
+				)
+				return True
+			# The summarised span still goes to the model as the provider cached it;
+			# the kept tail goes on as aged.
+			recent_messages = [m.message for m in self.history.messages][-keep_recent:]
+
 		# A4: separate any prior compacted summary so it is UPDATED, not re-summarized.
 		prior_summary: Optional[str] = None
 		prior_owner_rules: Optional[str] = None
@@ -785,8 +788,8 @@ class CompactorMixin:
 				# E-A6: the lifted owner section rides back INTO the prior summary so
 				# the summariser updates it instead of reading it as a runtime note.
 				prior_owner_rules = owner_instructions_body(msg)
-			elif _is_action_ledger(msg):
-				continue   # 103: re-read from the stores at the rebuild, never summarised
+			elif _is_action_ledger(msg) or compaction_safety.is_anchor_message(msg):
+				continue   # rebuilt at the rebuild (103, 108 W7), never summarised
 			else:
 				to_summarize.append(msg)
 		if prior_owner_rules:
@@ -799,16 +802,12 @@ class CompactorMixin:
 			messages_to_summarize, recent_messages,
 			owner_authority=getattr(self, "owner_instructions_authority", True))
 
-		# P1-4: give the active memory provider a chance to flush salient context
-		# before we summarize the middle away. Fail-open and inert by default
-		# (NullMemoryProvider's on_pre_compress is a no-op).
-		await self._run_pre_compress_hook()
-
 		# A5: prefer a cheap auxiliary model for compaction; fall back to the main LLM.
 		compaction_llm = getattr(self, "aux_llm", None) or self.llm
 
 		try:
-			summary_text = await self._run_summarization(to_summarize, prior_summary, compaction_llm)
+			summary_text = await self._run_summarization(
+				to_summarize, prior_summary, compaction_llm, wire_span=messages_to_summarize)
 			if not (summary_text and summary_text.strip()):
 				# An empty LLM summary would clear the history and insert an empty
 				# digest — permanent DATA LOSS. Fall back to the deterministic static
@@ -824,7 +823,8 @@ class CompactorMixin:
 				summary_text = static
 			self._report_tail_tokens(recent_messages)
 			self._rebuild_with_summary(summary_text, len(to_summarize), recent_messages,
-			                           current_request=current_request)
+			                           current_request=current_request,
+			                           span=messages_to_summarize, prior_summary=prior_summary)
 			self._record_compaction_savings(original_tokens, self.history.total_tokens)
 
 			self.logger.info(
@@ -842,11 +842,21 @@ class CompactorMixin:
 				f"LLM compaction aborted (transient: {type(e).__name__}: {e}); "
 				"keeping full context, will retry next step"
 			)
+			if isinstance(e, TimeoutError) or "timed out" in str(e).lower():
+				self.last_summary_report = {"timed_out": True}   # the step starts its cooldown
 			return False
 
 		except Exception as e:
 			# A6: build a deterministic summary locally instead of dropping straight to prune.
-			self.logger.error(f"LLM compaction failed: {e}, building static fallback summary")
+			if isinstance(e, LLMRefusalError):
+				# Never asked again, on this model or another: the same span gets the
+				# same answer. The owner text rides the report.
+				refused = e.owner_text()
+				self.logger.warning(f"Compaction summary stopped: {refused}; static fallback, "
+				                    "nothing was re-sent")
+				self.last_summary_report = {"refused": refused, "complete": False, "retried": False}
+			else:
+				self.logger.error(f"LLM compaction failed: {e}, building static fallback summary")
 			static = self._build_static_fallback_summary(to_summarize)
 			# BUG 4 fix: preserve the prior compacted summary in the fallback so
 			# iterative compaction does not drop the earlier digest on a non-transient
@@ -856,7 +866,8 @@ class CompactorMixin:
 				static = f"{prior_summary}\n\n{static}"
 			if static:
 				self._rebuild_with_summary(static, len(to_summarize), recent_messages,
-				                           current_request=current_request)
+				                           current_request=current_request,
+				                           span=messages_to_summarize, prior_summary=prior_summary)
 				self._record_compaction_savings(original_tokens, self.history.total_tokens)
 				self.logger.warning("Static fallback summary applied (summarizer unavailable)")
 				return True
@@ -883,43 +894,52 @@ class CompactorMixin:
 			windows.append(current)
 		return windows or [[]]
 
-	async def _run_summarization(self, messages: list, prior_summary: Optional[str], compaction_llm) -> str:
-		"""Summarize ``messages`` in one shot, or in iterative windows when huge (A1/A4).
+	async def _run_summarization(self, messages: list, prior_summary: Optional[str], compaction_llm,
+	                             wire_span: Optional[list] = None) -> str:
+		"""Summarize ``messages`` warm in one shot, or cold in iterative windows (A1/A4).
 
-		Iterative windowing means a SMALL auxiliary model can summarize an arbitrarily
-		large middle without overflowing: each window is summarized with the running
-		summary fed back in (Reference-style), so nothing is dropped.
+		*wire_span* is the history span as the step call sent it, prior summary and
+		ledger included. The warm shape sends it whole: a second window could not
+		share the prefix. The cold shape caps each message, and windowing means a
+		SMALL auxiliary model can summarize an arbitrarily large middle without
+		overflowing: each window is summarized with the running summary fed back in
+		(Reference-style), so nothing is dropped.
 		"""
+		if wire_span and self._warm_summarization_available(compaction_llm, wire_span):
+			try:
+				return await self._summarize_window(messages, prior_summary, compaction_llm,
+				                                    wire_span) or ""
+			except _WarmShapeRefused:
+				pass   # marked on the client; this compaction goes on cold
 		windows = self._window_messages(messages, _SUMMARIZE_INPUT_BUDGET_CHARS)
 		if len(windows) > 1:
 			self.logger.info(f"Compaction input large; summarizing in {len(windows)} iterative windows")
-		warm = self._warm_summarization_available(compaction_llm)
 		running = prior_summary
 		for window in windows:
-			running = await self._summarize_window(window, running, compaction_llm, warm)
+			running = await self._summarize_window(window, running, compaction_llm, None)
 		return running or ""
 
 	async def _summarize_window(self, window: list, prior: Optional[str], compaction_llm,
-	                            warm: bool) -> str:
+	                            wire_span: Optional[list]) -> str:
 		"""One complete summary of ``window``, or a salvage that names its gap (103).
 
 		A cut answer gets ONE retry with a smaller prior summary. It is never stored
 		as a good summary: the next compaction would build on it, and what it lost
 		would stay lost with nothing to say so.
 		"""
-		first = await self._invoke_summary_call(window, prior, compaction_llm, warm)
+		first, facts = await self._invoke_summary_call(window, prior, compaction_llm, wire_span)
 		if not first.strip():
 			return ""   # the caller's empty-summary path owns this
-		if summary_contract.is_complete(first):
+		if summary_contract.is_complete(first, facts):
 			return self._summary_done(summary_contract.strip_end_line(first), retried=False)
 		self.logger.warning(
-			f"Compaction summary has no end line ({len(first):,} chars): it was cut at "
-			"the output limit. Retrying once with a smaller prior summary")
+			f"Compaction summary is not complete ({len(first):,} chars): it was cut or has no "
+			"end line. Retrying once with a smaller prior summary")
 		smaller = (summary_contract.bound_summary(prior, summary_contract.RETRY_SECTION_MAX_CHARS)
 		           if prior else prior)
-		second = await self._invoke_summary_call(window, smaller, compaction_llm, warm,
-		                                         retry_note=summary_contract.RETRY_NOTE)
-		if summary_contract.is_complete(second):
+		second, facts = await self._invoke_summary_call(window, smaller, compaction_llm, wire_span,
+		                                                retry_note=summary_contract.RETRY_NOTE)
+		if summary_contract.is_complete(second, facts):
 			return self._summary_done(summary_contract.strip_end_line(second), retried=True)
 		self.logger.warning(
 			"Compaction summary was cut again: storing a salvage that names the lost sections")
@@ -953,31 +973,54 @@ class CompactorMixin:
 		return text
 
 	async def _invoke_summary_call(self, window: list, prior: Optional[str], compaction_llm,
-	                               warm: bool, retry_note: str = "") -> str:
+	                               wire_span: Optional[list], retry_note: str = "") -> tuple:
+		"""One summariser call: ``(answer text, the call's facts)``."""
 		prompt = retry_note + self._build_compaction_prompt(window, prior_summary=prior,
-		                                                    inline_conversation=not warm)
+		                                                    inline_conversation=wire_span is None)
 		import time as _time
 		_t0 = _time.time()
-		# tools=None is explicit: a summarisation call never carries the step's
-		# toolset (2026-09-20: 176 stale schemas rode the compaction prompt).
-		if warm:
+		if wire_span is not None:
 			response = await self._invoke_warm_summarization(
-				compaction_llm, window, prompt, prior_summary=prior)
+				compaction_llm, wire_span, prompt, started=_t0)
 		else:
-			response = await compaction_llm.ainvoke([HumanMessage(content=prompt)], tools=None)
-		# A3: meter this aux LLM call through the single deduction path (fail-open).
+			# tools=None is explicit: the cold shape carries no tool turns, so it
+			# carries no toolset (2026-09-20: 176 stale schemas rode this prompt).
+			response = await self._bounded_summary_call(
+				compaction_llm, [HumanMessage(content=prompt)], tools=None)
+		await self._meter_summary_call(compaction_llm, response, _t0)
+		self._last_summary_output_tokens = _completion_tokens(response)
+		text = response.content if hasattr(response, 'content') else str(response)
+		return text or "", getattr(response, "call_facts", None)
+
+	async def _meter_summary_call(self, compaction_llm, response: Any, started: float) -> None:
+		"""A3: meter this aux LLM call through the single deduction path (fail-open)."""
+		import time as _time
 		from modules.llm.aux_metering import meter_aux_llm
 		await meter_aux_llm(
 			usage_tracker=getattr(self, "usage_tracker", None),
 			user_id=getattr(self, "metering_user_id", None),
 			session_id=getattr(self, "session_id", ""),
 			agent_id=getattr(self, "metering_agent_id", "") or "",
-			llm=compaction_llm, response=response, duration_seconds=_time.time() - _t0,
+			llm=compaction_llm, response=response, duration_seconds=_time.time() - started,
 			component="compaction", purpose="compaction",
 		)
-		self._last_summary_output_tokens = _completion_tokens(compaction_llm, response)
-		text = response.content if hasattr(response, 'content') else str(response)
-		return text or ""
+
+	def _summary_timeout(self) -> float:
+		"""The per-call budget of the step calls: the same context, the same stalls."""
+		reader = getattr(self, "calculate_llm_timeout", None)
+		if callable(reader):
+			return float(reader())
+		from core.llm_limits import llm_request_timeout
+		return float(llm_request_timeout())
+
+	async def _bounded_summary_call(self, compaction_llm, messages: list, **kwargs) -> Any:
+		"""A stalled summariser raises ``TimeoutError``, which ``llm_compact_history``
+		reads as transient: the full context stays and the step starts its cooldown. The
+		SDK reads the same budget and has no retry: its retry would be one more paid
+		attempt, and the next compaction tries the summary again."""
+		timeout = self._summary_timeout()
+		with call_scope(timeout=timeout, max_retries=0):
+			return await asyncio.wait_for(compaction_llm.ainvoke(messages, **kwargs), timeout=timeout)
 
 	# ------------------------------------------------------------------ #
 	# F11 — the summariser is a WARM-prefix call, not a cold one
@@ -990,23 +1033,32 @@ class CompactorMixin:
 		        "send, read from the stores. Do not list those under Completed Actions; list "
 		        "the work only they do not show.\n")
 
-	def _warm_summarization_available(self, compaction_llm) -> bool:
+	def _warm_summarization_available(self, compaction_llm, wire_span: list) -> bool:
 		"""Can this summarisation ride the prefix the step call just cached?
 
-		Two conditions, both necessary:
+		All are necessary:
 
-		* the summariser is the SESSION'S OWN client — a different model has a
-		  different cache entry, so the warm shape would only add bytes (Pi solves
-		  the same problem with ``cacheRetention:"none"``; POLYROB has no such knob);
+		* the summariser is the SESSION'S OWN client: a different model has a
+		  different cache entry, so the warm shape would only add bytes;
 		* this client has not already refused the shape (see
-		  :meth:`_invoke_warm_summarization`).
+		  :meth:`_invoke_warm_summarization`);
+		* a native-tools session knows its ``tools[]``, which come BEFORE the system
+		  prompt in the cached bytes (``warm_summary_tools``, stamped by the step);
+		* the span fits the input budget at its REAL size. The warm shape caps no
+		  message, so the capped sizes the cold windows are measured in say nothing.
 		"""
 		if compaction_llm is None or compaction_llm is not getattr(self, "llm", None):
 			return False
-		return not getattr(compaction_llm, _WARM_UNAVAILABLE_ATTR, False)
+		if getattr(compaction_llm, _WARM_UNAVAILABLE_ATTR, False):
+			return False
+		if getattr(self, "use_native_tools", True) and not getattr(self, "warm_summary_tools", None):
+			return False
+		size = sum(len(str(getattr(m, "content", ""))) + len(str(getattr(m, "tool_calls", None) or ""))
+		           + len(replayed_reasoning(m)) for m in wire_span)
+		return size <= _SUMMARIZE_INPUT_BUDGET_CHARS
 
-	def _warm_prefix_messages(self, window: list, instruction: str) -> list:
-		"""``foundation + window + ONE instruction`` — the DSH summariser shape.
+	def _warm_prefix_messages(self, wire_span: list, instruction: str) -> list:
+		"""``foundation + history span + ONE instruction`` — the DSH summariser shape.
 
 		Everything but the last message is bytes the provider just served for the
 		step call, so only the instruction is cold. The instruction is LAST on
@@ -1014,57 +1066,66 @@ class CompactorMixin:
 		cannot be reused.
 
 		The foundation slots are read through the ONE table that names them in wire
-		order (``foundation_layers.FOUNDATION_LAYERS``), not re-listed here: a ninth
-		slot must not have to be remembered in two places. H-MEM is deliberately
-		absent — under the default tail placement it is not a foundation block at
-		all, and it changes every step, so it is never part of a cached prefix.
+		order (``foundation_layers.FOUNDATION_LAYERS``), and the span passes the ONE
+		wire pass of the assembly (``_wire_conversation``): a filter the step call
+		applies and this request does not would cut the prefix at the first row it
+		touches. H-MEM is deliberately absent: it rides the tail and changes every
+		step, so it is never part of a cached prefix. ``layer_messages`` flattens a
+		sequence slot and applies the owner-document visibility rule the step call
+		applies, so the summariser never sees a block the step did not send.
 		"""
 		from agents.task.agent.messages.foundation_layers import FOUNDATION_LAYERS, layer_messages
-		# A-5 (2026-10-14): a slot can hold a SEQUENCE — ``_self_context_blocks`` is
-		# a tuple of messages (060 WS-1). Appended whole, the tuple reached the
-		# client as one "message" and every warm summarisation failed with
-		# "'tuple' object has no attribute 'content'" (6 owner chats ran cold).
-		# ``layer_messages`` flattens it AND applies the same owner-document
-		# visibility rule the step call applies, so the summariser never sees a
-		# block the step did not send.
 		foundation = []
 		for layer in FOUNDATION_LAYERS:
 			foundation.extend(layer_messages(self, layer))
-		return foundation + list(window) + [HumanMessage(content=instruction)]
+		messages = foundation + self._wire_conversation(list(wire_span))
+		if not getattr(self, "use_native_tools", True):
+			messages = self.convert_messages_for_non_function_calling_models(messages)
+		return messages + [HumanMessage(content=instruction)]
 
-	async def _invoke_warm_summarization(self, compaction_llm, window: list, prompt: str,
-	                                     prior_summary: Optional[str] = None):
-		"""Send the warm shape; fall back to the cold one ONCE per client.
+	async def _invoke_warm_summarization(self, compaction_llm, wire_span: list, prompt: str,
+	                                     started: float):
+		"""Send the warm shape: the step's ``tools[]`` with ``tool_choice: none``.
 
-		A provider can refuse a request that carries ``tool_use``/``tool_result``
-		turns without a ``tools`` definition (Anthropic does). That is a property of
-		the client, not of this conversation, so the first refusal marks the client
-		and every later compaction in the session goes straight to the cold shape —
-		the Bedrock self-healing pattern, one probe, not one per compaction. A
-		TRANSIENT failure (rate limit, connection, timeout) is re-raised untouched:
+		A provider can refuse the shape, or ignore the ``none`` and answer with a tool
+		call. That is a property of the client, not of this conversation, so the first
+		refusal marks the client and every later compaction in the session goes
+		straight to the cold shape: one probe, not one per compaction. A TRANSIENT
+		failure (rate limit, connection, timeout) is re-raised untouched:
 		``llm_compact_history`` must still see it as "retry next step", and it says
 		nothing about whether the shape is supported.
 		"""
+		tools = getattr(self, "warm_summary_tools", None) or None
+		wire = {"tools": tools, "tool_choice": "none"} if tools else {"tools": None}
 		try:
-			return await compaction_llm.ainvoke(
-				self._warm_prefix_messages(window, prompt), tools=None)
+			response = await self._bounded_summary_call(
+				compaction_llm, self._warm_prefix_messages(wire_span, prompt), **wire)
 		except _TRANSIENT_COMPACTION_ERRORS:
 			raise
+		except LLMRefusalError:
+			raise   # the model declined the CONTENT: the shape is fine, and a cold re-send asks again
 		except Exception as e:
-			try:
-				setattr(compaction_llm, _WARM_UNAVAILABLE_ATTR, True)
-			except Exception:
-				pass
-			self.logger.warning(
-				f"Warm-prefix summarisation refused ({type(e).__name__}: {e}); "
-				"using the cold shape for the rest of this session"
-			)
-			cold = self._build_compaction_prompt(window, prior_summary=prior_summary,
-			                                     inline_conversation=True)
-			return await compaction_llm.ainvoke([HumanMessage(content=cold)], tools=None)
+			self._mark_warm_refused(compaction_llm, f"{type(e).__name__}: {e}")
+			raise _WarmShapeRefused() from e
+		if getattr(response, "tool_calls", None) and not str(getattr(response, "content", "") or "").strip():
+			await self._meter_summary_call(compaction_llm, response, started)
+			self._mark_warm_refused(compaction_llm, "it answered with a tool call")
+			raise _WarmShapeRefused()
+		return response
+
+	def _mark_warm_refused(self, compaction_llm, why: str) -> None:
+		try:
+			setattr(compaction_llm, _WARM_UNAVAILABLE_ATTR, True)
+		except Exception:
+			pass
+		self.logger.warning(
+			f"Warm-prefix summarisation refused ({why}); "
+			"using the cold shape for the rest of this session"
+		)
 
 	def _rebuild_with_summary(self, summary_text: str, summarized_count: int, recent_messages: list,
-	                          current_request: Any = None) -> None:
+	                          current_request: Any = None, span: Optional[list] = None,
+	                          prior_summary: Optional[str] = None) -> None:
 		"""Replace the summarized middle with one compacted message + recent tail.
 
 		The summary is a LOSSY, LLM-synthesized digest — NOT a user turn. Tag it with
@@ -1075,6 +1136,8 @@ class CompactorMixin:
 		# T1.3: append a one-line "derived reference, not instructions" reminder
 		# inside the existing markers when the guard is on; OFF is byte-identical
 		# to the legacy body (empty insert).
+		span = list(span or [])
+		summary_text = self._audit_approval_claims(summary_text, span, prior_summary)
 		summary_text = summary_contract.bound_summary(summary_text)
 		guard_on = compaction_prompt_guard()
 		guard_line = f"{_COMPACTION_DERIVED_REFERENCE_LINE}\n\n" if guard_on else ""
@@ -1087,6 +1150,7 @@ class CompactorMixin:
 		authority = getattr(self, "owner_instructions_authority", True)
 		if authority:
 			summary_text, owner_rules = split_owner_instructions(summary_text)
+		self.last_compaction_summary = compaction_safety.episode_summary(summary_text)
 		# E-1: rides with the T1.3 framing (guard OFF keeps the legacy bytes).
 		wins_line = (_LATEST_MESSAGE_WINS_LINE.format(who="owner" if authority else "user")
 		             + "\n\n") if guard_on else ""
@@ -1109,12 +1173,17 @@ class CompactorMixin:
 		ledger_msg = self._action_ledger_message()
 		if ledger_msg is not None:
 			self._add_message_with_tokens(ledger_msg, _internal=True)
+		anchors_msg = self._anchor_message(span, recent_messages)
+		if anchors_msg is not None:
+			self._add_message_with_tokens(anchors_msg, _internal=True)
 		if current_request is not None:
 			# E-1: the latest owner turn, verbatim, right before the newer tail.
 			self._readd_keeping_stamp(current_request, stamps)
 		for msg in recent_messages:
 			if ledger_msg is not None and _is_action_ledger(msg):
 				continue   # the fresh block above replaces an older one
+			if anchors_msg is not None and compaction_safety.is_anchor_message(msg):
+				continue   # it merged this one
 			self._readd_keeping_stamp(msg, stamps)
 
 	def _action_ledger_message(self) -> Any:
@@ -1128,6 +1197,29 @@ class CompactorMixin:
 			self.logger.warning(f"action ledger skipped at compaction: {type(e).__name__}")
 			return None
 		return make_control_message(text, MessageOrigin.ACTION_LEDGER) if text else None
+
+	def _anchor_message(self, span: list, tail: list) -> Any:
+		"""108 W7: the exact values of the compacted tool results. None = no block."""
+		try:
+			return compaction_safety.build_anchor_message(span, tail)
+		except Exception as e:
+			self.logger.warning(f"compaction anchors skipped: {type(e).__name__}")
+			return None
+
+	def _audit_approval_claims(self, summary: str, span: list, prior: Optional[str]) -> str:
+		"""108 W7: a claim of approval needs an owner line. On an error the summary stays."""
+		authority = getattr(self, "owner_instructions_authority", True)
+		try:
+			text, removed = compaction_safety.audit_approval_claims(
+				summary, span, prior, owner_turn=_is_owner_turn if authority else None,
+				user_turn=_is_genuine_user_turn)
+		except Exception as e:
+			self.logger.warning(f"compaction approval audit skipped: {type(e).__name__}")
+			return summary
+		if removed:
+			self.logger.warning(f"Compaction audit removed {len(removed)} approval claim(s) "
+			                    f"with no owner line, first: {removed[0][:160]!r}")
+		return text
 
 	def _message_stamps(self) -> dict:
 		"""``id(message)`` -> its original ISO stamp, taken before a rebuild clears

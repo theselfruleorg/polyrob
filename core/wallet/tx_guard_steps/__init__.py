@@ -52,7 +52,12 @@ def run(ctx: GuardContext):
         decision = step(ctx)
         if decision is not None:
             return decision
-    return value.allow(ctx)
+    decision = value.allow(ctx)
+    if decision is not None and decision.allowed:
+        booked = turn.reserve_offer_budget(ctx)   # 099: an order's budget books ALLOWED spends only
+        if booked is not None:
+            return booked
+    return decision
 
 
 __all__ = ["GuardContext", "STEPS", "run"]

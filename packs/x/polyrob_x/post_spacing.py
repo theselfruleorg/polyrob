@@ -17,6 +17,7 @@ Fail-open on a telemetry fault, like the cross-session cooldown beside it.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any, Optional
 
@@ -75,3 +76,17 @@ def spacing_refusal(action_name: str, execution_context: Any) -> Optional[str]:
     except Exception:
         logger.debug("x post-spacing probe failed (fail-open)", exc_info=True)
         return None
+
+
+#: Text that is a stand-in, never a post (prod 2026-11-06: a run called twitter_post
+#: with "placeholder", and only the cooldown stopped it; a replay posted "verify").
+_PLACEHOLDER = re.compile(
+    r"\s*(?:placeholder|test|testing|verify|hello|hello world|tbd|todo|lorem ipsum.*|<[^<>]*>|\.+|x+)\s*\.?\s*", re.I | re.S)
+
+
+def placeholder_refusal(action_name: str, text) -> Optional[str]:
+    """The refusal for a post whose whole text is a stand-in, else None."""
+    if isinstance(text, str) and _PLACEHOLDER.fullmatch(text):
+        return (f"Twitter write '{action_name}' blocked: {text.strip()!r} is a placeholder, "
+                "not a post. Nothing went out. Send the real text.")
+    return None

@@ -28,16 +28,16 @@ _REPO = Path(__file__).resolve().parents[3]
 CEILINGS = {
     "webview_copy": 68,
     "core_copy": 3,
-    "verbs": 20,
+    "verbs": 19,
     "prefs": 0,
     "inbox_render": 15,
     "telegram_owner": 42,
-    "repl_owner": 19,
+    "repl_owner": 60,   # 113 T-02: handlers.py joined at its exact count
     # 080 WS-5: every prose line of docs/guide/ and the guide skill. Large on
     # purpose — technical guide prose uses "session", "tool", "config"; the
     # number only falls.
-    "guide_docs": 1682,
-    "guide_skill": 240,
+    "guide_docs": 1671,
+    "guide_skill": 234,
 }
 
 _INBOX_RENDER = ("core/surfaces/inbox_render.py", "core/surfaces/owner_admin.py")
@@ -45,7 +45,8 @@ _TELEGRAM = tuple(f"surfaces/telegram/{m}.py" for m in (
     "owner_ops", "history_ops", "send_ops", "token_ops", "identity_ops",
     "job_ops"))
 _REPL = tuple(f"cli/ui/commands/{m}.py" for m in (
-    "h_mode", "h_autonomy", "h_money_verbs", "h_inbox", "h_help"))
+    "h_mode", "h_autonomy", "h_money_verbs", "h_inbox", "h_help",
+    "handlers"))  # 113 T-02: the REPL registry and its replies
 
 
 #: 080 WS-5: the published guide and the agent's own guide skill. The generated

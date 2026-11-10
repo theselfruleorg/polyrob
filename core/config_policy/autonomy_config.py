@@ -53,24 +53,10 @@ class AutonomyConfig(GoalFlagsMixin):
     def skills_writable() -> bool:
         return member_flag("SKILLS_WRITABLE")
 
-    @staticmethod
-    def skills_writable_require_review() -> bool:
-        return _bool_env("SKILLS_WRITABLE_REQUIRE_REVIEW", True)
-
-    @staticmethod
-    def skill_overwrite_protect() -> bool:
-        # An agent/background overwrite of an existing ACTIVE skill becomes a .pending
-        # proposal (owner promotes); all overwrites archive the prior body. Default ON.
-        return _bool_env("SKILL_OVERWRITE_PROTECT", True)
-
     # polyrob C-write — evolving SELF identity (agent-writable per-(instance,user) doc)
     @staticmethod
     def self_context_writable() -> bool:
         return member_flag("SELF_CONTEXT_WRITABLE")
-
-    @staticmethod
-    def self_context_require_review() -> bool:
-        return _bool_env("SELF_CONTEXT_REQUIRE_REVIEW", True)
 
     # Bounded owner-facts doc (USER.md-equivalent) — agent-maintained per-(instance,
     # user) document of durable owner facts/preferences, injected on the SELF/SOUL
@@ -78,10 +64,6 @@ class AutonomyConfig(GoalFlagsMixin):
     @staticmethod
     def owner_doc_writable() -> bool:
         return member_flag("OWNER_DOC_WRITABLE")
-
-    @staticmethod
-    def owner_doc_require_review() -> bool:
-        return _bool_env("OWNER_DOC_REQUIRE_REVIEW", True)
 
     # Bounded operating-contract doc (owner-authored operating rules/constraints,
     # owner-UX Phase 2) — injected after owner facts and before the evolving SELF
@@ -240,14 +222,6 @@ class AutonomyConfig(GoalFlagsMixin):
     @staticmethod
     def wake_change_gate() -> bool:
         return member_flag("WAKE_CHANGE_GATE")
-
-    # §7.2 — blocker → owner escalation. When a goal trips the circuit breaker
-    # (status='blocked') OR the pipeline drains, surface a concrete ask to the owner
-    # instead of dying silently. Default OFF (an unsolicited owner push is opt-in).
-    @staticmethod
-    def goal_blocker_escalation() -> bool:
-        # W1-1: default governed by AUTONOMY_POSTURE (owner-visible/full turn it on).
-        return member_flag("GOAL_BLOCKER_ESCALATION")
 
     # 044 T20 — how many lines ONE room service run may answer. Bounds a
     # catch-up run that finds a long backlog: the hourly `GROUP_REPLY_CAP_PER_HOUR`

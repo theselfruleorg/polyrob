@@ -27,3 +27,21 @@ def test_reused_pid_is_not_live(tmp_path):
     assert session_is_live("s-ghost", str(tmp_path)) is False
     assert session_is_live("s-live", str(tmp_path)) is True
     assert session_is_live("s-legacy", str(tmp_path)) is True
+
+
+def test_a_naive_stamp_is_the_local_clock_not_utc(monkeypatch):
+    """ST-20: cron's last_run_at and the registry's created_at are datetime.now()
+    text; reading them as UTC put "running since" off by the UTC offset."""
+    import time
+    from datetime import datetime
+    from core.status_live import _iso_ts
+    monkeypatch.setenv("TZ", "Etc/GMT-5")  # UTC+5
+    time.tzset()
+    try:
+        epoch = 1_800_000_000.0
+        naive_local = datetime.fromtimestamp(epoch).isoformat()
+        assert _iso_ts(naive_local) == epoch
+        assert _iso_ts("2027-01-15T08:00:00+00:00") == 1_800_000_000.0
+    finally:
+        monkeypatch.delenv("TZ")
+        time.tzset()

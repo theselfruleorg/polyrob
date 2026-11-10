@@ -754,8 +754,8 @@ async def test_approving_a_cron_ask_re_arms_the_job_and_never_wakes(board, tmp_p
     await asyncio.sleep(0)
     assert spy.calls == [], "a self-wake into a finished cron run cannot spend"
     job = store.get("job-rebuy")
-    assert job.next_run_at <= datetime.now(timezone.utc), "the job must be due now"
-    assert job.next_run_at < later
+    assert job.next_run_at <= datetime.now(), "the job must be due now (naive local, the cron store's convention)"
+    assert job.next_run_at < later.astimezone().replace(tzinfo=None)
     assert "next tick" in msg
 
 

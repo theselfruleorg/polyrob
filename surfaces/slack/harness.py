@@ -11,12 +11,18 @@ import os
 from typing import Any, Optional
 
 from core.surfaces.idempotency import IdempotencyStore
-from surfaces._shared import BaseHarness, TextSink, register_surface_and_sink
+from surfaces._shared import (FAILED_MARK, SEEN_MARK, BaseHarness, TextSink,
+                               register_surface_and_sink, wants_feedback)
 from surfaces.slack.client import SlackClient
-from surfaces.slack.socket_mode import SlackSocketModeClient, parse_event
+from surfaces.slack.socket_mode import (SLASH_ENVELOPE, SlackSocketModeClient,
+                                        parse_event, parse_slash_command)
 from surfaces.slack.surface import SlackSurface
 
 logger = logging.getLogger(__name__)
+
+#: The shared feedback marks as Slack reaction names. Slack's Web API has no
+#: typing indicator for a bot, so the reaction is the only "seen" signal.
+_REACTION = {SEEN_MARK: "eyes", FAILED_MARK: "x"}
 
 
 def SlackSink(client: SlackClient) -> TextSink:  # noqa: N802 — kept name
@@ -35,8 +41,12 @@ class SlackHarness(BaseHarness):
         self.bot_user_id: str = ""
 
     async def handle_event(self, event: dict) -> None:
-        inbound = parse_event(event, self.bot_user_id,
-                              user_directory=self._user_directory)
+        if event.get("type") == SLASH_ENVELOPE:
+            inbound = parse_slash_command(event.get("payload") or {},
+                                          user_directory=self._user_directory)
+        else:
+            inbound = parse_event(event, self.bot_user_id,
+                                  user_directory=self._user_directory)
         if inbound is None or self._is_duplicate(inbound):
             return
         await self._route(inbound)
@@ -50,6 +60,36 @@ class SlackHarness(BaseHarness):
     async def _deliver_to(self, target, text: str) -> None:
         channel, thread_ts = target if isinstance(target, tuple) else (target, None)
         await self._client.send_message(channel, text, thread_ts=thread_ts)
+
+    async def _deliver_dm(self, address: str, text: str) -> None:
+        """A user id (``OWNER_SLACK_ID``): the client opens the app's DM with it."""
+        await self._client.send_message(address, text)
+
+    @staticmethod
+    def _message_ref(inbound):
+        """``(channel, ts)`` of the message to react on, or None (a slash command
+        has no message; a room line that does not name the bot gets nothing)."""
+        if not wants_feedback(inbound):
+            return None
+        raw = inbound.raw if isinstance(inbound.raw, dict) else {}
+        ts = str(raw.get("ts") or "")
+        channel = str(inbound.identity.source.chat_id or "")
+        return (channel, ts) if ts and channel else None
+
+    async def on_processing_start(self, inbound) -> None:
+        ref = self._message_ref(inbound)
+        if ref:
+            await self._client.add_reaction(*ref, _REACTION[SEEN_MARK])
+
+    async def on_processing_finish(self, inbound, ok: bool) -> None:
+        ref = self._message_ref(inbound)
+        if not ref:
+            return
+        try:
+            await self._client.remove_reaction(*ref, _REACTION[SEEN_MARK])
+        finally:
+            if not ok:
+                await self._client.add_reaction(*ref, _REACTION[FAILED_MARK])
 
     async def _fetch_media(self, media) -> Optional[bytes]:
         """A Slack private file: the bot token rides ONLY to files.slack.com."""

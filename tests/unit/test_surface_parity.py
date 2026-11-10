@@ -32,8 +32,8 @@ CAPABILITY_MATRIX = {
                        "/approve"),
     "finance":        ("finance",   "finance",  "/api/webgate/ledger",      None),
     "goals":          ("goals",     "goals",    "/api/webgate/goals",       "/goals"),
-    "cron":           ("job",       "jobs",     "/api/webgate/cron",        "/jobs"),
-    "recap":          ("journey",   "journey",  None,                       "/recap"),
+    "cron":           ("job",       "jobs",     "/api/webgate/cron",        "/job"),
+    "recap":          ("journey",   "journey",  None,                       "/journey"),
     "recap-alias":    (None,        "recap",    None,                       "/journey"),
     # 061: the ONE owner transcript on both chat seats (the console reads the
     # same store through the status snapshot's delivery line; no route pinned yet).
@@ -51,7 +51,7 @@ CAPABILITY_MATRIX = {
     # 030 WS-C C2 (finding G1): the owner kill switch + money/admin verbs are
     # reachable from every interactive owner seat. The webview column stays
     # None here deliberately until G2/C3 ships its control surface.
-    "kill-switch-halt":   ("owner", "halt",      "/api/webgate/halt",       "/halt"),
+    "kill-switch-halt":   ("owner", "halt",      "/api/webgate/halt",       "/pause"),
     "kill-switch-resume": ("owner", "resume",    "/api/webgate/resume",     "/resume"),
     # 031: the owner pause record — /pause on every seat (halt stays an alias)
     "owner-pause":        ("autonomy", "pause",  "/api/webgate/pause",      "/pause"),

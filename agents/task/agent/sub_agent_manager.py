@@ -39,7 +39,7 @@ from typing import Dict, List, Optional, Any, Set, Union, TYPE_CHECKING
 # F28: the parent context a child inherits is third-party DATA, not task text.
 # `core.security` is a lower tier than `agents`, so this is a downward import.
 from core.security.untrusted_wrap import wrap_untrusted
-from agents.task.agent.core.model_swap import close_agent_llms
+from agents.task.agent.core.model_swap import close_agent_llms, close_own_llm
 from agents.task.agent.core.run_budget import attach_parent_run_budget
 from agents.task.runtime.stop_reason import StopReason, describe_stop_reason, label_last_report
 
@@ -148,6 +148,15 @@ def _state_stop_reason(agent: Any) -> Optional[str]:
     """The child's ``state.stop_reason`` (083 WS-1) when it is a real string."""
     reason = getattr(getattr(agent, 'state', None), 'stop_reason', None)
     return reason if isinstance(reason, str) and reason else None
+
+
+def _child_error(agent: Any, history: Any) -> Optional[str]:
+    """The halt text of a child that stopped on a fatal error (a refusal), else None."""
+    if _state_stop_reason(agent) != "error":
+        return None
+    from agents.task.session.execution import _terminal_error_text
+    text = _terminal_error_text(history)
+    return text.strip() if isinstance(text, str) and text.strip() else None
 
 
 @dataclass
@@ -799,16 +808,19 @@ class SubAgentManager:
                         llm_to_use = parent_agent.llm
                         self.logger.debug(f"Sub-agent {sub_agent_id} inheriting LLM from parent")
                         break
-            # 041 phase 2: a worker's PINNED model, unless the caller named one
-            # (an explicit delegate `model=` is more specific and still wins).
-            if worker is not None and worker.model:
-                llm_to_use = await self._worker_llm(parent_agent_id, worker) or llm_to_use
 
         sub_agent = None
+        pinned_llm = None
         # Use semaphore to limit concurrency
         async with self._concurrency_semaphore:
             self.logger.debug(f"✓ Acquired concurrency slot for {sub_agent_id}")
             try:
+                # 041 phase 2: a worker's PINNED model, unless the caller named one
+                # (an explicit delegate `model=` is more specific and still wins).
+                if parent_llm is None and worker is not None and worker.model:
+                    pinned_llm = await self._worker_llm(parent_agent_id, worker)
+                    llm_to_use = pinned_llm or llm_to_use
+
                 # 019 P1: mirror the child lifecycle into the PARENT session's
                 # feed (same-tenant — the child shares the parent orchestrator).
                 # Emitted INSIDE this try so the finally's 'finished' emit
@@ -898,13 +910,15 @@ class SubAgentManager:
                 # UPGRADE: Aggregate usage to parent session
                 usage = await self._aggregate_usage_to_parent(virtual_session_id, sub_agent_id, task)
 
-                # Build result
+                # Build result: a child halted by a fatal error (a refusal) failed.
                 duration = time.time() - start_time
+                child_error = _child_error(sub_agent, history)
                 result = SubAgentResult(
                     agent_id=sub_agent_id,
                     task=task,
                     output=output,
-                    success=True,
+                    success=child_error is None,
+                    error=child_error,
                     steps_taken=sub_agent.state.n_steps if hasattr(sub_agent, 'state') else 0,
                     duration_seconds=duration,
                     usage=usage,
@@ -920,7 +934,7 @@ class SubAgentManager:
                     f"({result.steps_taken} steps, {usage.credits_charged} credits)"
                 )
 
-                _sub_ok = True
+                _sub_ok = result.success
                 return result
 
             except asyncio.CancelledError:
@@ -1001,6 +1015,9 @@ class SubAgentManager:
 
                     # Remove from local tracking
                     self._sub_agents.pop(sub_agent_id, None)
+
+                # This run built the pinned client on its own, so no parent holds it.
+                await close_own_llm(pinned_llm, getattr(self.orchestrator, "container", None))
                 self._live_meta.pop(sub_agent_id, None)
                 self._parent_map.pop(sub_agent_id, None)
     
@@ -1424,6 +1441,8 @@ class SubAgentManager:
                     output_text += f"\n\n**Files:** {', '.join(result.output.files_created[:10])}"
             else:
                 output_text = str(result.output) if result.output else result.error or 'No output'
+            if not result.success and result.error and result.error not in output_text:
+                output_text = f"**Error:** {result.error}\n\n{output_text}"
 
             # Build formatted result with usage info
             formatted.append(f"""

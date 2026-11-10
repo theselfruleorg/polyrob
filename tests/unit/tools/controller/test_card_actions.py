@@ -38,7 +38,7 @@ def _ctx(sid="s-owner", role="orchestrator", is_sub_agent=False):
 
 
 @pytest.fixture(autouse=True)
-def _owner(monkeypatch):
+def _owner(monkeypatch, tmp_path):
     monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: "alice")
     # A /send proposal reads a spend-grade price; never the network in a test.
     monkeypatch.setattr("tools.controller.card_actions._SEND_PRICE_FN", lambda c, a: None)
@@ -49,18 +49,23 @@ def _owner(monkeypatch):
         return "sent"
 
     monkeypatch.setattr("core.surfaces.user_delivery.deliver_user_message", _deliver)
+    from agents.task.goals.board import GoalBoard
+    board = GoalBoard(str(tmp_path / "goals.db"))
+    monkeypatch.setattr("tools.controller.owner_ask_action._board", lambda c: board)
     return sent
 
 
 def _actions(**kw):
     from tools.controller.card_actions import register_card_actions
+    from tools.controller.owner_ask_action import register_owner_ask_action
     c = _Controller(**kw)
     register_card_actions(c)
+    register_owner_ask_action(c)
     return c.registry.actions
 
 
 def test_choice_returns_the_tapped_option_into_the_turn(_owner):
-    fn, model, _ = _actions()["present_choice"]
+    fn, model, _ = _actions()["owner_ask"]
     params = model(question="Which chain for the payout?", options=["Base", "Ethereum"],
                    wait_seconds=10)
 
@@ -82,7 +87,7 @@ def test_choice_returns_the_tapped_option_into_the_turn(_owner):
 
 
 def test_choice_times_out_closed_without_an_answer(monkeypatch):
-    fn, model, _ = _actions()["present_choice"]
+    fn, model, _ = _actions()["owner_ask"]
     monkeypatch.setattr(cards, "wait_for_answer",
                         lambda cid, t, **k: cards.store().get(cid))
     res = asyncio.run(fn(model(question="Which one?", options=["A", "B"], wait_seconds=10),
@@ -92,7 +97,7 @@ def test_choice_times_out_closed_without_an_answer(monkeypatch):
 
 
 def test_choice_uses_the_terminal_prompt_when_there_is_one(monkeypatch, _owner):
-    fn, model, _ = _actions()["present_choice"]
+    fn, model, _ = _actions()["owner_ask"]
 
     async def _reader(prompt):
         assert "1. Keep" in prompt
@@ -112,20 +117,56 @@ def test_choice_uses_the_terminal_prompt_when_there_is_one(monkeypatch, _owner):
 ])
 def test_both_tools_refuse_rooms_and_leaves(kw, ctx_kw, needle):
     acts = _actions(**kw)
-    for name, args in (("present_choice", dict(question="Which one?", options=["A", "B"])),
+    for name, args in (("owner_ask", dict(question="Which one?", options=["A", "B"])),
                        ("propose_action", dict(command="/send 1 native to 0xabc on base"))):
         fn, model, _ = acts[name]
         res = asyncio.run(fn(model(**args), execution_context=_ctx(**ctx_kw)))
         assert res.error and needle in res.error
 
 
-def test_choice_refused_in_an_autonomous_run():
+def test_choice_in_an_autonomous_run_is_a_durable_ask_with_tap_options():
     from core.autonomy_marker import mark_autonomous
+    from tools.controller import owner_ask_action
     mark_autonomous("s-auto-1", None, cron_job_id="j1")
-    fn, model, _ = _actions(sid="s-auto-1")["present_choice"]
-    res = asyncio.run(fn(model(question="Which one?", options=["A", "B"]),
+    fn, model, _ = _actions(sid="s-auto-1")["owner_ask"]
+    res = asyncio.run(fn(model(question="Which one?", options=["Keep", "Sell"]),
                          execution_context=_ctx(sid="s-auto-1")))
-    assert res.error and "owner_ask" in res.error
+    assert res.error is None and "Raised owner ask" in res.extracted_content
+    assert cards.store().open_cards("alice") == []
+    ask, = owner_ask_action._board(None).asks(user_id="alice", status="open")
+    assert ask.payload["options"] == {"A": "Keep", "B": "Sell"}
+    assert "A) Keep or B) Sell" in ask.title
+
+
+def test_a_card_that_cannot_reach_the_owner_becomes_a_durable_ask(monkeypatch):
+    from tools.controller import owner_ask_action
+
+    async def _undelivered(*a, **k):
+        return "unbound"
+
+    monkeypatch.setattr("tools.controller.card_actions._deliver", _undelivered)
+    fn, model, _ = _actions()["owner_ask"]
+    res = asyncio.run(fn(model(question="Which one?", options=["Keep", "Sell"]),
+                         execution_context=_ctx()))
+    assert res.error is None and "Raised owner ask" in res.extracted_content
+    assert cards.store().open_cards("alice") == []
+    assert len(owner_ask_action._board(None).asks(user_id="alice", status="open")) == 1
+
+
+def test_the_reason_rides_on_the_card(monkeypatch):
+    seen = []
+
+    async def _terminal(*a, **k):
+        return "unbound"
+
+    real = cards.choice_card
+    monkeypatch.setattr(cards, "choice_card",
+                        lambda *a, **k: seen.append(k.get("body")) or real(*a, **k))
+    monkeypatch.setattr("tools.controller.card_actions._deliver", _terminal)
+    fn, model, _ = _actions()["owner_ask"]
+    asyncio.run(fn(model(question="Which one?", why="the cap is near", options=["A", "B"]),
+                   execution_context=_ctx()))
+    assert seen == ["the cap is near"]
 
 
 def test_non_owner_tenant_is_refused(monkeypatch):

@@ -49,3 +49,36 @@ def test_stable_order_is_sorted_by_action_name(monkeypatch):
     emitted = _registry(_NAMES).get_all_actions_for_provider("openai")
     got = [t["function"]["name"] for t in emitted if isinstance(t, dict)]
     assert got == sorted(_NAMES)
+
+
+def test_common_tools_come_first():
+    """106 C8: a prefix cache stops at the first difference, so what most rigs hold
+    goes first. Anything else follows by name."""
+    from tools.controller.registry.tool_order import emit_rank
+    names = ["zeta", "agent_avatar", "filesystem_read_file", "done", "alpha", "task_todo_add"]
+    assert sorted(names, key=emit_rank) == [
+        "done", "task_todo_add", "filesystem_read_file", "agent_avatar", "alpha", "zeta"]
+
+
+def test_the_rigs_share_the_head_of_their_tools():
+    """The order is measured on the rendered rigs, so it must hold on them. A rig that
+    has a common tool holds it at the same place as the other rigs."""
+    import json
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[5] / "tests" / "golden" / "prompt_surface"
+    rigs = {f.name.split(".")[0]: [t["name"] for t in json.loads(f.read_text())["tools"]]
+            for f in root.glob("*.tools.json")}
+    every = set.intersection(*(set(names) for names in rigs.values()))
+    assert len(every) >= 11
+    heads = {tuple(names[:len(every)]) for names in rigs.values()}
+    assert len(heads) == 1, "the tools every rig holds are not the shared head"
+
+    def shared(a, b):
+        n = 0
+        for x, y in zip(a, b):
+            if x != y:
+                break
+            n += 1
+        return n
+    assert shared(rigs["cron"], rigs["prod_owner_telegram_dm"]) >= 40
+    assert shared(rigs["owner_repl"], rigs["prod_owner_telegram_dm"]) >= 40

@@ -73,9 +73,11 @@ def _set_refusal(execution_context) -> Optional[str]:
     if refusal:
         return refusal
     from agents.task.session_class import is_autonomous_session
-    if is_autonomous_session(getattr(execution_context, "session_id", None)):
-        return ("agent_avatar set_from denied: an autonomous (cron / goal) run "
-                "never changes the agent's face — only an owner turn may")
+    from core.security.owner_turn import is_owner_standing_run
+    if is_autonomous_session(getattr(execution_context, "session_id", None)) \
+            and not is_owner_standing_run(execution_context):
+        return ("agent_avatar set_from denied: an autonomous run that is not a standing "
+                "job never changes the agent's face")
     return None
 
 

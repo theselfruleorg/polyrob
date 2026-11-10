@@ -119,8 +119,11 @@ export function tokensSection(view, copy, readOnly) {
       fillAll(copy && copy.tok_unreadable, { what: (view && view.error) || "" })));
     return section;
   }
+  // 113 W5 (IA-4): the trusted list is collapsed — fifteen rows of contract
+  // addresses used to push everything else off the page, even with no wallet.
+  const trusted = view.trusted || [];
   const list = el("ul", "list");
-  for (const row of view.trusted || []) {
+  for (const row of trusted) {
     const li = el("li");
     li.appendChild(el("span", "what",
       `${row.symbol || "?"} · ${row.chain} · ${row.address}`));
@@ -131,7 +134,13 @@ export function tokensSection(view, copy, readOnly) {
     }
     list.appendChild(li);
   }
-  section.appendChild(list);
+  if (trusted.length) {
+    const fold = el("details", "token-fold");
+    fold.appendChild(el("summary", null,
+      fillAll(copy && copy.tok_show, { count: trusted.length })));
+    fold.appendChild(list);
+    section.appendChild(fold);
+  }
   if ((view.rejected || []).length) {
     section.appendChild(head(copy && copy.tok_rejected_title));
     const rej = el("ul", "list");
@@ -150,14 +159,16 @@ export function tokensSection(view, copy, readOnly) {
   }
   if (!readOnly) {
     const form = el("form", "token-trust-form");
+    // 113 W5 (A-4): a visible label per field, not a placeholder that goes
+    // away on the first key.
     for (const [name, label] of [["chain", copy && copy.tok_form_chain],
                                  ["address", copy && copy.tok_form_address],
                                  ["symbol", copy && copy.tok_form_symbol]]) {
+      const field = el("label", "token-field", label || name);
       const input = el("input");
       input.name = name;
-      input.placeholder = label || name;
-      input.setAttribute("aria-label", label || name);
-      form.appendChild(input);
+      field.appendChild(input);
+      form.appendChild(field);
     }
     const submit = el("button", "btn", copy && copy.tok_trust);
     submit.type = "submit";

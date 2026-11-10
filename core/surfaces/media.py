@@ -24,6 +24,14 @@ class Media:
     #: Workspace-relative path once the bytes have been stored
     #: (``core.surfaces.inbound_attachments.persist_inbound_file``).
     path: Optional[str] = None
+    #: Why the surface will not fetch these bytes, as text for the turn. Set when
+    #: the transport's own limit already decides the outcome, so no download runs.
+    refused: Optional[str] = None
+    #: The size the transport declares, in bytes. None = not declared.
+    size: Optional[int] = None
+    #: A file the rail opened for this attachment. A downloader may stream into it
+    #: and return its ``Path`` instead of holding the bytes in memory.
+    spool: Optional[str] = None
 
 
 def coerce_media(items: list) -> List[Media]:

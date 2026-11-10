@@ -13,6 +13,7 @@ from typing import Optional
 
 import click
 
+from cli.commands._options import json_option
 from agents.task.goals.board import (
     KIND_GOAL,
     STATUS_BLOCKED,
@@ -151,7 +152,7 @@ def _goal_to_dict(goal: Goal) -> dict:
 @click.option("--user", default=None, help="Tenant id (default: this instance's owner).")
 @click.option("-n", "limit", type=int, default=30, show_default=True,
               help="How many of the newest goals to show (1-500).")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def goals_list(status: Optional[str], user: Optional[str], limit: int, as_json: bool):
     """What is on the board, newest first, with the counts over EVERY row."""
     # C14/E1: this called `board.list(user_id=None)` — the DISPATCHER's order
@@ -206,7 +207,7 @@ def goals_list(status: Optional[str], user: Optional[str], limit: int, as_json: 
 
 @goals.command("show")
 @click.argument("goal_id")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def goals_show(goal_id: str, as_json: bool):
     """Show details for a single goal."""
     board = _get_board()
@@ -238,7 +239,7 @@ def goals_show(goal_id: str, as_json: bool):
 @click.option("--memory-regime", "memory_regime",
               type=click.Choice(["shared", "scoped", "sealed"]),
               help="Memory isolation for this goal's runs (needs memory scopes on).")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def goals_create(title: str, body: str, priority: int, parent: Optional[str], triage: bool,
                   tools: Optional[str], acceptance: Optional[str],
                   force: bool, as_json: bool, memory_regime: Optional[str] = None):
@@ -315,7 +316,7 @@ def _echo_verb(board: GoalBoard, goal_id: str, res, as_json: bool) -> None:
 
 @goals.command("pause")
 @click.argument("goal_id")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def goals_pause(goal_id: str, as_json: bool):
     """Pause a goal (status paused; `goals retry` resumes it)."""
     from core.goal_owner_verbs import pause_goal
@@ -329,7 +330,7 @@ def goals_pause(goal_id: str, as_json: bool):
 @click.argument("goal_id")
 @click.option("--forever", is_flag=True,
               help="Also switch the title off: no job or agent creates it again.")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def goals_stop(goal_id: str, forever: bool, as_json: bool):
     """Stop a goal — once by default; --forever means never again."""
     from core.goal_suppressions import stop_goal
@@ -341,7 +342,7 @@ def goals_stop(goal_id: str, forever: bool, as_json: bool):
 
 @goals.command("retry")
 @click.argument("goal_id")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def goals_retry(goal_id: str, as_json: bool):
     """Re-queue a blocked or paused goal (clears the failures)."""
     from core.goal_owner_verbs import retry_goal
@@ -353,7 +354,7 @@ def goals_retry(goal_id: str, as_json: bool):
 
 @goals.command("events")
 @click.argument("goal_id")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def goals_events(goal_id: str, as_json: bool):
     """Show event timeline for a goal."""
     board = _get_board()

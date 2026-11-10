@@ -180,4 +180,4 @@ def test_repl_goals_view_has_an_off_section(home, monkeypatch):
     gs.suppress(b.db_path, user_id="alice", scope=gs.SCOPE_TITLE, value="Den posts")
     monkeypatch.setattr(h_goals_view, "_board_path", lambda: b.db_path)
     out = h_goals_view.goals_view("alice")
-    assert "off (1)" in out and "Den posts" in out
+    assert "OFF — 1" in out and "Den posts" in out

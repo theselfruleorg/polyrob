@@ -41,7 +41,8 @@ def test_count_authored_skills_matches_bundled_library_size():
     # skills-vs-capabilities review added 16 generic skills for jobs no skill taught
     # (scheduling, goal runs, memory, apps, data, shell, git, APIs, MCP, correspondents,
     # rooms, wallet overview, sending, wallet login, agent identity, contract calls) (51).
-    assert mgr.count_authored_skills() == 51
+    # rule-conflict-check is the read-only check an owner-created job runs (52).
+    assert mgr.count_authored_skills() == 52
 
 
 def test_cli_skills_validate_no_arg_exits_zero_for_compliant_library():

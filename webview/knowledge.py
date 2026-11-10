@@ -2,9 +2,9 @@
 
 One page + JSON read endpoints following the webgate-v1 pages contract
 (``webview/pages.py``): every endpoint REUSES an existing reader — the notes
-verbs on the active MemoryProvider (C1), ``recall_episodes``, ``kb_list_sources``,
-``SkillManager`` catalog/pending, and the durable telemetry event log — it never
-grows a second source of truth.
+``recall_episodes``, ``kb_list_sources`` and the ``SkillManager`` catalog/pending
+— it never grows a second source of truth. Agent › Memory draws the episodes,
+Agent › Abilities a skill's text (``knowledge/skill/{id}``, 113 W5).
 
 ⚠️ **One shape, and an unreadable store is never an empty one** (043 A9). Every
 reader answers ``{"items": [...], "count": int, "error": str|null}``; on a read
@@ -41,9 +41,6 @@ from webview.pages import (
 )
 
 router = APIRouter()
-
-_CHANGE_KINDS = ("self_modification", "memory_write", "memory_promoted")  # 025: a promotion IS a knowledge change
-
 
 def _not_configured(**extra) -> JSONResponse:
     """The "nothing is configured" answer: a real empty list, ``error: None``,
@@ -84,68 +81,9 @@ def _fmt_day(ts) -> str:
         return ""
 
 
-# --- notes ------------------------------------------------------------------ #
-
-@router.get("/api/webgate/knowledge/notes")
-async def api_knowledge_notes(request: Request, status: str = "active",
-                              tag: str = "", limit: int = 200):
-    """The tenant's notes (C1 substrate) by status, newest-updated first."""
-    status = status if status in ("active", "pending", "archived") else "active"
-    provider, mem_error = _memory_provider_status()
-    user_id = _effective_user_id(request)  # 403 must not be fail-open-swallowed
-    if provider is None and mem_error:
-        return _broken(mem_error, status=status)
-    if provider is None or not hasattr(provider, "note_list"):
-        return _not_configured(status=status)
-    try:
-        notes = await provider.note_list(user_id, status=status,
-                                         tag=tag or None, limit=limit)
-    except Exception as exc:
-        return JSONResponse({"items": None, "count": None, "status": status,
-                             "error": _why(exc)})
-    for n in notes:
-        n["updated_day"] = _fmt_day(n.get("updated_ts"))
-        n["created_day"] = _fmt_day(n.get("created_ts"))
-    return JSONResponse({"items": notes, "count": len(notes), "status": status,
-                         "error": None})
-
-
-@router.get("/api/webgate/knowledge/note/{note_id}")
-async def api_knowledge_note(request: Request, note_id: int):
-    """One note + its backlinks ("learned from" provenance included)."""
-    provider, mem_error = _memory_provider_status()
-    user_id = _effective_user_id(request)
-    if provider is None and mem_error:
-        return JSONResponse({"note": None, "backlinks": None, "count": None,
-                             "error": mem_error})
-    if provider is None or not hasattr(provider, "note_get"):
-        from webview.copy import t
-        return JSONResponse({"note": None, "backlinks": [], "count": 0,
-                             "error": None,
-                             "reason": t("agent.memory.not_configured")},
-                            status_code=404)
-    try:
-        # bump_access=False: this page is READ-ONLY — an owner browsing the wiki
-        # must not mint the agent-reuse signal the staleness curator keys on.
-        note = await provider.note_get(user_id, note_id, bump_access=False)
-    except Exception as exc:
-        # A read that FAILED is not a note that is missing: 200 with the reason,
-        # so the page can say which it was.
-        return JSONResponse({"note": None, "backlinks": None, "count": None,
-                             "error": _why(exc)})
-    if note is None:
-        return JSONResponse({"note": None, "backlinks": [], "count": 0,
-                             "error": None}, status_code=404)
-    note["updated_day"] = _fmt_day(note.get("updated_ts"))
-    note["created_day"] = _fmt_day(note.get("created_ts"))
-    backlinks, error = [], None
-    try:
-        if note.get("title"):
-            backlinks = await provider.note_backlinks(user_id, note["title"])
-    except Exception as exc:
-        backlinks, error = None, _why(exc)
-    return JSONResponse({"note": note, "backlinks": backlinks,
-                         "count": len(backlinks or []), "error": error})
+# 113 W5 (C-14): ``knowledge/notes``, ``knowledge/note/{id}`` and
+# ``knowledge/changes`` are DELETED: no console screen called them. Agent ›
+# Memory reads the notes through ``/api/webgate/memory/search``.
 
 
 # --- episodes ----------------------------------------------------------------#
@@ -241,7 +179,7 @@ async def api_knowledge_skill(request: Request, skill_id: str):
     try:
         from agents.task.agent.skill_manager import get_skill_manager
         sm = get_skill_manager()
-        body = sm._load_skill_content(skill_id, user_id=user_id) or ""
+        body = sm._load_skill_content(skill_id, user_id=user_id, strict=True) or ""
         if hasattr(sm, "provenance_of"):
             provenance = sm.provenance_of(skill_id, user_id) or ""
     except Exception as exc:
@@ -278,30 +216,6 @@ async def api_knowledge_kb(request: Request, collection: str = ""):
     try:
         items = await provider.kb_list_sources(user_id=user_id,
                                                collection=(collection or None))
-    except Exception as exc:
-        return JSONResponse({"items": None, "count": None, "error": _why(exc)})
-    return JSONResponse({"items": items, "count": len(items), "error": None})
-
-
-# --- recent changes (the wiki changelog) --------------------------------------#
-
-@router.get("/api/webgate/knowledge/changes")
-async def api_knowledge_changes(request: Request, limit: int = 50):
-    """self_modification + memory_write events from the durable event log — the
-    knowledge layer's changelog, zero new plumbing."""
-    user_id = _effective_user_id(request)
-    limit = max(1, min(int(limit or 50), 200))
-    items = []
-    try:
-        from core.event_log import get_event_log
-        log = get_event_log()
-        for kind in _CHANGE_KINDS:
-            for e in (log.query(kind=kind, user_id=user_id, limit=limit) or []):
-                e = dict(e)
-                e["day"] = _fmt_day(e.get("ts"))
-                items.append(e)
-        items.sort(key=lambda e: e.get("ts") or 0, reverse=True)
-        items = items[:limit]
     except Exception as exc:
         return JSONResponse({"items": None, "count": None, "error": _why(exc)})
     return JSONResponse({"items": items, "count": len(items), "error": None})

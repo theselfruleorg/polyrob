@@ -293,3 +293,71 @@ def test_repl_workers_list_and_live_stop(store, tmp_path, monkeypatch):
     ctx.args = ["stop", "sub_x1"]
     asyncio.run(h_workers(ctx))
     assert child.state.stopped and "Stopping" in out[-1]
+
+
+class _ClosableClient:
+    def __init__(self):
+        self.closed = 0
+
+    async def cleanup(self):
+        self.closed += 1
+
+
+def _run_failing_child(monkeypatch, *, worker, parent_llm=None, built=None, parent=None):
+    """A delegation whose child fails at construction, so the run reaches its cleanup."""
+    monkeypatch.setattr(PS, "worker_dispatch_refusal", lambda *a, **k: None)
+    monkeypatch.setattr(PS, "resolve_worker", lambda *a, **k: worker)
+    build_calls = []
+
+    async def build(cfg, isolated=False):
+        build_calls.append((cfg, isolated))
+        return built
+
+    agents = {"parent": parent or SimpleNamespace(llm=SimpleNamespace(_client=_ClosableClient()),
+                                                  _create_llm_from_config_async=build)}
+    manager = _manager(agents)
+
+    async def _create_agent(**kwargs):
+        raise RuntimeError("the child did not start")
+
+    manager.orchestrator.create_agent = _create_agent
+
+    async def _child_controller(**kwargs):
+        return None
+
+    manager._build_child_controller = _child_controller
+    try:
+        asyncio.run(manager.run_subtask("a long enough task for a child to take on",
+                                        "parent", profile_id="researcher", parent_llm=parent_llm,
+                                        skip_complexity_check=True))
+    except RuntimeError:
+        pass
+    return agents["parent"], build_calls
+
+
+def test_a_pinned_worker_client_closes_when_the_run_ends(monkeypatch):
+    built = SimpleNamespace(_client=_ClosableClient())
+    worker = SimpleNamespace(id="researcher", model="m1", provider=None, instructions="", tool_ids=None)
+    parent, calls = _run_failing_child(monkeypatch, worker=worker, built=built)
+    assert calls == [({"model": "m1"}, True)]
+    assert built._client.closed == 1
+    assert parent.llm._client.closed == 0, "the parent's own client stays open"
+
+
+def test_a_child_on_the_parents_client_does_not_close_it(monkeypatch):
+    parent, calls = _run_failing_child(monkeypatch, worker=None)
+    assert calls == [] and parent.llm._client.closed == 0
+
+
+def test_a_failed_pin_inherits_and_closes_nothing(monkeypatch):
+    worker = SimpleNamespace(id="researcher", model="m1", provider=None, instructions="", tool_ids=None)
+    parent, _calls = _run_failing_child(monkeypatch, worker=worker, built=None)
+    assert parent.llm._client.closed == 0
+
+
+def test_an_explicit_model_builds_no_pin(monkeypatch):
+    worker = SimpleNamespace(id="researcher", model="m1", provider=None, instructions="", tool_ids=None)
+    explicit = SimpleNamespace(_client=_ClosableClient())
+    _parent, calls = _run_failing_child(monkeypatch, worker=worker, parent_llm=explicit,
+                                        built=SimpleNamespace(_client=_ClosableClient()))
+    assert calls == [] and explicit._client.closed == 0

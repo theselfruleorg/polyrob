@@ -17,8 +17,16 @@
           "nullable": true,
           "type": "string"
         },
+        "args": {
+          "default": null,
+          "description": "function: the arguments in order (addresses as 0x strings, integers as numbers or decimal strings, bytes as 0x hex).",
+          "items": {},
+          "nullable": true,
+          "type": "array"
+        },
         "calldata": {
-          "description": "ABI-encoded calldata, 0x-prefixed: the 4-byte selector followed by the encoded arguments. Build it yourself or take it from a protocol's own transaction-preparation endpoint.",
+          "default": "",
+          "description": "ABI-encoded calldata, 0x-prefixed: the 4-byte selector followed by the encoded arguments. Or leave it empty and give function + args.",
           "type": "string"
         },
         "chain": {
@@ -29,6 +37,12 @@
           "default": true,
           "description": "TRUE (default) simulates and asserts without broadcasting.",
           "type": "boolean"
+        },
+        "function": {
+          "default": null,
+          "description": "Instead of calldata: the function signature, e.g. \"mint(address,string)\"; the tool encodes it with args. Give calldata OR function, not both.",
+          "nullable": true,
+          "type": "string"
         },
         "max_spend_usd": {
           "description": "The most USD you authorize to leave the wallet on this call.",
@@ -73,7 +87,6 @@
       "required": [
         "chain",
         "to",
-        "calldata",
         "max_spend_usd"
       ],
       "type": "object"

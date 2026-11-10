@@ -3,6 +3,8 @@ from typing import Optional
 
 import click
 
+from cli.commands._options import json_option
+
 
 def get_skill_manager():
     """Lazy accessor (kept module-level so it stays cheap to import and patchable)."""
@@ -12,13 +14,13 @@ def get_skill_manager():
 
 @click.group()
 def skills():
-    """List and validate agent skills."""
+    """List, install, approve, validate and update agent skills."""
     from cli.commands._bootstrap import ensure_env_loaded
     ensure_env_loaded()
 
 
 @skills.command("list")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def skills_list(as_json: bool):
     """List registered skill IDs."""
     try:
@@ -132,3 +134,15 @@ def skills_export(skill_id: str, dest: Optional[str]):
     out.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(src, out)
     click.echo(f"exported {skill_id} -> {out}")
+
+
+def _mount_install_verbs() -> None:
+    """113 §2 item 10 (T-08): the install pipeline (``skill_install.skill``) lives here
+    too; ``polyrob skill`` stays as a hidden old name. Its ``list`` (scope and state) is
+    ``skills status`` here, because ``skills list`` is the registered ids."""
+    from cli.commands.skill_install import skill as _install_group
+    for name, cmd in _install_group.commands.items():
+        skills.add_command(cmd, "status" if name == "list" else name)
+
+
+_mount_install_verbs()

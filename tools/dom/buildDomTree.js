@@ -188,6 +188,16 @@
       return false;
     }
 
+    // A rich-text editor: the root of an editable region, or a block directly in
+    // the editable <body> of an editor iframe (that body is never a node here).
+    // With no role and no tabindex such an editor was not in the page state.
+    if (element.isContentEditable) {
+      const parent = element.parentElement;
+      if (!parent || !parent.isContentEditable || parent.tagName === "BODY") {
+        return true;
+      }
+    }
+
     // Base interactive elements and roles
     const interactiveElements = new Set([
       "a",

@@ -2,23 +2,38 @@
 import math
 
 
-def require_billable_model(model: str, provider: str) -> None:
-    from core.billing_context import is_billed
-    if not is_billed():
-        return
+def pricing_refusal(model: str, provider: str) -> str:
+    """Why a billed request may not run on *model*, naming it (``""`` = it may)."""
     from modules.llm.model_registry import get_model_config_exact
     from modules.llm.provider_spec import is_flat_rate
     if is_flat_rate(provider):
-        return  # Explicit subscription seats have zero marginal token cost.
-    config = get_model_config_exact(model)
-    pricing = getattr(config, "pricing", None)
+        return ""  # Explicit subscription seats have zero marginal token cost.
+    pricing = getattr(get_model_config_exact(model), "pricing", None)
     try:
         rates = (float(pricing.input_price), float(pricing.output_price))
         valid = all(math.isfinite(rate) and rate >= 0 for rate in rates)
     except (AttributeError, TypeError, ValueError):
         valid = False
-    if not valid:
-        raise ValueError("Billed requests require an explicitly priced model; register its pricing before use")
+    if valid:
+        return ""
+    return (f"Billed requests require an explicitly priced model, and {model} has no price; "
+            "register its pricing before use")
+
+
+def require_billable_model(model: str, provider: str) -> None:
+    from core.billing_context import is_billed
+    if not is_billed():
+        return
+    refusal = pricing_refusal(model, provider)
+    if refusal:
+        raise ValueError(refusal)
+
+
+async def fresh_credential(client) -> None:
+    """The one refresh before a call, off the event loop. ``check_adapter`` and
+    ``inference_sdk`` only read the credential."""
+    from core.llm_auth.inference import refresh_credential
+    await refresh_credential(client)
 
 
 def check_adapter(adapter) -> None:
@@ -40,11 +55,11 @@ def inference_sdk(client):
     """
     from core.llm_auth.inference import require_credential_access
     from core.billing_context import is_billed, is_prepaid
+    from modules.llm.call_scope import scoped_max_retries
     require_credential_access(client)
     sdk = client._client
-    if is_billed() and not is_prepaid():
-        return sdk.with_options(max_retries=0)
-    return sdk
+    retries = 0 if is_billed() and not is_prepaid() else scoped_max_retries()
+    return sdk if retries is None else sdk.with_options(max_retries=retries)
 
 
 def billed_generation_params(adapter, params):

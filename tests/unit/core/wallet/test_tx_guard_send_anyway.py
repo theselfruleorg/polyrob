@@ -43,7 +43,7 @@ def _owner():
                            session_id="s-owner", metadata={})
 
 
-def _run(*, ack, fallback=None, ctx="owner", is_transfer=True, amount=25 * WEI):
+def _run(*, ack, fallback=None, ctx="owner", is_transfer=True, amount=25 * WEI, **guard_kw):
     intent = tx_guard.TxIntent(
         chain="base", token=TOKEN, to=TO, amount_raw=amount, max_spend_usd=100.0,
         idempotency_key=f"k-{ack}-{fallback}-{ctx}", is_transfer=is_transfer,
@@ -57,7 +57,7 @@ def _run(*, ack, fallback=None, ctx="owner", is_transfer=True, amount=25 * WEI):
         price_fn=lambda chain, addr: None,          # no spend-grade price
         fallback_price_fn=(None if fallback is None else (lambda chain, addr: fallback)),
         rpc_is_pinned_fn=lambda chain: True, halted_fn=lambda: False,
-        entry_paused_fn=lambda: False, forged_fn=lambda c, t: False)
+        entry_paused_fn=lambda: False, forged_fn=lambda c, t: False, **guard_kw)
 
 
 def test_without_the_ack_it_refuses_and_names_the_extra_step():
@@ -92,3 +92,32 @@ def test_only_a_plain_send_gets_the_rule():
     d = _run(ack=True, fallback=1.0, is_transfer=False)
     assert d.allowed is False
     assert UNVERIFIED_MARK not in d.reason          # the old refusal, unchanged
+
+
+# -- the signer's switch (signer.toml [policy] unverified_sends = "caps") -------------
+
+_SIGNER = dict(ctx=None, approve_above_usd=1000.0, unverified_within_caps=True)
+
+
+def test_the_signer_switch_passes_a_send_the_weaker_price_valued():
+    d = _run(ack=True, fallback=1.0, **_SIGNER)
+    assert d.allowed is True, d.reason
+    assert d.valuation_basis == "low_confidence"
+    assert d.amount_usd == pytest.approx(25.0, abs=0.01)
+
+
+def test_the_signer_switch_keeps_every_other_bound():
+    d = _run(ack=True, fallback=100.0, **_SIGNER)   # $2,500 against a declared $100
+    assert d.allowed is False and "max_spend_usd" in d.reason
+
+
+def test_the_signer_switch_never_passes_a_send_with_no_price():
+    d = _run(ack=True, fallback=None, **_SIGNER)
+    assert d.allowed is False and d.lane == "owner_queue"
+    assert UNVERIFIED_MARK in d.reason
+
+
+def test_the_signer_switch_never_drops_the_ack():
+    d = _run(ack=False, fallback=1.0, **_SIGNER)
+    assert d.allowed is False and "anyway" in d.reason
+

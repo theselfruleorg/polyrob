@@ -45,9 +45,14 @@ VALID_EVENT_TYPES = (
     "user_message_during_execution", "session_completion", "llm_started",
     # 104: a gate in the chat says it waits in the Inbox.
     "awaiting_approval", "approval_resolved",
+    # 113 W5: a chat-box verb's answer (webview/command_feed.py).
+    "command_reply",
 )
 
 _NO_STORE = {"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
+
+#: The answer for a chat that exists and has written no event yet.
+EMPTY_FEED = {"events": [], "last_seq": 0, "total": 0, "has_more": False, "read": 0}
 
 
 def _type_matcher(event_type: str):
@@ -94,9 +99,11 @@ async def wait_for_feed_dir(path_manager, clean_id: str, polls: Optional[int] = 
 
 
 def read_feed(feed_dir, *, event_type: Optional[str], limit: int,
-              after_seq: Optional[int]) -> dict:
-    """The newest ``limit`` events of *feed_dir*, oldest first, plus the
-    delta-sync metadata (``last_seq``, ``total``, ``has_more``)."""
+              after_seq: Optional[int], skip: int = 0) -> dict:
+    """The newest ``limit`` events of *feed_dir* after the ``skip`` newest files,
+    oldest first, plus the delta-sync metadata (``last_seq``, ``total``,
+    ``has_more``). ``skip`` pages back: "load older" asks for
+    ``skip=<files already read>`` (113 W5, C-07)."""
     from webview.server import _enrich_llm_event_with_cost
 
     match = _type_matcher(event_type) if event_type else None
@@ -109,6 +116,7 @@ def read_feed(feed_dir, *, event_type: Optional[str], limit: int,
             return 0.0
 
     files.sort(key=_mtime, reverse=True)
+    files = files[max(0, int(skip or 0)):]
     items = []
     read = 0
     for path in files:
@@ -144,6 +152,8 @@ def read_feed(feed_dir, *, event_type: Optional[str], limit: int,
         "last_seq": max(seqs) if seqs else 0,
         "total": len(items),
         "has_more": read < len(files),
+        # How many files this page read: the next page's ``skip`` grows by it.
+        "read": read,
     }
 
 
@@ -151,7 +161,8 @@ def read_feed(feed_dir, *, event_type: Optional[str], limit: int,
 async def api_feed_events(request: Request, session_id: str,
                           event_type: Optional[str] = None,
                           limit: Optional[int] = None,
-                          after_seq: Optional[int] = None):
+                          after_seq: Optional[int] = None,
+                          skip: Optional[int] = None):
     """The session's feed events, newest ``limit`` (default
     ``WEBVIEW_FEED_DEFAULT_LIMIT``, at most ``WEBVIEW_FEED_MAX_LIMIT``),
     returned in time order. ``after_seq`` keeps only events with a higher
@@ -180,9 +191,22 @@ async def api_feed_events(request: Request, session_id: str,
         logger.error("feed events: no feed dir for %s: %s", clean_id, exc)
         raise HTTPException(500, {"error": "internal_error"})
     if feed_dir is None:
-        logger.debug("feed events: feed dir missing for %s", clean_id)
-        raise HTTPException(404, {"error": "session_not_found"})
-    body = read_feed(feed_dir, event_type=event_type, limit=limit, after_seq=after_seq)
+        # 113 W5 (ST-1): a chat whose folder exists but whose feed was never
+        # written is EMPTY, not unreadable — the timeline said "I could not read
+        # what this chat did" on every new chat. No folder at all stays a 404.
+        try:
+            root = await asyncio.to_thread(pm().find_session_root, clean_id, user_id)
+        except Exception as exc:
+            logger.error("feed events: no session root for %s: %s", clean_id, exc)
+            raise HTTPException(500, {"error": "internal_error"})
+        if root is None:
+            logger.debug("feed events: feed dir missing for %s", clean_id)
+            raise HTTPException(404, {"error": "session_not_found"})
+        return JSONResponse(EMPTY_FEED, headers=_NO_STORE)
+    if skip is not None and skip < 0:
+        raise HTTPException(400, {"error": "invalid_skip", "min": 0})
+    body = read_feed(feed_dir, event_type=event_type, limit=limit, after_seq=after_seq,
+                     skip=skip or 0)
     return JSONResponse(body, headers=_NO_STORE)
 
 

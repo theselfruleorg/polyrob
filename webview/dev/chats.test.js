@@ -267,3 +267,41 @@ describe("the live@agent chip (043 A32)", () => {
     expect(chip.dataset.ownerPid).toBe(undefined);
   });
 });
+
+describe("113: rename and close for your console chats", () => {
+  it("a chat of yours gets Rename and Close; the main chat gets no Close", async () => {
+    const { actionsNode } = await import("../static/app/chats.js");
+    const copy = { can_write: "1", rename: "Rename", close_chat: "Close chat", main: "Main chat" };
+    const calls = [];
+    const act = (...args) => calls.push(args);
+    const main = actionsNode({ id: "s1", chat: { slug: "main", label: "", main: true } }, copy, act, () => " home ");
+    expect(main.querySelectorAll("button").length).toBe(1);
+    main.querySelector("button").click();
+    expect(calls).toEqual([["rename", "main", "home"]]);
+    const other = actionsNode({ id: "s2", chat: { slug: "c2", label: "notes", main: false } }, copy, act, () => "");
+    const [rename, close] = other.querySelectorAll("button");
+    expect(close.getAttribute("aria-label")).toBe("Close chat: notes");
+    rename.click();                       // an empty name changes nothing
+    close.click();
+    expect(calls.slice(1)).toEqual([["close", "c2"]]);
+  });
+
+  it("a run that is not your chat, and a read-only console, get no control", async () => {
+    const { actionsNode } = await import("../static/app/chats.js");
+    const act = () => {};
+    expect(actionsNode({ id: "s3" }, { can_write: "1" }, act)).toBeNull();
+    expect(actionsNode({ id: "s2", chat: { slug: "c2" } }, {}, act)).toBeNull();
+  });
+
+  it("change posts to the route of that chat and keeps a refusal's words", async () => {
+    const { change } = await import("../static/app/chats.js");
+    const seen = [];
+    const fetcher = async (url, init) => {
+      seen.push([url, init.method, init.body]);
+      return { ok: false, status: 400, json: async () => ({ success: false, error: "The main chat stays open." }) };
+    };
+    const out = await change("close", "main", undefined, fetcher);
+    expect(seen[0]).toEqual(["/api/webgate/chats/main/close", "POST", "{}"]);
+    expect(out).toEqual({ ok: false, error: "The main chat stays open." });
+  });
+});

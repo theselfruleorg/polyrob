@@ -13,8 +13,10 @@ the facts it measured (``SpendIntent.offer_scope``):
 * a zero-value resource call (``TxIntent.is_resource_call``) addresses a
   resource contract, never anything else; ANY call to a resource contract (with
   value or a token spend too) uses a function the owner pinned;
-* the spend fits the confirmed per-order ``spend_usd`` budget: each admitted
-  spend RESERVES its declared maximum (a CAS; never given back — the safe side).
+* the spend fits the confirmed per-order ``spend_usd`` budget: each spend the guard
+  ALLOWED reserves its declared maximum (a CAS; never given back — the safe side). The
+  guard's step 2 only checks (``dry_run``); ``tx_guard_steps.turn.reserve_offer_budget``
+  books after the final allow, so a transaction a later step refuses books nothing.
 
 What it is NOT: a way in for any other run. A run without an order id never
 reaches this step, and a self-wake or forged turn is refused before it (step 3).
@@ -76,6 +78,11 @@ def refusal(order_id: str, *, user_id: str, scope: Optional[Mapping[str, Any]],
         return f"refused: the confirmed version of offer {o.offer_id} cannot be read"
     chain = str(scope.get("chain") or "").lower()
     dests = [str(d).lower() for d in (scope.get("destinations") or ()) if d]
+    if not dests and not scope.get("is_resource_call"):
+        # Only a zero-value resource call names no destination; any other spend with
+        # none would pass the check below with nothing to check.
+        return ("refused: this spend names no destination, so the order's envelope cannot "
+                "bind where the value goes")
     recipient = order_recipient(order_id)
     for d in dests:
         if recipient and d == recipient:
@@ -100,6 +107,12 @@ def refusal(order_id: str, *, user_id: str, scope: Optional[Mapping[str, Any]],
     if usd is None:
         return "refused: the spend has no USD bound, so the order's envelope cannot hold it"
     if dry_run:
+        if key or scope.get("key"):
+            # The guard books a keyed spend after its final allow (``reserve_spend``,
+            # idempotent by key), and that booking decides the budget. Judging the
+            # remainder here would refuse the real send of a dry run that already
+            # booked under the same key.
+            return None
         remaining = o.spend_budget - o.spent_usd
         return None if float(usd) <= remaining + 1e-9 else (
             f"refused: ${float(usd):.2f} exceeds order {order_id}'s remaining budget "

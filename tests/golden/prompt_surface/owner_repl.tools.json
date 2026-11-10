@@ -1,144 +1,52 @@
 {
   "tools": [
     {
-      "name": "agent_avatar",
-      "sha": "414a85c0b80e"
-    },
-    {
-      "name": "agent_status",
-      "sha": "a537b675a8de"
-    },
-    {
-      "name": "anysite_api",
-      "sha": "a830c4d053e4"
-    },
-    {
-      "name": "anysite_describe",
-      "sha": "d7d596c6800d"
-    },
-    {
-      "name": "anysite_schema_update",
-      "sha": "ad04f2312a11"
-    },
-    {
-      "name": "autonomy_control",
-      "sha": "b0d4a83e3e43"
-    },
-    {
-      "name": "browser_click_element",
-      "sha": "048985f62f64"
-    },
-    {
-      "name": "browser_extract_page_content",
-      "sha": "3734f05fe3e6"
-    },
-    {
-      "name": "browser_get_dropdown_options",
-      "sha": "ec378b878130"
-    },
-    {
-      "name": "browser_go_back_action",
-      "sha": "172768f30140"
-    },
-    {
-      "name": "browser_go_to_url",
-      "sha": "400bbe9a3ad4"
-    },
-    {
-      "name": "browser_input_text",
-      "sha": "9241a26bae2c"
-    },
-    {
-      "name": "browser_open_tab",
-      "sha": "a59d1b10e454"
-    },
-    {
-      "name": "browser_refresh_page",
-      "sha": "1de70ba1f5ea"
-    },
-    {
-      "name": "browser_screenshot",
-      "sha": "4f9327718d06"
-    },
-    {
-      "name": "browser_scroll",
-      "sha": "26ca1c454f9d"
-    },
-    {
-      "name": "browser_scroll_down",
-      "sha": "e630bcdd2ced"
-    },
-    {
-      "name": "browser_scroll_to_text",
-      "sha": "b7d14639e8a8"
-    },
-    {
-      "name": "browser_scroll_up",
-      "sha": "fab79309495c"
-    },
-    {
-      "name": "browser_search_google",
-      "sha": "f687f8f6ed18"
-    },
-    {
-      "name": "browser_select_dropdown_option",
-      "sha": "60bca17e8f0a"
-    },
-    {
-      "name": "browser_send_keys",
-      "sha": "e67b7a7b2830"
-    },
-    {
-      "name": "browser_switch_tab",
-      "sha": "c1ef05548947"
-    },
-    {
-      "name": "coding_apply_patch",
-      "sha": "59bd1e84694a"
-    },
-    {
-      "name": "coding_create_file",
-      "sha": "c3d89a4e7565"
-    },
-    {
-      "name": "coding_delete_file",
-      "sha": "c91162fc1ea8"
-    },
-    {
-      "name": "coding_grep",
-      "sha": "64c90eeedd12"
-    },
-    {
-      "name": "coding_move_file",
-      "sha": "6ed85b940ef8"
-    },
-    {
-      "name": "coding_restore",
-      "sha": "2f59966340b0"
-    },
-    {
-      "name": "coding_run_tests",
-      "sha": "d96319e6e038"
-    },
-    {
-      "name": "coding_snapshots",
-      "sha": "c652b84f8d0e"
-    },
-    {
-      "name": "coding_str_replace",
-      "sha": "6485d421e4e2"
-    },
-    {
-      "name": "contact_history",
-      "sha": "cd5b9107df8e"
-    },
-    {
-      "name": "delegate_task",
-      "sha": "99c7f57cb8f9"
-    },
-    {
       "name": "done",
       "sha": "d52ce43147c8"
+    },
+    {
+      "name": "send_message",
+      "sha": "5639154a5361"
+    },
+    {
+      "name": "load_skill",
+      "sha": "1cf2893b4073"
+    },
+    {
+      "name": "read_skill_resource",
+      "sha": "5157194c3386"
+    },
+    {
+      "name": "task_todo_add",
+      "sha": "11502431e548"
+    },
+    {
+      "name": "task_todo_complete",
+      "sha": "5dd6ac7cf5af"
+    },
+    {
+      "name": "task_todo_list",
+      "sha": "e1cd22ac08bd"
+    },
+    {
+      "name": "task_todo_next",
+      "sha": "1164773d627d"
+    },
+    {
+      "name": "task_todo_progress",
+      "sha": "20d5a866a3d7"
+    },
+    {
+      "name": "tool_describe",
+      "sha": "5b897a46f500"
+    },
+    {
+      "name": "tool_search",
+      "sha": "7d8f9245f92d"
+    },
+    {
+      "name": "compute",
+      "sha": "30a9af73bd55"
     },
     {
       "name": "filesystem_append_file",
@@ -185,8 +93,252 @@
       "sha": "0b42d4b5f38a"
     },
     {
+      "name": "web_fetch_fetch_url",
+      "sha": "3bbc659950d4"
+    },
+    {
+      "name": "agent_status",
+      "sha": "a537b675a8de"
+    },
+    {
       "name": "insights",
       "sha": "40a717ccaee9"
+    },
+    {
+      "name": "load_tool",
+      "sha": "a7b2720e3dbc"
+    },
+    {
+      "name": "message",
+      "sha": "a477faab6c1f"
+    },
+    {
+      "name": "tool_call",
+      "sha": "b3cde26d9db1"
+    },
+    {
+      "name": "agent_avatar",
+      "sha": "414a85c0b80e"
+    },
+    {
+      "name": "autonomy_control",
+      "sha": "b0d4a83e3e43"
+    },
+    {
+      "name": "contact_history",
+      "sha": "cd5b9107df8e"
+    },
+    {
+      "name": "delegate_task",
+      "sha": "24cec158d9c4"
+    },
+    {
+      "name": "offer_manage",
+      "sha": "8f2695997d09"
+    },
+    {
+      "name": "order_deliver",
+      "sha": "de43909365bb"
+    },
+    {
+      "name": "owner_ask",
+      "sha": "3de09cdb975b"
+    },
+    {
+      "name": "owner_doc_manage",
+      "sha": "95f8a92c9f32"
+    },
+    {
+      "name": "preferences",
+      "sha": "e30f13a6a673"
+    },
+    {
+      "name": "propose_action",
+      "sha": "8adf404efe07"
+    },
+    {
+      "name": "room_moderate",
+      "sha": "47c4b36dfcef"
+    },
+    {
+      "name": "room_read",
+      "sha": "9af7efe8d3e0"
+    },
+    {
+      "name": "self_context_manage",
+      "sha": "7ca08bf9fa47"
+    },
+    {
+      "name": "skill_manage",
+      "sha": "0e2b5f77f08e"
+    },
+    {
+      "name": "trade_mandate_propose",
+      "sha": "a10e0c5bdc0d"
+    },
+    {
+      "name": "anysite_api",
+      "sha": "a830c4d053e4"
+    },
+    {
+      "name": "anysite_describe",
+      "sha": "d7d596c6800d"
+    },
+    {
+      "name": "anysite_schema_update",
+      "sha": "ad04f2312a11"
+    },
+    {
+      "name": "browser_click_at",
+      "sha": "227aec4ae65f"
+    },
+    {
+      "name": "browser_click_element",
+      "sha": "d035174607e9"
+    },
+    {
+      "name": "browser_close_tab",
+      "sha": "2f392f5c8c3b"
+    },
+    {
+      "name": "browser_drag_and_drop",
+      "sha": "52bd58566005"
+    },
+    {
+      "name": "browser_evaluate_js",
+      "sha": "8557baf0bc71"
+    },
+    {
+      "name": "browser_extract_page_content",
+      "sha": "3734f05fe3e6"
+    },
+    {
+      "name": "browser_get_dropdown_options",
+      "sha": "6f9dc0307aa4"
+    },
+    {
+      "name": "browser_go_back_action",
+      "sha": "172768f30140"
+    },
+    {
+      "name": "browser_go_forward",
+      "sha": "85a403894f32"
+    },
+    {
+      "name": "browser_go_to_url",
+      "sha": "400bbe9a3ad4"
+    },
+    {
+      "name": "browser_handle_dialog",
+      "sha": "614266847c92"
+    },
+    {
+      "name": "browser_hover_element",
+      "sha": "12da44275744"
+    },
+    {
+      "name": "browser_input_text",
+      "sha": "fe4e23d7723e"
+    },
+    {
+      "name": "browser_open_tab",
+      "sha": "a59d1b10e454"
+    },
+    {
+      "name": "browser_read_element",
+      "sha": "440b2c424f79"
+    },
+    {
+      "name": "browser_refresh_page",
+      "sha": "1de70ba1f5ea"
+    },
+    {
+      "name": "browser_screenshot",
+      "sha": "4f9327718d06"
+    },
+    {
+      "name": "browser_scroll",
+      "sha": "b6c7fbe709b2"
+    },
+    {
+      "name": "browser_scroll_down",
+      "sha": "e630bcdd2ced"
+    },
+    {
+      "name": "browser_scroll_to_text",
+      "sha": "b7d14639e8a8"
+    },
+    {
+      "name": "browser_scroll_up",
+      "sha": "fab79309495c"
+    },
+    {
+      "name": "browser_search_google",
+      "sha": "f687f8f6ed18"
+    },
+    {
+      "name": "browser_select_dropdown_option",
+      "sha": "702fac215c9e"
+    },
+    {
+      "name": "browser_send_keys",
+      "sha": "7ec9dcaccdeb"
+    },
+    {
+      "name": "browser_set_checked",
+      "sha": "437cec5d5b8f"
+    },
+    {
+      "name": "browser_switch_tab",
+      "sha": "c1ef05548947"
+    },
+    {
+      "name": "browser_type_text",
+      "sha": "dc32c5dbd6bc"
+    },
+    {
+      "name": "browser_upload_file",
+      "sha": "39554e2e3d15"
+    },
+    {
+      "name": "browser_wait",
+      "sha": "040be6d0d80f"
+    },
+    {
+      "name": "coding_apply_patch",
+      "sha": "59bd1e84694a"
+    },
+    {
+      "name": "coding_create_file",
+      "sha": "c3d89a4e7565"
+    },
+    {
+      "name": "coding_delete_file",
+      "sha": "c91162fc1ea8"
+    },
+    {
+      "name": "coding_grep",
+      "sha": "64c90eeedd12"
+    },
+    {
+      "name": "coding_move_file",
+      "sha": "6ed85b940ef8"
+    },
+    {
+      "name": "coding_restore",
+      "sha": "2f59966340b0"
+    },
+    {
+      "name": "coding_run_tests",
+      "sha": "d96319e6e038"
+    },
+    {
+      "name": "coding_snapshots",
+      "sha": "c652b84f8d0e"
+    },
+    {
+      "name": "coding_str_replace",
+      "sha": "6485d421e4e2"
     },
     {
       "name": "knowledge_kb_ingest",
@@ -205,112 +357,8 @@
       "sha": "f2e37a92ff69"
     },
     {
-      "name": "load_skill",
-      "sha": "1cf2893b4073"
-    },
-    {
-      "name": "load_tool",
-      "sha": "a7b2720e3dbc"
-    },
-    {
-      "name": "message",
-      "sha": "a477faab6c1f"
-    },
-    {
-      "name": "offer_manage",
-      "sha": "33b8b7853317"
-    },
-    {
-      "name": "order_deliver",
-      "sha": "de43909365bb"
-    },
-    {
-      "name": "owner_ask",
-      "sha": "fff14dbc6121"
-    },
-    {
-      "name": "owner_doc_manage",
-      "sha": "8682150a5406"
-    },
-    {
-      "name": "preferences",
-      "sha": "e30f13a6a673"
-    },
-    {
-      "name": "present_choice",
-      "sha": "e65bf115d368"
-    },
-    {
-      "name": "propose_action",
-      "sha": "8adf404efe07"
-    },
-    {
       "name": "propose_setting",
       "sha": "fc030760ca08"
-    },
-    {
-      "name": "read_skill_resource",
-      "sha": "5157194c3386"
-    },
-    {
-      "name": "room_moderate",
-      "sha": "47c4b36dfcef"
-    },
-    {
-      "name": "room_read",
-      "sha": "9af7efe8d3e0"
-    },
-    {
-      "name": "self_context_manage",
-      "sha": "7ca08bf9fa47"
-    },
-    {
-      "name": "send_message",
-      "sha": "5639154a5361"
-    },
-    {
-      "name": "skill_manage",
-      "sha": "08762d93b4a1"
-    },
-    {
-      "name": "task_todo_add",
-      "sha": "11502431e548"
-    },
-    {
-      "name": "task_todo_complete",
-      "sha": "5dd6ac7cf5af"
-    },
-    {
-      "name": "task_todo_list",
-      "sha": "e1cd22ac08bd"
-    },
-    {
-      "name": "task_todo_next",
-      "sha": "1164773d627d"
-    },
-    {
-      "name": "task_todo_progress",
-      "sha": "20d5a866a3d7"
-    },
-    {
-      "name": "tool_call",
-      "sha": "b3cde26d9db1"
-    },
-    {
-      "name": "tool_describe",
-      "sha": "5b897a46f500"
-    },
-    {
-      "name": "tool_search",
-      "sha": "7d8f9245f92d"
-    },
-    {
-      "name": "trade_mandate_propose",
-      "sha": "a10e0c5bdc0d"
-    },
-    {
-      "name": "web_fetch_fetch_url",
-      "sha": "3bbc659950d4"
     },
     {
       "name": "x402_invoice_accounting",

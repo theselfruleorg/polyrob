@@ -195,6 +195,7 @@ def current_hold(disk_path: str) -> Optional[Pressure]:
     if pressure.hold:
         return pressure
     _hold_started.clear()
+    _last_noted.clear()  # the next hold is a new hold: it is noted again
     _owner_told = False
     return None
 

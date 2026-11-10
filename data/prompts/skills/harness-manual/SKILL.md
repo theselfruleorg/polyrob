@@ -66,6 +66,7 @@ metadata:
 - denylist: owner-verb · next-turn · the owner's approvals.deny preference (/prefs) or POLYROB_TOOL_DENYLIST · no retry
 - paused: owner-verb · now · /resume · no retry
 - strict_code_change: deploy · deploy · a row in core/effects.py WRITE_ACTIONS or NON_WRITE_ACTIONS · no retry
+- repeat_act: agent · next-turn · another post · no retry
 - retry_wall: agent · next-turn · change the call, or the owner's next message · no retry
 - unattended:goal: owner-verb · now · an owner turn · no retry
 - unattended:cron: owner-verb · now · an owner turn · no retry

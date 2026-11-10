@@ -140,11 +140,16 @@ def db_path(data_dir: Optional[str] = None) -> str:
 def init_schema(path: Optional[str] = None) -> str:
     """Create the store (the WRITE path only). Returns the path."""
     from core.sqlite_util import init_schema as _init
-    from core.commerce.orders import ORDER_SCHEMA
+    from core.commerce.orders import ORDER_INDEXES_AFTER_COLUMNS, ORDER_SCHEMA
+    from core.commerce.thread import THREAD_SCHEMA
     p = path or db_path()
-    _init(p, _SCHEMA + ORDER_SCHEMA, mkdir=True,
-          columns={"offer_orders": (("payment_tx", "TEXT"),),
+    _init(p, _SCHEMA + ORDER_SCHEMA + THREAD_SCHEMA, mkdir=True,
+          columns={"offer_orders": (("payment_tx", "TEXT"), ("thread_ref", "TEXT"),
+                                    ("notice_pending", "TEXT"), ("notice_since", "REAL"),
+                                    ("asset", "TEXT")),
                    "offer_versions": (("contracts", "TEXT NOT NULL DEFAULT '[]'"),)})
+    # An index on an ADDED column runs after the columns exist (an old file).
+    _init(p, ORDER_INDEXES_AFTER_COLUMNS)
     return p
 
 
@@ -241,6 +246,7 @@ def save_draft(user_id: str, manifest: Mapping[str, Any], *, actor: str = "agent
     stage an edit of a live/paused one (the live version is untouched until the
     owner confirms it). Raises :class:`OfferError` / :class:`CommerceError`."""
     m = validate(manifest)
+    _require_rails(m)
     uid = str(user_id or "").strip()
     if not uid:
         raise CommerceError("an offer needs an owner (user_id)")
@@ -262,6 +268,17 @@ def save_draft(user_id: str, manifest: Mapping[str, Any], *, actor: str = "agent
         if n != 1:
             raise CommerceError(f"offer {m.id} changed while it was being saved; try again")
     return get(m.id, path=p)
+
+
+def _require_rails(m: OfferManifest) -> None:
+    """109 W1: every rail asset must be payable HERE now, so an offer never goes
+    live on an asset nobody pinned and fails only at the first buyer's order."""
+    from core.payments.assets import resolve, vocabulary
+    for asset, _mode in m.rails:
+        if resolve(asset) is None:
+            raise OfferError(f"rails: {asset!r} is not a payable asset here (known: "
+                             f"{vocabulary()}); the operator pins another with "
+                             f"`polyrob wallet asset add`")
 
 
 def _owner(actor: str, what: str) -> None:
@@ -355,21 +372,36 @@ def go_live(offer_id: str, user_id: str, *, actor: str, expect_hash: str,
         raise CommerceError(f"offer {o.id} changed after this card was made — the agent "
                             f"must propose it again")
     m = o.working()
+    _require_rails(m)
     ts = _now(now)
-    version = o.version + 1
+    import sqlite3
     from core.sqlite_util import execute_retry
-    execute_retry(p, "INSERT INTO offer_versions (offer_id, version, manifest, playbook_sha, "
-                     "contracts, confirmed_at) VALUES (?,?,?,?,?,?)",
-                  (o.id, version, m.to_json(), playbook_sha,
-                   json.dumps(pinned, sort_keys=True), ts))
-    if o.state == LIVE:
-        n = execute_retry(p, "UPDATE offers SET version=?, actor=?, updated_at=? WHERE id=? "
-                             "AND version=? AND state=?",
-                          (version, actor, ts, o.id, o.version, LIVE))
-        if n != 1:
-            raise CommerceError(f"offer {o.id} changed while going live; try again")
-        return get(o.id, path=p)
-    return _move(o, LIVE, path=p, now=ts, set_cols={"version": version, "actor": actor})
+    # Above every version row, not only the live pointer: a row left by an older
+    # crash must never block every later go-live on its primary key.
+    top = execute_retry(p, "SELECT MAX(version) AS v FROM offer_versions WHERE offer_id=?",
+                        (o.id,), fetch="one")
+    version = max(o.version, int((top["v"] if top else 0) or 0)) + 1
+    try:
+        execute_retry(p, "INSERT INTO offer_versions (offer_id, version, manifest, "
+                         "playbook_sha, contracts, confirmed_at) VALUES (?,?,?,?,?,?)",
+                      (o.id, version, m.to_json(), playbook_sha,
+                       json.dumps(pinned, sort_keys=True), ts))
+    except sqlite3.IntegrityError:
+        raise CommerceError(f"offer {o.id} changed while going live; try again") from None
+    try:
+        if o.state == LIVE:
+            n = execute_retry(p, "UPDATE offers SET version=?, actor=?, updated_at=? WHERE "
+                                 "id=? AND version=? AND state=?",
+                              (version, actor, ts, o.id, o.version, LIVE))
+            if n != 1:
+                raise CommerceError(f"offer {o.id} changed while going live; try again")
+            return get(o.id, path=p)
+        return _move(o, LIVE, path=p, now=ts, set_cols={"version": version, "actor": actor})
+    except CommerceError:
+        # The version the owner confirmed never became live: no row may claim it did.
+        execute_retry(p, "DELETE FROM offer_versions WHERE offer_id=? AND version=?",
+                      (o.id, version))
+        raise
 
 
 def set_state(offer_id: str, user_id: str, to: str, *, actor: str,

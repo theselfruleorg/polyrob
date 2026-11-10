@@ -102,3 +102,44 @@ def test_interrupted_record_is_pending_receipt():
         venue="defi", action="swap", amount_usd=1, counterparty=None,
         idempotency_key=None, result_ref=TX, chain="base"))
     assert g.audit_log[0]["receipt_state"] == "pending_receipt"
+
+
+# -- the ONE record after a receipt wait (tools/defi/receipt_wait.book_after_receipt) --
+
+TX2 = "0x" + "cd" * 32
+
+
+@pytest.fixture
+def empty_gate(monkeypatch):
+    import core.money.hooks as hooks
+    monkeypatch.setattr(hooks, "submission_journal", lambda: _Journal())
+    monkeypatch.setattr("core.config_policy.AutonomyConfig.autonomy_halted",
+                        staticmethod(lambda: False))
+    return SpendLedger(max_per_tx_usd=100, daily_cap_usd=50)
+
+
+def _book(gate, status):
+    from types import SimpleNamespace
+
+    from tools.defi.receipt_wait import book_after_receipt
+    receipt = None if status is None else SimpleNamespace(status=status, block_number=7)
+    book_after_receipt(gate, receipt, venue="defi", action="transfer", amount_usd=40,
+                       counterparty=None, idempotency_key="k9", result_ref=TX2, chain="base")
+
+
+def test_a_revert_seen_in_the_wait_leaves_the_caps(empty_gate):
+    _book(empty_gate, "failed")
+    assert receipt_states(empty_gate.audit_log)[TX2] == "reverted"
+    assert empty_gate.check(venue="defi", amount_usd=20, idempotency_key="k2").allowed
+
+
+def test_a_success_counts_against_the_caps(empty_gate):
+    _book(empty_gate, "success")
+    assert TX2 not in receipt_states(empty_gate.audit_log)
+    assert not empty_gate.check(venue="defi", amount_usd=20, idempotency_key="k2").allowed
+
+
+@pytest.mark.parametrize("status", ["pending", None])
+def test_a_timed_out_or_unread_receipt_is_left_for_the_resolver(empty_gate, status):
+    _book(empty_gate, status)
+    assert [e["result_ref"] for e in open_receipts(empty_gate.audit_log)] == [TX2]

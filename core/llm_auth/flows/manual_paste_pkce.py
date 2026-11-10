@@ -1,4 +1,4 @@
-"""Authorization-code + PKCE with a MANUAL code paste (proposal 024, L2).
+"""Authorization-code + PKCE with a MANUAL code paste.
 
 The third redirect shape, and the one Anthropic's OAuth uses: instead of
 redirecting to a loopback port, the provider redirects to its own hosted

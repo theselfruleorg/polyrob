@@ -210,9 +210,8 @@ def owner_seat_tool_ids(user_id) -> "list[str] | None":
     """:func:`owner_seat_tools` when *user_id* is THIS instance's owner principal,
     else None (the caller keeps its own default — a tenant or a stranger is never
     given the owner's grant). ``INTERACTIVE_TOOL_IDS`` overrides the set."""
-    from core.instance import resolve_owner_principal
-    owner = resolve_owner_principal()
-    if not (owner and user_id and str(user_id) == str(owner)):
+    from core.instance import is_owner_uid
+    if not (user_id and is_owner_uid(str(user_id), allow_local=False)):
         return None
     raw = os.getenv("INTERACTIVE_TOOL_IDS")
     if raw is not None:

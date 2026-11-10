@@ -170,6 +170,7 @@ _ALCHEMY_NETWORK = {
     "arbitrum": "arb-mainnet",
     "polygon": "polygon-mainnet",
     "optimism": "opt-mainnet",     # 064 S1 stage R: reads only
+    "robinhood": "robinhood-mainnet",  # E-S1-12: slug from Alchemy chain list; eth_chainId not probed (demo key 429)
 }
 
 

@@ -7,7 +7,8 @@ metadata:
   polyrob-priority: '3'
   polyrob-owner-only: 'true'
   polyrob-triggers: '{"tool_ids":["goal","cronjob"]}'
-  polyrob-version: '2'
+  polyrob-money-class: 'true'
+  polyrob-version: '3'
 ---
 # Pay for Work — paying people for a task the goal defines
 

@@ -39,6 +39,10 @@ class SignalHarness(BaseHarness):
     async def _deliver_to(self, target, text: str) -> None:
         await self._client.send(target, text)
 
+    async def _deliver_dm(self, address: str, text: str) -> None:
+        """A phone number (``OWNER_SIGNAL_ID``) is the DM itself."""
+        await self._client.send(address, text)
+
     async def _fetch_media(self, media) -> Optional[bytes]:
         """A signal-cli attachment by id, from the local daemon (size-capped)."""
         from core.surfaces.inbound_attachments import inbound_media_max_mb

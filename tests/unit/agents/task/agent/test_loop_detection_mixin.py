@@ -10,7 +10,7 @@ from agents.task.agent.core.loop_detection import LoopDetectionMixin
 def test_agent_composes_loop_detection_mixin():
     from agents.task.agent.service import Agent
     assert issubclass(Agent, LoopDetectionMixin)
-    for m in ("_check_if_stopped", "_trigger_loop_intervention", "detect_action_loop"):
+    for m in ("_check_if_stopped", "_trigger_loop_intervention", "_record_progress"):
         assert getattr(Agent, m).__qualname__.startswith("LoopDetectionMixin")
 
 
@@ -29,13 +29,6 @@ def test_check_if_stopped_raises_when_stopped():
     h.state.stopped = True
     with pytest.raises(InterruptedError):
         h._check_if_stopped()
-
-
-def test_detect_action_loop_noop_without_context():
-    h = _Host()
-    h.task_context_manager = None
-    h.session_id = None
-    assert h.detect_action_loop(object(), [{"write_file": {}}]) == (False, None)
 
 
 # --- F12: interventions name only REGISTERED actions --------------------------
@@ -82,3 +75,22 @@ def test_reset_clears_pattern_window():
     h = types.SimpleNamespace(_previous_actions=deque(["A", "B"], maxlen=8))
     LoopDetectionMixin._reset_loop_guard(h)
     assert list(h._previous_actions) == []
+
+
+def test_intervention_error_is_not_hidden_in_a_committed_result_list():
+    """The step's result list is marked as sent in ToolMessages by identity (F14); the
+    loop error must go on a new list, or the next state message never shows it."""
+    from agents.task.agent.views import ActionResult
+    h = _Host()
+    h.state = types.SimpleNamespace(stopped=False, paused=False, loop_warning_count=0,
+                                    reset_loop_detection=lambda: None)
+    h.controller = types.SimpleNamespace(get_action_names=lambda: ["done"])
+    h.message_manager = _MM()
+    h._previous_actions = []
+    h._action_repetition_counter = 0
+    committed = [ActionResult(extracted_content="same result")]
+    h._last_result = committed
+    h._trigger_loop_intervention("Action repeated 3 times")
+    assert h._last_result is not committed
+    assert len(committed) == 1
+    assert "LOOP DETECTED" in (h._last_result[-1].error or "")

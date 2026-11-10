@@ -46,8 +46,7 @@ from watchfiles import awatch, Change
 # Local utility that aggregates session statistics from feed files
 
 # Shared read-service: reconstruct the multi-agent roster from the session feed
-from agents.task.telemetry.agent_graph import build_session_agents
-from agents.task.telemetry.feed_reads import build_session_services, build_session_task, build_session_skills
+from agents.task.telemetry.feed_reads import build_session_task
 
 # Webgate config object — single source of truth for single-user (default) vs
 # multitenant mode. Consulted at the four seam points below (middleware, ownership,
@@ -863,8 +862,6 @@ async def auth_middleware(request: Request, call_next):
     auth_header = request.headers.get("Authorization")
     auth_token = None
 
-    # Get all cookies for auth check (debug logging removed for security)
-
     # 043 A15: DEBUG, and no details. This block logged the credential SOURCE,
     # the token LENGTH and the full list of cookie NAMES at INFO on every
     # request — a per-request credential-shape trace in the default log, which
@@ -929,6 +926,9 @@ async def auth_middleware(request: Request, call_next):
             authenticated=True,
         )
 
+        from api.account_access import account_block_refusal  # multitenant: the ONE block predicate
+        if webgate.is_multitenant() and (refused := await account_block_refusal(request.state.user_id)):
+            return refused
         from webview.session_access import may_read_session_path
         if not may_read_session_path(path, request.state.user_id, pm()):
             return JSONResponse(status_code=403, content={"error": "Session access denied"})
@@ -957,7 +957,6 @@ async def auth_middleware(request: Request, call_next):
 
     except pyjwt.InvalidTokenError as e:
         logger.error(f"❌ Invalid token for path={path}: {e}")
-        logger.error(f"   JWT_SECRET_KEY present: {bool(jwt_secret)}")
         if path.startswith("/api/"):
             return JSONResponse(status_code=401, content={"error": "Invalid token"})
         from urllib.parse import quote
@@ -1656,91 +1655,11 @@ async def api_screenshot_file(request: Request, clean_id: str = Depends(get_clea
         raise HTTPException(500, f"Error serving screenshot: {str(exc)}")
 
 
-@_fastapi.get("/api/session/{session_id}/agents", response_class=JSONResponse)
-async def api_agents(clean_id: str = Depends(get_clean_session_id)) -> Response:
-    """Return the agents information for a session."""
-    logger.debug(f"API agents request for cleaned ID: {clean_id}")
-    try:
-        agents = build_session_agents(clean_id)
-        # Return with Cache-Control header to prevent stale responses
-        return JSONResponse(
-            {"status": "ok", "agents": agents},
-            headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
-        )
-    except Exception as exc:
-        logger.error("Failed to get agents for %s: %s", clean_id, exc, exc_info=True)
-        return JSONResponse(
-            {"status": "error", "message": str(exc)},
-            status_code=500,
-            headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
-        )
-
-
 # 043 A30: `GET /api/session/{id}/stats` is DELETED with its only caller
 # (`static/js/stats.js`, loaded by no template). `webview/stats_service.py` is
 # reduced to the cost helper `_enrich_llm_event_with_cost` still uses.
-
-
-@_fastapi.get("/api/session/{session_id}/services", response_class=JSONResponse)
-async def api_services(clean_id: str = Depends(get_clean_session_id)) -> Response:
-    """Return the services information for a session."""
-    logger.debug(f"API services request for cleaned ID: {clean_id}")
-    try:
-        services = build_session_services(clean_id)
-        return JSONResponse(
-            {"status": "ok", "services": services},
-            headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
-        )
-    except Exception as exc:
-        logger.error("Failed to get services for %s: %s", clean_id, exc, exc_info=True)
-        return JSONResponse(
-            {"status": "error", "message": str(exc)},
-            status_code=500,
-            headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
-        )
-
-
-@_fastapi.get("/api/session/{session_id}/task", response_class=JSONResponse)
-async def api_task(clean_id: str = Depends(get_clean_session_id)) -> Response:
-    """Return the current task for a session (the initial user task, not later goals)."""
-    logger.debug(f"API task request for cleaned ID: {clean_id}")
-    try:
-        result = build_session_task(clean_id)
-        if result is not None:
-            return JSONResponse(
-                {"status": "ok", "task": result["task"], "timestamp": result["timestamp"]},
-                headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
-            )
-        return JSONResponse(
-            {"status": "not_found", "message": "No task information available"},
-            headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
-        )
-    except Exception as exc:
-        logger.error("Failed to get task for %s: %s", clean_id, exc, exc_info=True)
-        return JSONResponse(
-            {"status": "error", "message": str(exc)},
-            status_code=500,
-            headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
-        )
-
-
-@_fastapi.get("/api/session/{session_id}/skills", response_class=JSONResponse)
-async def api_skills(clean_id: str = Depends(get_clean_session_id)) -> Response:
-    """Return the skills loaded for a session."""
-    logger.debug(f"API skills request for cleaned ID: {clean_id}")
-    try:
-        skills = build_session_skills(clean_id)
-        return JSONResponse(
-            {"status": "ok", "skills": skills},
-            headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
-        )
-    except Exception as exc:
-        logger.error("Failed to get skills for %s: %s", clean_id, exc, exc_info=True)
-        return JSONResponse(
-            {"status": "error", "message": str(exc)},
-            status_code=500,
-            headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
-        )
+# 113 W5 (C-14): `GET /api/session/{id}/{agents,services,task,skills}` are DELETED:
+# no console screen called them. The readers stay in agents/task/telemetry.
 
 
 # GET /api/session/{session_id}/feed/events lives in webview/feed_routes.py (070 W0.10).
@@ -2160,19 +2079,20 @@ async def _send_message_in_process(request: Request, clean_id: str, agent,
                 status_code=404,
             )
         detail = e.detail if isinstance(e.detail, str) else json.dumps(e.detail)
-        return JSONResponse({"success": False, "error": detail},
-                            status_code=e.status_code)
+        code = e.detail.get("code") if isinstance(e.detail, dict) else None  # 113 W6: no_model
+        return JSONResponse({"success": False, "error": detail, "code": code}, status_code=e.status_code)
 
     logger.info(f"Message sent to session {clean_id} (in-process): '{text[:50]}...'")
     return JSONResponse({"success": True, "message": "Message sent"})
 
 
 async def _maybe_handle_console_command(clean_id: str, user_id: str, text: str):
-    """030 WS-B6 delegator — body in webview/console_commands.py (ratchet).
-    Resolves the in-process agent HERE so tests can patch _in_process_task_agent."""
+    """030 WS-B6 delegator (console_commands.py); the agent resolves HERE for test patches."""
+    from webview.command_feed import record_command_reply   # 113 W5: the feed keeps it
     from webview.console_commands import maybe_handle_console_command
-    return await maybe_handle_console_command(
-        _in_process_task_agent(), clean_id, user_id, text)
+    agent = _in_process_task_agent()
+    reply = await maybe_handle_console_command(agent, clean_id, user_id, text)
+    return await record_command_reply(agent, clean_id, text, reply)
 
 
 @_fastapi.post("/api/session/{session_id}/messages",

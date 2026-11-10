@@ -135,7 +135,7 @@ Send `/why`: it lists the last refusals and the reason for each.
 **What do you remember about me?**
 Your rules and facts are in the owner doc, which your agent reads in every
 chat; ask it to show the doc. `/thread` shows your chat history across every
-app. In the terminal chat, `/memory` searches what it recalls.
+app. `/memory search <words>` searches what it recalls, in any chat app or the terminal.
 
 **Forget something about me.**
 No verb deletes one remembered fact. What exists:
@@ -149,17 +149,18 @@ No verb deletes one remembered fact. What exists:
 
 **Add a rule ("always ask before posting").**
 Tell your agent the rule. It writes a draft of the owner doc; the rule applies
-after you approve it in `/pending`.
+after you approve it in `/pending`. The doc holds rules, not the state of a job:
+whether a job is on or off, its schedule, its id and its progress live in the job
+(`/job show <id>`), and a line that holds them is refused.
 
 ## Skills
 
 **How do I add a skill?**
-Run `polyrob skill install <source>` in a terminal; `/skills` in chat shows
+Run `polyrob skills install <source>` in a terminal; `/skills` in chat shows
 what your agent can load. See [skills.md](skills.md#two-ways-to-add-a-new-skill).
 
 **How do I teach you a new way to do something?**
-Send `/learn <description>` in the terminal chat; the draft skill waits for
-your review.
+Send `/learn <description>` in the terminal chat; the skill is live at once.
 
 ## Chat apps and people
 
@@ -363,6 +364,10 @@ recent ones.
 #### '{action}' is an unclassified {effect} write (EXTERNAL_WRITE_STRICT), so it does not run until a code change classifies it
 
 `strict_code_change` — who can act: a code change; what changes it: a row in core/effects.py WRITE_ACTIONS or NON_WRITE_ACTIONS; a retry can help: no.
+
+#### already replied to this post on {date}{ref}; skip it
+
+`repeat_act` — who can act: the agent; what changes it: another post; a retry can help: no.
 
 #### you made the SAME call {attempts} times in this turn and it failed each time. Last error: {last_error} — The tool is not broken, locked or blocked: this limit counts only your identical call, and only the owner's next message resets it. Change the parameter the last error names, or stop and tell the owner that last error. Do not repeat this call
 

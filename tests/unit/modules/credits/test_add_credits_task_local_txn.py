@@ -140,3 +140,60 @@ def test_begin_never_waits_forever_on_an_abandoned_transaction(tmp_path):
         row = await db.fetch_one("SELECT COUNT(*) AS n FROM other")
         assert row["n"] == 0  # the dead task's partial write was rolled back
     asyncio.run(run())
+
+
+def _while_another_task_holds_a_transaction(tmp_path, act):
+    """Run *act(mgr)* while another task holds a transaction, release it, and
+    return act's result: the money call must WAIT, not raise."""
+    from modules.credits.reservations import PREFIX
+
+    async def run():
+        db = await _make_db(tmp_path)
+        await db.execute("ALTER TABLE credit_transactions ADD COLUMN session_id TEXT")
+        await db.execute("ALTER TABLE credit_transactions ADD COLUMN id INTEGER")
+        await db.execute("INSERT INTO user_credits (user_id, balance) VALUES ('u1', 500)")
+        await db.execute(
+            "INSERT INTO credit_transactions (id, user_id, amount, transaction_type, reason) "
+            "VALUES (1, 'u1', -100, 'reservation', ?)", (PREFIX + "r1",))
+        mgr = CreditBalanceManager(db)
+        holding, release = asyncio.Event(), asyncio.Event()
+
+        async def other_task():
+            await db.connection.begin_transaction()
+            await db.execute("INSERT INTO other (x) VALUES (1)")
+            holding.set()
+            await release.wait()
+            await db.connection.commit()
+
+        other = asyncio.create_task(other_task())
+        await holding.wait()
+        task = asyncio.create_task(act(mgr))
+        await asyncio.sleep(0.05)
+        release.set()
+        await other
+        result = await task
+        assert not await db.connection.in_transaction()
+        return result, await _balance(db, "u1")
+    return asyncio.run(run())
+
+
+def test_a_deduction_waits_for_another_tasks_transaction(tmp_path):
+    async def act(mgr):
+        real, calls = mgr.get_balance, []
+
+        async def first_read_is_cached(user_id):
+            calls.append(user_id)       # the pre-transaction existence read
+            if len(calls) == 1:
+                return {"balance": 500}
+            return await real(user_id)
+        mgr.get_balance = first_read_is_cached
+        return await mgr.deduct_credits("u1", 100, "usage")
+    ok, balance = _while_another_task_holds_a_transaction(tmp_path, act)
+    assert ok is True and balance == 400
+
+
+def test_a_reservation_settlement_waits_for_another_tasks_transaction(tmp_path):
+    from modules.credits.reservations import PREFIX, settle_reservation
+    ok, balance = _while_another_task_holds_a_transaction(
+        tmp_path, lambda mgr: settle_reservation(mgr, "u1", PREFIX + "r1", 60))
+    assert ok is True and balance == 540

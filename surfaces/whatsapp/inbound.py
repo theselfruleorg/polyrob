@@ -177,10 +177,13 @@ class WhatsAppInbound(WebhookSurface):
                 self._window.touch(wa_from, now=_t.time())
             except Exception:
                 pass
-        try:
-            user_id = self._ud.resolve_internal(wa_from, "whatsapp")
-        except Exception:
-            user_id = "wa_" + wa_from
+        from core.instance import owner_surface_alias
+        user_id = owner_surface_alias(wa_from, "whatsapp")
+        if not user_id:
+            try:
+                user_id = self._ud.resolve_internal(wa_from, "whatsapp")
+            except Exception:
+                user_id = "wa_" + wa_from
         ident = Identity(
             user_id=user_id,
             source=SessionSource(surface_id="whatsapp", chat_id=wa_from, chat_type="dm"),

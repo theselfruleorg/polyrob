@@ -588,7 +588,8 @@ def _live_text(kind: str, item_id, *, user_id: str, home_dir, instance_id: str,
 
 #: 095 W10 (R9): who drafted a pending item, in the owner's words.
 _BY_LABELS = {"user": "the owner", "agent": "the agent",
-              "background_review": "a background run"}
+              "background_review": "a background run",
+              "untrusted_turn": "a session that is not the owner's"}
 
 
 def _annotate(items: List[dict], user_id: str, home_dir, instance_id: str) -> None:

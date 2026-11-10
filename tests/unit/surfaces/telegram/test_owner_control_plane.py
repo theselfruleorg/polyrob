@@ -59,7 +59,9 @@ def env(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_halt_verbs_are_owner_admin_commands():
-    assert "/halt" in _OWNER_ADMIN_COMMANDS
+    from core.verbs import verb_for
+    assert verb_for("/halt").name == "/pause"      # 113: /halt is the old name of /pause
+    assert "/pause" in _OWNER_ADMIN_COMMANDS
     assert "/resume" in _OWNER_ADMIN_COMMANDS
 
 
@@ -153,7 +155,7 @@ async def test_help_advertises_prose_driven_admin(env):
 
 def test_help_commands_parse_from_the_help_body():
     pairs = dict(help_commands())
-    assert "halt" in pairs and "resume" in pairs
+    assert "pause" in pairs and "resume" in pairs and "halt" not in pairs
     assert "help" in pairs and "task" in pairs
     for name, desc in pairs.items():
         assert name == name.lower() and name.replace("_", "").isalnum()
@@ -213,7 +215,7 @@ async def test_owner_verbs_route_as_commands_end_to_end(env, verb):
                              identity=Identity(user_id="alice", source=source))
     decision = await route_inbound(None, inbound)
     assert decision.kind is RouteKind.COMMAND
-    assert decision.command == verb
+    assert decision.command == {"/halt": "/pause"}.get(verb, verb)   # an old name is its row
 
 
 def test_every_routable_verb_is_discoverable():
@@ -242,7 +244,8 @@ def test_every_help_line_is_dispatched_or_lifecycle():
     tuple and the session-lifecycle set is a verb the owner can read about but
     never actually run — `/journey` shipped this way once (help mentioned it
     only as a parenthetical on /recap, with no line of its own to look up)."""
-    lifecycle = {"/task", "/cancel", "/new", "/help", "/start"}
+    lifecycle = {"/task", "/cancel", "/new", "/help", "/start",
+                 "/chats", "/chat", "/rename", "/close"}   # 113: chat_ops.chat_command
     from surfaces.telegram.harness import _owner_verbs  # + contributed verbs (067 P5a)
     known = set(_owner_verbs()) | lifecycle
     for name, _ in help_commands():

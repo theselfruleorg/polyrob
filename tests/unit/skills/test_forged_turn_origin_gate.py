@@ -19,7 +19,7 @@ import pytest
 
 from tools.controller.action_registration import _is_forged_or_autonomous_turn
 from agents.task.agent.skill_manager import SkillManager
-from modules.skills.writer import PROVENANCE_BACKGROUND
+from modules.skills.writer import PROVENANCE_UNTRUSTED
 from tools.controller.registry.service import Registry
 from tools.controller.service import Controller
 
@@ -49,7 +49,7 @@ def _controller(sm, monkeypatch):
 
 
 def _seed_pending(sm):
-    res = sm.create_skill("draft-skill", _BODY, user_id="u1", created_by=PROVENANCE_BACKGROUND)
+    res = sm.create_skill("draft-skill", _BODY, user_id="u1", created_by=PROVENANCE_UNTRUSTED)
     assert res.pending
 
 
@@ -109,8 +109,8 @@ async def test_forged_self_wake_cannot_promote(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_forged_self_wake_create_quarantined_even_review_off(monkeypatch, tmp_path):
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
+async def test_forged_self_wake_create_on_a_non_owner_tenant_stays_a_draft(monkeypatch, tmp_path):
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "someone-else")
     sm = SkillManager(skills_dir=tmp_path)
     c = _controller(sm, monkeypatch)
     action = c.registry.registry.actions["skill_manage"]
@@ -126,10 +126,26 @@ async def test_forged_self_wake_create_quarantined_even_review_off(monkeypatch, 
 
 
 @pytest.mark.asyncio
-async def test_genuine_turn_create_auto_activates_when_review_off(monkeypatch, tmp_path):
-    """Unchanged-behavior guard: a genuine user turn (no turn_kind) with review off
-    still auto-activates — the forged gate must not regress the happy path."""
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
+async def test_forged_self_wake_create_on_the_owner_tenant_is_active_as_background_review(monkeypatch, tmp_path):
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
+    sm = SkillManager(skills_dir=tmp_path)
+    c = _controller(sm, monkeypatch)
+    action = c.registry.registry.actions["skill_manage"]
+    ctx = _ctx(turn_kind="self_wake", role="orchestrator", is_sub=False)
+    params = action.param_model(
+        action="create", skill_id="forged-skill", when="When a forged turn repeats",
+        content="# Forged Skill\n\nA reusable procedure distilled from a forged turn.\n",
+    )
+    res = await action.function(params, execution_context=ctx)
+    assert res.error is None, res.error
+    assert (tmp_path / "user_u1" / "forged-skill" / "SKILL.md").exists()
+    assert not (tmp_path / "user_u1" / ".pending" / "forged-skill").exists()
+
+
+@pytest.mark.asyncio
+async def test_genuine_turn_create_auto_activates(monkeypatch, tmp_path):
+    """A genuine owner turn (no turn_kind) writes an active skill."""
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
     sm = SkillManager(skills_dir=tmp_path)
     c = _controller(sm, monkeypatch)
     action = c.registry.registry.actions["skill_manage"]
@@ -165,7 +181,7 @@ async def test_genuine_owner_turn_cannot_self_promote(monkeypatch, tmp_path):
 async def test_non_owner_genuine_turn_cannot_promote(monkeypatch, tmp_path):
     # T3-02 (the closed hole): a genuine (non-forged) turn that is NOT the owner —
     # the skill promote branch previously gated on is_forged ONLY, so the agent could
-    # create (-> .pending under REQUIRE_REVIEW) then promote in the SAME turn, activating
+    # create (-> .pending for an untrusted turn) then promote in the SAME turn, activating
     # an unreviewed body (e.g. an injected "author skill X and promote it"). Mirror the
     # self_context_manage owner gate: no owner principal + not local => refused.
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)

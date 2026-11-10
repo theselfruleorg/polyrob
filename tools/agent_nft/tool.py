@@ -64,8 +64,8 @@ class InspectParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
     target: str = Field(..., description=(
         "Any agent NFT, as '<chain>:<collection>/<token_id>' (e.g. 'base:0xabc…/42') or "
-        "'<chain>:<token_id>' on the chain's one pinned collection. Read-only: owner, holdings, lock, state, identity "
-        "count and — FIRST — every open approval on the account."))
+        "'<chain>:<token_id>' on the chain's one pinned collection. Read-only: owner, holdings, lock (AccountV3) or "
+        "sale readiness (PolyrobAccount), state, identity count and — FIRST — every open approval on the account."))
 
 
 class JournalParams(BaseModel):
@@ -280,7 +280,7 @@ class AgentNftTool(WalletHolderMixin, BaseTool):
 
     @BaseTool.action(
         "The agent NFT account this instance owns: every OPEN APPROVAL found and whether that table is "
-        "complete, the purchase checks, owner (must be this treasury), lock and lockedUntil, state, "
+        "complete, the purchase checks, owner (must be this treasury), lock and lockedUntil (AccountV3) or sale readiness (PolyrobAccount), state, "
         "identity, reveal state, native balance, journal entry count and head. Read-only.",
         param_model=SnapshotParams)
     async def agent_nft_snapshot(self, params: SnapshotParams, execution_context=None):
@@ -288,8 +288,8 @@ class AgentNftTool(WalletHolderMixin, BaseTool):
 
     @BaseTool.action(
         "Inspect ANY agent NFT before buying or taking it: open approvals FIRST with their coverage "
-        "(complete or incomplete, never 'empty' when incomplete), then named checks (locked, approval "
-        "table, lockedUntil, revealed), owner, state, identity count, native balance. Read-only.",
+        "(complete or incomplete, never 'empty' when incomplete), then named checks (approval table, locked and "
+        "lockedUntil for AccountV3, sale ready for PolyrobAccount, revealed), owner, state, identity count, native balance. Read-only.",
         param_model=InspectParams)
     async def agent_nft_inspect(self, params: InspectParams, execution_context=None):
         return await self._core_body("inspect", params, execution_context, write=False)

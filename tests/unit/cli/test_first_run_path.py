@@ -85,8 +85,16 @@ def test_an_unchecked_key_is_saved_and_does_not_claim_it_works(home, probe):
     assert "The key works" not in result.output
 
 
-def test_ctrl_c_keeps_a_pasted_key_and_says_how_to_go_on(home, probe):
-    # The input ends after the key, so the very next question aborts, as Ctrl-C does.
+def test_ctrl_c_keeps_a_pasted_key_and_says_how_to_go_on(home, probe, monkeypatch):
+    # The question after the key aborts, as Ctrl-C does. Raised by hand: whether the
+    # runner aborts at the end of the input depends on the click version.
+    import click
+    import cli.commands.init as init_mod
+
+    def ctrl_c(*a, **k):
+        raise click.Abort()
+
+    monkeypatch.setattr(init_mod.click, "confirm", ctrl_c)
     result = CliRunner().invoke(init_cmd, ["--quick"], input=f"openrouter\n{KEY}\n")
     assert KEY in (home / ".env").read_text()
     assert "Setup stopped" in result.output

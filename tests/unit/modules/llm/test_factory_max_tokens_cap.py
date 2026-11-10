@@ -23,18 +23,18 @@ def registry(monkeypatch):
 
 def test_a_huge_model_ceiling_is_capped_at_the_per_request_cap(registry):
     from modules.llm.llm_client import _DEFAULT_OUTPUT_TOKEN_CAP
-    assert llm_factory._get_model_max_tokens_from_registry("big", "openrouter") == \
+    assert llm_factory._get_model_max_tokens_from_registry("big") == \
         _DEFAULT_OUTPUT_TOKEN_CAP
 
 
 def test_the_env_cap_is_the_same_one_the_request_uses(registry, monkeypatch):
     monkeypatch.setenv("LLM_MAX_OUTPUT_TOKENS", "8192")
-    assert llm_factory._get_model_max_tokens_from_registry("big", "openrouter") == 8192
+    assert llm_factory._get_model_max_tokens_from_registry("big") == 8192
 
 
 def test_a_small_model_keeps_its_own_ceiling(registry):
-    assert llm_factory._get_model_max_tokens_from_registry("small", "openrouter") == 4096
+    assert llm_factory._get_model_max_tokens_from_registry("small") == 4096
 
 
-def test_an_unknown_model_stays_unset(registry):
-    assert llm_factory._get_model_max_tokens_from_registry("nope", "openrouter") is None
+def test_no_model_stays_unset():
+    assert llm_factory._get_model_max_tokens_from_registry("") is None

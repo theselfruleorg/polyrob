@@ -327,6 +327,43 @@ def collect_cards(user_id: str, *, data_dir: str) -> List[Item]:
     return out
 
 
+def collect_pairing(user_id: str, *, data_dir: str) -> List[Item]:
+    """Strangers who asked to talk to the agent and wait for the owner (113 W6
+    C-12, ``core.pairing``). The store is instance-wide, so only the owner's
+    Inbox lists it; with pairing off nobody is asked, so nothing waits. The
+    card carries no code: the owner approves the code the person sends him."""
+    from core.instance import is_owner_uid
+    from core.pairing import PAIRING_CODE_TTL_SEC, pairing_required, store_at
+    from core.runtime_paths import store_db_path
+    if not pairing_required() or not is_owner_uid(user_id):
+        return []
+    path = _store(store_db_path("pairing.db", data_dir))
+    if path is None:
+        return []
+    out: List[Item] = []
+    for row in store_at(path).list_all():
+        if row.get("paired"):
+            continue
+        surface = str(row.get("surface") or "")
+        raw_id = str(row.get("raw_id") or "")
+        created = float(row.get("created_at") or 0.0)
+        where = surface or "A chat app"
+        out.append(Item(
+            kind="pairing",
+            id=str(row.get("user_id") or ""),
+            title=f"{where} sender asks to talk to me",
+            body=_body(f"{surface or '?'}:{raw_id or '?'} got a pairing code. Approve "
+                       "only if you know them, with the code they send you."),
+            blocking=True,
+            created_at=created,
+            expires_at=(created + PAIRING_CODE_TTL_SEC) if created else None,
+            actions=(),
+            source="pairing",
+            extra={"surface": surface or "<surface>"},
+        ))
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # the wiring
 # --------------------------------------------------------------------------- #
@@ -352,6 +389,7 @@ def default_collectors(*, data_dir: Optional[str] = None,
         "apps": lambda uid: collect_apps(uid, data_dir=home),
         "signer_approvals": lambda uid: collect_signer_approvals(uid, data_dir=home),
         "cards": lambda uid: collect_cards(uid, data_dir=home),
+        "pairing": lambda uid: collect_pairing(uid, data_dir=home),
     }
 
 

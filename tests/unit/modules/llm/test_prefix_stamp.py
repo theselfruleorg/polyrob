@@ -1,7 +1,9 @@
 """prefix_sha / tools_sha — the request's prefix identity, stamped for billing."""
 import types
 
-from modules.llm.prefix_stamp import compute_stamps, read_stamps, stamp_client
+from modules.llm.call_result import CallFacts, cold_call_cause, read_stamps
+from modules.llm.call_scope import begin_call, set_foundation_len
+from modules.llm.prefix_stamp import compute_stamps, stamp_request
 
 
 def _req(system="You are Nova.", tools=None):
@@ -28,14 +30,67 @@ def test_missing_parts_are_absent_not_digests_of_nothing():
     assert compute_stamps({}) == {}
 
 
-def test_stamps_ride_the_client_and_read_back_through_the_adapter():
-    client = types.SimpleNamespace()
-    stamps = stamp_client(client, _req(tools=[{"a": 1}]))
-    llm = types.SimpleNamespace(_client=client)
-    assert read_stamps(llm) == stamps and set(stamps) == {"prefix_sha", "tools_sha"}
-    assert read_stamps(types.SimpleNamespace()) == {}          # an unstamped path is silent
-    stamp_client(client, {"messages": []})                     # the next call had no system msg
-    assert read_stamps(llm) == {}
+def test_stamps_ride_the_call_and_read_back_from_its_message():
+    request = begin_call()
+    stamps = stamp_request(_req(tools=[{"a": 1}]))
+    assert request.stamps == stamps and set(stamps) == {"prefix_sha", "tools_sha"}
+    message = types.SimpleNamespace(call_facts=CallFacts(request_stamps=stamps))
+    assert read_stamps(message) == stamps
+    assert read_stamps(types.SimpleNamespace()) == {}          # a message with no facts is silent
+    stamp_request({"messages": []})                            # a retry had no system msg
+    assert request.stamps == {}
+
+
+def _foundation_req(first="identity", tail="go"):
+    return {"messages": [{"role": "system", "content": "s"}, {"role": "user", "content": first},
+                         {"role": "user", "content": tail}]}
+
+
+def test_foundation_sha_covers_the_rows_after_the_system_message():
+    set_foundation_len(1)
+    try:
+        base = compute_stamps(_foundation_req())["foundation_sha"]
+        assert compute_stamps(_foundation_req(tail="other"))["foundation_sha"] == base
+        assert compute_stamps(_foundation_req(first="changed"))["foundation_sha"] != base
+    finally:
+        set_foundation_len(None)
+    assert "foundation_sha" not in compute_stamps(_foundation_req())
+
+
+def test_a_moving_cache_marker_does_not_change_the_foundation_sha():
+    set_foundation_len(1)
+    try:
+        plain = compute_stamps(_foundation_req())["foundation_sha"]
+        marked = _foundation_req()
+        marked["messages"][1]["content"] = [{"type": "text", "text": "identity",
+                                             "cache_control": {"type": "ephemeral"}}]
+        assert compute_stamps(marked)["foundation_sha"] == plain
+    finally:
+        set_foundation_len(None)
+
+
+_HIT = {"input_tokens": 1000, "cached_tokens": 900, "model": "m", "upstream": "A",
+        "tools_sha": "t", "foundation_sha": "f", "prefix_sha": "p"}
+
+
+def _cold(**over):
+    return {**_HIT, "cached_tokens": 10, **over}
+
+
+def test_no_cause_with_no_previous_call_or_a_warm_call():
+    assert cold_call_cause(None, _cold()) is None
+    assert cold_call_cause(_HIT, dict(_HIT)) is None
+    assert cold_call_cause({**_HIT, "cached_tokens": 100}, _cold()) is None, "the previous call was cold"
+
+
+def test_each_cold_call_names_its_cause():
+    assert cold_call_cause(_HIT, _cold(upstream="B")) == "upstream_moved"
+    assert cold_call_cause(_HIT, _cold(model="other")) == "upstream_moved"
+    assert cold_call_cause(_HIT, _cold(tools_sha="x")) == "tools_changed"
+    assert cold_call_cause(_HIT, _cold(foundation_sha="x")) == "foundation_changed"
+    assert cold_call_cause(_HIT, _cold(prefix_sha="x")) == "foundation_changed"
+    assert cold_call_cause(_HIT, _cold(input_tokens=300)) == "compaction"
+    assert cold_call_cause(_HIT, _cold()) == "expired_or_unknown"
 
 
 # ---------------------------------------------------------------------------

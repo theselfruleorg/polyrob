@@ -51,3 +51,27 @@ def test_self_env_refuses_config_policy_source(tmp_path):
     (tmp_path / "core" / "ok.py").write_text("y = 2\n")
     target2, err2 = tool._confine("core/ok.py")
     assert err2 is None and target2 is not None
+
+
+def test_env_block_names_host_executables_only_when_an_exec_tool_is_open(monkeypatch):
+    """112 K4: prod forces CODE_EXEC_ENABLED=false — the block must not say the host
+    binaries are visible to exec tools that are closed."""
+    from agents.task.agent.core import env_context, tool_availability
+    monkeypatch.setattr(env_context, "_host_capabilities", lambda: "git, python3")
+    monkeypatch.setattr(tool_availability, "compute_gate", lambda t: ("x", "disabled", "r"))
+    assert "No exec tool is open here" in env_context._exec_tools_line()
+    monkeypatch.setattr(tool_availability, "compute_gate",
+                        lambda t: ("x", "loadable" if t == "shell" else "disabled", "r"))
+    line = env_context._exec_tools_line()
+    assert "(shell)" in line and "git, python3" in line
+
+
+def test_env_block_names_the_model_tiers():
+    """112 W2: the agent knows its tiers (it could not see HEAVY_MODEL before)."""
+    import agents.task.constants  # noqa: F401
+    from agents.task.agent.core import env_context
+    env = {"DEFAULT_PROVIDER": "openrouter", "DEFAULT_MODEL": "deepseek/deepseek-v4.1-flash",
+           "HEAVY_MODEL": "deepseek/deepseek-v4-pro"}
+    line = env_context.model_tiers_line(env)
+    assert "heavy = deepseek/deepseek-v4-pro" in line and "default = deepseek/deepseek-v4.1-flash" in line
+    assert env_context.model_tiers_line({}) == ""

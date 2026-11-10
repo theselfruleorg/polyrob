@@ -373,3 +373,22 @@ async def test_unrelated_spl_outflow_never_reaches_signer(token_in):
         token_out=WSOL if token_in == USDC else USDC, dry_run=False))
     assert "undeclared token outflow" in result.error
     assert sends == []
+
+
+def test_the_wsol_held_balance_is_the_raw_lamport_integer(monkeypatch):
+    """`int(sol * 1e9)` from a float lost lamports on a large balance; the raw
+    integer read is exact."""
+    from core.wallet import solana_onchain
+    from tools.defi.solana_rail_adapters import SolanaRailMixin
+    from tools.defi.trade_tool import _WSOL_MINT
+    lamports = 123_456_789_123_456_789
+    monkeypatch.setattr(solana_onchain, "token_balances", lambda owner, **k: {_WSOL_MINT: 7})
+    monkeypatch.setattr(solana_onchain, "native_balance_raw", lambda owner, **k: lamports)
+    monkeypatch.setattr(solana_onchain, "native_balance",
+                        lambda owner, **k: lamports / 1_000_000_000)
+    tool = SolanaRailMixin()
+    tool._solana_held_fn = None
+    assert tool._solana_held_raw("Owner1111111111111111111111111111111111111", _WSOL_MINT) \
+        == lamports + 7
+    monkeypatch.setattr(solana_onchain, "native_balance_raw", lambda owner, **k: None)
+    assert tool._solana_held_raw("Owner1111111111111111111111111111111111111", _WSOL_MINT) is None

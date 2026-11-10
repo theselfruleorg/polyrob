@@ -8,14 +8,22 @@ back to the originating channel. The shell is ``surfaces._shared.BaseHarness``.
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 from typing import Any, Optional
 
 from core.surfaces.idempotency import IdempotencyStore
-from surfaces._shared import BaseHarness, TextSink, register_surface_and_sink
+from surfaces._shared import (FAILED_MARK, SEEN_MARK, BaseHarness, TextSink,
+                               register_surface_and_sink, wants_feedback)
 from surfaces.discord.client import DiscordClient
 from surfaces.discord.gateway import DiscordGatewayClient, parse_message_create
 from surfaces.discord.surface import DiscordSurface
+
+logger = logging.getLogger(__name__)
+
+#: Seconds between typing renewals (Discord shows typing for about ten).
+TYPING_PULSE_S = 8.0
 
 
 def DiscordSink(client: DiscordClient) -> TextSink:  # noqa: N802 — kept name
@@ -31,6 +39,7 @@ class DiscordHarness(BaseHarness):
         super().__init__(container, task_agent, dedup)
         self._client = client
         self._gateway = gateway
+        self._pulses: dict = {}   # id(inbound) -> the typing-pulse task
 
     async def handle_message_create(self, d: dict) -> None:
         bot_id = self._gateway.bot_user_id or ""
@@ -43,8 +52,53 @@ class DiscordHarness(BaseHarness):
     async def _before_route(self, target) -> None:
         await self._client.trigger_typing(target)
 
+    @staticmethod
+    def _message_ref(inbound):
+        """``(channel, message id)`` to react on, or None (see ``wants_feedback``)."""
+        if not wants_feedback(inbound):
+            return None
+        raw = inbound.raw if isinstance(inbound.raw, dict) else {}
+        mid = str(raw.get("id") or "")
+        channel = str(inbound.identity.source.chat_id or "")
+        return (channel, mid) if mid and channel else None
+
+    async def _typing_pulse(self, channel: str) -> None:
+        """Discord's typing state lasts about ten seconds; a turn takes longer.
+        Renewed until the turn ends (cancelled in ``on_processing_finish``)."""
+        while True:
+            await asyncio.sleep(TYPING_PULSE_S)
+            try:
+                await self._client.trigger_typing(channel)
+            except Exception:
+                logger.debug("discord typing pulse failed", exc_info=True)
+
+    async def on_processing_start(self, inbound) -> None:
+        ref = self._message_ref(inbound)
+        if not ref:
+            return
+        key = id(inbound)
+        self._pulses[key] = asyncio.create_task(self._typing_pulse(ref[0]))
+        await self._client.add_reaction(*ref, SEEN_MARK)
+
+    async def on_processing_finish(self, inbound, ok: bool) -> None:
+        pulse = self._pulses.pop(id(inbound), None)
+        if pulse is not None:
+            pulse.cancel()
+        ref = self._message_ref(inbound)
+        if not ref:
+            return
+        try:
+            await self._client.remove_reaction(*ref, SEEN_MARK)
+        finally:
+            if not ok:
+                await self._client.add_reaction(*ref, FAILED_MARK)
+
     async def _deliver_to(self, target, text: str) -> None:
         await self._client.send_message(target, text)
+
+    async def _deliver_dm(self, address: str, text: str) -> None:
+        """A user id is not a channel id on Discord: open (or fetch) the DM first."""
+        await self._client.send_message(await self._client.create_dm(address), text)
 
     async def _fetch_media(self, media) -> Optional[bytes]:
         """A Discord CDN attachment (public signed URL — no token sent)."""

@@ -1,4 +1,5 @@
-"""Deterministic cron jobs: a READ verb with no model step, and the per-job
+"""Deterministic cron jobs: a READ verb with no model step, a SCRIPT of the
+agent with no model step (114 W2, below), and the per-job
 pause window (core handoff W9; 090 §3/§7, 080/090 D45).
 
 Read job — ``payload.read_verb``::
@@ -24,6 +25,8 @@ window is refused when the job is scheduled or edited, never silently ignored.
 from __future__ import annotations
 
 import logging
+import os
+import shlex
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -320,6 +323,204 @@ async def run_read_job(task_agent: Any, job: Any, *, tool_factory=None) -> Tuple
                        exc_info=True)
         sent = False
     return ok, "read_verb_delivered" if sent else "read_verb_undelivered"
+
+
+# -- the script job (114 W2) ---------------------------------------------------
+# (lives in this module, not its own, so the cron import cycle gains no member
+# — tests/test_layering_ratchet.py)
+"""Deterministic cron jobs: a SCRIPT the agent wrote, with no model step (114 W2).
+
+Script job — ``payload.script``::
+
+    {"path": "jobs/collect.py",       # relative to the durable workspace; .py or .sh
+     "args": ["--round", "S1"],       # optional, strings only
+     "timeout_s": 120,                # optional, 1..MAX_TIMEOUT_S
+     "deliver_on": "alert"}           # "alert" (default) | "always" | "never"
+
+The script is the agent's own file in its workspace. The harness knows nothing about
+what it does: the runner starts it through the code-execution backend (the same
+sandbox, limits and network policy as ``run_code``), with no session and no model
+turn, and reads only the exit code and the output. Exit code 0 is ``done``; any other
+exit code or a timeout is ``failed`` and is an alert. A stdout line that starts with
+``ALERT`` is an alert on a clean run (the read-job rule).
+
+The job needs ONE durable workspace (``POLYROB_PROJECT_DIR``): a per-session
+workspace does not outlive the session that wrote the script. Where code execution is
+refused (``code_exec_execution_blocked_reason``), the job is refused at schedule time
+and fails with the same reason at run time; nothing runs on a host that refuses it.
+"""
+SCRIPT_KEY = "script"
+#: The launcher per file type. The file type is the only thing the harness reads.
+SCRIPT_LAUNCHERS = {".py": "python3", ".sh": "bash"}
+SCRIPT_DEFAULT_TIMEOUT_S = 120
+#: Below the default run cap (600 s), so the script ends before the ticker cuts the run.
+SCRIPT_MAX_TIMEOUT_S = 540
+SCRIPT_MAX_ARGS = 16
+SCRIPT_MAX_ARG_CHARS = 500
+SCRIPT_MAX_PATH_CHARS = 300
+#: Characters of output a delivery or a failure note carries (the tail).
+SCRIPT_TAIL_CHARS = 1500
+
+
+class ScriptJobError(ValueError):
+    """A ``script`` spec that cannot run as written."""
+
+
+def validate_script(spec: Any) -> Dict[str, Any]:
+    """The normalized spec, or :class:`ScriptJobError`. Shape only: it reads no file."""
+    if not isinstance(spec, dict):
+        raise ScriptJobError("script must be an object {path, args, timeout_s, deliver_on}")
+    unknown = sorted(set(spec) - {"path", "args", "timeout_s", "deliver_on"})
+    if unknown:
+        raise ScriptJobError(f"script has unknown keys: {', '.join(unknown)}")
+    path = spec.get("path")
+    if not isinstance(path, str) or not path.strip():
+        raise ScriptJobError("script.path must name a file in the workspace")
+    path = path.strip()
+    parts = path.replace("\\", "/").split("/")
+    if (len(path) > SCRIPT_MAX_PATH_CHARS or path.startswith(("/", "~", "-")) or "\x00" in path
+            or "\n" in path or any(p in ("", ".", "..") for p in parts)):
+        raise ScriptJobError("script.path must be a plain relative path inside the workspace "
+                             "(no '..', no absolute path)")
+    if os.path.splitext(path)[1].lower() not in SCRIPT_LAUNCHERS:
+        raise ScriptJobError("script.path must end in " + " or ".join(sorted(SCRIPT_LAUNCHERS)))
+    args = spec.get("args") or []
+    if (not isinstance(args, (list, tuple)) or len(args) > SCRIPT_MAX_ARGS
+            or any(not isinstance(a, str) or len(a) > SCRIPT_MAX_ARG_CHARS or "\x00" in a for a in args)):
+        raise ScriptJobError(f"script.args must be a list of at most {SCRIPT_MAX_ARGS} strings "
+                             f"(each at most {SCRIPT_MAX_ARG_CHARS} characters)")
+    timeout = spec.get("timeout_s", SCRIPT_DEFAULT_TIMEOUT_S)
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) \
+            or not 1 <= timeout <= SCRIPT_MAX_TIMEOUT_S:
+        raise ScriptJobError(f"script.timeout_s must be a number from 1 to {SCRIPT_MAX_TIMEOUT_S}")
+    deliver_on = str(spec.get("deliver_on") or "alert")
+    if deliver_on not in DELIVER_ON:
+        raise ScriptJobError(f"script.deliver_on must be one of {', '.join(DELIVER_ON)}")
+    return {"path": "/".join(parts), "args": [str(a) for a in args],
+            "timeout_s": int(timeout), "deliver_on": deliver_on}
+
+
+def script_refusal() -> Optional[str]:
+    """None when a script job can run on this install, else the reason. Asked before a
+    job is stored, so the agent learns now and not at the first tick."""
+    try:
+        from tools.code_exec.sandbox_guard import code_exec_execution_blocked_reason
+        blocked = code_exec_execution_blocked_reason()
+    except Exception as exc:
+        return f"a script job cannot run here: the code-execution check failed ({type(exc).__name__})"
+    if blocked:
+        return f"a script job cannot run here: {blocked}"
+    if _script_workspace() is None:
+        return ("a script job needs one durable workspace, and this install keeps a "
+                "workspace per session (set POLYROB_PROJECT_DIR)")
+    return None
+
+
+def checked_script(spec: Any) -> Dict[str, Any]:
+    """The normalized spec of a job that can run NOW, or :class:`ScriptJobError`: the
+    shape, whether this install runs a script job at all, and that the file is there.
+    The cron service calls it before a job is stored or edited."""
+    spec = validate_script(spec)
+    refusal = script_refusal()
+    if refusal:
+        raise ScriptJobError(refusal)
+    resolve_script(_script_workspace(), spec["path"])
+    return spec
+
+
+def _script_workspace() -> Optional[str]:
+    """The durable workspace root, or None when this install has none."""
+    try:
+        from agents.task.path import pm
+        manager = pm()
+        if not manager.is_project_root_workspace:
+            return None
+        return os.path.realpath(str(manager.project_root))
+    except Exception:
+        logger.debug("script job: workspace not resolved", exc_info=True)
+        return None
+
+
+def resolve_script(workspace: str, rel: str) -> str:
+    """The real path of *rel* under *workspace*, or :class:`ScriptJobError` when it is
+    not a regular file inside it (a link that leaves the workspace is refused)."""
+    real = os.path.realpath(os.path.join(workspace, rel))
+    if os.path.commonpath([workspace, real]) != workspace:
+        raise ScriptJobError(f"script {rel!r} points outside the workspace")
+    if not os.path.isfile(real):
+        raise ScriptJobError(f"script {rel!r} is not a file in the workspace")
+    return real
+
+
+def launch_line(spec: Dict[str, Any]) -> str:
+    """PURE: the one shell line that starts the script from the workspace root."""
+    launcher = SCRIPT_LAUNCHERS[os.path.splitext(spec["path"])[1].lower()]
+    words = [launcher, "./" + spec["path"], *spec.get("args", ())]
+    return "exec " + " ".join(shlex.quote(w) for w in words)
+
+
+def _script_tail(text: str) -> str:
+    text = (text or "").strip()
+    return text if len(text) <= SCRIPT_TAIL_CHARS else "…" + text[-SCRIPT_TAIL_CHARS:]
+
+
+async def call_script(spec: Dict[str, Any], *, user_id: str = "",
+                      backend_factory=None) -> Tuple[bool, str]:
+    """Run the script once. ``(ok, text)``; never raises. *text* is what a person reads:
+    the output tail on a clean run, the reason and the error tail otherwise."""
+    try:
+        spec = validate_script(spec)
+        refusal = script_refusal()
+        if refusal:
+            return False, refusal
+        from types import SimpleNamespace
+        from tools.code_exec.sandbox_guard import local_host_exec_refusal
+        refusal = local_host_exec_refusal(SimpleNamespace(user_id=user_id))
+        if refusal:
+            return False, refusal
+        workspace = _script_workspace()
+        resolve_script(workspace, spec["path"])
+        from tools.code_exec import default_registry, get_backend_name
+        from tools.code_exec.result import ExecutionRequest
+        backend = (backend_factory or (lambda: default_registry.create(get_backend_name())))()
+        result = await backend.run(ExecutionRequest(
+            language="bash", code=launch_line(spec), workdir=workspace,
+            timeout=float(spec["timeout_s"]), ceiling=float(spec["timeout_s"])))
+    except ScriptJobError as exc:
+        return False, f"script job refused: {exc}"
+    except Exception as exc:
+        logger.warning("script job %r did not start", (spec or {}).get("path")
+                       if isinstance(spec, dict) else spec, exc_info=True)
+        return False, f"script job did not start: {type(exc).__name__}: {str(exc)[:300]}"
+    out, err = _script_tail(result.stdout), _script_tail(result.stderr)
+    if result.ok:
+        return True, out or f"{spec['path']}: done, no output"
+    why = (f"timed out after {spec['timeout_s']} s" if result.timed_out
+           else f"exit code {result.exit_code}")
+    body = "\n".join(part for part in (err, out) if part)
+    return False, f"{spec['path']}: {why}" + (f"\n{body}" if body else "")
+
+
+async def run_script_job(task_agent: Any, job: Any, *, backend_factory=None) -> Tuple[bool, str]:
+    """Run the job's script and deliver per ``deliver_on``. Returns ``(ok,
+    outcome_reason)``; never raises."""
+    payload = dict(getattr(job, "payload", None) or {})
+    spec = payload.get(SCRIPT_KEY) or {}
+    ok, text = await call_script(spec, user_id=str(getattr(job, "user_id", "") or ""),
+                                 backend_factory=backend_factory)
+    deliver_on = str((spec if isinstance(spec, dict) else {}).get("deliver_on") or "alert")
+    if not should_deliver(deliver_on, ok, text):
+        return ok, "script"
+    try:
+        from cron.delivery import deliver_result
+        sent = await deliver_result(task_agent, job, text,
+                                    target=payload.get("deliver") or "telegram",
+                                    deliver_target=payload.get("deliver_target"))
+    except Exception:
+        logger.warning("cron job %s: script-job delivery failed", getattr(job, "id", "?"),
+                       exc_info=True)
+        sent = False
+    return ok, "script_delivered" if sent else "script_undelivered"
 
 
 # -- $0 pre-check for watch jobs ---------------------------------------------

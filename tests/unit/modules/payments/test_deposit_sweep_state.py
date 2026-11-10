@@ -15,9 +15,18 @@ from modules.payments.treasury_sweeper import TreasurySweeper
 from tests.unit.modules.payments.test_treasury_submission_safety import ADDRESS, _RigDB
 
 
-def _sweeper(db, wallet):
-    return TreasurySweeper(db, wallet, SimpleNamespace(
+def _sweeper(db, wallet, *, latest=0, mark=0):
+    """A remote-signer sweeper reads the latest balance against the credited
+    mark first; by default both are 0 (everything there is credited)."""
+    s = TreasurySweeper(db, wallet, SimpleNamespace(
         treasury_address='0x' + '2' * 40, ethereum_rpc_url='https://example.invalid'))
+    if getattr(wallet, 'remote', False):
+        _with_mark(db, mark)
+
+        async def _latest(*a, **k):
+            return latest
+        s._latest_balance = _latest
+    return s
 
 
 def _deposit(rid=1):
@@ -239,3 +248,128 @@ def test_deposit_resolve_sent_without_a_tx_is_a_usage_error(monkeypatch):
     rid = db.conn.execute("SELECT id FROM crypto_payments LIMIT 1").fetchone()[0]
     r = CliRunner().invoke(owner, ["deposit-resolve", str(rid), "--sent", "--confirm"])
     assert r.exit_code != 0 and "--tx" in r.output and "Traceback" not in r.output
+
+
+# -- the credited row carries the deposit address ---------------------------
+
+@pytest.mark.asyncio
+async def test_a_credited_reading_carries_its_deposit_address(monkeypatch):
+    """The sweeper refuses a row whose deposit_address does not match the
+    derived signer; an empty one blocked every group for ever."""
+    import sys
+    from tests.unit.modules.payments.test_deposit_monitor_notify import (
+        _Config, _FakeBalanceManager, _FakeDB, _fake_web3_module)
+    from modules.payments.deposit_monitor import DepositMonitor
+    monkeypatch.setitem(sys.modules, "web3", _fake_web3_module(2 * 10**18))
+    monkeypatch.setenv("ETH_PRICE_USD_OVERRIDE", "3000.0")
+    monitor = DepositMonitor(_FakeDB(), _FakeBalanceManager(), _Config())
+    readings = await monitor._check_chain_deposits(
+        ADDRESS, "ethereum", {"rpc_url": "http://fake-rpc.invalid", "chain_id": 1})
+    assert readings and all(r["address"] == ADDRESS for r in readings)
+
+
+@pytest.mark.asyncio
+async def test_ensure_sweep_schema_backfills_an_empty_deposit_address():
+    db = _RigDB()
+    db.conn.execute("UPDATE crypto_payments SET deposit_address = ''")
+    db.conn.execute("INSERT INTO crypto_payments (id, user_id, chain, deposit_address, "
+                    "token_symbol, amount_usd, status) VALUES (2, 'other', 'ethereum', '', "
+                    "'ETH', 5, 'confirmed')")
+    db.conn.execute("CREATE TABLE user_deposit_addresses (user_id TEXT PRIMARY KEY, "
+                    "deposit_address TEXT UNIQUE NOT NULL)")
+    db.conn.execute("INSERT INTO user_deposit_addresses VALUES ('test', ?)", (ADDRESS,))
+    await sweep_state.ensure_sweep_schema(db)
+    await sweep_state.ensure_sweep_schema(db)          # idempotent
+    assert db.row()['deposit_address'] == ADDRESS
+    assert db.row(2)['deposit_address'] == ''          # no address known: left as is
+
+
+@pytest.mark.asyncio
+async def test_ensure_sweep_schema_without_the_address_table_backfills_nothing():
+    db = _RigDB()
+    db.conn.execute("UPDATE crypto_payments SET deposit_address = ''")
+    await sweep_state.ensure_sweep_schema(db)
+    assert db.row()['deposit_address'] == ''
+
+
+# -- a remote sweep waits for the credit of what sits on the address --------
+
+def _with_mark(db, balance):
+    db.conn.execute("CREATE TABLE IF NOT EXISTS deposit_balance_marks (user_id TEXT, chain TEXT, "
+                    "token_symbol TEXT, balance TEXT, updated_at TEXT, as_of_block INTEGER "
+                    "NOT NULL DEFAULT 0, PRIMARY KEY (user_id, chain, token_symbol))")
+    if balance is not None:
+        db.conn.execute("INSERT OR REPLACE INTO deposit_balance_marks (user_id, chain, token_symbol, "
+                        "balance) VALUES ('test', 'ethereum', 'ETH', ?)", (str(balance),))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('latest,mark', [(3 * 10**18, 2 * 10**18), (None, 2 * 10**18),
+                                         (1 * 10**18, None)])
+async def test_remote_sweep_waits_while_the_address_holds_uncredited_funds(
+        monkeypatch, tmp_path, latest, mark):
+    """The signer sweeps the WHOLE latest balance; the monitor credits at the
+    finalized block. Latest above the credited mark (or unreadable, or no mark)
+    = a deposit not yet credited: release the claim, send nothing."""
+    monkeypatch.setenv('POLYROB_DATA_DIR', str(tmp_path))
+    db = _RigDB()
+    wallet = SimpleNamespace(remote=True, sweep=Mock(return_value='0x' + 'ab' * 32))
+    s = _sweeper(db, wallet, latest=latest, mark=mark)
+    await s._sweep_deposit(_deposit())
+    wallet.sweep.assert_not_called()
+    assert db.row()['sweep_state'] == 'unswept'
+
+
+@pytest.mark.asyncio
+async def test_remote_sweep_runs_when_the_latest_balance_is_credited(monkeypatch, tmp_path):
+    monkeypatch.setenv('POLYROB_DATA_DIR', str(tmp_path))
+    db = _RigDB()
+    wallet = SimpleNamespace(remote=True, sweep=Mock(return_value='0x' + 'ab' * 32))
+    s = _sweeper(db, wallet, latest=2 * 10**18, mark=2 * 10**18)
+    await s._sweep_deposit(_deposit())
+    wallet.sweep.assert_called_once()
+    assert db.row()['sweep_state'] == 'swept_unproven'
+
+
+# -- an unreadable store is not an empty one ---------------------------------
+
+class _Broken(_RigDB):
+    """Every read of *needle* fails the way a locked or corrupt file does."""
+
+    def __init__(self, needle):
+        super().__init__()
+        self.needle = needle
+
+    async def fetch_all(self, sql, params=()):
+        if self.needle in sql:
+            raise RuntimeError("database disk image is malformed")
+        return await super().fetch_all(sql, params)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('needle', ['FROM sqlite_master', 'GROUP BY user_id',
+                                    'FROM deposit_balance_marks'])
+async def test_owner_report_raises_on_an_unreadable_store(needle):
+    db = _Broken(needle)
+    db.conn.execute("CREATE TABLE deposit_balance_marks (user_id TEXT, chain TEXT, "
+                    "token_symbol TEXT, balance TEXT, as_of_block INTEGER)")
+    with pytest.raises(Exception, match="malformed"):
+        await sweep_state.deposit_report(db)
+
+
+@pytest.mark.asyncio
+async def test_owner_report_without_tables_is_empty():
+    db = _RigDB()
+    db.conn.execute("DROP TABLE crypto_payments")
+    assert await sweep_state.deposit_report(db) == []
+    db = _RigDB()                                     # no marks table yet
+    rep = await sweep_state.deposit_report(db)
+    assert rep and rep[0]['mark_balance'] is None
+
+
+@pytest.mark.asyncio
+async def test_ensure_sweep_schema_logs_an_unreadable_table(caplog):
+    db = _Broken('PRAGMA table_info(crypto_payments)')
+    with caplog.at_level('WARNING', logger='modules.payments.sweep_state'):
+        await sweep_state.ensure_sweep_schema(db)
+    assert 'sweep columns skipped' in caplog.text

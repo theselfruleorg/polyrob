@@ -155,7 +155,7 @@ def test_step_log_line_names_the_cause_and_emits(events, caplog):
 
 def test_usage_metadata_carries_the_regime():
     from agents.task.agent.core.next_action_internal import _prefix_stamps
-    meta = _prefix_stamps(_agent(llm=None))
+    meta = _prefix_stamps(_agent(llm=None), None)
     assert meta["regime"] == "owner_chat"
 
 
@@ -329,12 +329,11 @@ def test_a_misnamed_call_is_repaired_and_runs():
 
 # ── D-7: the step stamps its context reading before the call ────────────────
 
-def test_stamp_step_context_hands_the_reading_to_the_llm(monkeypatch):
+def test_stamp_step_context_scopes_the_reading_to_the_task(monkeypatch):
     seen = []
     import modules.llm.prefix_stamp as ps
-    monkeypatch.setattr(ps, "stamp_context", lambda llm, usage: seen.append((llm, usage)))
-    llm = object()
-    a = SimpleNamespace(llm=llm, message_manager=SimpleNamespace(context_usage=lambda: {"total": 5}))
+    monkeypatch.setattr(ps, "context_stamps", lambda usage: seen.append(usage))
+    a = SimpleNamespace(message_manager=SimpleNamespace(context_usage=lambda: {"total": 5}))
     cq.stamp_step_context(a)
-    assert seen == [(llm, {"total": 5})]
+    assert seen == [{"total": 5}]
     cq.stamp_step_context(SimpleNamespace())  # fail-open

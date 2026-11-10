@@ -162,3 +162,48 @@ def test_duplicate_captions_across_an_album_are_said_once():
              Media(kind="image", ref="f2", filename="b.png", caption="both")]
     out = _with_captions("[attached 2]", media, "")
     assert out.count("both") == 1
+
+
+# --- a video over the Telegram bot download limit ------------------------------
+
+def test_a_video_over_the_bot_download_limit_carries_the_reason():
+    size = 148 * 1024 * 1024
+    items = extract_media(_update({"video": {"file_id": "v1", "file_size": size}}))
+    assert "148.0MB" in items[0].refused
+    assert "20MB" in items[0].refused
+
+
+@pytest.mark.parametrize("update_fields", [
+    {"file_id": "v1", "file_size": 20 * 1024 * 1024},
+    {"file_id": "v1"},
+])
+def test_a_video_at_the_limit_or_of_unknown_size_is_downloaded(update_fields):
+    items = extract_media(_update({"video": update_fields}))
+    assert items[0].refused is None
+
+
+def test_a_local_server_lets_a_video_up_to_the_video_cap(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_API_URL", "http://127.0.0.1:8081")
+    big = {"file_id": "v1", "file_size": 148 * 1024 * 1024}
+    assert extract_media(_update({"video": big}))[0].refused is None
+    over = {"file_id": "v1", "file_size": 501 * 1024 * 1024}
+    assert "500MB cap" in extract_media(_update({"video": over}))[0].refused
+
+
+def test_a_local_server_keeps_the_general_cap_for_a_document(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_API_URL", "http://127.0.0.1:8081")
+    doc = {"file_id": "d1", "file_size": 21 * 1024 * 1024, "mime_type": "application/pdf"}
+    assert "20MB cap" in extract_media(_update({"document": doc}))[0].refused
+
+
+def test_a_video_sent_as_a_file_is_a_video_with_an_extension():
+    item = extract_media(_update({"document": {
+        "file_id": "d1", "file_name": "clip", "mime_type": "video/mp4"}}))[0]
+    assert item.kind == "video"
+    assert item.filename == "clip.mp4"
+
+
+def test_a_channel_post_carries_its_video():
+    update = {"update_id": 1, "channel_post": {
+        "chat": {"id": 42, "type": "channel"}, "video": {"file_id": "v1"}}}
+    assert [m.ref for m in extract_media(update)] == ["v1"]

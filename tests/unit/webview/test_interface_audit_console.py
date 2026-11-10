@@ -221,12 +221,12 @@ def test_a_known_verb_is_recognised_before_a_session_is_made():
     # A command-SHAPED unknown verb is answered inline with the help reply
     # (2026-10-03 audit CLI11, Telegram parity) — never a new session.
     assert looks_like_console_verb("/notaverb") is True
-    # Prose, a path, and the two session-CREATING verbs the console has its own
-    # controls for, all reach the agent unchanged.
+    # Prose, a path, and `/task` (the console has its own control for it) reach
+    # the agent unchanged. `/new` is a chat verb the chat box answers (113).
     assert looks_like_console_verb("halt the trading") is False
     assert looks_like_console_verb("/etc/passwd") is False
     assert looks_like_console_verb("/task do a thing") is False
-    assert looks_like_console_verb("/new") is False
+    assert looks_like_console_verb("/new") is True
     assert looks_like_console_verb("") is False
     assert looks_like_console_verb(None) is False
 

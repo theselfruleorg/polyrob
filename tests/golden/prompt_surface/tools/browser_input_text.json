@@ -1,16 +1,28 @@
 {
   "function": {
-    "description": "Input text into an element by its index.",
+    "description": "Put text into an element by its index: a text field, a text area, a date or picker field, or a rich-text editor. It replaces what the element holds (clear=false adds) and reports what the element holds after. submit=true presses Enter.",
     "name": "browser_input_text",
     "parameters": {
       "additionalProperties": false,
       "description": "Model for inputting text into an element.",
       "properties": {
+        "clear": {
+          "default": null,
+          "description": "Default true: replace what the element holds. false adds the text at the end",
+          "nullable": true,
+          "type": "boolean"
+        },
         "elementIndex": {
           "type": "integer"
         },
         "inputText": {
           "type": "string"
+        },
+        "submit": {
+          "default": null,
+          "description": "true = press Enter after the text",
+          "nullable": true,
+          "type": "boolean"
         },
         "xPath": {
           "default": null,

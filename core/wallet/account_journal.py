@@ -6,9 +6,11 @@ plain EIP-191 ``personal_sign`` over a human-readable template — never an opaq
 key to this template; what stays is the template itself, so an entry is recognisable and
 verifiable by anyone.
 
-⚠️ The owner of an NFT is an ERC-1271 signer of its account, and AccountV3 puts no account
-in the digest: whatever this key signs can be presented as the account's signature. Sign
-only what you mean to stand behind as the account.
+⚠️ For a Tokenbound AccountV3, the owner of an NFT is an ERC-1271 signer of its account, and
+AccountV3 puts no account in the digest: whatever this key signs can be presented as the
+account's signature. Sign only what you mean to stand behind as the account. A PolyrobAccount
+signs nothing (``isValidSignature`` always fails), so there this risk does not exist; the
+template rule stays for both.
 """
 from __future__ import annotations
 

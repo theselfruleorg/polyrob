@@ -90,51 +90,34 @@ def get_tool_lookahead_window(total_messages: int = 0) -> int:
 TOOL_LOOKAHEAD_WINDOW = 15  # Default, use get_tool_lookahead_window() for dynamic sizing
 
 # ========== AUX-MODEL ROUTER (A5/A1 + generalized) ==========
-# Provider -> cheap auxiliary model, used for compaction (`llm_compact_history`) and the
-# judge aux task (output validation) via resolve_aux_model() below.
-# NOTE: this map has no "openrouter" key. OpenRouter serves many model families, so its
-# cheap aux model is keyed by the MAIN model's family instead
-# (OPENROUTER_AUX_FAMILY_MAP below; 2026-10-14 review B-2 — before it, AUX_AUTO was inert
-# on an openrouter box). A family with no row resolves to None => the main model.
-# (Reference parity: auxiliary.compression.model — a small/fast model for compaction.)
-COMPACTION_AUX_MODEL_MAP = {
-    "anthropic": "claude-haiku-4-5",
-    "openai": "gpt-5-mini",
-    "gemini": "gemini-flash",
-    "google": "gemini-flash",
-    # z.ai GLM seats. `glm-5.3-flash` is served by BOTH the flat-rate Coding Plan
-    # (`zai-coding`, Anthropic transport) and the pay-as-you-go API (`zai`), and it
-    # is ~18x cheaper per token than the 5.3 flagship. Before this row a zai session
-    # resolved every aux task to None, so compaction, the goal-completion judge, the
-    # background skill reviewer and H-MEM reflection all ran on the FLAGSHIP.
-    "zai-coding": "glm-5.3-flash",
-    "zai": "glm-5.3-flash",
-}
-
-# Alias: the generalized router reuses the same cheap-model map for all aux tasks.
-AUX_MODEL_MAP = COMPACTION_AUX_MODEL_MAP
-
-# OpenRouter: main-model family prefix -> the cheap aux model of that family. First
-# match wins. `deepseek/*` has no row: its flash IS the cheap tier, so aux = main.
-OPENROUTER_AUX_FAMILY_MAP = (
-    ("z-ai/glm-5", "z-ai/glm-5.3-flash"),
-)
+# Each provider's cheap auxiliary model is on its ProviderSpec (``aux_model``,
+# ``aux_family_map``), used for compaction and the judge via resolve_aux_model() below.
 
 
-def _openrouter_aux_model(main_model):
-    """The cheap aux model for an openrouter MAIN model, or None (=> the main model).
-    ``main_model`` None => the operator's pinned openrouter model."""
+def _spec_aux_model(provider, main_model):
+    """The cheap aux model of *provider* for *main_model*, or None (=> the main model).
+    ``main_model`` None => the operator's pinned model of that provider."""
+    from modules.llm.provider_spec import get_spec
+    spec = get_spec(provider)
+    if spec is None or spec.aux_model or not spec.aux_family_map:
+        return spec.aux_model if spec else None
     if not main_model:
         try:
             from core.runtime_config import operator_model_for
-            main_model = operator_model_for("openrouter")
+            main_model = operator_model_for(spec.name)
         except Exception:
             main_model = None
     name = str(main_model or "").strip().lower()
-    for prefix, cheap in OPENROUTER_AUX_FAMILY_MAP:
+    for prefix, cheap in spec.aux_family_map:
         if name.startswith(prefix):
             return None if name == cheap else cheap
     return None
+
+
+# 112 W2: the `light` model tier reads the same aux map (core cannot import modules).
+from core.runtime_config import register_light_resolver as _register_light  # noqa: E402
+_register_light(_spec_aux_model)
+
 
 # Per-task explicit override env var names (the slot names, AUX_MODEL_<SLOT>).
 # UP-10 2.1: only `compaction` (live) and `judge` (wired into output validation,
@@ -161,9 +144,7 @@ def _resolve_aux_model_with_origin(task, provider=None, main_model=None):
         return explicit, False
     auto = _core_bool_env("AUX_AUTO", False)
     if auto and provider:
-        mapped = AUX_MODEL_MAP.get(provider.lower())
-        if not mapped and provider.lower() == "openrouter":
-            mapped = _openrouter_aux_model(main_model)
+        mapped = _spec_aux_model(provider, main_model)
         return mapped, bool(mapped)
     return None, False
 
@@ -182,16 +163,23 @@ def resolve_aux_model(task, provider=None, main_model=None):
 _AUX_SLOTS = ("compaction", "judge", "reflection")
 
 
-def _parse_provider_model(token, default_provider=None):
-    """Parse one fallback-chain token ('provider/model' or bare 'model')."""
+def parse_provider_model(token, default_provider=None):
+    """Parse one fallback-chain token ('provider/model' or bare 'model'). A token with
+    its own catalog row is one model id (`deepseek/deepseek-v4-pro`), and the head is a
+    provider only when a spec knows it (`z-ai/glm-5.3-flash` is one model id too)."""
     token = (token or "").strip()
     if not token:
         return None
     if "/" in token:
-        head, tail = token.split("/", 1)
-        tail = tail.strip()
-        head = head.strip()
-        return {"model": tail, "provider": head or default_provider} if tail else None
+        head, tail = (part.strip() for part in token.split("/", 1))
+        if not tail:
+            return None
+        if not head:
+            return {"model": tail, "provider": default_provider}
+        from modules.llm.model_registry import get_model_config_exact
+        from modules.llm.provider_spec import get_spec
+        if get_model_config_exact(token) is None and get_spec(head) is not None:
+            return {"model": tail, "provider": head}
     return {"model": token, "provider": default_provider}
 
 
@@ -268,13 +256,13 @@ def resolve_aux_chain(task, provider=None, main_model=None):
     # auto-detects the provider from the model registry — where every GLM id is
     # owned by `openrouter`. A zai-coding session would have silently moved its aux
     # calls OFF the flat-rate seat and onto a metered provider. Only pin a provider
-    # the client registry actually knows (specs are the client keys); "google" has
-    # no spec, so that row keeps its legacy auto-detect to `gemini`.
+    # the client registry actually knows (specs are the client keys).
     if not primary_provider and from_cheap_map:
         try:
             from modules.llm.provider_spec import get_spec
-            if get_spec(provider) is not None:
-                primary_provider = provider
+            spec = get_spec(provider)
+            if spec is not None:
+                primary_provider = spec.name
         except Exception:
             pass  # fail-open: legacy auto-detect
 
@@ -284,7 +272,7 @@ def resolve_aux_chain(task, provider=None, main_model=None):
     if not raw_fb and task == "reflection" and inherited_from_compaction:
         raw_fb = os.getenv("AUX_FALLBACK_COMPACTION", "")
     for tok in raw_fb.split(","):
-        cand = _parse_provider_model(tok)
+        cand = parse_provider_model(tok)
         if cand:
             chain.append(cand)
     return chain
@@ -443,7 +431,6 @@ class TimeoutConfig:
     STALL_TIMEOUT = _core_float_env('STALL_TIMEOUT_SECONDS', 300)     # 5 min stall detection
 
     # ========== LLM REQUEST TIMEOUTS ==========
-    LLM_REQUEST_TIMEOUT = _core_int_env('LLM_REQUEST_TIMEOUT_SECONDS', 120)   # Standard LLM request
     LLM_STREAM_TIMEOUT = _core_int_env('LLM_STREAM_TIMEOUT_SECONDS', 300)     # Streaming needs longer
     LLM_BASE_TIMEOUT = _core_float_env('LLM_BASE_TIMEOUT_SECONDS', 30)        # Base (adjusted by tokens)
 

@@ -27,7 +27,6 @@ class _Unauth(Exception):
 
 def _tool(monkeypatch, *, oauth1=True, oauth2="oauth2-tok"):
     monkeypatch.setenv("TWITTER_ENABLED", "true")
-    monkeypatch.setenv("TWITTER_REQUIRE_APPROVAL", "false")
     t = object.__new__(TwitterTool)
     t.logger = logging.getLogger("tw-fallback")
     t.name = "twitter"

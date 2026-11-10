@@ -37,27 +37,21 @@ def test_sessions_list_has_json_flag():
         assert result.exit_code == 0 or "No sessions found" in result.output
 
 
-def test_session_list_survives_null_task(monkeypatch):
+def test_session_list_survives_null_task(monkeypatch, tmp_path):
     """A session row with a present-but-None 'task'/'id'/'created_at' must not crash
     `session list`. `.get(k, "")` returns None (not "") when the key is present with
     a null value, and None[:38] raised TypeError — breaking the whole command."""
-    from cli.commands.session import session
-    runner = CliRunner()
-
-    mock_agent = MagicMock()
-    mock_agent.session_manager.get_all_sessions.return_value = [
+    import json as _json
+    from cli.commands import session as sess
+    d = tmp_path / "sessions" / "local" / "sess-xyz9"
+    d.mkdir(parents=True)
+    (d / "metadata.json").write_text(_json.dumps(
         {"id": None, "session_id": "sess-xyz9", "status": "running",
-         "task": None, "created_at": None},
-    ]
-    mock_container = MagicMock()
-    mock_container.get_agent.return_value = mock_agent
-
-    async def _fake_build(*args, **kwargs):
-        return mock_container
-
-    monkeypatch.setattr("cli.keys.preflight_or_onboard", lambda **k: True)
-    with patch("polyrob.app.bootstrap.build_cli_container", side_effect=_fake_build):
-        result = runner.invoke(session, ["list"])
+         "task": None, "created_at": None}))
+    monkeypatch.setattr(sess, "_data_root", lambda write=False: tmp_path / "sessions")
+    monkeypatch.setattr(sess, "_admin_home", lambda write=False: tmp_path)
+    monkeypatch.setattr(sess, "ensure_env_loaded", lambda: None)
+    result = CliRunner().invoke(sess.session, ["list"])
 
     assert result.exception is None, result.exception
     assert result.exit_code == 0, result.output
@@ -120,31 +114,21 @@ def test_sessions_tools_command_exists():
     assert "tools" in session.commands
 
 
-def test_session_show_uses_get_session_info():
-    """`session show` must call get_session_info (SessionManager has no get_session)."""
-    from cli.commands.session import session
-    runner = CliRunner()
-
-    class FakeSM:
-        def __init__(self):
-            self.called_with = None
-
-        def get_session_info(self, sid):
-            self.called_with = sid
-            return {"id": sid, "task": "demo", "status": "running", "created_at": "t0"}
-        # deliberately NO get_session attribute — mirrors the real SessionManager
-
-    fake_sm = FakeSM()
-    fake_agent = type("A", (), {"session_manager": fake_sm})()
-    mock_container = MagicMock()
-    mock_container.get_agent.return_value = fake_agent
-
-    async def _fake_build(*args, **kwargs):
-        return mock_container
-
-    with patch("polyrob.app.bootstrap.build_cli_container", side_effect=_fake_build), \
-         patch("cli.keys.preflight_or_onboard", lambda **k: True):
-        result = runner.invoke(session, ["show", "abc123", "--json"])
+def test_session_show_reads_the_admin_home(monkeypatch, tmp_path):
+    """`session show` reads the session's metadata from the tree every session verb
+    reads (113 T-04), not a CLI container's SessionManager."""
+    import json as _json
+    from cli.commands import session as sess
+    d = tmp_path / "sessions" / "local" / "abc123"
+    d.mkdir(parents=True)
+    (d / "metadata.json").write_text(_json.dumps(
+        {"id": "abc123", "task": "demo", "status": "running", "created_at": "t0",
+         "user_id": "local"}))
+    monkeypatch.setattr(sess, "_data_root", lambda write=False: tmp_path / "sessions")
+    monkeypatch.setattr(sess, "_admin_home", lambda write=False: tmp_path)
+    monkeypatch.setattr(sess, "ensure_env_loaded", lambda: None)
+    result = CliRunner().invoke(sess.session, ["show", "abc123", "--json"])
 
     assert result.exit_code == 0, result.output
-    assert fake_sm.called_with == "abc123"
+    data = _json.loads(result.output)
+    assert data["id"] == "abc123" and data["title"] == "demo"

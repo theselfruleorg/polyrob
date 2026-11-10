@@ -1,0 +1,26 @@
+{
+  "function": {
+    "description": "Drag one element onto another by their indexes (reorder a list, move a card, a slider).",
+    "name": "browser_drag_and_drop",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for dragging one element onto another.",
+      "properties": {
+        "fromIndex": {
+          "description": "The element to drag",
+          "type": "integer"
+        },
+        "toIndex": {
+          "description": "The element to drop it on",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "fromIndex",
+        "toIndex"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

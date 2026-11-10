@@ -44,6 +44,11 @@ you when you do, because nothing will start it.
 /goal stop <id>           stop this run; add --forever to switch the title off
 ```
 
+Ask in chat for work that decides money — who is paid, how much, a winner — and the agent
+does not do it in the chat turn. It creates a goal on the `heavy` model tier
+(`HEAVY_MODEL`), tells you the goal id and the model in one line, and the full result comes
+back to the same chat when the goal is done.
+
 The same board from the terminal:
 
 ```bash
@@ -101,7 +106,8 @@ provider outage caused goes back to the queue within
 `GOAL_BLOCKED_PROVIDER_RETRY_MIN` minutes. Any other block waits for you
 (`/goal retry <id>`) or ages out to `cancelled` after
 `GOAL_BLOCKED_MAX_AGE_DAYS`. A goal that needs something only you can supply
-opens a decision in your inbox (§4) and names it.
+opens a decision in your inbox (§4) and names it. You hear once of each stop and
+each age-out; a provider outage reaches you only when it stops healing.
 
 ### How long one run may go
 
@@ -149,6 +155,15 @@ it, down to the group's read-only toolset.
                                         create a job in that lane again until you allow it
 /job allow <lane>                       switch a lane back on
 ```
+
+A recurring job pauses after 3 failed runs in a row. You get one line at the first
+failure (not for a recurring job the agent wrote: the agent corrects it) and one line
+when the job pauses. A job whose read or write verb fails has a failed run too. A
+provider outage does not count, and `/job resume <id>` starts a new count. A job that
+runs the model does not repeat by itself after a crash cuts its run: it goes to its
+next slot and you get `/job run <id>` (while jobs are paused, the line says it runs
+after `/resume`). `/jobs` shows how long a late job has waited,
+and a money job more than 1 hour late does not run, unless it is an exit job.
 
 `/job new` takes the schedule first, then the work: quote a schedule that has
 spaces, or put `|` between the two. `tools=a,b` grants the job those tools;

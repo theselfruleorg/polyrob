@@ -12,7 +12,7 @@ promote/scan/atomic-write machinery is the base class's ONE shared body (audit
 T4, 2026-07-16 — previously ``propose``/``promote``/archives were copy-pasted
 here and could drift from the security gate). Only the target file
 (``owner.md``), the char cap (``OWNER_DOC_MAX_CHARS`` — terser than SELF), the
-review flag (``OWNER_DOC_REQUIRE_REVIEW``), the pending-listing ``kind``
+pending-listing ``kind``
 (``owner_doc``) and the archive filename prefixes differ — all expressed as
 class attributes.
 """
@@ -81,9 +81,20 @@ class OwnerDocWriter(SelfContextWriter):
         except Exception:
             return body
 
+    def _content_guard(self, uid: str, body: str, *, created_by: str,
+                       pending: Optional[bool]) -> Optional[SelfContextWriteResult]:
+        """A job's own row holds its state; a NEW or CHANGED active line that names a
+        job id or claims a job's on/off state is refused, on an owner turn too
+        (``doc_claims.job_state_refusal``). A draft is refused when written, and an older
+        draft when promoted, so nothing waits in /pending that cannot apply."""
+        from core.doc_claims import job_state_refusal
+        old = self._provenance_baseline(uid, quarantine=self._resolve_pending(created_by, pending))
+        why = job_state_refusal(old, body)
+        return SelfContextWriteResult(False, errors=[why]) if why else None
+
     def _capped_len(self, body: str) -> int:
-        """The cap counts the ACTIVE rules only; the superseded section has its own
-        bound (``doc_claims.SUPERSEDED_MAX_CHARS``) and is never injected."""
+        """The cap counts the ACTIVE rules only; each frozen section has its own bound
+        (``doc_claims.SUPERSEDED_MAX_CHARS``) and is never injected."""
         try:
             from core.doc_claims import split_superseded
             return len(split_superseded(body)[0])
@@ -96,7 +107,7 @@ class OwnerDocWriter(SelfContextWriter):
     _PATCH_SCOPE = "the active rules"
 
     def _patch_split(self, text: str):
-        """A patch edits the ACTIVE rules; ``## Superseded`` is frozen history."""
+        """A patch edits the ACTIVE rules; ``## Superseded`` and ``## History`` are frozen."""
         from core.doc_claims import split_superseded_raw
         return split_superseded_raw(text)
 
@@ -118,7 +129,7 @@ class OwnerDocWriter(SelfContextWriter):
         if pending is not None:
             base = pending
         else:
-            base = AutonomyConfig.owner_doc_require_review()
+            base = True
         if created_by in _NON_USER_AUTHORS:  # a forged author can never auto-activate
             return True
         return base

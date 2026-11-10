@@ -57,3 +57,19 @@ def test_collection_shape_only_when_the_kb_is_on(monkeypatch):
     assert "collection=" not in memory_system_content({"session_search"})
     monkeypatch.setattr(cp.AutonomyConfig, "kb_enabled", staticmethod(lambda: True))
     assert "collection=" in memory_system_content({"session_search"})
+
+
+def test_the_prompt_does_not_say_the_memory_field_is_recalled():
+    """Only reflection summaries reach the store: most steps never do."""
+    from agents.task.agent import prompt_memory
+    assert "is what later sessions recall" not in prompt_memory._BRAIN
+    assert "note for this run" in prompt_memory._BRAIN
+
+
+def test_the_unused_brain_fields_are_gone():
+    from agents.task.agent.views import AgentBrain
+    fields = set(AgentBrain.model_fields)
+    assert not fields & {"working_memory", "confidence_level", "acceptance_criteria"}
+    # A model that still sends one is read, not refused.
+    brain = AgentBrain(evaluation_previous_goal="e", memory="m", next_goal="n", confidence_level=0.5)
+    assert brain.memory == "m"

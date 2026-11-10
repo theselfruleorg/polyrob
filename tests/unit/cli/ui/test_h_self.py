@@ -186,8 +186,9 @@ def test_self_soul_loader_raises_is_failopen(monkeypatch):
     # Must not raise.
     h_self(ctx)
     out = buf.getvalue()
-    # SOUL degrades to the empty placeholder; SELF still shows.
-    assert "no SOUL/identity doc authored" in out
+    # An unread SOUL says so (113 G-6: never the empty placeholder); SELF still shows.
+    assert "could not read it: RuntimeError" in out
+    assert "no SOUL/identity doc authored" not in out
     assert "ok self" in out
 
 

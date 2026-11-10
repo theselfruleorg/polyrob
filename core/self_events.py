@@ -9,7 +9,8 @@ surface could answer "what did the agent change about itself?".
 event log (telemetry_events.db → `/telemetry` CLI + webview `/activity`):
 
 - ``kind``       — skill | self_context
-- ``action``     — create | patch | delete | promote | reject | archive | reactivate
+- ``action``     — create | patch | delete | promote | reject | archive | reactivate |
+                   propose | measure | rollback
 - ``item_id``    — the skill id, or the tenant for a self-context doc
 - ``pending``    — True when the write landed in the review quarantine
 - ``created_by`` — provenance (agent | background_review | owner)

@@ -41,7 +41,6 @@ def test_registered_when_flag_on(monkeypatch, tmp_path):
 @pytest.mark.asyncio
 async def test_update_is_always_quarantined_even_review_off(monkeypatch, tmp_path):
     monkeypatch.setenv("OWNER_DOC_WRITABLE", "true")
-    monkeypatch.setenv("OWNER_DOC_REQUIRE_REVIEW", "false")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     c = _bare_controller(tmp_path)
     c._register_owner_doc_manage_action()
@@ -110,7 +109,6 @@ async def test_forged_turn_cannot_write_or_promote(monkeypatch, tmp_path):
 @pytest.mark.asyncio
 async def test_identity_subversion_rejected(monkeypatch, tmp_path):
     monkeypatch.setenv("OWNER_DOC_WRITABLE", "true")
-    monkeypatch.setenv("OWNER_DOC_REQUIRE_REVIEW", "false")
     c = _bare_controller(tmp_path)
     c._register_owner_doc_manage_action()
     action = c.registry.registry.actions["owner_doc_manage"]

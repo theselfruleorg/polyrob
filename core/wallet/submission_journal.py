@@ -7,6 +7,30 @@ Stores public transaction identifiers only, never keys or signed payloads.
 import time
 from pathlib import Path
 
+from core.state.machine import StateMachine
+
+#: The row's ``state`` (declared; the guarded SQL writes below are the transitions):
+#:
+#: * ``reserved``  — a signing attempt journaled before the key signs (``reserve_signing``);
+#: * ``prepared``  — the signed hash, or a venue/x402 ``attempt:`` row (``prepare``);
+#: * ``booked``    — its cap charge is durable (``mark_booked``, ``operator_release``,
+#:   ``operator_book``; the node's definitive refusal books it at $0 too);
+#: * ``rejected``  — an unsent x402 payload or a venue's explicit rejection.
+#:
+#: ``reserved`` → ``prepared`` (``bind_signed_hash``) | ``booked`` (``operator_book``);
+#: ``prepared`` → ``booked`` | ``rejected``. Any row not ``booked``/``rejected`` refuses
+#: every new submission (the interlock).
+SUBMISSION = StateMachine(
+    name="wallet.submission",
+    states=frozenset({"reserved", "prepared", "booked", "rejected"}),
+    transitions={
+        "reserved": frozenset({"prepared", "booked"}),
+        "prepared": frozenset({"booked", "rejected"}),
+    },
+    terminal=frozenset({"booked", "rejected"}),
+    initial=frozenset({"reserved", "prepared"}),
+)
+
 #: Upper bound on a journaled replay key. Stored whole below this; refused above.
 MAX_IDEMPOTENCY_KEY_CHARS = 16384
 

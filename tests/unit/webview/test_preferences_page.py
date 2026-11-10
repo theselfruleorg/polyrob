@@ -44,9 +44,12 @@ def test_get_lists_every_schema_key_with_spec_fields(monkeypatch, tmp_path):
     items = {it["key"]: it for it in body["preferences"]}
     assert set(items) == set(PREF_SCHEMA)
     sample = items["style.verbosity"]
-    for field in ("key", "description", "type", "sensitivity", "applies",
+    for field in ("key", "label", "help", "type", "sensitivity", "applies",
                   "value", "source"):
         assert field in sample
+    # 113 W5 (CP-1): the owner label, never the developer note of core/prefs.py.
+    assert "description" not in sample
+    assert sample["label"] == "How much the agent writes"
     assert sample["sensitivity"] == "safe"
     assert items["approvals.require"]["sensitivity"] == "guarded"
     # enum keys surface their allowed values so the UI can render a select

@@ -29,8 +29,7 @@ state files and command.
 
 ⚠️ ``owner_seat`` is "the owner can be REACHED here" (outbound). Whether an
 INBOUND sender on the surface may ever be the owner is ``forgeable`` (never) and
-``alias_owner`` (the configured owner id aliases to the owner principal without
-a pairing row). Those two are security data — change them only with a spoofed-id
+``alias_owner`` (the configured owner id aliases to the owner principal). Those two are security data — change them only with a spoofed-id
 test and an independent review.
 """
 import re
@@ -53,8 +52,8 @@ class SurfaceSpec:
     cron_target: bool            # a cron job may deliver its report here
     region: str                  # "global" | "CN" | ...
     max_message_chars: int       # the platform's hard per-message limit
-    #: The configured owner id on this surface IS the owner principal, with no
-    #: pairing row. Only for a surface whose sender id the platform signs.
+    #: The configured owner id on this surface IS the owner principal. Only for a
+    #: surface whose sender id the platform signs.
     alias_owner: bool = False
     #: cron delivers through its own sink (telegram bot, email tool), not the
     #: outbound router.
@@ -90,6 +89,10 @@ class SurfaceSpec:
     #: surface whose credentials are SHARED with a tool (email: the email tool;
     #: x: the posting tool) or that runs as its own primary process (telegram).
     auto_start: bool = True
+    #: What the platform lets the agent do beyond text (113 W4 item 6, F-07):
+    #: ``moderation`` = it mutes and bans a room member and lifts both. A verb
+    #: row that needs one (``core.verbs.Verb.needs``) runs only on such a surface.
+    capabilities: Tuple[str, ...] = ()
     #: Extra facts a surface wants to carry without a new field.
     meta: Dict[str, str] = field(default_factory=dict)
     #: The pack that contributes this row (067 P3b); None = a core row.
@@ -118,7 +121,7 @@ SURFACES: Tuple[SurfaceSpec, ...] = (
         owner_seat=True, forgeable=False, transport="longpoll", extra="telegram",
         cron_target=True, region="global", max_message_chars=4096,
         alias_owner=True, dedicated_sink=True, token_env="TELEGRAM_BOT_TOKEN",
-        auto_start=False,
+        auto_start=False, capabilities=("moderation",),
         credentials=("TELEGRAM_BOT_TOKEN",),
         cli_command="cli.commands.telegram:telegram", state_dbs=("tg_dedup.db",)),
     SurfaceSpec(
@@ -136,6 +139,7 @@ SURFACES: Tuple[SurfaceSpec, ...] = (
         enabled_flag="SLACK_SURFACE_ENABLED", owner_env="OWNER_SLACK_ID",
         owner_seat=True, forgeable=False, transport="ws", extra=None,
         cron_target=True, region="global", max_message_chars=4000,
+        alias_owner=True,
         token_env="SLACK_BOT_TOKEN", credentials=("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"),
         cli_command="cli.commands.slack:slack", state_dbs=("slack_dedup.db",)),
     SurfaceSpec(
@@ -143,6 +147,7 @@ SURFACES: Tuple[SurfaceSpec, ...] = (
         enabled_flag="DISCORD_SURFACE_ENABLED", owner_env="OWNER_DISCORD_ID",
         owner_seat=True, forgeable=False, transport="ws", extra=None,
         cron_target=True, region="global", max_message_chars=2000,
+        alias_owner=True,
         token_env="DISCORD_BOT_TOKEN", credentials=("DISCORD_BOT_TOKEN",),
         cli_command="cli.commands.discord:discord", state_dbs=("discord_dedup.db",)),
     SurfaceSpec(
@@ -151,6 +156,7 @@ SURFACES: Tuple[SurfaceSpec, ...] = (
         enabled_flag="SIGNAL_SURFACE_ENABLED", owner_env="OWNER_SIGNAL_ID",
         owner_seat=True, forgeable=False, transport="sse", extra=None,
         cron_target=True, region="global", max_message_chars=2000,
+        alias_owner=True,
         credentials=("SIGNAL_ACCOUNT", "SIGNAL_DAEMON_URL"),
         required=("SIGNAL_ACCOUNT",),       # the daemon URL has a default
         cli_command="cli.commands.signal:signal", state_dbs=("signal_dedup.db",)),
@@ -159,6 +165,7 @@ SURFACES: Tuple[SurfaceSpec, ...] = (
         enabled_flag="WHATSAPP_SURFACE_ENABLED", owner_env="OWNER_WHATSAPP_ID",
         owner_seat=True, forgeable=False, transport="webhook", extra=None,
         cron_target=True, region="global", max_message_chars=4096,
+        alias_owner=True,
         credentials=("WHATSAPP_ACCESS_TOKEN", "WHATSAPP_PHONE_NUMBER_ID",
                      "WHATSAPP_VERIFY_TOKEN", "WHATSAPP_WEBHOOK_SECRET"),
         cli_command="cli.commands.whatsapp:whatsapp",
@@ -176,6 +183,7 @@ SURFACES: Tuple[SurfaceSpec, ...] = (
         # The platform refuses a text message over ~150 KB of request body;
         # 10 000 chars keeps the worst case (3-byte CJK, doubly JSON-escaped) far below.
         cron_target=False, region="CN", max_message_chars=10_000,
+        alias_owner=True,
         credentials=("FEISHU_APP_ID", "FEISHU_APP_SECRET"),
         state_dbs=("feishu_dedup.db",)),
     SurfaceSpec(
@@ -189,6 +197,7 @@ SURFACES: Tuple[SurfaceSpec, ...] = (
         # message; ~20 KB of body is where sends start to be refused, so 5 000
         # chars (3-byte CJK, JSON-escaped) stays well inside it.
         cron_target=False, region="CN", max_message_chars=5000,
+        alias_owner=True,
         credentials=("DINGTALK_CLIENT_ID", "DINGTALK_CLIENT_SECRET"),
         state_dbs=("dingtalk_dedup.db",)),
 )
@@ -304,6 +313,11 @@ def get(surface_id: str) -> Optional[SurfaceSpec]:
         if s.id == sid:
             return s
     return None
+
+
+def capability_ids(capability: str) -> Tuple[str, ...]:
+    """The surfaces whose platform gives *capability* (``SurfaceSpec.capabilities``)."""
+    return tuple(s.id for s in surfaces() if capability in s.capabilities)
 
 
 def owner_seat_ids() -> Tuple[str, ...]:

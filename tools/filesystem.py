@@ -358,8 +358,9 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
                 # Tenant fix: adopt the execution_context user_id too, so a delegated
                 # sub-agent's virtual session resolves under the parent tenant in
                 # _normalize_path (which reads self.user_id) instead of _anonymous_.
-                if getattr(execution_context, 'user_id', None):
-                    self.user_id = execution_context.user_id
+                # Always, even None: one FileSystem serves every session, so a context
+                # without a tenant must never inherit the previous caller's.
+                self.user_id = getattr(execution_context, 'user_id', None)
             if execution_context and hasattr(execution_context, 'workspace_dir') and execution_context.workspace_dir:
                 self.workspace_dir = execution_context.workspace_dir
 
@@ -577,8 +578,9 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
                 # Tenant fix: adopt the execution_context user_id too, so a delegated
                 # sub-agent's virtual session resolves under the parent tenant in
                 # _normalize_path (which reads self.user_id) instead of _anonymous_.
-                if getattr(execution_context, 'user_id', None):
-                    self.user_id = execution_context.user_id
+                # Always, even None: one FileSystem serves every session, so a context
+                # without a tenant must never inherit the previous caller's.
+                self.user_id = getattr(execution_context, 'user_id', None)
             if execution_context and hasattr(execution_context, 'workspace_dir') and execution_context.workspace_dir:
                 self.workspace_dir = execution_context.workspace_dir
 
@@ -693,8 +695,9 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
                 # Tenant fix: adopt the execution_context user_id too, so a delegated
                 # sub-agent's virtual session resolves under the parent tenant in
                 # _normalize_path (which reads self.user_id) instead of _anonymous_.
-                if getattr(execution_context, 'user_id', None):
-                    self.user_id = execution_context.user_id
+                # Always, even None: one FileSystem serves every session, so a context
+                # without a tenant must never inherit the previous caller's.
+                self.user_id = getattr(execution_context, 'user_id', None)
             if execution_context and hasattr(execution_context, 'workspace_dir') and execution_context.workspace_dir:
                 self.workspace_dir = execution_context.workspace_dir
 
@@ -1089,8 +1092,9 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
                 # Tenant fix: adopt the execution_context user_id too, so a delegated
                 # sub-agent's virtual session resolves under the parent tenant in
                 # _normalize_path (which reads self.user_id) instead of _anonymous_.
-                if getattr(execution_context, 'user_id', None):
-                    self.user_id = execution_context.user_id
+                # Always, even None: one FileSystem serves every session, so a context
+                # without a tenant must never inherit the previous caller's.
+                self.user_id = getattr(execution_context, 'user_id', None)
             if execution_context and hasattr(execution_context, 'workspace_dir') and execution_context.workspace_dir:
                 self.workspace_dir = execution_context.workspace_dir
 
@@ -1148,8 +1152,9 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
                 # Tenant fix: adopt the execution_context user_id too, so a delegated
                 # sub-agent's virtual session resolves under the parent tenant in
                 # _normalize_path (which reads self.user_id) instead of _anonymous_.
-                if getattr(execution_context, 'user_id', None):
-                    self.user_id = execution_context.user_id
+                # Always, even None: one FileSystem serves every session, so a context
+                # without a tenant must never inherit the previous caller's.
+                self.user_id = getattr(execution_context, 'user_id', None)
             if execution_context and hasattr(execution_context, 'workspace_dir') and execution_context.workspace_dir:
                 self.workspace_dir = execution_context.workspace_dir
 
@@ -1199,8 +1204,9 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
         try:
             if execution_context and hasattr(execution_context, 'session_id') and execution_context.session_id:
                 self.session_id = execution_context.session_id
-                if getattr(execution_context, 'user_id', None):
-                    self.user_id = execution_context.user_id
+                # Always, even None: one FileSystem serves every session, so a context
+                # without a tenant must never inherit the previous caller's.
+                self.user_id = getattr(execution_context, 'user_id', None)
             if execution_context and hasattr(execution_context, 'workspace_dir') and execution_context.workspace_dir:
                 self.workspace_dir = execution_context.workspace_dir
 
@@ -1259,8 +1265,9 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
     def _adopt_context(self, execution_context) -> None:
         if execution_context and hasattr(execution_context, 'session_id') and execution_context.session_id:
             self.session_id = execution_context.session_id
-            if getattr(execution_context, 'user_id', None):
-                self.user_id = execution_context.user_id
+            # Always, even None: one FileSystem serves every session, so a context
+            # without a tenant must never inherit the previous caller's.
+            self.user_id = getattr(execution_context, 'user_id', None)
         if execution_context and hasattr(execution_context, 'workspace_dir') and execution_context.workspace_dir:
             self.workspace_dir = execution_context.workspace_dir
 
@@ -1447,8 +1454,9 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
                 # Tenant fix: adopt the execution_context user_id too, so a delegated
                 # sub-agent's virtual session resolves under the parent tenant in
                 # _normalize_path (which reads self.user_id) instead of _anonymous_.
-                if getattr(execution_context, 'user_id', None):
-                    self.user_id = execution_context.user_id
+                # Always, even None: one FileSystem serves every session, so a context
+                # without a tenant must never inherit the previous caller's.
+                self.user_id = getattr(execution_context, 'user_id', None)
                 self.logger.debug(f"Got session_id from execution_context: {execution_context.session_id[:8]}")
 
             # Also use workspace_dir from execution_context

@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import Any, Optional, Tuple
 
 from core import model_switch as ms
+from core.price_guard import guard_reason
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,17 @@ async def _model_facts(provider: str, model: str):
             cfg.capabilities.supports_function_calling, "", True)
 
 
+#: The providers whose client maps a session reasoning level to the wire.
+REASONING_PROVIDERS = ("openrouter", "deepseek")
+
+
+def _token_level_refused(provider: Optional[str], level: Optional[str]) -> Optional[str]:
+    """DeepSeek has no token budget, so a count would show a setting that nothing sends."""
+    if (provider or "").lower() == "deepseek" and str(level or "").isdigit():
+        return "❌ DeepSeek takes reasoning=off|on|low|medium|high, not a token count. Nothing changed."
+    return None
+
+
 async def _reasoning_ok(provider: Optional[str], model: Optional[str]) -> bool:
     """False only when the OpenRouter list says the model has no reasoning setting
     (a session level is then never sent to it); unknown = True."""
@@ -132,9 +144,12 @@ async def plan_switch(cmd: ms.ModelCommand, *, user_id: str,
     if cmd.reasoning and not plan.reasoning_ok:
         return None, (f"❌ {res.model} has no reasoning setting; switch without reasoning=. "
                       "Nothing changed.")
+    refused = _token_level_refused(res.provider, cmd.reasoning)
+    if refused:
+        return None, refused
     if not cmd.confirm and current[1] and current[1] != res.model:
         cur_price = (await _model_facts(current[0] or res.provider, current[1]))[0]
-        why = ms.guard_reason(cur_price, price)
+        why = guard_reason(cur_price, price)
         if why:
             line = " ".join(["/model"] + [w for w in cmd.words if w.lower() not in ("go",)] + ["go"])
             plan.quote = (f"Switch to {res.model} ({res.provider})? {why.capitalize()}.\n"
@@ -155,7 +170,7 @@ def describe(plan: Plan) -> str:
              + (f" · context {plan.context:,}" if plan.context else "")]
     if plan.reasoning:
         lines.append(f"Reasoning: {plan.reasoning}"
-                     + ("" if plan.provider == "openrouter" else " (sent on OpenRouter only)"))
+                     + ("" if plan.provider in REASONING_PROVIDERS else " (sent on OpenRouter and DeepSeek only)"))
     if plan.verified:
         lines.append(f"⚠️ Not verified: {plan.verified}. The first reply shows if it works.")
     return "\n".join(lines)
@@ -379,6 +394,13 @@ def _apply(task_agent, user_id, sid, agent, chat_key, plan: Plan, current, seat)
                              switched_from=current[1])
         _emit("model_switched", user_id, sid, attrs)
         when = "from your next message"
+    elif not chat_key:
+        # No chat is named (the console's Settings picker): only the default moved.
+        if not plan.default:
+            return "Name a chat to switch, or add `default` to set the model of every new chat."
+        _emit("model_switched", user_id, "", attrs)
+        return (f"✅ Model: {describe(plan)}\nYour default for every new chat. "
+                "A chat that is open keeps its model.")
     else:
         queue_chat_pin(chat_key, {"provider": plan.provider, "model": plan.model,
                                   "reasoning": plan.reasoning})
@@ -401,6 +423,11 @@ async def _set_reasoning(task_agent, user_id, sid, agent, cmd, current, seat) ->
             ok, err = model_pins.set_default_reasoning(user_id, level)
             return "✅ Default reasoning saved." if ok else f"❌ {err}"
         return "No live chat: write /model <name> reasoning=<level> to start one with it."
+    first = getattr(agent, "_first_model", None) if agent is not None else None
+    if first is not None:
+        # A provider fallback is temporary: the record keeps the session's own model,
+        # never the fallback it returns from after the cooldown.
+        current = (first.provider, first.model)
     pending = agent.pending_model_pin() if agent is not None else None
     if pending and pending.get("model"):
         # A queued switch applies its own level at the drain: the new level rides it,
@@ -408,6 +435,9 @@ async def _set_reasoning(task_agent, user_id, sid, agent, cmd, current, seat) ->
         current = (pending.get("provider") or current[0], pending["model"])
     if not await _reasoning_ok(current[0], current[1]):
         return f"❌ {current[1]} has no reasoning setting. Nothing changed."
+    refused = _token_level_refused(current[0], level)
+    if refused:
+        return refused
     set_session_reasoning(sid, level)
     if pending and pending.get("model"):
         pending["reasoning"] = level
@@ -416,7 +446,7 @@ async def _set_reasoning(task_agent, user_id, sid, agent, cmd, current, seat) ->
     if cmd.default:
         model_pins.set_default_reasoning(user_id, level)
     _emit("model_reasoning_set", user_id, sid, {"level": level, "seat": seat})
-    tail = "" if (current[0] or "").lower() == "openrouter" else " It is sent on OpenRouter only."
+    tail = "" if (current[0] or "").lower() in REASONING_PROVIDERS else " It is sent on OpenRouter and DeepSeek only."
     return f"✅ Reasoning {level} for this chat, from my next step.{tail}"
 
 
@@ -523,7 +553,8 @@ def resolve_job_model(name: str, user_id: str) -> Tuple[Optional[dict], str]:
 
 
 async def child_model_refusal(parent_agent: Any, model: str, provider: Optional[str]) -> str:
-    """094: ``delegate_task(model=…)`` is the one place the AGENT picks a model.
+    """094: ``delegate_task(model=…)`` — a raw model the agent picks (112 adds named tiers,
+    ``tools/controller/delegate_tier.py``, which resolve to a model and pass here too).
     It may pick: its own model, a model the owner already uses (``DEFAULT_MODEL``,
     ``HEAVY_MODEL``, the owner's chat default or an owner alias), or one that costs
     no more than its own (input AND output). Anything else is refused — a prompt
@@ -540,9 +571,18 @@ async def child_model_refusal(parent_agent: Any, model: str, provider: Optional[
     for target in model_pins.aliases(owner).values():
         allowed.add(target.split("/", 1)[1] if target.split("/", 1)[0] in _known_providers()
                     else target)
-    if model in allowed:
-        return ""
     own_provider = getattr(parent_agent, "llm_provider", None) or getattr(parent_agent, "provider_name", "")
+    if model in allowed:
+        # 112 F3: an owner-chosen model id is owner-chosen only on the owner's providers —
+        # the same id on another provider is a different price and a different account.
+        # (No 5x price quote here: the owner set these models; on prod HEAVY is 5.2x flash.)
+        if provider:
+            from core.runtime_config import canonicalize_provider, operator_provider_pin
+            mine_p = {canonicalize_provider(p) or p for p in (own_provider, operator_provider_pin()) if p}
+            if mine_p and (canonicalize_provider(provider) or provider) not in mine_p:
+                return (f"refused: '{model}' is allowed on your own provider "
+                        f"({', '.join(sorted(mine_p))}), not on '{provider}'.")
+        return ""
     mine = (await _model_facts(own_provider or "", own or ""))[0]
     theirs = (await _model_facts(provider or own_provider or "", model))[0]
     if mine and theirs and theirs[0] <= mine[0] and theirs[1] <= mine[1]:
@@ -555,12 +595,20 @@ async def child_model_refusal(parent_agent: Any, model: str, provider: Optional[
 def with_chat_pin(request_body: dict, user_id: Optional[str]) -> dict:
     """094: an API/console session request with no model or provider starts on the
     owner's default (``model.json``) when this tenant set one; the pin rides along
-    as ``_chat_pin`` for :func:`start_with_pin`. Anything else is returned as is."""
+    as ``_chat_pin`` for :func:`start_with_pin`. A billed request refuses a pin with no
+    price and starts on the default; ``_pin_notice`` names the model. Anything else is
+    returned as is."""
     body = dict(request_body or {})
     if body.get("model") or body.get("provider"):
         return body
+    from agents.task.model_pin_state import stored_pin_refusal
+    from core.billing_context import is_billed
     from core.model_pins import chat_pin_for
     pin = chat_pin_for(user_id)
-    if pin:
+    refusal = stored_pin_refusal(pin["provider"], pin["model"]) if pin and is_billed() else ""
+    if refusal:
+        logger.warning("model pin refused at load: %s", refusal)
+        body["_pin_notice"] = refusal
+    elif pin:
         body.update(model=pin["model"], provider=pin["provider"], _chat_pin=pin)
     return body

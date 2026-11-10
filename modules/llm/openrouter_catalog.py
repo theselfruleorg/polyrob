@@ -1,4 +1,4 @@
-"""094: the LIVE OpenRouter model list — does this id exist, does it call tools,
+"""The LIVE OpenRouter model list — does this id exist, does it call tools,
 what does it cost, how big is its window.
 
 The built-in registry (``model_catalog.py``) is a dated table; an OpenRouter id
@@ -193,7 +193,8 @@ def register_live_model(entry: CatalogEntry) -> None:
             max_completion_tokens=min(max(entry.context // 8, 8192), 128000),
             pricing=ModelPricing(input_price=entry.input_price or 0.0,
                                  output_price=entry.output_price or 0.0,
-                                 cached_input_price=entry.cached_price),
+                                 # no listed cached price: a cache hit bills as input
+                                 cached_input_price=entry.cached_price or entry.input_price),
             capabilities=ModelCapabilities(supports_function_calling=entry.tools,
                                            supports_thinking=entry.reasoning),
         ))

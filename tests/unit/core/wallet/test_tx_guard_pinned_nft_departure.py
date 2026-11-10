@@ -15,7 +15,7 @@ OTHER_NFT = "0x4444444444444444444444444444444444444444"
 DEST = "0x9999999999999999999999999999999999999999"
 TOKEN = "0x2222222222222222222222222222222222222222"
 SPENDER = "0x5555555555555555555555555555555555555555"
-ACCOUNT_42 = erc6551.account_address(4663, PINNED, 42)
+ACCOUNT_42 = erc6551.account_address(4663, PINNED, 42, implementation=erc6551.ACCOUNT_V3_IMPL)
 
 
 def _w(addr):
@@ -136,7 +136,7 @@ def test_an_unreadable_collection_runtime_refuses(monkeypatch):
 
 def test_an_unpinned_collection_is_not_judged_by_this_rule(monkeypatch):
     pin(monkeypatch, PINNED)
-    rpc = Rpc(logs=[_erc20_approval_log(account=erc6551.account_address(4663, OTHER_NFT, 42))])
+    rpc = Rpc(logs=[_erc20_approval_log(account=erc6551.account_address(4663, OTHER_NFT, 42, implementation=erc6551.ACCOUNT_V3_IMPL))])
     assert _run(OTHER_NFT, rpc).allowed is True
     assert "eth_getLogs" not in rpc.calls
 
@@ -146,7 +146,7 @@ def test_every_pinned_account_version_is_scanned(monkeypatch):
     raw["accounts"].append({"registry": erc6551.REGISTRY, "implementation": erc6551.ACCOUNT_V3_IMPL,
                             "salt": 7})
     pin(monkeypatch, raw)
-    second = erc6551.account_address(4663, PINNED, 42, salt=7)
+    second = erc6551.account_address(4663, PINNED, 42, salt=7, implementation=erc6551.ACCOUNT_V3_IMPL)
     d = _run(PINNED, Rpc(logs=[_erc20_approval_log(account=second)]))
     # the fake returns the same log for both scans; the refusal names the FIRST account scanned
     assert d.allowed is False and "open approval" in d.reason

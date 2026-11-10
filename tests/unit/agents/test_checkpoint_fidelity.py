@@ -2,11 +2,9 @@
 
 Three independent bugs (CX-M1/M2/M3):
 
-- CX-M1: ``checkpoint_history``/``restore_from_checkpoint_file`` do NOT serialize/
-  restore ``BaseMessage.origin`` (nor the ``msg_metadata`` tag dict), unlike
-  ``save_to_disk``/``load_from_disk`` which do. A file-checkpoint restore silently
-  turns every SELF_WAKE/CORRESPONDENT/COMPACTION_SUMMARY turn into a plain USER
-  message.
+- CX-M1: ``save_to_disk``/``load_from_disk`` serialize and restore ``BaseMessage.origin``
+  and the ``msg_metadata`` tag dict, so no SELF_WAKE/CORRESPONDENT/COMPACTION_SUMMARY turn
+  turns into a plain USER message.
 - CX-M2: ``restore_from_checkpoint`` assigns ``self.history.messages`` to the raw
   checkpoint list (aliased, and not a ``deque``), so later appends mutate the
   checkpoint and eviction bookkeeping (``maxlen``) is lost.
@@ -54,17 +52,16 @@ def tmp_data_root(tmp_path):
 	yield tmp_path
 
 
-def test_checkpoint_file_roundtrip_preserves_origin(tmp_data_root):
-	"""CX-M1: a SELF_WAKE-origin message must survive checkpoint→restore-from-file."""
+def test_save_and_load_preserve_origin(tmp_data_root):
+	"""CX-M1: a SELF_WAKE-origin message must survive save and load."""
 	mm = _mm()
 	mm.add_message(HumanMessage(content="real owner question", origin=MessageOrigin.USER))
 	mm.add_message(make_control_message("forged wake turn", MessageOrigin.SELF_WAKE))
 
-	checkpoint_path = tmp_data_root / "checkpoint.json"
-	mm.checkpoint_history(filepath=checkpoint_path)
+	mm.save_to_disk(SESSION)
 
 	mm2 = _mm()
-	assert mm2.restore_from_checkpoint_file(checkpoint_path) is True
+	assert mm2.load_from_disk(SESSION) is True
 
 	origins = [m.message.origin for m in mm2.history.messages]
 	assert MessageOrigin.SELF_WAKE in origins, (
@@ -73,20 +70,41 @@ def test_checkpoint_file_roundtrip_preserves_origin(tmp_data_root):
 	assert origins[-2:] == [MessageOrigin.USER, MessageOrigin.SELF_WAKE]
 
 
-def test_checkpoint_file_roundtrip_preserves_msg_metadata(tmp_data_root):
+def test_save_and_load_preserve_msg_metadata(tmp_data_root):
 	"""CX-M1 (metadata parity with save_to_disk/load_from_disk)."""
 	mm = _mm()
 	msg = HumanMessage(content="tagged state msg")
 	msg.metadata = {"tag": "state_message"}
 	mm.add_message(msg)
 
-	checkpoint_path = tmp_data_root / "checkpoint.json"
-	mm.checkpoint_history(filepath=checkpoint_path)
+	mm.save_to_disk(SESSION)
 
 	mm2 = _mm()
-	assert mm2.restore_from_checkpoint_file(checkpoint_path) is True
+	assert mm2.load_from_disk(SESSION) is True
 	restored = mm2.history.messages[-1].message
 	assert getattr(restored, "metadata", None) == {"tag": "state_message"}
+
+
+def test_save_and_load_preserve_reasoning(tmp_data_root):
+	"""A restored session replays the same reasoning, so the prefix bytes hold."""
+	from modules.llm.messages import AIMessage
+	mm = _mm()
+	with_tools = AIMessage(content="a", tool_calls=[{"id": "c1", "name": "noop", "args": {}}])
+	with_tools.additional_kwargs.update(reasoning_content="thought one", reasoning_seat="deepseek-native")
+	plain = AIMessage(content="b")
+	plain.additional_kwargs["reasoning_content"] = "thought two"
+	plain.additional_kwargs["anthropic_thinking"] = [{"block": {"type": "thinking", "signature": "s"}}]
+	mm._add_message_with_tokens(with_tools, _internal=True)
+	mm._add_message_with_tokens(plain, _internal=True)
+	mm.save_to_disk(SESSION)
+
+	restored = _mm()
+	assert restored.load_from_disk(SESSION) is True
+	kept = [m.message.additional_kwargs.get("reasoning_content")
+	        for m in restored.history.messages]
+	assert kept == ["thought one", "thought two"]
+	assert restored.history.messages[0].message.additional_kwargs["reasoning_seat"] == "deepseek-native"
+	assert restored.history.messages[1].message.additional_kwargs["anthropic_thinking"][0]["block"]["signature"] == "s"
 
 
 def test_restore_from_checkpoint_is_a_fresh_deque_not_aliased():

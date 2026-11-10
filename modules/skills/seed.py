@@ -5,8 +5,9 @@ synced by the deploy with ``--delete``). Each process start copies it to
 ``<data_home>/skills/bundled/`` (:func:`core.skills.scopes.bundled_seed_root`) and
 records ``id:sha256`` of every ``SKILL.md`` it copied in ``.bundled_manifest``.
 Once the manifest exists the builtin scope serves the seeded copy, so a fix to a
-bundled skill needs no deploy: the agent proposes it (a ``.pending/`` draft in its
-tenant) and the owner accepts it (``promote``), which writes the seeded copy.
+bundled skill needs no deploy: the agent's fix goes through a ``.pending/`` draft in its
+tenant and is accepted in the same call (``promote``), which writes the seeded copy. A
+draft from an untrusted turn waits for the owner's accept.
 
 Each later start (and so each update) applies these rules, per skill:
 
@@ -14,6 +15,8 @@ Each later start (and so each update) applies these rules, per skill:
 - unmodified copy (its sha is the manifest's): replaced when upstream changed;
 - copy the owner changed (its sha is the last accepted ``promote`` in the ledger):
   KEPT, named in the report (``kept``); its resource files still follow upstream;
+- copy the agent changed: kept while upstream is the same; a changed upstream replaces it
+  (archived, a rollback restores it), named in the report (``updated``);
 - copy changed outside an accept: archived and restored (the accepted revision
   when the archive holds it, else the package copy), named (``restored``);
 - id that left the package: removed (a changed copy is archived first), named —
@@ -159,6 +162,19 @@ def accepted_sha(skill_id: str) -> Optional[str]:
     return None
 
 
+def _accepted_by_owner(skill_id: str) -> bool:
+    """Whether the newest ``promote`` is the owner's own accept. Unreadable answers True:
+    the copy stays, the safe direction for a fix that may be the owner's."""
+    try:
+        from modules.skills.skill_usage import get_skill_usage_store
+        for row in get_skill_usage_store().list_changes(skill_id, scope="bundled", limit=50):
+            if row.get("action") == "promote":
+                return row.get("actor") == "user"
+    except Exception:
+        logger.debug("seed: promote author unreadable for %s", skill_id, exc_info=True)
+    return True
+
+
 def _ledger(skill_id: str, action: str, **row) -> None:
     try:
         from modules.skills.skill_usage import get_skill_usage_store
@@ -215,7 +231,15 @@ def _seed_one(sid: str, src: Path, root: Path, manifest: Dict[str, str], rep: Se
         rep.kept.append(sid)
         rep.errors.append(f"{sid}: ledger unreadable ({type(exc).__name__}), copy left as is")
         return
-    if accepted == cur_sha:  # the owner's fix: keep it; resources follow upstream
+    if accepted == cur_sha and src_sha != origin and not _accepted_by_owner(sid):
+        # An automatic fix must not freeze the shipped text for ever.
+        path = archive_body(root, sid, cur_text)
+        _replace_dir(src, dest)
+        manifest[sid] = src_sha
+        rep.updated.append(sid)
+        _ledger(sid, "update", before_sha=cur_sha, after_sha=src_sha, archive_path=path)
+        return
+    if accepted == cur_sha:  # the accepted fix: keep it; resources follow upstream
         rep.kept.append(sid)
         _replace_dir(src, dest, keep_skill_md=cur_text)
         return

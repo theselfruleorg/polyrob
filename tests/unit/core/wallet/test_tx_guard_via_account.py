@@ -28,9 +28,9 @@ COLLECTION = "0x6666666666666666666666666666666666666666"
 BASE_ID = 8453
 TOKEN_ID = 1
 #: C4: the account is the canonical ERC-6551 account of a PINNED collection's token.
-ACCOUNT = erc6551.account_address(BASE_ID, COLLECTION, TOKEN_ID)
+ACCOUNT = erc6551.account_address(BASE_ID, COLLECTION, TOKEN_ID, implementation=erc6551.ACCOUNT_V3_IMPL)
 RH_ID = 4663
-ACCOUNT_RH = erc6551.account_address(RH_ID, COLLECTION, TOKEN_ID)
+ACCOUNT_RH = erc6551.account_address(RH_ID, COLLECTION, TOKEN_ID, implementation=erc6551.ACCOUNT_V3_IMPL)
 REGISTRY = "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432"
 ESCROW = "0xd3afeb2a57f70ef218aa82451c51b2fb0416ac9e"
 ZERO = "0x0000000000000000000000000000000000000000"
@@ -231,7 +231,7 @@ def test_an_undeclared_account_call_refuses(data):
     (AccountRpc(locked=True), "LOCKED"),
     (AccountRpc(owner=OWNER), "does not own"),
     (AccountRpc(state=STATE + 1), "state moved"),
-    (AccountRpc(impl="0x" + "99" * 20), "not the pinned AccountV3"),
+    (AccountRpc(impl="0x" + "99" * 20), "not an account implementation pinned"),
     (AccountRpc(pins_ok=False), "un-reviewed"),
     (AccountRpc(broken=True), "failing closed"),
     # C4: the account's token() must name a PINNED collection whose live code is the pinned code

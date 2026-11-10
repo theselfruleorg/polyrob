@@ -336,6 +336,13 @@ class MessageRouter:
                 # delivered the secret verbatim through the queue.
                 scrubbed = _safe
         row = self._registry.resolve(msg.session_key)
+        if row and not msg.partial and not is_group_session_key(msg.session_key):
+            # 113: a line from a chat the person is not in now says which chat it is.
+            from core.surfaces.chats import reply_prefix
+            _pre = reply_prefix(self._registry, msg.session_key)
+            if _pre:
+                msg = replace(msg, text=_pre + (msg.text or ""))
+                scrubbed = msg.text   # the durable queue path enqueues `scrubbed`
         if not row:
             # 044 T20 fix round 2 (N1): a room the owner allowlisted but that has
             # never run a LIVE turn has no durable row (bind_chat_surface is the

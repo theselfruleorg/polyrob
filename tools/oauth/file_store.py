@@ -126,12 +126,19 @@ class FileTokenStore(MutableMapping):
     def path(self) -> Path:
         return self._path
 
-    def _load(self) -> dict:
+    def _load(self, strict: bool = False) -> dict:
+        """The file's rows. ``strict`` is for a WRITER: an unreadable file (an
+        ``OSError`` other than a missing file) raises instead of answering {} —
+        a write that flushed {} plus one row replaced every row it held."""
         if not self._path.exists():
             return {}
         try:
             text = self._path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return {}
         except OSError as e:
+            if strict:
+                raise
             # UNREADABLE is not CORRUPT. On 2026-09-17 prod's polyrob-email unit
             # (a non-root service identity) got EACCES on the root-owned 0600
             # store that polyrob.service had just written, and the corruption
@@ -262,14 +269,14 @@ class FileTokenStore(MutableMapping):
         # writes before we flush. (Cross-PROCESS workers>1 is still last-writer-
         # wins — see the module docstring; this only closes the same-process
         # two-instance clobber.)
-        self._data = self._load()
+        self._data = self._load(strict=True)
         self._data[key] = bytes(value)
         self._flush()
 
     def __delitem__(self, key: Key) -> None:
         # Same read-modify-write discipline as __setitem__: reload so deleting one
         # key can't flush away another instance's rows (the X session clobber).
-        self._data = self._load()
+        self._data = self._load(strict=True)
         if key not in self._data:
             raise KeyError(key)
         del self._data[key]

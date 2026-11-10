@@ -313,6 +313,93 @@ class TelemetryEventLog:
         except Exception:
             return int(row[0])
 
+    def last_where(self, *, kind: str, effect: str, since_ts: float,
+                   user_ids: Any, attrs_in: Dict[str, str]) -> Optional[Dict[str, Any]]:
+        """The newest matching row (``{"ts", "attrs"}``), ``{}`` when nothing matched, and
+        ``None`` when the store cannot answer: unlike :meth:`query`, a gate can tell
+        "nothing there" from "I could not look" (the :meth:`count_where` rule)."""
+        if not self._ready or not self._has_effect:
+            return None
+        users = [str(u) for u in user_ids]
+        clauses = ["kind = ?", "effect = ?", "ts >= ?",
+                   f"user_id IN ({', '.join('?' for _ in users)})"]
+        params: List[Any] = [str(kind), str(effect), float(since_ts), *users]
+        for name, value in attrs_in.items():
+            clauses.append(f"json_extract(attrs, '$.{name}') = ?")
+            params.append(str(value))
+        try:
+            row = execute_retry(
+                self.db_path,
+                f"SELECT ts, attrs FROM telemetry_events WHERE {' AND '.join(clauses)} "
+                "ORDER BY ts DESC, id DESC LIMIT 1", tuple(params), fetch="one")
+            return {"ts": row["ts"], "attrs": json.loads(row["attrs"] or "{}")} if row else {}
+        except Exception as e:
+            logger.warning("event_log last_where failed: %s", e, exc_info=True)
+            return None
+
+    def rows_where(self, *, kind: str, effects: Any, since_ts: float, user_ids: Any,
+                   attrs_in: Dict[str, str], limit: int = 200,
+                   session_id: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+        """Rows newest first, each ``{"ts", "effect", "attrs"}``; ``None`` when the store cannot
+        answer, where :meth:`query` reads the same fault as no rows."""
+        if not self._ready or not self._has_effect:
+            return None
+        users, effs = [str(u) for u in user_ids], [str(e) for e in effects]
+        clauses = ["kind = ?", "ts >= ?",
+                   f"effect IN ({', '.join('?' for _ in effs)})",
+                   f"user_id IN ({', '.join('?' for _ in users)})"]
+        params: List[Any] = [str(kind), float(since_ts), *effs, *users]
+        if session_id is not None:
+            clauses.append("session_id = ?")
+            params.append(str(session_id))
+        for name, value in attrs_in.items():
+            clauses.append(f"json_extract(attrs, '$.{name}') = ?")
+            params.append(str(value))
+        try:
+            rows = execute_retry(
+                self.db_path,
+                f"SELECT ts, effect, attrs FROM telemetry_events WHERE {' AND '.join(clauses)} "
+                "ORDER BY ts DESC, id DESC LIMIT ?", (*params, int(limit)), fetch="all") or []
+            return [{"ts": r["ts"], "effect": r["effect"], "attrs": json.loads(r["attrs"] or "{}")}
+                    for r in rows]
+        except Exception as e:
+            logger.warning("event_log rows_where failed: %s", e, exc_info=True)
+            return None
+
+    def job_money(self, *, job_id: str, since_ts: float,
+                  user_ids: Any) -> Optional[Dict[str, Dict[str, float]]]:
+        """``{kind: {"n", "usd", "unpriced"}}`` of the ``wallet_spend`` and ``tx_settled`` rows
+        of one cron job's sessions; ``None`` when the store cannot answer. A money row names a
+        session, not a job, so the job's sessions come from its finished ``cron_run`` rows (a
+        ``started`` row does not count) and from the ``external_write`` rows that name the job,
+        which still hold the session of a run that died before its finished row."""
+        if not self._ready:
+            return None
+        from core.event_kinds import CRON_RUN, EXTERNAL_WRITE, TX_SETTLED, WALLET_SPEND
+        users = [str(u) for u in user_ids]
+        priced = "COALESCE(json_type(attrs, '$.amount_usd'), '') IN ('integer', 'real')"
+        sql = (
+            f"SELECT kind, COUNT(*) AS n, "
+            f"SUM(CASE WHEN {priced} THEN json_extract(attrs, '$.amount_usd') ELSE 0 END) AS usd, "
+            f"SUM(CASE WHEN {priced} THEN 0 ELSE 1 END) AS unpriced "
+            "FROM telemetry_events WHERE kind IN (?, ?) AND ts >= ? "
+            f"AND user_id IN ({', '.join('?' for _ in users)}) "
+            "AND session_id IN (SELECT session_id FROM telemetry_events WHERE ts >= ? "
+            "AND session_id != '' AND ("
+            "(kind = ? AND json_extract(attrs, '$.job_id') = ? "
+            "AND json_extract(attrs, '$.outcome') != 'started') "
+            "OR (kind = ? AND json_extract(attrs, '$.cron_job_id') = ?))) "
+            "GROUP BY kind")
+        params = (WALLET_SPEND, TX_SETTLED, float(since_ts), *users, float(since_ts),
+                  CRON_RUN, str(job_id), EXTERNAL_WRITE, str(job_id))
+        try:
+            rows = execute_retry(self.db_path, sql, params, fetch="all") or []
+            return {str(r["kind"]): {"n": int(r["n"]), "usd": float(r["usd"] or 0),
+                                     "unpriced": int(r["unpriced"] or 0)} for r in rows}
+        except Exception as e:
+            logger.warning("event_log job_money failed: %s", e, exc_info=True)
+            return None
+
     def prune(self, *, older_than_ts: float) -> int:
         """Delete events older than a cutoff. Returns rows removed (keeps the store
         bounded — the same retention discipline the audit demanded of feed/)."""

@@ -9,6 +9,8 @@
   order that takes its goal back (a retry, a passed deadline) stops that goal.
   None registered = the goal runs on, but it can no longer spend, deliver or fail
   the order (the money kernel and ``order_deliver`` bind to the CURRENT goal).
+* **Thread channels** (109) — one per surface whose pack can read and answer
+  public reply threads (``core.commerce.thread.ThreadChannel``).
 * **Listing adapters** — one :class:`ListingAdapter` per listing kind (``a2a``,
   ``mcp``, ``http402``, ``market:<name>``, ``native:<surface>``). A projection
   that is served on request (A2A card, MCP, HTTP) needs no ``publish``; a
@@ -66,6 +68,30 @@ class ListingAdapter(Protocol):
         """New external orders: ``[{"offer_id", "inputs", "buyer", "ref"}]``."""
 
 
+_THREAD_CHANNELS: Dict[str, Any] = {}
+
+
+def register_thread_channel(surface: str, channel: Any) -> None:
+    """109: a surface's public threads (``core.commerce.thread.ThreadChannel``). A
+    surface with none stays DM-only. Registered by the surface's pack."""
+    key = str(surface or "").strip().lower()
+    if not key or channel is None:
+        raise ValueError("a thread channel needs a surface and an object")
+    _THREAD_CHANNELS[key] = channel
+
+
+def unregister_thread_channel(surface: str) -> None:
+    _THREAD_CHANNELS.pop(str(surface).lower(), None)
+
+
+def thread_channel(surface: str) -> Optional[Any]:
+    return _THREAD_CHANNELS.get(str(surface or "").lower())
+
+
+def thread_channels() -> Dict[str, Any]:
+    return dict(_THREAD_CHANNELS)
+
+
 _ADAPTERS: Dict[str, ListingAdapter] = {}
 
 
@@ -88,4 +114,5 @@ def listing_adapters() -> Dict[str, ListingAdapter]:
 
 __all__ = ["ListingAdapter", "fulfiller", "goal_canceller", "listing_adapters",
            "register_fulfiller", "register_goal_canceller", "register_listing_adapter",
-           "unregister_listing_adapter"]
+           "register_thread_channel", "thread_channel", "thread_channels",
+           "unregister_listing_adapter", "unregister_thread_channel"]

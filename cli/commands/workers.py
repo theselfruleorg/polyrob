@@ -23,6 +23,8 @@ from typing import List, Optional
 
 import click
 
+from cli.commands._options import json_option
+
 
 def _owner() -> str:
     from core.admin_data_home import AmbiguousDataHome, admin_owner_principal
@@ -145,7 +147,7 @@ def workers():
 
 
 @workers.command("list")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def workers_list(as_json: bool):
     """Approved workers and the ones waiting for your approval."""
     store, uid = _store(write=False), _owner()

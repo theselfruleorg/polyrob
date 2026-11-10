@@ -193,6 +193,43 @@ class MessageRetrievalMixin:
 			self._ephemeral_messages = keep + self._ephemeral_messages
 			self._ephemeral_pending = []
 
+	def _in_flight_ephemerals(self) -> List[BaseMessage]:
+		"""The pending (sent, not yet committed) ephemerals a re-assembly in the same
+		step carries again. A per-call hint is rebuilt by each call, and a queued state
+		message is newer than a pending one, so neither is carried twice."""
+		pending = list(getattr(self, '_ephemeral_pending', None) or [])
+		if not pending:
+			return []
+		queued = list(getattr(self, '_ephemeral_messages', None) or [])
+		new_state = any((getattr(m, "metadata", None) or {}).get("state_message") for m in queued)
+		kept = []
+		for m in pending:
+			md = getattr(m, "metadata", None) or {}
+			if md.get("per_call") or (new_state and md.get("state_message")):
+				continue
+			kept.append(m)
+		return kept
+
+	def _wire_conversation(self, conversation: List[BaseMessage]) -> List[BaseMessage]:
+		"""The conversation as the provider sees it: the ONE pass of the step call and
+		the warm summariser, so both send one prefix.
+
+		Repairs tool sequences, then B2/B3 (Reference-parity media hygiene, see
+		docs/REFERENCE_VS_ROB_CONTEXT_SYSTEM_2026-06.md §9): dedups byte-identical tool
+		outputs and retires old base64 images in batches (F7 step function:
+		MEDIA_KEEP_MAX / MEDIA_RETIRE_BATCH / MEDIA_KEEP_FLOOR). Conversation only:
+		the foundation is never touched. Idempotent and fail-soft when nothing matches.
+		"""
+		conversation = self._validate_and_repair_tool_sequences(conversation)
+		try:
+			from agents.task.agent.messages.filters import dedup_tool_results, strip_historical_media
+			conversation = dedup_tool_results(conversation)
+			if self._images_reach_the_wire():
+				conversation = strip_historical_media(conversation)
+		except Exception as e:
+			self.logger.debug(f"media-hygiene pass skipped: {e}")
+		return conversation
+
 	def get_messages_for_llm(self, consume_ephemeral: bool = True) -> List[BaseMessage]:
 		"""Get messages ready for LLM call with all processing applied.
 
@@ -216,10 +253,8 @@ class MessageRetrievalMixin:
 		This ensures H-MEM can never be lost because it's in the protected foundation layer.
 		"""
 		# Build foundation (never repaired). 060 WS-2: ONE table
-		# (foundation_layers.FOUNDATION_LAYERS) is the order — system prompt, runtime
-		# identity, <environment>, self-context, project context, the initial task,
-		# skills, <tool-catalog>. Each block stays out of the system prompt so the
-		# prompt is cacheable; an unset block is skipped.
+		# (foundation_layers.FOUNDATION_LAYERS) is the order. Each block stays out of
+		# the system prompt so the prompt is cacheable; an unset block is skipped.
 		foundation = foundation_messages(self)
 
 		# 1.3: Hierarchical memory.
@@ -233,11 +268,14 @@ class MessageRetrievalMixin:
 		hmem_msg = None  # appended after the conversation
 
 		# FIX #1: Explicit warnings when H-MEM cannot be injected (was silently skipped)
-		if not self.task_context_manager:
+		if self.task_context_manager is None:
 			self.logger.warning(
 				"⚠️ H-MEM DISABLED: TaskContextManager not available. "
 				"Agent will run without hierarchical memory context."
 			)
+		elif not self.task_context_manager:
+			# A sub-agent's NullTaskContextManager is falsy: no H-MEM is the design.
+			self.logger.debug("H-MEM off: sub-agent isolation")
 		elif not self.session_id:
 			self.logger.warning(
 				"⚠️ H-MEM DISABLED: session_id not set. "
@@ -272,10 +310,16 @@ class MessageRetrievalMixin:
 		conversation_messages = [m.message for m in self.history.messages]
 		conversation.extend(conversation_messages)
 
-		# 2.2: Include any queued ephemeral messages (one-shot)
-		if hasattr(self, '_ephemeral_messages') and self._ephemeral_messages:
+		# 2.2: Include any queued ephemeral messages (one-shot). A second assembly in
+		# the same step (a provider fallback, a timeout retry) finds the first one's
+		# messages pending, not queued: they ride this request too, and the pending
+		# buffer grows instead of being replaced (a replaced buffer lost them for good).
+		# A per-call message of the earlier assembly gives way to the fresh one queued.
+		in_flight = self._in_flight_ephemerals()
+		if in_flight or (hasattr(self, '_ephemeral_messages') and self._ephemeral_messages):
+			conversation.extend(in_flight)
 			conversation.extend(self._ephemeral_messages)
-			self.logger.debug(f"Included {len(self._ephemeral_messages)} ephemeral messages")
+			self.logger.debug(f"Included {len(in_flight) + len(self._ephemeral_messages)} ephemeral messages")
 			if consume_ephemeral:
 				# P2-14: don't drop the one-shot ephemerals (correspondent replies,
 				# RECALL) at assembly time — the LLM call hasn't happened yet, so a
@@ -284,7 +328,7 @@ class MessageRetrievalMixin:
 				# commit_ephemeral_consumption() drops them once the LLM has responded,
 				# restore_ephemeral_on_failure() re-queues them if the call ultimately
 				# failed. Wired in the next_action wrapper (output_validation.py).
-				self._ephemeral_pending = list(self._ephemeral_messages)
+				self._ephemeral_pending = in_flight + list(self._ephemeral_messages)
 				self._ephemeral_messages.clear()
 
 		self.logger.debug(
@@ -292,21 +336,8 @@ class MessageRetrievalMixin:
 			f"h_mem={1 if memory_injected else 0}), conversation={len(conversation)}"
 		)
 
-		# Repair tool sequences in conversation
-		conversation = self._validate_and_repair_tool_sequences(conversation)
+		conversation = self._wire_conversation(conversation)
 		self.logger.debug(f"After repair: foundation={len(foundation)}, conversation={len(conversation)}")
-
-		# B2/B3 (Reference-parity media hygiene, see docs/REFERENCE_VS_ROB_CONTEXT_SYSTEM_2026-06.md §9):
-		# dedup byte-identical tool outputs, and retire old base64 images in batches
-		# (F7 step function: MEDIA_KEEP_MAX / MEDIA_RETIRE_BATCH / MEDIA_KEEP_FLOOR).
-		# Conversation only — foundation (system/task/H-MEM/skills) is never touched.
-		# Both are idempotent and fail-soft no-ops when nothing matches.
-		try:
-			from agents.task.agent.messages.filters import dedup_tool_results, strip_historical_media
-			conversation = dedup_tool_results(conversation)
-			conversation = strip_historical_media(conversation)
-		except Exception as e:
-			self.logger.debug(f"media-hygiene pass skipped: {e}")
 
 		# The H-MEM tail suffix goes AFTER the repaired conversation so it never
 		# participates in tool-sequence repair (same protection it had in the
@@ -497,7 +528,7 @@ class MessageRetrievalMixin:
 		expected = max(recent) if recent else 1024
 		try:
 			from modules.llm.output_budget import output_token_cap
-			ceiling = output_token_cap(getattr(self.llm, "_client", None) or self.llm, 16384)
+			ceiling = output_token_cap(16384)
 		except Exception:
 			ceiling = 16384
 		expected = min(expected, max(1, ceiling))

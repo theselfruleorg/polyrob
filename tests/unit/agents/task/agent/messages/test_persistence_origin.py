@@ -96,3 +96,19 @@ def test_timestamp_populated_on_add_and_roundtrips(tmp_data_root):
     mm2 = _mm()
     assert mm2.load_from_disk(SESSION, USER) is True
     assert mm2.history.messages[-1].metadata.timestamp == original_ts
+
+
+def test_per_call_ephemeral_is_not_persisted(tmp_data_root):
+    """A per-call hint is rebuilt by each call: a restored copy would ride beside it."""
+    mm = _mm()
+    mm.push_ephemeral_message(HumanMessage(content="queued correspondent reply"))
+    hint = HumanMessage(content="per-call format hint")
+    hint.metadata = {"per_call": True}
+    mm.push_ephemeral_message(hint)
+    mm.save_to_disk(SESSION, USER)
+
+    mm2 = _mm()
+    assert mm2.load_from_disk(SESSION, USER) is True
+    restored = [m.content for m in mm2._ephemeral_messages]
+    assert "queued correspondent reply" in restored
+    assert "per-call format hint" not in restored

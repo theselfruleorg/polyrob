@@ -76,11 +76,15 @@
         <div id="agent-mem-notes"></div>
         <div id="agent-mem-recall"></div>
         <div id="agent-mem-kb"></div>
+        <div id="agent-mem-episodes"></div>
       </div>
 
       {# Settings — the preferences people actually change, grouped by intent,
          plus the money limits. Drawn from /api/webgate/preferences + /ledger. #}
       <div data-pane="settings" hidden>
+        {# 113 W6 (G-4): the model a new chat starts on — /model <name> default,
+           drawn by agent-model.js from /api/webgate/model. #}
+        <section class="section" id="agent-model" aria-label="{{ t('agent.model.title') }}"></section>
         <div id="agent-settings"></div>
       </div>
 
@@ -117,6 +121,7 @@
          data-control_confirmation="{{ t('agent.control_confirmation') }}"
          data-control_effective="{{ t('agent.control_effective') }}"
          data-control_list="{{ t('agent.control_list') }}"
+         data-set_list_none="{{ t('agent.set_list_none') }}"
          data-control_restart="{{ t('agent.control_restart') }}"
          data-read_only="{{ 1 if read_only else 0 }}"
          data-name="{{ wordmark }}"
@@ -263,6 +268,20 @@
          data-set_prefs_unreadable_why="{{ t('agent.set_prefs_unreadable_why') }}"
          data-set_prefs_empty="{{ t('agent.set_prefs_empty') }}"
          data-set_prefs_other="{{ t('agent.set_prefs_other') }}"
+         data-set_group_now="{{ t('agent.set_group_now') }}"
+         data-cap_skill_read="{{ t('agent.cap_skill_read') }}"
+         data-cap_skill_gone="{{ t('agent.cap_skill_gone') }}"
+         data-cap_skill_unreadable="{{ t('agent.cap_skill_unreadable') }}"
+         data-mem_ep_title="{{ t('agent.mem_ep_title') }}"
+         data-mem_ep_aside="{{ t('agent.mem_ep_aside') }}"
+         data-mem_ep_empty="{{ t('agent.mem_ep_empty') }}"
+         data-mem_ep_unreadable="{{ t('agent.mem_ep_unreadable') }}"
+         data-mem_ep_col_what="{{ t('agent.mem_ep_col_what') }}"
+         data-mem_ep_col_outcome="{{ t('agent.mem_ep_col_outcome') }}"
+         data-mem_ep_col_day="{{ t('agent.mem_ep_col_day') }}"
+         data-set_group_next_chat="{{ t('agent.set_group_next_chat') }}"
+         data-set_group_restart="{{ t('agent.set_group_restart') }}"
+         data-nothing_changed="{{ t('agent.set_nothing_changed') }}"
          data-set_col_what="{{ t('agent.set_col_what') }}"
          data-set_col_value="{{ t('agent.set_col_value') }}"
          data-set_more="{{ t('agent.set_more') }}"
@@ -285,4 +304,18 @@
          data-adv_diag_unreadable="{{ t('agent.adv_diag_unreadable') }}"
          data-adv_diag_unreadable_why="{{ t('agent.adv_diag_unreadable_why') }}"></div>
     <script src="/static/app/agent.js" type="module"></script>
+    <div id="agent-model-copy" hidden
+         data-title="{{ t('agent.model.title') }}"
+         data-aside="{{ t('agent.model.aside') }}"
+         data-now="{{ t('agent.model.now') }}"
+         data-source="{{ t('agent.model.source') }}"
+         data-provider_default="{{ t('agent.model.provider_default') }}"
+         data-label="{{ t('agent.model.label') }}"
+         data-save="{{ t('agent.model.save') }}"
+         data-reset="{{ t('agent.model.reset') }}"
+         data-loading="{{ t('agent.model.loading') }}"
+         data-unreadable="{{ t('agent.model.unreadable') }}"
+         data-unreachable="{{ t('agent.unreachable') }}"
+         data-why="{{ t('agent.model.why') }}"></div>
+    <script src="/static/app/agent-model.js" type="module"></script>
 {% endblock %}

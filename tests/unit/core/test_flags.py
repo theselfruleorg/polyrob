@@ -57,7 +57,7 @@ def test_explicit_env_wins_and_uses_falsey_set():
 
 
 def test_unset_bool_flag_resolves_documented_default():
-    r = resolve_flag("GEMINI_PROMPT_CACHE", {})
+    r = resolve_flag("THINKING_CONFIG_ENABLED", {})
     assert r.value is False
     assert r.source == "default"
     r = resolve_flag("REFLECTION_LLM_ENABLED", {})
@@ -65,9 +65,9 @@ def test_unset_bool_flag_resolves_documented_default():
 
 
 def test_int_flag_resolution():
-    r = resolve_flag("GEMINI_CACHE_TTL_MIN", {})
-    assert r.value == 10
-    r = resolve_flag("GEMINI_CACHE_TTL_MIN", {"GEMINI_CACHE_TTL_MIN": "25"})
+    r = resolve_flag("MEMORY_TOOL_MAX_ENTRIES", {})
+    assert r.value == 50
+    r = resolve_flag("MEMORY_TOOL_MAX_ENTRIES", {"MEMORY_TOOL_MAX_ENTRIES": "25"})
     assert r.value == 25
 
 

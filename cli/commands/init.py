@@ -58,6 +58,29 @@ def _env_with_home_file() -> dict:
     return merged
 
 
+def _current_identity(profile_name) -> dict:
+    """The identity a re-run keeps on Enter: the target .env (the profile's with
+    --profile, else the home one), the process env as the fallback. Read, not loaded."""
+    import os as _os
+
+    current: dict = {}
+    try:
+        if profile_name:
+            from core.profiles import profile_dir
+            path = profile_dir(profile_name) / ".env"
+        else:
+            path = _core_paths.polyrob_home() / ".env"
+        for line in path.read_text().splitlines():
+            key, sep, value = line.partition("=")
+            if sep and not key.lstrip().startswith("#"):
+                current[key.strip()] = value.strip().strip('"').strip("'")
+    except Exception:
+        pass  # no file yet (or an unsafe profile name, refused later): no current value
+    keys = ("POLYROB_INSTANCE_ID", "POLYROB_OWNER_USER_ID",
+            "POLYROB_AGENT_TOOLSET", "POLYROB_PERSONA")
+    return {k: (current.get(k) or _os.environ.get(k) or "") for k in keys}
+
+
 def _save_key_now(env_key: str, value: str) -> None:
     """A pasted key survives a Ctrl-C at any later question. Fail-open: the closing
     write reports a failure to save."""
@@ -429,11 +452,16 @@ def init_cmd(
                 pass  # a check, never a stop
 
         if not quick:
+            # A re-run keeps what the last run wrote: the defaults come from the .env.
+            current = _current_identity(profile_name)
             # ── Section (c): Toolset ─────────────────────────────────────────
             _section(3, "Toolset", quick)
             toolset_choices = list(TOOLSETS.keys())
             _say(f"Available toolsets: {', '.join(toolset_choices)}")
-            default_ts = effective_toolset or "default"
+            default_ts = (effective_toolset
+                          or (current["POLYROB_AGENT_TOOLSET"]
+                              if current["POLYROB_AGENT_TOOLSET"] in TOOLSETS else "")
+                          or "default")
             chosen_toolset = click.prompt(
                 "Toolset", default=default_ts, show_default=True)
             if chosen_toolset in TOOLSETS:
@@ -447,7 +475,10 @@ def init_cmd(
             from agents.task.templates import TEMPLATES
             template_choices = list(TEMPLATES.keys())
             click.echo(f"Available templates: {', '.join(template_choices)}")
-            default_tpl = effective_persona or "general"
+            default_tpl = (effective_persona
+                           or (current["POLYROB_PERSONA"]
+                               if current["POLYROB_PERSONA"] in TEMPLATES else "")
+                           or "general")
             chosen_template = click.prompt(
                 "Template", default=default_tpl, show_default=True)
             if chosen_template not in TEMPLATES:
@@ -489,11 +520,14 @@ def init_cmd(
             from core.instance import DEFAULT_INSTANCE_ID
             if instance_id is None:
                 instance_id = click.prompt(
-                    "Instance id", default=DEFAULT_INSTANCE_ID, show_default=True) or None
+                    "Instance id",
+                    default=current["POLYROB_INSTANCE_ID"] or DEFAULT_INSTANCE_ID,
+                    show_default=True) or None
             if owner_user_id is None:
                 owner_user_id = click.prompt(
                     "Owner user id (blank = same as instance id)",
-                    default=(instance_id or DEFAULT_INSTANCE_ID), show_default=True) or None
+                    default=(current["POLYROB_OWNER_USER_ID"] or instance_id
+                             or DEFAULT_INSTANCE_ID), show_default=True) or None
 
             # ── Section 6: Autonomy & guardrails ───────────────────────────
             # All prompts blank-to-skip. Env keys land in ``guardrail_updates``
@@ -695,6 +729,8 @@ def init_cmd(
             updates.update(global_updates)
             _write_env(home_env, updates)
     except OSError as exc:
+        click.echo(f"Warning: could not write {home_env}: {exc}", err=True)
+    except ValueError as exc:  # env_write_error refused a value (CR/LF): that file is untouched
         click.echo(f"Warning: could not write {home_env}: {exc}", err=True)
 
     # F0: scaffold the character into the same home the identity keys went to,

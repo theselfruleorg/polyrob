@@ -105,6 +105,8 @@ class Conversation:
             max_steps=max_steps, _continue_session=bool(self.turns))
         answer = extract_answer(history)
         self.turns.append(Turn(user=text, assistant=answer))
+        from agents.task.agent.core.owner_verdict import owner_turn_ended
+        owner_turn_ended(str(getattr(self.agent, "session_id", "") or ""), agent=self.agent)  # 108 W5
         return answer
 
 

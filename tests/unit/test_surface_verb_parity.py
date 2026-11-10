@@ -33,7 +33,6 @@ SURFACE_VERB_NONE = {
         "/gates": "seat-local: a REPL pane (Verb.seats = repl)",
         "/meter": "seat-local: a REPL pane (Verb.seats = repl)",
         "/workers": "seat-local: Stop/Steer act on the REPL's live session (Verb.seats = repl)",
-        "/memory": "seat-local: recall and scope inspection use the REPL memory handler (Verb.seats = repl)",
     },
     "email": {
         "*": "forgeable sender (email-class): an inbound is never OWNER, so no "

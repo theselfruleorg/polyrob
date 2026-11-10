@@ -727,8 +727,8 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin):
           rail (review finding #3 — exempting a kind from auto-requeue must not
           ALSO exempt it from ever aging out, or the blocked population grows
           unbounded): a row older than ``max_age_days`` (measured from when it
-          blocked, else creation) ages out VISIBLY to ``cancelled`` (logged
-          ``aged_out``) and cascades to ``dep_failed`` dependents exactly like
+          blocked, else creation) ages out to ``cancelled`` (logged ``aged_out``,
+          told to the owner by the stop sweep) and cascades to ``dep_failed`` dependents exactly like
           ``cancel()``/the two breaker-trip sites
           (``record_failure``/``reclaim_stale``).
 
@@ -780,7 +780,9 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin):
                     continue  # still inside the short self-heal window
                 requeues = int(payload.get("provider_requeues") or 0)
                 if requeues < self._PROVIDER_OUTAGE_MAX_REQUEUES:
-                    expr, eparams = payload_expr({"provider_requeues": requeues + 1})
+                    # The next block names its own kind: a stale outage would hide it.
+                    expr, eparams = payload_expr({"provider_requeues": requeues + 1},
+                                                 remove=("block_kind",))
                     rc = execute_retry(
                         self.db_path,
                         f"""UPDATE goals SET status='ready', consecutive_failures=0,
@@ -815,15 +817,18 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin):
             # the legacy terminal max-age cutoff (review finding #3).
             if blocked_at >= cutoff_legacy:
                 continue
+            # The stop sweep (goals/escalation.py) tells the owner from these keys.
+            expr, eparams = payload_expr({"aged_out": True}, remove=("stop_told",))
             rc = execute_retry(
                 self.db_path,
-                """UPDATE goals SET status='cancelled', completed_at=?
+                f"""UPDATE goals SET status='cancelled', completed_at=?, payload={expr}
                     WHERE id=? AND status='blocked'""",
-                (now, g.id),
+                (now, *eparams, g.id),
             )
             if rc == 1:
                 n += 1
                 self._event(g.id, "aged_out", {"max_age_days": max_age_days})
+                self.close_asks_for_goal(g.user_id, g.id, reason="goal_aged_out")
                 self._cascade_dep_failed(g.id)
         return n
 

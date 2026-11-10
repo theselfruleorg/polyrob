@@ -38,7 +38,7 @@ appendix at the end for when each claim was verified.
 | **Editor integration (ACP)** | ❌ | ✅ `hermes acp` | ✅ `openclaw acp` |
 | **MCP client** | ✅ | ✅ | ✅ |
 | **MCP server (inbound)** | ✅ `POST /mcp`, 5 read-only tenant-scoped tools | ✅ The `mcp-serve` plugin | ✅ `openclaw mcp serve`, a stdio bridge to channel conversations |
-| **Delegation / multi-agent** | ✅ Least-privilege sub-agents | ✅ Subagents you can steer live, Kanban workers, bot-to-bot DMs (`hermes peer`) | ✅ Multi-agent routing and subagents |
+| **Delegation / multi-agent** | ✅ Least-privilege sub-agents; the agent picks each one's model tier with a reason | ✅ Subagents you can steer live, Kanban workers, bot-to-bot DMs (`hermes peer`) | ✅ Multi-agent routing and subagents |
 | **Wallet and payments** | ✅ Agent wallet, x402 in and out, invoicing, spend caps, an optional separate signer process | ⚠️ Not built in: optional MPP (HTTP 402) and Stripe Link skills; community wallet plugins in the catalog | ❌ Not in the repository |
 | **On-chain capability** | ✅ Swaps on EVM + Solana, cross-chain bridging, token deployment, launchpads, a wallet inside the browser for any dapp, and an owner-set trading mandate with code-armed exits | ⚠️ Read-only EVM, Solana and Hyperliquid skills (optional); community plugins add transfers and swaps | ❌ |
 | **Durable app service** | ✅ The agent's own app runs past the session behind a public URL, owner-approved | ⚠️ No supervised app service; an optional Pinggy skill opens a temporary localhost tunnel, and the desktop app previews generated apps in a sandbox | ⚠️ Portals show an agent-run dev server to the operator only, through the Gateway; not a public URL |

@@ -69,6 +69,9 @@ async def test_run_due_reschedules_a_pause_cancelled_job(home, tmp_path):
     assert res.ran == [] and res.failed == []  # a pause is not a failure
     assert store.get("j1").status == "scheduled"
     assert store.get("j2").status == "scheduled"
+    # 107 WS-3: the pause cut a model run, so it must not start again from the top.
+    assert store.get("j1").payload.get("cut_run") == "pause"
+    assert "cut_run" not in store.get("j2").payload
 
 
 @pytest.mark.asyncio

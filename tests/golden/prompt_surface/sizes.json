@@ -7,66 +7,66 @@
         "tokens": 31
       },
       "runtime_identity": {
-        "chars": 290,
-        "tokens": 72
+        "chars": 280,
+        "tokens": 70
       },
       "skill_catalog": {
         "chars": 883,
         "tokens": 220
       },
       "system_prompt": {
-        "chars": 11854,
-        "tokens": 2963
+        "chars": 12148,
+        "tokens": 3037
       },
       "tool_catalog": {
-        "chars": 4390,
+        "chars": 4389,
         "tokens": 1097
       }
     },
     "system": {
-      "chars": 17544,
-      "tokens": 4386
+      "chars": 17827,
+      "tokens": 4456
     },
     "tools": {
-      "chars": 14769,
-      "count": 24,
-      "tokens": 3692
+      "chars": 16376,
+      "count": 25,
+      "tokens": 4094
     },
-    "total_tokens": 8078
+    "total_tokens": 8550
   },
   "cron": {
     "layers": {
       "environment": {
-        "chars": 1073,
-        "tokens": 268
+        "chars": 1112,
+        "tokens": 278
       },
       "initial_task": {
         "chars": 55,
         "tokens": 13
       },
       "runtime_identity": {
-        "chars": 290,
-        "tokens": 72
+        "chars": 280,
+        "tokens": 70
       },
-      "self_context_blocks": {
+      "self_context_soul": {
         "chars": 212,
         "tokens": 53
       },
       "skill_catalog": {
-        "chars": 7057,
-        "tokens": 1764
+        "chars": 7191,
+        "tokens": 1797
       },
       "step1:state_delta": {
         "chars": 1026,
         "tokens": 256
       },
       "system_prompt": {
-        "chars": 15296,
-        "tokens": 3824
+        "chars": 15493,
+        "tokens": 3873
       },
       "tool_catalog": {
-        "chars": 4452,
-        "tokens": 1113
+        "chars": 4451,
+        "tokens": 1112
       },
       "workspace": {
         "chars": 113,
@@ -74,49 +74,49 @@
       }
     },
     "system": {
-      "chars": 29574,
-      "tokens": 7393
+      "chars": 29933,
+      "tokens": 7483
     },
     "tools": {
-      "chars": 83250,
-      "count": 93,
-      "tokens": 20812
+      "chars": 98597,
+      "count": 104,
+      "tokens": 24649
     },
-    "total_tokens": 28206
+    "total_tokens": 32132
   },
   "goal": {
     "layers": {
       "environment": {
-        "chars": 1073,
-        "tokens": 268
+        "chars": 1112,
+        "tokens": 278
       },
       "initial_task": {
         "chars": 39,
         "tokens": 9
       },
       "runtime_identity": {
-        "chars": 290,
-        "tokens": 72
+        "chars": 280,
+        "tokens": 70
       },
-      "self_context_blocks": {
+      "self_context_soul": {
         "chars": 212,
         "tokens": 53
       },
       "skill_catalog": {
-        "chars": 7057,
-        "tokens": 1764
+        "chars": 7191,
+        "tokens": 1797
       },
       "step1:state_delta": {
         "chars": 1026,
         "tokens": 256
       },
       "system_prompt": {
-        "chars": 15296,
-        "tokens": 3824
+        "chars": 15493,
+        "tokens": 3873
       },
       "tool_catalog": {
-        "chars": 4452,
-        "tokens": 1113
+        "chars": 4451,
+        "tokens": 1112
       },
       "workspace": {
         "chars": 113,
@@ -124,44 +124,44 @@
       }
     },
     "system": {
-      "chars": 29558,
-      "tokens": 7389
+      "chars": 29917,
+      "tokens": 7479
     },
     "tools": {
-      "chars": 83250,
-      "count": 93,
-      "tokens": 20812
+      "chars": 98597,
+      "count": 104,
+      "tokens": 24649
     },
-    "total_tokens": 28202
+    "total_tokens": 32128
   },
   "leaf": {
     "layers": {
       "environment": {
-        "chars": 986,
-        "tokens": 246
+        "chars": 1025,
+        "tokens": 256
       },
       "initial_task": {
         "chars": 46,
         "tokens": 11
       },
       "runtime_identity": {
-        "chars": 290,
-        "tokens": 72
+        "chars": 280,
+        "tokens": 70
       },
-      "self_context_blocks": {
+      "self_context_soul": {
         "chars": 212,
         "tokens": 53
       },
       "skill_catalog": {
-        "chars": 2531,
-        "tokens": 632
+        "chars": 2607,
+        "tokens": 651
       },
       "system_prompt": {
-        "chars": 9259,
-        "tokens": 2314
+        "chars": 9596,
+        "tokens": 2399
       },
       "tool_catalog": {
-        "chars": 4761,
+        "chars": 4760,
         "tokens": 1190
       },
       "workspace": {
@@ -170,48 +170,48 @@
       }
     },
     "system": {
-      "chars": 18198,
-      "tokens": 4549
+      "chars": 18639,
+      "tokens": 4659
     },
     "tools": {
-      "chars": 37543,
+      "chars": 39150,
       "count": 42,
-      "tokens": 9385
+      "tokens": 9787
     },
-    "total_tokens": 13935
+    "total_tokens": 14447
   },
   "owner_repl": {
     "layers": {
       "environment": {
-        "chars": 1073,
-        "tokens": 268
+        "chars": 1112,
+        "tokens": 278
       },
       "initial_task": {
         "chars": 107,
         "tokens": 26
       },
       "runtime_identity": {
-        "chars": 290,
-        "tokens": 72
+        "chars": 280,
+        "tokens": 70
       },
-      "self_context_blocks": {
+      "self_context_soul": {
         "chars": 212,
         "tokens": 53
       },
       "skill_catalog": {
-        "chars": 7057,
-        "tokens": 1764
+        "chars": 7191,
+        "tokens": 1797
       },
       "step1:state_delta": {
         "chars": 1026,
         "tokens": 256
       },
       "system_prompt": {
-        "chars": 15145,
-        "tokens": 3786
+        "chars": 15946,
+        "tokens": 3986
       },
       "tool_catalog": {
-        "chars": 4499,
+        "chars": 4498,
         "tokens": 1124
       },
       "workspace": {
@@ -220,48 +220,48 @@
       }
     },
     "system": {
-      "chars": 29528,
-      "tokens": 7382
+      "chars": 30491,
+      "tokens": 7622
     },
     "tools": {
-      "chars": 65717,
-      "count": 81,
-      "tokens": 16429
+      "chars": 77328,
+      "count": 93,
+      "tokens": 19332
     },
-    "total_tokens": 23811
+    "total_tokens": 26954
   },
   "owner_telegram_dm": {
     "layers": {
       "environment": {
-        "chars": 1073,
-        "tokens": 268
+        "chars": 1112,
+        "tokens": 278
       },
       "initial_task": {
         "chars": 107,
         "tokens": 26
       },
       "runtime_identity": {
-        "chars": 290,
-        "tokens": 72
+        "chars": 280,
+        "tokens": 70
       },
-      "self_context_blocks": {
+      "self_context_soul": {
         "chars": 212,
         "tokens": 53
       },
       "skill_catalog": {
-        "chars": 7057,
-        "tokens": 1764
+        "chars": 7191,
+        "tokens": 1797
       },
       "step1:state_delta": {
         "chars": 1026,
         "tokens": 256
       },
       "system_prompt": {
-        "chars": 15795,
-        "tokens": 3948
+        "chars": 16625,
+        "tokens": 4156
       },
       "tool_catalog": {
-        "chars": 4553,
+        "chars": 4552,
         "tokens": 1138
       },
       "workspace": {
@@ -270,49 +270,49 @@
       }
     },
     "system": {
-      "chars": 30239,
-      "tokens": 7559
+      "chars": 31231,
+      "tokens": 7807
     },
     "tools": {
-      "chars": 67276,
-      "count": 61,
-      "tokens": 16819
+      "chars": 74484,
+      "count": 60,
+      "tokens": 18621
     },
-    "total_tokens": 24378
+    "total_tokens": 26428
   },
   "prod_owner_telegram_dm": {
     "layers": {
       "environment": {
-        "chars": 1113,
-        "tokens": 278
+        "chars": 1479,
+        "tokens": 369
       },
       "initial_task": {
         "chars": 107,
         "tokens": 26
       },
       "runtime_identity": {
-        "chars": 290,
-        "tokens": 72
+        "chars": 280,
+        "tokens": 70
       },
-      "self_context_blocks": {
+      "self_context_soul": {
         "chars": 212,
         "tokens": 53
       },
       "skill_catalog": {
-        "chars": 8337,
-        "tokens": 2084
+        "chars": 8471,
+        "tokens": 2117
       },
       "step1:state_delta": {
-        "chars": 3079,
-        "tokens": 769
+        "chars": 3129,
+        "tokens": 782
       },
       "system_prompt": {
-        "chars": 17056,
-        "tokens": 4264
+        "chars": 17930,
+        "tokens": 4482
       },
       "tool_catalog": {
-        "chars": 5279,
-        "tokens": 1319
+        "chars": 5346,
+        "tokens": 1336
       },
       "workspace": {
         "chars": 126,
@@ -320,15 +320,15 @@
       }
     },
     "system": {
-      "chars": 35599,
-      "tokens": 8899
+      "chars": 37080,
+      "tokens": 9270
     },
     "tools": {
-      "chars": 118836,
-      "count": 87,
-      "tokens": 29709
+      "chars": 126483,
+      "count": 86,
+      "tokens": 31620
     },
-    "total_tokens": 38608
+    "total_tokens": 40890
   },
   "room": {
     "layers": {
@@ -337,32 +337,32 @@
         "tokens": 13
       },
       "runtime_identity": {
-        "chars": 290,
-        "tokens": 72
+        "chars": 280,
+        "tokens": 70
       },
       "skill_catalog": {
         "chars": 876,
         "tokens": 219
       },
       "system_prompt": {
-        "chars": 13188,
-        "tokens": 3297
+        "chars": 13482,
+        "tokens": 3370
       },
       "tool_catalog": {
-        "chars": 3946,
+        "chars": 3945,
         "tokens": 986
       }
     },
     "system": {
-      "chars": 18352,
-      "tokens": 4588
+      "chars": 18635,
+      "tokens": 4658
     },
     "tools": {
-      "chars": 23242,
-      "count": 27,
-      "tokens": 5810
+      "chars": 24849,
+      "count": 28,
+      "tokens": 6212
     },
-    "total_tokens": 10398
+    "total_tokens": 10871
   },
   "server_owner_telegram_dm": {
     "layers": {
@@ -371,39 +371,39 @@
         "tokens": 26
       },
       "runtime_identity": {
-        "chars": 290,
-        "tokens": 72
+        "chars": 280,
+        "tokens": 70
       },
-      "self_context_blocks": {
+      "self_context_soul": {
         "chars": 71,
         "tokens": 17
       },
       "skill_catalog": {
-        "chars": 6700,
-        "tokens": 1675
+        "chars": 6681,
+        "tokens": 1670
       },
       "step1:state_delta": {
-        "chars": 2829,
-        "tokens": 707
+        "chars": 2879,
+        "tokens": 719
       },
       "system_prompt": {
-        "chars": 15224,
-        "tokens": 3806
+        "chars": 16035,
+        "tokens": 4008
       },
       "tool_catalog": {
-        "chars": 6094,
-        "tokens": 1523
+        "chars": 5814,
+        "tokens": 1453
       }
     },
     "system": {
-      "chars": 31315,
-      "tokens": 7828
+      "chars": 31867,
+      "tokens": 7966
     },
     "tools": {
-      "chars": 33112,
+      "chars": 36297,
       "count": 37,
-      "tokens": 8278
+      "tokens": 9074
     },
-    "total_tokens": 16106
+    "total_tokens": 17041
   }
 }

@@ -39,6 +39,9 @@ _LEAD_ORDER = ("running", "blocked", "triage", "ready", "waiting")
 #: Enough rows to be useful on a phone without becoming a wall.
 _MAX_SHOWN = 12
 
+#: The empty board, on every seat.
+NO_GOALS_YET = "No goals yet. Add one with `/goal new <what to do>`."
+
 
 def _title(goal: Any) -> str:
     return (getattr(goal, "title", None) or "(untitled)").strip()
@@ -129,7 +132,8 @@ def render_board(board: Any, *, user_id: Optional[str] = None) -> str:
     total = sum(counts.values())
     off = _off_lines(board, user_id)
     if not total:
-        return "\n".join(["No goals yet."] + off)
+        # E17: the remedy names a verb every seat runs, never a flag.
+        return "\n".join([NO_GOALS_YET] + off)
 
     from core.goal_legibility import bucket_line, origin_tag
     lines = [f"{total} goal(s): " +
@@ -185,4 +189,4 @@ def render_board(board: Any, *, user_id: Optional[str] = None) -> str:
     return "\n".join(lines)
 
 
-__all__ = ["render_board"]
+__all__ = ["NO_GOALS_YET", "render_board"]

@@ -180,3 +180,97 @@ async def test_two_writers_outside_transaction_both_commit(tmp_path):
         assert [r["id"] for r in rows] == ["p", "q"]
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_read_from_another_task_waits_for_the_open_span(tmp_path):
+    """EP-4: a read from a DIFFERENT task used to see the owner's uncommitted
+    row (a dirty read). It now waits for the span and sees the rolled-back truth."""
+    db = await _fresh(tmp_path)
+    try:
+        go = asyncio.Event()
+        seen = {}
+
+        async def owner():
+            await db.begin_transaction()
+            await db.execute("INSERT INTO t (id, v) VALUES ('A', 'uncommitted')")
+            # The owner reads its own span: no self-deadlock.
+            assert (await db.fetch_one("SELECT v FROM t WHERE id='A'"))["v"] == "uncommitted"
+            assert len(await db.fetch_all("SELECT id FROM t")) == 1
+            go.set()
+            await asyncio.sleep(0.05)
+            assert "one" not in seen and "all" not in seen  # readers still wait
+            await db.rollback()
+
+        async def reader():
+            await go.wait()
+            seen["one"] = await db.fetch_one("SELECT v FROM t WHERE id='A'")
+            seen["all"] = await db.fetch_all("SELECT id FROM t")
+
+        await asyncio.wait_for(asyncio.gather(owner(), reader()), timeout=5)
+        assert seen["one"] is None and seen["all"] == []
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_executemany_never_commits_a_foreign_span(tmp_path):
+    """EP-4: executemany from another task committed the owner's open span."""
+    db = await _fresh(tmp_path)
+    try:
+        go = asyncio.Event()
+
+        async def owner():
+            await db.begin_transaction()
+            await db.execute("INSERT INTO t (id, v) VALUES ('A', 'owner')")
+            go.set()
+            await asyncio.sleep(0.05)
+            await db.rollback()
+
+        async def other():
+            await go.wait()
+            await db.executemany("INSERT INTO t (id, v) VALUES (?, ?)", [("B", "x")])
+
+        await asyncio.wait_for(asyncio.gather(owner(), other()), timeout=5)
+        rows = await db.fetch_all("SELECT id FROM t ORDER BY id")
+        assert [r["id"] for r in rows] == ["B"]
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_connect_sets_an_explicit_busy_timeout(tmp_path):
+    from modules.database.connection import BUSY_TIMEOUT_MS
+    db = await _fresh(tmp_path)
+    try:
+        assert db.connection.execute("PRAGMA busy_timeout").fetchone()[0] == BUSY_TIMEOUT_MS
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_parked_reader_resumes_when_the_owner_dies_in_its_span(tmp_path):
+    """A reader already parked on an open span must not wait for a THIRD caller
+    to clear a dead owner (at shutdown none comes): the owner task's end wakes
+    it, and the woken reader rolls the dead span back and proceeds."""
+    db = await _fresh(tmp_path)
+    try:
+        in_span = asyncio.Event()
+
+        async def owner():
+            await db.begin_transaction()
+            await db.execute("INSERT INTO t (id, v) VALUES ('dead', 'x')")
+            in_span.set()
+            await asyncio.Event().wait()     # never commits, never rolls back
+
+        owner_task = asyncio.create_task(owner())
+        await in_span.wait()
+        reader = asyncio.create_task(db.fetch_all("SELECT id FROM t"))
+        await asyncio.sleep(0.05)
+        assert not reader.done()             # parked on the foreign span
+        owner_task.cancel()
+        rows = await asyncio.wait_for(reader, timeout=2)
+        assert rows == []                    # the dead span's write is gone
+        assert not await db.in_transaction()
+    finally:
+        await db.close()

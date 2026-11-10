@@ -249,7 +249,7 @@ async def _call_usage_summary(
     session_id = arguments.get("session_id")
     if session_id is not None and not isinstance(session_id, str):
         return _error_result("session_id must be a string")
-    from modules.credits.usage_rollup import usage_rollup
+    from modules.credits.usage_rollup import unreadable_text, usage_rollup
 
     # `usage_rollup` resolves its own db via the process DI singleton and is
     # REQUIRED to be given `user_id` for a non-zero result (fails open to an
@@ -257,6 +257,8 @@ async def _call_usage_summary(
     # mirrors every other in-repo call site (e.g.
     # tools/controller/action_registration.py's `usage_summary` action).
     rollup = await usage_rollup(user_id, session_id=session_id)
+    if unreadable_text(rollup):
+        return _error_result(unreadable_text(rollup))  # the zeros are not a measurement
     return _text_result(rollup)
 
 

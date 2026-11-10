@@ -10,8 +10,9 @@ One line per setting: NAME — default — meaning. Code anchors and full prose:
 - POLYROB_PROJECT_DIR — default: unset — When set, the agent uses this folder as ONE persistent workspace shared across sessions/goals/cron (Claude-Code style), **independent** of `POLYROB_DATA_DIR`.
 - POLYROB_LOG_DIR — default: unset — Runtime log directory override.
 - POLYROB_PROJECT_SECRET_REFUSE — default: 0 — When truthy, refuse to start if the cwd-default persistent workspace contains secrets/`.git` (SEC-1).
-- POLYROB_REQUIRE_PAIRING — default: OFF — Owner-allowlist + DM-pairing ingress gate; when ON, an unpaired sender or unreadable pairing store is denied at the surface dispatcher; unused pairing codes expire after 15 minutes.
+- POLYROB_REQUIRE_PAIRING — default: OFF — DM-pairing ingress gate; when ON, an unpaired person in a private chat on a signed chat app (never a room, email, a bot or a bound correspondent) gets a one-time code the owner approves with `/pair approve <surface> <code>`; an unreadable…
 - TELEGRAM_BOT_TOKEN — default: unset — Telegram bot token (from @BotFather) for the `polyrob telegram` local-polling surface.
+- TELEGRAM_BOT_API_URL — default: unset (public server) — Loopback URL of a local Bot API server in `--local` mode (e.g. `http://127.0.0.1:8081`).
 - ALLOWED_TELEGRAM_USER_IDS — default: unset — Comma list of raw Telegram numeric user ids allowed to drive the bot.
 - POLYROB_OWNER_TELEGRAM_ID — default: unset — The owner's raw Telegram numeric id, used for two things: (1) the **inbound owner alias** — an inbound from this id is aliased to the OWNER principal (`POLYROB_OWNER_USER_ID`) instead of its surface-hashed `u_…` id, so the owner's chat sha…
 - POLYROB_OWNER_EMAIL — default: unset — The owner's email address for **out-of-band cron delivery** (`deliver="email"`) on single-owner headless deploys where no `user_directory` service is registered.
@@ -74,8 +75,6 @@ One line per setting: NAME — default — meaning. Code anchors and full prose:
 - OUTBOUND_QUEUE_ENABLED — default: OFF — Durable outbound send queue (retry + dead-letter) behind `publish()`'s PRIMARY reply routing (direct-send vs. queued-with-retry for a locally-subscribed surface); OFF = direct legacy sends.
 - VOICE_TRANSCRIPTION_REQUIRED — default: OFF — Make a missing faster-whisper engine a startup ERROR instead of a WARN (most deploys degrade gracefully: voice refused with a notice).
 - INTERACTIVE_TOOL_IDS — default: unset — Explicit comma-list override of the owner chat seat's eager toolset (Telegram, the console/API on the owner's identity); unset derives it: the `owner` rig (`filesystem`, `task`, `web_fetch`, `goal`, `cronjob`, `message`) plus, under effect…
-- SELF_CONTEXT_REQUIRE_REVIEW — default: ON (True) — SELF-context writes go to `.pending/` review.
-- OWNER_DOC_REQUIRE_REVIEW — default: ON (True) — Owner-facts writes go to `.pending/` review (owner promotes via `/pending` or `polyrob owner`).
 - DATA_ROOT — default: ./data/task — Server-bootstrap (`build_bot`/`main.py`) data root for sessions/dbs; when unset, `POLYROB_DATA_DIR` also moves the server session tree to `<POLYROB_DATA_DIR>/sessions`.
 - DB_PATH — default: unset (derived: <data_dir>/database/bot.db) — Explicit `bot.db` location (made REAL — historically a decoy the app never opened).
 - DATA_DIR — default: data — The server's runtime data directory (`config.data_dir`).

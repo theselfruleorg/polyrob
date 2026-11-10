@@ -262,7 +262,7 @@ async def perform_solana_deploy_token(tool, params, execution_context=None):
     outcome = confirmation_outcome(ok, detail)
     if outcome != "confirmed":
         return tool._ar(content=header + (
-            f"  RESULT: {'REVERTED' if outcome == 'reverted' else 'UNCONFIRMED'} "
+            f"  RESULT: {({'reverted': 'REVERTED', 'expired': 'EXPIRED (never landed)'}).get(outcome, 'UNCONFIRMED')} "
             f"— {detail}\n  signature: {signature}\n"
             f"  ⚠️ do NOT retry blindly: a second run creates a SECOND mint."))
 

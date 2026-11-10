@@ -706,9 +706,12 @@ class WalletBridge:
             self.envelope.sent.append({
                 "tx": tx_hash, "to": to, "selector": data[:10],
                 "usd": spent, "at": time.time()})
+            # No receipt is read here: booked pending, the receipt resolver
+            # settles it (a revert then leaves the daily caps).
             gate.record(venue="defi", action="dapp_call", amount_usd=spent,
                         counterparty=to, idempotency_key=idem,
-                        result_ref=tx_hash, chain=self.envelope.chain)
+                        result_ref=tx_hash, chain=self.envelope.chain,
+                        receipt_state="pending_receipt")
             self._persist()
 
         self._notify(to, data, decision, tx_hash)

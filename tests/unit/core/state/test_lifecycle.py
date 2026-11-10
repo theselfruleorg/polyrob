@@ -180,3 +180,67 @@ def test_cancelled_stop_still_ends_closed_and_can_start_again():
         await lc.start()                      # strict mode: raises on an illegal edge
         assert lc.state == READY
     asyncio.run(go())
+
+
+@pytest.mark.parametrize("how", ["fail", "restart"])
+def test_cancelled_degrade_still_ends_degraded_and_can_start_again(how):
+    """A cancel during the teardown await of fail()/restart() left READY with no
+    handle, so every later start was the illegal edge READY -> STARTING (a resource
+    with no probe never recovered)."""
+    async def go():
+        c = Clock()
+        f = Factory()
+        slow = {"on": True}
+
+        async def slow_teardown(h):
+            if slow["on"]:
+                await asyncio.sleep(10)
+        lc = ResourceLifecycle("test", create=f.create, teardown=slow_teardown, clock=c)
+        first = await lc.start()
+        t = asyncio.create_task(getattr(lc, how)())
+        await asyncio.sleep(0.01)
+        t.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await t
+        assert lc.state == DEGRADED
+        assert lc.handle is None
+        slow["on"] = False
+        c.t += 1000
+        handle = await lc.start()             # strict mode: raises on an illegal edge
+        assert lc.state == READY and handle is not None and handle is not first
+    asyncio.run(go())
+
+
+def test_an_illegal_edge_is_refused_not_assigned_in_production():
+    """ST-16: non-strict mode used to log the edge and assign it anyway."""
+    from core.state import machine
+    from core.state.machine import IllegalTransition
+    lc = _lc(Factory(), Clock())
+    lc._state = REMOVED
+    machine.set_strict(False)
+    try:
+        with pytest.raises(IllegalTransition):
+            lc._move(READY)
+    finally:
+        machine.set_strict(True)
+    assert lc.state == REMOVED
+
+
+def test_adopt_refuses_while_a_start_runs_and_over_a_live_state():
+    """ST-16: an adopt during a start's create leaked one of the two handles."""
+    async def go():
+        gate = asyncio.Event()
+
+        async def slow_create():
+            await gate.wait()
+            return "created"
+        lc = ResourceLifecycle("t", create=slow_create, clock=Clock())
+        t = asyncio.create_task(lc.start())
+        await asyncio.sleep(0)
+        with pytest.raises(RuntimeError):
+            lc.adopt("adopted")
+        gate.set()
+        assert await t == "created" and lc.handle == "created"
+        with pytest.raises(RuntimeError):
+            lc.adopt("again")
+    asyncio.run(go())

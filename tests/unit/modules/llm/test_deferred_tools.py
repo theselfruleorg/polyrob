@@ -64,8 +64,9 @@ def test_deferred_can_be_turned_off_back_to_grow(monkeypatch):
 def test_model_capability_reads_the_registry():
     assert model_supports_deferred_tools("claude-opus-5") is True
     assert model_supports_deferred_tools("claude-fable-5-1") is True
-    assert model_supports_deferred_tools("claude-opus-4-8") is False
+    assert model_supports_deferred_tools("claude-opus-4-8") is True
     assert model_supports_deferred_tools("claude-sonnet-4-6") is False
+    assert model_supports_deferred_tools("claude-sonnet-5") is False
     assert model_supports_deferred_tools("gpt-4.1") is False
     assert model_supports_deferred_tools(None) is False
 
@@ -197,22 +198,6 @@ def test_at_least_one_tool_must_stay_non_deferred():
     assert all("defer_loading" not in t for t in out["tools"])
     assert all(m["role"] != "system" for m in out["messages"])
     assert "extra_headers" not in out
-
-
-def test_a_cache_breakpoint_on_the_envelope_moves_to_the_last_non_system_message():
-    """F12: a breakpoint may never ride the system message we build."""
-    marked = {"role": "user", "content": [
-        {"type": "text", "text": ENVELOPE,
-         "cache_control": {"type": "ephemeral", "ttl": "1h"}}]}
-    params = _params([
-        {"role": "user", "content": "hi"},
-        marked,
-        {"role": "user", "content": "<state/>"},
-    ])
-    out = prepare_deferred_tools(params, enabled=True)
-    assert out["messages"][-1]["role"] == "system"
-    tail = out["messages"][-2]
-    assert tail["content"][-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
 
 
 # --------------------------------------------------------------------------
@@ -355,3 +340,14 @@ def test_no_retry_when_the_request_carried_no_deferral():
     assert retry_params_without_deferral(
         client, _BadRequestError("defer_loading"), plain) is None
     assert deferred_tools_unavailable(client) is False
+
+
+def test_a_cache_breakpoint_never_rides_the_system_message_we_build():
+    """F12: the API refuses a marker on a ``tool_addition`` system message."""
+    marked = {"role": "user", "content": [
+        {"type": "text", "text": ENVELOPE, "cache_control": {"type": "ephemeral", "ttl": "1h"}}]}
+    out = prepare_deferred_tools(
+        _params([{"role": "user", "content": "hi"}, marked, {"role": "user", "content": "<state/>"}]),
+        enabled=True)
+    assert out["messages"][-1]["role"] == "system"
+    assert "cache_control" not in str(out["messages"][-1])

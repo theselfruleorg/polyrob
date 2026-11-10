@@ -116,12 +116,44 @@ class TestAdjustMaxTokensBase:
         result = _call(stub, requested=2000, estimated_input=3500)
         assert result == 400
 
-    def test_floor_at_one(self):
-        """When remaining context is <= 0, return at least 1."""
+    def test_no_room_raises_instead_of_paying_for_one_token(self):
+        """A full prompt with no room for an answer is an overflow, not a 1-token call."""
+        from core.exceptions import LLMContextLengthError
         stub = _make_stub(context_window=1000, max_completion=8192)
-        # input=1000 → remaining = 1000-1000-100 = -100 → max(1, -100) = 1
-        result = _call(stub, requested=500, estimated_input=1000)
-        assert result == 1
+        with pytest.raises(LLMContextLengthError, match="context length"):
+            _call(stub, requested=500, estimated_input=1000)
+
+    def test_a_small_request_may_use_a_small_room(self):
+        stub = _make_stub(context_window=1000, max_completion=8192)
+        assert _call(stub, requested=5, estimated_input=890) == 5
+
+    def test_room_below_a_useful_answer_raises(self):
+        from core.exceptions import LLMContextLengthError
+        stub = _make_stub(context_window=1000, max_completion=8192)
+        with pytest.raises(LLMContextLengthError):
+            _call(stub, requested=500, estimated_input=800)
+
+    def test_tool_schemas_count_as_input(self):
+        stub = _make_stub(context_window=10000, max_completion=8192)
+        tools = [{"type": "function", "function": {"name": "t", "description": "x" * 16000}}]
+        result = stub._adjust_max_tokens(
+            messages=MESSAGES_5_TOKENS, max_tokens=8000, estimated_input_tokens=100, tools=tools)
+        assert result < 6000
+
+    def test_reasoning_replay_counts_as_input(self):
+        stub = _make_stub(context_window=10000, max_completion=8192)
+        replay = [{"role": "assistant", "content": "", "reasoning_content": "y" * 16000}]
+        assert stub._adjust_max_tokens(messages=replay, max_tokens=8000) < 6500
+
+    def test_the_step_anchor_replaces_the_estimate(self):
+        """The provider's own number wins over chars/4, and it already holds the tools."""
+        from modules.llm.call_scope import call_scope
+        stub = _make_stub(context_window=10000, max_completion=8192)
+
+        with call_scope(timeout=60.0, input_tokens=9000):
+            assert stub._adjust_max_tokens(
+                messages=MESSAGES_5_TOKENS, max_tokens=8000,
+                tools=[{"name": "t", "description": "x" * 16000}]) == 900
 
     def test_both_limits_apply_completion_wins(self):
         """When both limits apply, the tighter one wins (completion < context-remaining)."""

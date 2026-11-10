@@ -276,7 +276,6 @@ def _tool(monkeypatch):
     from tools.base_tool import ToolStatus
     from polyrob_x.twitter_tool import TwitterTool
     monkeypatch.setenv("TWITTER_ENABLED", "true")
-    monkeypatch.setenv("TWITTER_REQUIRE_APPROVAL", "false")
     t = object.__new__(TwitterTool)
     t.logger = logging.getLogger("tw-chat-send")
     t.name = "twitter"

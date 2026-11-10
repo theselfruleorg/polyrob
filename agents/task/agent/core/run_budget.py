@@ -66,7 +66,8 @@ async def _session_spend(agent, *, warn_budget: float = 0.0) -> Optional[float]:
     """Session provider spend (api_cost_usd), or None when it cannot be measured.
 
     ``warn_budget`` > 0 warns once when a precondition fails (RUN_BUDGET_USD only).
-    Raises on a probe error — callers fail open.
+    An unreadable usage store is None (unmeasured), never a spend of $0: a $0
+    baseline halted a long session on step 1, and a $0 reading let no cap trip.
     """
     tracker = getattr(agent, "usage_tracker", None)
     user_id = getattr(agent, "user_id", None)
@@ -77,6 +78,8 @@ async def _session_spend(agent, *, warn_budget: float = 0.0) -> Optional[float]:
     rollup = await usage_rollup(
         user_id, session_id=agent.session_id, db=getattr(tracker, "db", None)
     )
+    if rollup.get("unreadable"):
+        return None
     return float(rollup.get("api_cost_usd") or 0.0)
 
 

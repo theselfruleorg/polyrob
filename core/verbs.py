@@ -81,6 +81,11 @@ class Verb:
                  there anyway unless its contributor named it room-safe
                  (``register_verbs(room_verbs=...)``); the flag is for the
                  core rows. Seats read :func:`room_refused`, never a literal.
+        needs:   A surface capability (``core.surfaces.catalog.SurfaceSpec.
+                 capabilities``) the verb's executor needs, e.g. ``moderation``.
+                 A chat surface without it cannot run the row; an owner control
+                 seat (the terminal, the console) runs it through the surface
+                 that has it (113 W4 item 6, F-07). Seats read :meth:`runs_on`.
         background: Non-empty for a money verb whose executing (``go``) form
                  waits on a chain receipt or the owner's own tap: a chat seat
                  runs it off its poll loop and names it with this word in the
@@ -94,10 +99,28 @@ class Verb:
     seats: tuple[str, ...] = ()
     room_refused: bool = False
     background: str = ""
+    needs: str = ""
 
     def runs_on(self, seat: str) -> bool:
-        """True when ``seat`` can run this verb (no ``seats`` = every seat)."""
-        return not self.seats or seat in self.seats
+        """True when ``seat`` can run this verb (no ``seats`` = every seat; a
+        ``needs`` row = a seat that is not a chat surface, or one that has it)."""
+        if self.seats and seat not in self.seats:
+            return False
+        if self.needs:
+            from core.surfaces.catalog import get
+            spec = get(seat)
+            return spec is None or self.needs in spec.capabilities
+        return True
+
+    def run_seats(self) -> tuple:
+        """The seat ids that run this row, for an answer that names them;
+        ``()`` = every seat."""
+        if self.seats:
+            return self.seats
+        if self.needs:
+            from core.surfaces.catalog import capability_ids
+            return capability_ids(self.needs) + ("repl", "console")
+        return ()
 
 
 #: The CORE rows. :data:`VERB_TABLE` is these plus every registered row
@@ -142,20 +165,19 @@ _CORE_TABLE: tuple[Verb, ...] = (
     # work
     Verb("/goal", "work", "Add, show, retry, grant, pause, or stop one goal", room_refused=True),
     Verb("/goals", "work", "The goal board summary"),
-    Verb("/jobs", "work", "Scheduled jobs: next run, last outcome, and who wrote each"),
-    Verb("/job", "work", "Add, change, grant, pause, resume, run, or stop one scheduled job",
-         room_refused=True),
+    Verb("/job", "work",
+         "Scheduled jobs: the list, or add, change, grant, pause, resume, run, or stop one",
+         aliases=("/jobs",), room_refused=True),
     Verb("/apps", "work",
          "Deployed apps: approve an address, check health, stop, start or remove one", room_refused=True),
     # money: no core row. Every money verb is CONTRIBUTED
     # (``register_verbs``) — today by ``core/money_verbs.py``, after 067 P5b by
     # the wallet pack. With none registered the group renders its install hint.
     # control
-    Verb("/cancel", "control", "Stop the task I am running now"),
+    Verb("/cancel", "control", "Stop the task I am running now", aliases=("/stop",)),
     Verb("/pause", "control", "Stop autonomous work now, all of it or one scope",
-         room_refused=True),
+         aliases=("/halt",), room_refused=True),
     Verb("/resume", "control", "Lift the pause", room_refused=True),
-    Verb("/halt", "control", "Stop all autonomous work now", room_refused=True),
     Verb("/run", "control", "Pause, resume or stop one background run", room_refused=True),
     Verb("/mode", "control",
          "What I may do without you, what I do when you are away, and how to change it"),
@@ -167,16 +189,17 @@ _CORE_TABLE: tuple[Verb, ...] = (
          "(/update now: a waiting deploy stops waiting for your chat to go quiet)",
          room_refused=True),
     # remember
-    Verb("/recap", "remember", "The same as /journey"),
     Verb("/thread", "remember",
          "Our conversation across every session and rail, newest last", room_refused=True),
-    Verb("/journey", "remember", "What I have done over a recent window"),
+    Verb("/journey", "remember", "What I have done over a recent window",
+         aliases=("/recap",)),
     # 096 W5: read only — the rules you gave me and my operating contract.
     Verb("/rules", "remember", "Your rules for me and my operating contract, numbered",
          room_refused=True),
     Verb("/kb", "remember", "Search and list my knowledge base"),
+    # 113 W6 G-6: owner reads on every seat (a phone could not read either).
     Verb("/memory", "remember", "Recall across sessions and inspect memory scopes",
-         seats=("repl",)),
+         room_refused=True),
     # look
     Verb("/status", "look",
          "Health first, then session, goals, loops, and wallet"),
@@ -194,12 +217,16 @@ _CORE_TABLE: tuple[Verb, ...] = (
     Verb("/allow", "set up", "Allow me to message a target", room_refused=True),
     Verb("/deny", "set up", "Revoke a message permission", room_refused=True),
     Verb("/allowlist", "set up", "Who I am allowed to message"),
+    Verb("/pair", "set up", "Strangers who asked to talk to me: list, approve or revoke",
+         room_refused=True),
     Verb("/groups", "set up",
          "Room presence admin: allow, deny, mode, roles, and more"),
     Verb("/mute", "set up", "Silence a room, or mute a member for a while"),
-    Verb("/ban", "set up", "Ban a member for a while"),
-    Verb("/unban", "set up", "Lift a member's ban"),
-    Verb("/unmute", "set up", "End a member's mute early"),
+    # F-07: the member verbs need a platform that mutes and bans (`moderation`).
+    # /mute stays on every seat: silencing a room is the agent's own presence.
+    Verb("/ban", "set up", "Ban a member for a while", needs="moderation"),
+    Verb("/unban", "set up", "Lift a member's ban", needs="moderation"),
+    Verb("/unmute", "set up", "End a member's mute early", needs="moderation"),
     Verb("/config", "set up", "Read or set preferences", room_refused=True),
     # REPL-local (041 phase 2): the terminal holds the live session, so it is
     # where a RUNNING worker is stopped or steered; the store half is
@@ -207,7 +234,8 @@ _CORE_TABLE: tuple[Verb, ...] = (
     Verb("/workers", "set up",
          "Named helpers: approve them, and stop or steer a running one",
          seats=("repl",)),
-    Verb("/prefs", "set up", "The preferences you have set", room_refused=True),
+    Verb("/prefs", "set up", "The preferences you have set", room_refused=True,
+         aliases=("/settings",)),
     Verb("/mcp", "set up", "MCP servers I can use: add, remove, or test", room_refused=True),
     # display
     Verb("/avatar", "display", "This instance's avatar image — show, set, clear"),
@@ -218,11 +246,24 @@ _CORE_TABLE: tuple[Verb, ...] = (
     Verb("/model", "set up",
          "The model this chat runs on — switch it live, set your default, pick reasoning",
          room_refused=True),
-    Verb("/skills", "work", "The skills I can load, and what each one does; /skills <id> shows one skill's text",
+    # I-1: one help line for every seat, so it says where the writes run.
+    Verb("/skills", "work",
+         "The skills I can load, and what each one does; /skills <id> shows one "
+         "skill's text. You install or approve a skill in the terminal",
          room_refused=True),
     # 080 WS-2: the REPL-only verbs, so this ONE table is complete. The terminal
     # holds the live session, its trace and the local machine; no other seat can
     # run these, so every other seat's help and palette leave them out.
+    # The chat model: one main chat and the separate chats beside it, on every
+    # seat (core/surfaces/chats.py). `/new` in a group restarts the room, so it
+    # is the one of the five a room runs.
+    Verb("/new", "talk", "Open a separate chat beside the main one"),
+    Verb("/chats", "talk", "Your chats: the main one and each separate one",
+         aliases=("/sessions",), room_refused=True),
+    Verb("/chat", "talk", "Switch to another of your chats", room_refused=True),
+    Verb("/rename", "talk", "Name the chat you are in", room_refused=True),
+    Verb("/close", "talk", "Close a separate chat and go back to the main one",
+         room_refused=True),
     Verb("/clear", "talk", "Clear this chat and keep my instructions",
          seats=("repl",)),
     Verb("/compact", "talk", "Shorten this chat's history in the background",
@@ -230,20 +271,21 @@ _CORE_TABLE: tuple[Verb, ...] = (
     Verb("/history", "talk", "The turns of this chat", seats=("repl",)),
     Verb("/attach", "talk", "Attach local files or images to my next step",
          seats=("repl",)),
-    Verb("/steer", "talk", "Give the running turn one more instruction", seats=("repl",)),
+    # I-5: every chat app steers with a plain message; the verb is the terminal's.
+    Verb("/steer", "talk", "Give the running turn one more instruction (in a chat app, "
+         "just send it)", seats=("repl",)),
     Verb("/session", "talk", "Who and where this chat is: owner, model, memory, files",
          aliases=("/info",), seats=("repl",)),
-    Verb("/sessions", "talk", "Every chat I know about", seats=("repl",)),
     Verb("/replay", "talk", "Replay a chat's feed", seats=("repl",)),
     Verb("/export", "talk", "Export this chat's data", seats=("repl",)),
-    Verb("/learn", "work", "Describe how to do something and I draft a skill for you to check",
+    Verb("/learn", "work", "Describe how to do something and I save it as a skill",
          seats=("repl",)),
     Verb("/todos", "work", "The todo list in my working files", seats=("repl",)),
     Verb("/subagents", "work", "What I can hand to a helper", seats=("repl",)),
     Verb("/autonomy", "control", "My background loops and what they hold; switch them on or off",
          seats=("repl",)),
     Verb("/self", "remember", "My identity documents, read-only", aliases=("/soul",),
-         seats=("repl",)),
+         room_refused=True),
     Verb("/doctor", "look", "The health report", seats=("repl",)),
     Verb("/logs", "look", "Recent log lines of this chat", seats=("repl",)),
     Verb("/context", "look", "What fills my context, slot by slot", seats=("repl",)),
@@ -260,7 +302,9 @@ _CORE_TABLE: tuple[Verb, ...] = (
     Verb("/persona", "set up", "The personas, and the one new chats use", seats=("repl",)),
     Verb("/profile", "set up", "Which agent this terminal runs, and where its files live", seats=("repl",)),
     Verb("/toolset", "set up", "The ability sets, and the one new chats use", seats=("repl",)),
-    Verb("/quiet", "display", "Hide or show the step transcript", seats=("repl",)),
+    # I-3: "quiet" means quiet hours only; /quiet is the old name for one release.
+    Verb("/brief", "display", "Hide or show the step transcript", seats=("repl",),
+         aliases=("/quiet",)),
     Verb("/verbose", "display", "Show or hide the live trace", seats=("repl",)),
     Verb("/exit", "leave", "Leave the terminal", aliases=("/quit", "/q"),
          seats=("repl",)),
@@ -270,11 +314,10 @@ _CORE_TABLE: tuple[Verb, ...] = (
 )
 
 
-#: Names DELIBERATELY not in :data:`VERB_TABLE`: the two verbs the console drops
-#: from ``/help`` (``webview/console_commands.py`` ``CONSOLE_HELP_EXCLUDED``).
-#: Named here so the contract test reads the exclusion from the SSOT, not a
-#: literal it can drift from.
-PALETTE_EXCLUDED: frozenset[str] = frozenset({"/task", "/new"})
+#: Names DELIBERATELY not in :data:`VERB_TABLE`: `/task`, the old form of `/new`
+#: (``webview/console_commands.py`` ``CONSOLE_HELP_EXCLUDED``). Named here so the
+#: contract test reads the exclusion from the SSOT, not a literal it can drift from.
+PALETTE_EXCLUDED: frozenset[str] = frozenset({"/task"})
 
 
 #: 067 P5a — contributed verbs. A pack contributes ROWS (words, group) and, per

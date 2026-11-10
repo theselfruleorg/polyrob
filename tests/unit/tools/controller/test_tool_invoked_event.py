@@ -57,6 +57,17 @@ def test_unresolvable_action_records_unknown_tool_not_nothing(monkeypatch):
     assert seen[0][1]["attrs"]["tool"] == "unknown"
 
 
+def test_a_core_action_with_no_tool_id_is_labeled_core(monkeypatch):
+    """1,794 of 4,466 prod rows read 'unknown' and were core actions (tool=None)."""
+    class _Core(_Ctrl):
+        def get_action_details(self, name):
+            return SimpleNamespace(tool=None)
+    seen = _capture(monkeypatch)
+    _Core()._record_invocation("done", SimpleNamespace(error=None), None, started_ns=0)
+    assert seen[0][1]["attrs"]["tool"] == "core"
+    assert seen[0][1]["attrs"]["action"] == "done"
+
+
 def test_a_raising_resolver_never_breaks_execution(monkeypatch):
     class _Bad(_Ctrl):
         def get_action_details(self, name):

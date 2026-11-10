@@ -50,7 +50,7 @@ from typing import Awaitable, Callable, List, Optional, Tuple
 
 from tools.code_exec.backend import ExecutionBackend, ExecutionBackendError
 from tools.code_exec.backends._proc import run_group
-from tools.code_exec.env_policy import SECRET_PAT, build_child_env
+from tools.code_exec.env_policy import SECRET_PAT, docker_cli_env
 from tools.code_exec.limits import exec_timeout_cap, max_output_bytes, max_timeout_sec
 from tools.code_exec.result import ExecutionRequest, ExecutionResult
 from tools.code_exec.backends.sandbox_lifecycle import dead_container, restarted_result
@@ -229,7 +229,7 @@ async def _default_docker_runner(
     stdin_bytes = input.encode() if input is not None else None
 
     code, out_text, err_text, timed_out = await run_group(
-        argv, stdin_bytes=stdin_bytes, timeout=timeout, label="docker"
+        argv, stdin_bytes=stdin_bytes, timeout=timeout, label="docker", env=docker_cli_env()
     )
     if timed_out:
         raise _DockerExecTimeout(
@@ -1077,7 +1077,7 @@ class DockerBackend(ExecutionBackend):
         argv = self._build_run_argv(
             request, workdir, container_name=container_name, timeout_sec=timeout,
         )
-        env = build_child_env({})  # env for the docker CLI process itself (PATH/HOME only)
+        env = docker_cli_env()  # the docker CLI process itself: PATH/HOME + the daemon address
         binary = docker_binary()
         stdin_bytes = (request.stdin or "").encode() if request.stdin else None
         # Host-side wait is a BACKSTOP only (a hung docker CLI client) — deliberately

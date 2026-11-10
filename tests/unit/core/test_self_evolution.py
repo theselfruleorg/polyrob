@@ -45,9 +45,8 @@ def test_list_pending_includes_self_context(tmp_path):
 
 
 def test_list_pending_includes_skills(tmp_path, monkeypatch):
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "true")
     mgr = _skill_mgr(tmp_path)
-    mgr.create_skill("learned-thing", GOOD_SKILL, user_id="alice", created_by="agent")
+    mgr.create_skill("learned-thing", GOOD_SKILL, user_id="alice", created_by="untrusted_turn")
     items = self_evolution.list_pending(
         "alice", home_dir=tmp_path, instance_id=DEFAULT_INSTANCE_ID, skill_manager=mgr)
     kinds = {i["kind"] for i in items}
@@ -87,9 +86,8 @@ def test_reject_self_context(tmp_path):
 
 
 def test_promote_skill(tmp_path, monkeypatch):
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "true")
     mgr = _skill_mgr(tmp_path)
-    mgr.create_skill("learned-thing", GOOD_SKILL, user_id="alice", created_by="agent")
+    mgr.create_skill("learned-thing", GOOD_SKILL, user_id="alice", created_by="untrusted_turn")
     ok, _ = self_evolution.promote(
         "skill", "learned-thing", user_id="alice",
         home_dir=tmp_path, instance_id=DEFAULT_INSTANCE_ID, skill_manager=mgr)
@@ -99,9 +97,8 @@ def test_promote_skill(tmp_path, monkeypatch):
 
 
 def test_reject_skill(tmp_path, monkeypatch):
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "true")
     mgr = _skill_mgr(tmp_path)
-    mgr.create_skill("bad-thing", GOOD_SKILL, user_id="alice", created_by="agent")
+    mgr.create_skill("bad-thing", GOOD_SKILL, user_id="alice", created_by="untrusted_turn")
     ok, _ = self_evolution.reject(
         "skill", "bad-thing", user_id="alice",
         home_dir=tmp_path, instance_id=DEFAULT_INSTANCE_ID, skill_manager=mgr)
@@ -336,7 +333,6 @@ async def test_notify_unchanged_pending_set_attempts_once(tmp_path, monkeypatch)
 @pytest.mark.asyncio
 async def test_notify_new_pending_item_notifies_again(tmp_path, monkeypatch):
     monkeypatch.setenv("SELF_EVOLUTION_TRANSPARENCY", "true")
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "true")
     attempts = _patch_rail(monkeypatch)
     _seed_self_pending(tmp_path)
     mgr = _skill_mgr(tmp_path)
@@ -344,7 +340,7 @@ async def test_notify_new_pending_item_notifies_again(tmp_path, monkeypatch):
     assert await _notify(c, tmp_path, mgr) is True
     assert await _notify(c, tmp_path, mgr) is False
     # a genuinely NEW pending item changes the set -> prompt notify
-    mgr.create_skill("learned-thing", GOOD_SKILL, user_id="alice", created_by="agent")
+    mgr.create_skill("learned-thing", GOOD_SKILL, user_id="alice", created_by="untrusted_turn")
     assert await _notify(c, tmp_path, mgr) is True
     assert len(attempts) == 2
     assert "learned-thing" in attempts[-1]

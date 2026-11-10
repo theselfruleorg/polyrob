@@ -181,6 +181,27 @@ def _ensure_group_roles(container, db_path: str):
         return None
 
 
+def ensure_chat_registry(container, db_path: str = None):
+    """113: the chat store WITHOUT the outbound bus — for a seat that has chats and no
+    router (the terminal, a local console). Returns the registry on the container
+    (the bus's own when it is installed), or None when it could not be opened."""
+    existing = container.get_service("session_chat_registry")
+    if existing is not None:
+        return existing
+    try:
+        if db_path is None:
+            from core.runtime_paths import data_dir_or_home
+            db_path = surfaces_db_path(data_dir_or_home(
+                getattr(getattr(container, "config", None), "data_dir", None)))
+        from core.surfaces.session_chat_registry import SessionChatRegistry
+        registry = SessionChatRegistry(db_path)
+        container.register_service("session_chat_registry", registry)
+        return registry
+    except Exception as e:
+        logger.warning("chat store not opened (chats are not listed here): %s", e)
+        return None
+
+
 def install_surface_bus(container, db_path: str = None) -> bool:
     """Build SessionChatRegistry + MessageRouter and register them on ``container``.
 
@@ -227,7 +248,8 @@ def install_surface_bus(container, db_path: str = None) -> bool:
         from core.surfaces.session_chat_registry import SessionChatRegistry
         from core.surfaces.message_router import MessageRouter
 
-        registry = SessionChatRegistry(db_path)
+        # ONE registry per process: a seat that opened the chat store first keeps it.
+        registry = container.get_service("session_chat_registry") or SessionChatRegistry(db_path)
         router = MessageRouter(registry)
         container.register_service("session_chat_registry", registry)
         container.register_service("message_router", router)

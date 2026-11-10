@@ -48,3 +48,30 @@ def test_backend_build_env_delegates(monkeypatch):
     b = LocalSubprocessBackend()
     assert b._build_env({"FOO": "bar"}) == build_child_env({"FOO": "bar"})
     assert "OPENAI_API_KEY" not in b._build_env({})
+
+
+def test_docker_cli_env_carries_the_daemon_address_and_no_secret(monkeypatch):
+    # A rootless or remote daemon (DOCKER_HOST) was probed but never used: the scrubbed
+    # CLI env dropped the address, so `docker` fell back to the default rootful socket.
+    from tools.code_exec.env_policy import docker_cli_env
+    monkeypatch.setenv("DOCKER_HOST", "unix:///run/sandbox/docker.sock")
+    monkeypatch.setenv("AGENT_WALLET_MASTER_SEED", "never")
+    monkeypatch.setenv("OPENAI_API_KEY", "never")
+    env = docker_cli_env()
+    assert env["DOCKER_HOST"] == "unix:///run/sandbox/docker.sock"
+    assert "AGENT_WALLET_MASTER_SEED" not in env and "OPENAI_API_KEY" not in env
+
+
+def test_the_docker_runner_and_the_kernel_use_the_docker_cli_env(monkeypatch):
+    import asyncio
+    from tools.code_exec.backends import docker as docker_mod
+    monkeypatch.setenv("DOCKER_HOST", "unix:///run/sandbox/docker.sock")
+    seen = {}
+
+    async def fake_run_group(cmd, *, stdin_bytes, timeout, label, env=None, **kw):
+        seen["env"] = env
+        return 0, "", "", False
+
+    monkeypatch.setattr(docker_mod, "run_group", fake_run_group)
+    asyncio.run(docker_mod._default_docker_runner(["version"]))
+    assert seen["env"]["DOCKER_HOST"] == "unix:///run/sandbox/docker.sock"

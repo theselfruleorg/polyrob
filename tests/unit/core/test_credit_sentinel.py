@@ -376,3 +376,21 @@ def test_release_ts_survives_latch_roundtrip(data_dir):
         "[1310] limit exhausted", provider="zai-coding", release_ts=release))
     entries = _read_latch(_sentinel_path())
     assert entries["zai-coding"]["release_ts"] == pytest.approx(release)
+
+
+@pytest.mark.parametrize("text", [
+    "cost so far $0.402", "spent $402 today", "budget 0.402 USD", "requested 1,402 tokens",
+    "took 402.5 ms", "req_9f402ab13c7e",
+])
+def test_a_price_or_a_count_with_402_is_not_credit_death(text):
+    from core.credit_sentinel import looks_like_credit_death
+    assert not looks_like_credit_death(text)
+
+
+@pytest.mark.parametrize("text", [
+    "Error code: 402", "HTTP/1.1 402 Payment", "(402)", "status_code=402", "error 402.",
+    "got 402, retry",
+])
+def test_a_402_status_is_credit_death(text):
+    from core.credit_sentinel import looks_like_credit_death
+    assert looks_like_credit_death(text)

@@ -16,11 +16,13 @@ from __future__ import annotations
 import logging
 import os
 import re
-from typing import Any, List, Optional, Dict
+from typing import Any, List, Literal, Optional, Dict
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from tools.base_tool import BaseTool
+from core.money.classify import is_money_class as _money_class  # 112 W3
+from tools.model_tier import TIER_FIELD_DESCRIPTION, WHY_FIELD_DESCRIPTION, tier_payload  # 112 W2
 from agents.task.loop_types.controller_types import ActionResult
 from agents.task.goals.board import DuplicateGoalError, GoalBoard
 
@@ -372,8 +374,11 @@ _SELF_REFERENTIAL_ACCEPTANCE = re.compile(
 
 
 _CADENCE_RE = re.compile(
-    r"\b(?:every|each)\s+(?:run|day|morning|evening|night|week|hour|\d+\s*(?:h|hours?|min(?:ute)?s?|days?))\b"
-    r"|\bper\s+(?:run|day|week|hour)\b|\bdaily\b|\bweekly\b|\bhourly\b|\bonce\s+a\s+day\b",
+    r"\b(?:every|each)\s+(?:run|day|morning|evening|night|week|weekday|month|hour"
+    r"|monday|tuesday|wednesday|thursday|friday|saturday|sunday"
+    r"|\d+\s*(?:h|hours?|min(?:ute)?s?|days?))\b"
+    r"|\bper\s+(?:run|day|week|hour)\b|\bdaily\b|\bweekly\b|\bhourly\b|\bnightly\b|\bmonthly\b"
+    r"|\b(?:once|twice)\s+a\s+(?:day|week)\b",
     re.IGNORECASE)
 
 
@@ -423,6 +428,8 @@ class GoalCreateAction(BaseModel):
                      "needs DEFI_AGENT_AUTONOMY armed; 'ops' asks for cronjob, which needs "
                      "autonomous mode)."),
     )
+    tier: Optional[Literal["default", "heavy", "light"]] = Field(None, description=TIER_FIELD_DESCRIPTION)
+    why: Optional[str] = Field(None, max_length=200, description=WHY_FIELD_DESCRIPTION)
     skills: Optional[List[str]] = Field(
         None,
         description=("Optional skill ids this goal's runs must load (its doctrine, e.g. "
@@ -447,11 +454,12 @@ class GoalCreateAction(BaseModel):
                      "(reads shared memory, its own findings stay quarantined until it "
                      "completes verified) or 'sealed' (sees only its own findings). Omit "
                      "for the deployment default. Never weaker than the creating run's."))
-    report_back: bool = Field(
-        False,
+    report_back: Optional[bool] = Field(
+        None,
         description=("056 WS7: when true the FULL result re-enters the session that created "
-                     "this goal; default false = a one-line 'goal <id> done — <first line>' "
-                     "notice (the artefacts are on disk either way)."))
+                     "this goal; false = a one-line 'goal <id> done — <first line>' notice "
+                     "(the artefacts are on disk either way). Omit: true when the owner's chat "
+                     "creates a heavy or money goal, else false."))
     acceptance_checks: Optional[List[Any]] = Field(
         None,
         description=("Optional TYPED checks the framework executes at run end (fail-closed "
@@ -472,20 +480,6 @@ class GoalCreateAction(BaseModel):
                      "it in plain-English `acceptance` instead and let the completion judge "
                      "read it."),
     )
-
-
-class GoalAskAction(BaseModel):
-    """A durable OWNER-FACING need: "I require a decision/resource from you to proceed"."""
-    what: str = Field(..., min_length=8, max_length=600, description=(
-        "The decision or resource you need from the owner, as ONE question they can answer in a "
-        "word or two (name the options: 'A) … or B) …'). This lands on the durable board, shows in "
-        "/status, /pending and the daily digest, and is deduplicated: a matching OPEN ask "
-        "is refreshed, never duplicated — so raise it EVERY time you skip on it; never fall back to "
-        "'I asked once, I will not spam'."))
-    why: str = Field("", max_length=1200, description=(
-        "Evidence: what is blocked, since when, what you tried, the numbers. Written for a phone."))
-    blocks_goal_ids: Optional[List[str]] = Field(None, description=(
-        "Goal ids this ask blocks (they are HELD until the owner answers, then re-armed)."))
 
 
 class GoalListAction(BaseModel):
@@ -537,7 +531,7 @@ class GoalCancelAction(BaseModel):
                                           "an ask no longer needed).")
     forever: bool = Field(False, description=(
         "True ONLY when the owner said never again: the title is switched off, so "
-        "no stream, planner or agent creates it again (until the owner's /goal "
+        "no job or agent creates it again (until the owner's /goal "
         "allow). Default: stop just this goal."))
 
 
@@ -555,20 +549,27 @@ class GoalUpdateAction(BaseModel):
     priority: Optional[int] = Field(None, ge=1, le=10)
     acceptance: Optional[str] = Field(None, description="What 'done' must prove (ids/paths/urls).")
     tools: Optional[List[str]] = None
+    tier: Optional[Literal["default", "heavy", "light"]] = Field(None, description=TIER_FIELD_DESCRIPTION)
+    why: Optional[str] = Field(None, max_length=200, description=WHY_FIELD_DESCRIPTION)
 
 
-def _autonomy_refusal(execution_context) -> Optional[ActionResult]:
-    from core.autonomy_marker import is_autonomous
+def _autonomy_refusal(execution_context, goal_id: Optional[str] = None) -> Optional[ActionResult]:
+    """A standing run may steer other goals. It never rewrites the goal it runs (a runaway
+    goal must not change its own mission), and a delegated or forged turn changes none."""
+    from core.autonomy_marker import goal_for_session, is_autonomous
+    from core.security.owner_turn import is_owner_standing_run
     sid = getattr(execution_context, "session_id", None)
     psid = getattr(execution_context, "parent_session_id", None)
     if is_autonomous(sid) or is_autonomous(psid):
+        if is_owner_standing_run(execution_context) and goal_id \
+                and goal_id != goal_for_session(sid):
+            return None
         return ActionResult(
-            error=("Refused: goal mutation is not allowed from an autonomous "
-                   "(goal/cron-spawned) session — owner-only. You may goal_create new "
-                   "goals or read state."),
+            error=("Refused: a run cannot change the goal it is running, and a delegated "
+                   "run changes no goal. You may goal_create new goals or read state."),
             include_in_memory=True)
     if not owner_seat_turn(execution_context):
-        return ActionResult(error="Refused: goal mutation requires a genuine owner turn; a leaf or forged turn cannot change standing work.", include_in_memory=True)
+        return ActionResult(error="Refused: goal mutation requires a genuine owner turn; a leaf or forged turn cannot change a goal.", include_in_memory=True)
     return None
 
 
@@ -599,12 +600,12 @@ class GoalTool(BaseTool):
         except Exception:
             return True
 
-    @BaseTool.action("Record a DURABLE goal pursued across sessions (beyond this turn). "
-                     "Use for ongoing work; use `task` for this-turn TODOs and `cronjob` "
-                     "for time-scheduled runs.", param_model=GoalCreateAction)
+    @BaseTool.action("Record a DURABLE goal: ONE piece of work that outlives this turn and "
+                     "is done once. Use `task` for this-turn TODOs and `cronjob` for repeating "
+                     "or timed work.", param_model=GoalCreateAction)
     async def goal_create(self, params: GoalCreateAction, execution_context=None) -> ActionResult:
         # A leaf / sub-agent reports to its parent; it must not start durable
-        # autonomous work of its own (cronjob is delegate_blocked, goal_ask
+        # autonomous work of its own (cronjob is delegate_blocked, owner_ask
         # refuses a leaf — the same rule).
         if _is_leaf_context(execution_context):
             return ActionResult(error="Refused: a leaf/sub-agent cannot create a durable goal — "
@@ -684,6 +685,11 @@ class GoalTool(BaseTool):
             if refusal:
                 return ActionResult(error=refusal, include_in_memory=True)
             payload["rig"] = params.rig.strip().lower()
+        # 112 W2: a model tier, from the owner's chat only.
+        _tier, _tier_err = tier_payload(params.tier, params.why, owner_turn, payload.get("provider"))
+        if _tier_err:
+            return ActionResult(error=_tier_err, include_in_memory=True)
+        payload.update(_tier)
         # 060 WS-5: the goal pins its doctrine (seeded every run; no tool granted).
         from core.config_policy.rigs import pinned_skills
         if pinned_skills({"skills": params.skills}):
@@ -717,7 +723,10 @@ class GoalTool(BaseTool):
         board = self._resolve_board()
         if params.acceptance:
             payload["acceptance"] = params.acceptance
-        if params.report_back:
+        # 112 W3: a goal the owner's chat asked for reports back to that chat by default.
+        if (params.report_back if params.report_back is not None
+                else bool(payload.get("origin_session_id") and owner_turn
+                          and (payload.get("tier") == "heavy" or _money_class(payload)))):
             payload["report_back"] = True
         if params.memory_regime is not None or execution_context is not None:
             from modules.memory.scope import goal_create_regime  # 025: clamped, never a label
@@ -785,69 +794,12 @@ class GoalTool(BaseTool):
         skipped = [name for name, value in (
             ("priority", params.priority != 5), ("depends_on", params.depends_on),
             ("memory_regime", params.memory_regime), ("report_back", params.report_back),
-            ("acceptance_checks", params.acceptance_checks)) if value]
+            ("acceptance_checks", params.acceptance_checks), ("tier", params.tier)) if value]
         return await raise_job_card(
             self, execution_context, words, what="goal", reasons=reasons,
             details=[f"Goal: {params.title.strip()}"] + [f"Grant: {w}" for w in grant],
             not_carried=skipped,
             later="find the goal with goal_list and set those fields with goal_update.")
-
-    @BaseTool.action("Raise a DURABLE owner ask that HOLDS specific goals (blocks_goal_ids) until "
-                     "the owner answers. For any other owner decision use owner_ask — it tells the "
-                     "owner, offers taps and hands the answer to this rail's next run. Lands on the "
-                     "board, shows in /status, /pending and the daily digest; dedups against your "
-                     "OPEN asks, so call it every time you skip on the same blocker.",
-                     param_model=GoalAskAction)
-    async def goal_ask(self, params: GoalAskAction, execution_context=None) -> ActionResult:
-        # A leaf / sub-agent reports to its parent, not to the owner: refuse.
-        if getattr(execution_context, "is_sub_agent", False) or \
-                str(getattr(execution_context, "role", "") or "") == "leaf":
-            return ActionResult(error="Refused: a leaf/sub-agent cannot raise an owner ask — "
-                                      "return the blocker to your parent instead.",
-                                include_in_memory=True)
-        user_id = self._user(execution_context)
-        sid = str(getattr(execution_context, "session_id", "") or "")
-        from core.surfaces.owner_address import is_owner_tenant
-        from core.autonomy_marker import goal_for_session
-        if not is_owner_tenant(user_id):
-            return ActionResult(error="Refused: this tenant cannot raise an owner ask.")
-        own_goal = goal_for_session(sid)
-        if params.blocks_goal_ids and not owner_seat_turn(execution_context):
-            if any(goal_id != own_goal for goal_id in params.blocks_goal_ids):
-                return ActionResult(error="Refused: a run may hold only its own goal for an owner decision.")
-        board = self._resolve_board()
-        before = {a.id for a in board.asks(user_id=user_id, status="open")}
-        # Same provenance and tap options owner_ask stamps, so the answer reaches
-        # the asking rail's next run and the owner can answer with one tap.
-        extra = {"origin": "agent", "session_id": sid}
-        try:
-            from tools.controller.owner_ask_action import _rail, ask_options
-            rail_id, rail_kind = _rail(sid)
-            if rail_id:
-                extra.update(rail_id=rail_id, rail_kind=rail_kind)
-            options = ask_options(params.what)
-            if options:
-                extra["options"] = options
-        except Exception:
-            pass
-        ask = board.create_ask(
-            user_id=user_id, what=params.what.strip(), why=(params.why or "").strip(),
-            blocks_goal_ids=list(params.blocks_goal_ids or []),
-            extra_payload=extra)
-        if ask.id in before:
-            import datetime as _dt
-            since = _dt.datetime.fromtimestamp(float(ask.created_at or 0), tz=_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-            return ActionResult(
-                extracted_content=(f"Ask `{ask.id}` is ALREADY OPEN since {since} (refreshed, not duplicated — "
-                                   f"the store dedups, no need to re-ask in chat). The owner sees it in /status, "
-                                   f"/pending and the daily digest; until it is answered, keep applying the "
-                                   f"conservative reading and log the skip against ask {ask.id}."),
-                include_in_memory=True)
-        return ActionResult(
-            extracted_content=(f"Raised owner ask `{ask.id}` (open): {ask.title}. It stays visible on every owner "
-                               f"seat until answered; re-calling goal_ask with the same question refreshes it. "
-                               f"Log skips against ask {ask.id} and do NOT also message the owner about it."),
-            include_in_memory=True)
 
     @BaseTool.action("List your durable goals, newest first — LIVE ones by default "
                      "(pass status='done'/'cancelled' for history).",
@@ -932,7 +884,7 @@ class GoalTool(BaseTool):
     @BaseTool.action("Requeue a BLOCKED goal with a rationale (§5.3 stewardship; "
                      "resets its retry budget).", param_model=GoalUnblockAction)
     async def goal_unblock(self, params: GoalUnblockAction, execution_context=None) -> ActionResult:
-        refusal = _autonomy_refusal(execution_context)
+        refusal = _autonomy_refusal(execution_context, params.goal_id)
         if refusal:
             return refusal
         board = self._resolve_board()
@@ -949,7 +901,7 @@ class GoalTool(BaseTool):
                      "owner said never again (the same as the owner's /goal stop).",
                      param_model=GoalCancelAction)
     async def goal_cancel(self, params: GoalCancelAction, execution_context=None) -> ActionResult:
-        refusal = _autonomy_refusal(execution_context)
+        refusal = _autonomy_refusal(execution_context, params.goal_id)
         if refusal:
             return refusal
         board = self._resolve_board()
@@ -971,10 +923,10 @@ class GoalTool(BaseTool):
             return ActionResult(error=res.message, include_in_memory=True)
         return ActionResult(extracted_content=res.message, include_in_memory=True)
 
-    @BaseTool.action("Edit a goal's title/body/priority/acceptance/tools (owner-only).",
+    @BaseTool.action("Edit a goal's title/body/priority/acceptance/tools.",
                      param_model=GoalUpdateAction)
     async def goal_update(self, params: GoalUpdateAction, execution_context=None) -> ActionResult:
-        refusal = _autonomy_refusal(execution_context)
+        refusal = _autonomy_refusal(execution_context, params.goal_id)
         if refusal:
             return refusal
         board = self._resolve_board()
@@ -989,6 +941,12 @@ class GoalTool(BaseTool):
                                     include_in_memory=True)
         owner_turn = owner_seat_turn(execution_context)
         patch: dict = {}
+        # 112 W2: a tier is checked against the goal's own provider, as goal_create checks it.
+        _goal_provider = (getattr(row, "payload", None) or {}).get("provider") if row else None
+        _tier, _tier_err = tier_payload(params.tier, params.why, owner_turn, _goal_provider)
+        if _tier_err:
+            return ActionResult(error=_tier_err, include_in_memory=True)
+        patch.update(_tier)
         if params.acceptance is not None:
             patch["acceptance"] = params.acceptance
         if params.tools is not None:
@@ -1056,7 +1014,7 @@ def register_goal_tool(force: bool = False) -> bool:
         ToolDescriptor(
             name="goal",
             description=("Record/list/update/cancel durable cross-session goals "
-                        "(goal_create/list/show/ask/unblock/update/cancel)"),
+                        "(goal_create/list/show/unblock/update/cancel)"),
             category=ToolCategory.INTEGRATION,
             required_config=[],
             init_priority=80,

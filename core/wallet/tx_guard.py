@@ -284,6 +284,10 @@ class TxIntent:
     #: 099 W2 — a zero-value call to an offer's contract RESOURCE, in an order run only; the
     #: receipt is the shape (``core.wallet.resource_call``), the scope ``core.money.offer_gate``.
     is_resource_call: bool = False
+    #: The order's recipient a resource call binds (lower-case; set by the verb, checked against
+    #: the order in step 2). It travels to ``polyrob-signer``, which has no order store, so its
+    #: re-check asserts the receipt against the same recipient.
+    resource_recipient: Optional[str] = None
     #: The collection reveal (069 v4; a pinned collection profile with the ``reveal``
     #: capability): ``reveal(uint256[] ids)`` on a pinned collection, value 0. The
     #: registration precedent: it moves nothing, so the RECEIPT is the shape — the simulation
@@ -418,7 +422,10 @@ def autonomous_max_usd(user_id=None, home_dir=None) -> float:
         from core.wallet.signer_envelope import clamp
         backstop = float(clamp(float_env("AGENT_WALLET_MAX_PER_TX_USD",
                                          DEFAULT_MAX_PER_TX_USD), "per_tx_usd"))
-    return min(value, backstop)
+    # The signer holds a send above its own ask-above value for the on-box approval,
+    # so the agent asks the owner first (a signer that reports no value binds nothing).
+    from core.wallet.signer_envelope import clamp as _signer_clamp
+    return float(_signer_clamp(min(value, backstop), "approve_above_usd"))
 
 
 def rpc_is_pinned(chain: str) -> bool:
@@ -699,8 +706,16 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
               forged_fn: Optional[Callable] = None,
               autonomous_ok_fn: Optional[Callable] = None,
               liquidity_rpc: Optional[Callable] = None,
-              account_rpc: Optional[Callable] = None) -> Decision:
+              account_rpc: Optional[Callable] = None,
+              approve_above_usd: Optional[float] = None,
+              unverified_within_caps: bool = False) -> Decision:
     """Authorize *tx* against *intent*. Returns a Decision; never broadcasts.
+
+    ``approve_above_usd`` replaces the owner's ask-above dial in step 9 for a caller
+    with no owner prefs of its own (the signer, from ``signer.toml``). The caps of
+    *gate* bind as always. ``unverified_within_caps`` (the signer, root's switch) lets
+    a send with no spend-grade price through step 9 when the weaker, liquidity-measured
+    price valued it; a send with no price at all still needs the owner.
 
     The caller must hold ``gate.reserve()`` across authorize → broadcast →
     record so a concurrent transaction cannot both clear a nearly-exhausted cap.
@@ -716,7 +731,8 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
         fallback_price_fn=fallback_price_fn, rpc_is_pinned_fn=rpc_is_pinned_fn,
         halted_fn=halted_fn, entry_paused_fn=entry_paused_fn, forged_fn=forged_fn,
         autonomous_ok_fn=autonomous_ok_fn, liquidity_rpc=liquidity_rpc,
-        account_rpc=account_rpc)
+        account_rpc=account_rpc, approve_above_usd=approve_above_usd,
+        unverified_within_caps=unverified_within_caps)
     if decision.allowed and decision.lane in ("owner_direct", "owner_approved"):
         # Book the spend with the lane it was authorized on, so the pause alarm
         # can tell the owner acting from the agent breaching (fail-open: a fake
@@ -769,7 +785,9 @@ def _authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
                forged_fn: Optional[Callable] = None,
                autonomous_ok_fn: Optional[Callable] = None,
                liquidity_rpc: Optional[Callable] = None,
-               account_rpc: Optional[Callable] = None) -> Decision:
+               account_rpc: Optional[Callable] = None,
+               approve_above_usd: Optional[float] = None,
+               unverified_within_caps: bool = False) -> Decision:
     """The guard itself (see :func:`authorize`).
 
     W6 (2026-10-10): the numbered steps are functions in
@@ -793,7 +811,8 @@ def _authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
         rpc_is_pinned_fn=rpc_is_pinned_fn, halted_fn=halted_fn,
         entry_paused_fn=entry_paused_fn, forged_fn=forged_fn,
         autonomous_ok_fn=autonomous_ok_fn, liquidity_rpc=liquidity_rpc,
-        account_rpc=account_rpc))
+        account_rpc=account_rpc, approve_above_usd=approve_above_usd,
+        unverified_within_caps=unverified_within_caps))
 
 
 # ==========================================================================
@@ -955,39 +974,10 @@ def _account_call_refusal(tx: dict, *, deep: bool = True) -> Optional[str]:
 def _via_account_preflight(intent: TxIntent, sender: str, rpc, *,
                            inner_to: Optional[str] = None,
                            journal_to: Optional[str] = None) -> Optional[str]:
-    """Rule 5: reads BEFORE simulation. Any failed read refuses (fail closed).
-
-    069 v4 (the simple model): the SIGNER must be the NFT's current owner — the only way this
-    instance acts through an account. There is no grant path: ``setPermissions`` is an
-    account-admin selector the guard refuses, and a permissioned caller is never accepted."""
-    from core.wallet import erc6551
-    acct = intent.via_account
-    try:
-        erc6551.verify(rpc)
-        impl = erc6551.read_implementation(rpc, acct)
-        if impl.lower() != erc6551.ACCOUNT_V3_IMPL.lower():
-            return (f"the token-bound account clones {impl}, not the pinned AccountV3 "
-                    f"{erc6551.ACCOUNT_V3_IMPL}")
-        _coll_why = _account_collection_refusal(intent.chain, acct, rpc, journal_to=journal_to)
-        if _coll_why:
-            return _coll_why
-        if erc6551.read_is_locked(rpc, acct):
-            return "the token-bound account is LOCKED by its owner — nothing moves until the lock ends"
-        owner = erc6551.read_owner(rpc, acct)
-        if str(owner).lower() != str(sender).lower():
-            return (f"this wallet ({sender}) does not own the NFT of the token-bound account "
-                    f"{acct} (its owner is {owner}) — an agent acts through an account only "
-                    f"as the NFT's current owner")
-        if inner_to and erc6551.read_is_trusted_forwarder(rpc, acct, inner_to):
-            return (f"the token-bound account trusts {inner_to} as an ERC-2771 forwarder — the "
-                    f"inner call may not go through it")
-        state = erc6551.read_state(rpc, acct)
-        if state != int(intent.via_account_state):
-            return (f"the token-bound account state moved ({intent.via_account_state} → "
-                    f"{state}) since the intent was built — re-read and rebuild")
-    except Exception as exc:  # noqa: BLE001
-        return f"Account pre-flight could not be verified ({exc}); failing closed"
-    return None
+    """Rule 5: the account pre-flight reads (``core/wallet/tx_guard_account.py``)."""
+    from core.wallet import tx_guard_account
+    return tx_guard_account.via_account_preflight(intent, sender, rpc, inner_to=inner_to,
+                                                  journal_to=journal_to)
 
 
 def _treasury_side_refusal(intent: TxIntent, deltas, *, holder: str, sender: str) -> Optional[str]:
@@ -1044,30 +1034,10 @@ def _valueless_price_fn(chain: Optional[str], price_fn: Optional[Callable]) -> O
 
 def _account_collection_refusal(chain: str, account: str, rpc, *,
                                 journal_to: Optional[str] = None) -> Optional[str]:
-    """C4: the account's own ``token()`` must name a PINNED collection on this chain whose live
-    code still hashes to its pin, and the account must be that token's canonical account (one
-    of the profile's account versions, pure CREATE2). The signer re-runs this guard, so an
-    AccountV3 clone of an unpinned or changed collection refuses there too. Fail closed."""
-    from core.wallet import collection_registry, erc6551
-    chain_id, collection, token_id = erc6551.read_token(rpc, account)
-    want = collection_registry.chain_id_of(chain)
-    if int(chain_id) != int(want):
-        return (f"the token-bound account {account} is bound to a token on chain {chain_id}, "
-                f"not {chain} ({want})")
-    why = _collection_runtime_refusal(chain, collection, rpc)
-    if why:
-        return f"the token-bound account {account} belongs to {collection} #{token_id}: {why}"
-    profile = collection_registry.profile_for(want, collection)
-    canonical = {erc6551.account_address(want, profile.address, int(token_id), salt=v.salt,
-                                         implementation=v.implementation).lower()
-                 for v in profile.accounts}
-    if str(account).lower() not in canonical:
-        return (f"{account} is not the pinned ERC-6551 account of {collection} #{token_id} — "
-                f"an account outside the profile's account versions")
-    if journal_to is not None and str(journal_to).lower() != str(profile.journal_log or ""):
-        return (f"the journal leg calls {journal_to}, not the JournalLog pinned for {collection} "
-                f"({profile.journal_log or 'none'})")
-    return None
+    """C4 (``core/wallet/tx_guard_account.py``): the account is a pinned collection's own."""
+    from core.wallet import tx_guard_account
+    return tx_guard_account.account_collection_refusal(chain, account, rpc,
+                                                       journal_to=journal_to)[0]
 
 
 def _journal_entry_refusal(intent: TxIntent, data: str, *, signer: str, chain_id: int,
@@ -1411,6 +1381,10 @@ def _price_allowance_grants(intent: TxIntent, *, price_fn, fallback_price_fn,
     from core.wallet.tx_guard_steps.value import _spend_price  # 085 W5: 0.0 = no price
     total = 0.0
     for (g_token, g_spender, g_amount) in intent.expected_allowance_grants:
+        # A negative grant would SUBTRACT from the value the caps judge.
+        if isinstance(g_amount, bool) or not isinstance(g_amount, int) or g_amount < 0:
+            return 0.0, Decision(False, (
+                "refused: a declared allowance grant is not a non-negative whole number"))
         try:
             unit_price = _spend_price(price_fn(intent.chain, g_token) if price_fn else None, intent.chain)
         except Exception:

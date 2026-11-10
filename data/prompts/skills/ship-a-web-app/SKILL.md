@@ -1,6 +1,6 @@
 ---
 name: ship-a-web-app
-description: Put a page, a file or a small web app online - pick the rail (publish, app_service, hf_deploy), test first, get the owner's approval for a new address, prove it live
+description: Put a page, a file or a small web app online - pick the rail (publish, app_service, hf_deploy), test first, get a new app address approved, prove it live
 license: MIT
 metadata:
   polyrob-when: 'Putting a page, file or small app at a public URL'
@@ -47,9 +47,9 @@ can ship. If no rail is available, put the ABSOLUTE workspace paths of the files
 - **An app:** `app_service_deploy(slug=…, dir=…, cmd=[…], port=…, health_path="/")`.
 - **A Space:** `hf_deploy_deploy(app_name=…)` deploys the session workspace.
 
-A NEW slug or app name needs the owner's approval once; the result says how (for an app,
-the `/apps approve <slug>` token). Give the owner that token as the result renders it.
-After approval, later updates of the same slug run unattended within caps. A changed
+On the owner's turn or job, a new `publish` slug or `hf_deploy` name needs no tap. A new
+`app_service` address runs a container, so it needs the owner once: give the owner the
+`/apps approve <slug>` token as the result renders it. After that, later updates of the same slug run unattended within caps. A changed
 command, port or env key set asks the owner again.
 
 ## 4. Prove it live

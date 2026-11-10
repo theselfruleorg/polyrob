@@ -77,13 +77,8 @@ async def tick(container: Any = None, *, db_path: Optional[str] = None,
     from core.wallet import bridge_guard
 
     result = TickResult()
-    # 098 TS-23: a money tx booked before its receipt was known gets its final
-    # receipt state here (reads only; a revert leaves the daily cap).
-    try:
-        from core.wallet.receipt_resolver import resolve_pending_receipts
-        await resolve_pending_receipts()
-    except Exception:
-        logger.warning("bridge watcher: receipt resolver failed", exc_info=True)
+    # 098 TS-23: the receipt resolver has its own ticker (``receipt_resolver.INTERVAL_SEC``,
+    # started with the wallet): an install that trades but never bridges needs it too.
     if provider is None:
         # The seam, NOT the provider: `core` may not import `tools`. See
         # core/wallet/bridge_status.py for why the degraded case is safe.
@@ -186,8 +181,9 @@ async def _reconcile(row: Dict[str, Any], *, container, provider, reader, notify
     if prove is not None:
         # The delivering transaction's own transfer is the proof (B-1/B-2); on
         # EVM the measured rise must also clear the floor.
-        delta_ok = (not prove.requires_delta) or (delta is not None and delta >= min_out)
-        proven = prove() if (state == "success" and delta_ok) else None
+        # On EVM the balance rise AT the delivering block is checked inside the
+        # proof, never the live delta: the wallet may already have spent it.
+        proven = prove() if state == "success" else None
         if proven is not None and proven >= min_out > 0:
             arrived_by = (f"proven +{proven} raw by the delivering transaction on "
                           f"{chain_name}", f"+{proven} raw on {chain_name}")
@@ -216,9 +212,10 @@ async def _reconcile(row: Dict[str, Any], *, container, provider, reader, notify
             ledger_recorded=True))
         return
 
-    if state == "failure" and (delta is None or delta < min_out):
+    if state == "failure" and bridge_guard.failure_shows_no_arrival(prove, delta, min_out):
         # The one case that can be called failed: the provider says refunded or
-        # expired AND no inflow was measured at the destination.
+        # expired AND a read shows no inflow at the destination. An unreadable
+        # destination stays in flight (FAILED is terminal).
         if not bridge_guard.settle(
                 bid, state=bridge_guard.STATE_FAILED,
                 detail=(f"relay reports failure/refund ({status_detail}); measured "
@@ -237,7 +234,9 @@ async def _reconcile(row: Dict[str, Any], *, container, provider, reader, notify
 
     last = float(row.get("escalated_at") or 0.0)
     if age >= ESCALATE_AFTER_SEC and (now() - last) >= ESCALATE_AFTER_SEC:
-        bridge_guard.mark_escalated(bid, at=now(), db_path=db_path)
+        if not bridge_guard.mark_escalated(bid, expected=row.get("escalated_at"),
+                                           at=now(), db_path=db_path):
+            return  # another watcher stamped it first and tells the owner
         result.escalated += 1
         await notify(container, user_id, tx_notify.TxNotice(
             verb="bridge", route=route, chain=origin_name,

@@ -3,16 +3,10 @@ import types
 
 import pytest
 
+from modules.llm.call_result import CallFacts
 from agents.task.agent.core.output_truncation import (
     build_truncation_note, handle_truncated_output, truncation_retry_enabled,
 )
-
-
-class _Client:
-    def __init__(self, reason, tokens=None):
-        usage = types.SimpleNamespace(completion_tokens=tokens)
-        self.last_response = types.SimpleNamespace(
-            choices=[types.SimpleNamespace(finish_reason=reason)], usage=usage)
 
 
 class _Agent:
@@ -20,13 +14,15 @@ class _Agent:
     session_id = "s1"
     model_name = "test-model"
 
-    def __init__(self, reason, tokens=None):
-        self.llm = types.SimpleNamespace(_client=_Client(reason, tokens))
+    def __init__(self, reason, tokens=None, reasoning=None):
+        self.last_call_facts = CallFacts(finish_reason=reason, output_tokens=tokens,
+                                         reasoning_tokens=reasoning)
         self.state = types.SimpleNamespace(n_steps=3)
         self.retries = []
 
-    async def _get_next_action_internal(self, messages):
-        self.retries.append(messages)
+    async def _get_next_action_internal(self, messages, extra_messages=None):
+        # The request is rebuilt from the manager; only extra_messages reach it.
+        self.retries.append(list(extra_messages or []))
         return "RETRIED"
 
 
@@ -72,7 +68,7 @@ async def test_a_failing_retry_falls_back_honestly(monkeypatch):
     monkeypatch.setenv("LLM_OUTPUT_TRUNCATION_RETRY", "true")
     agent = _Agent("length", 16384)
 
-    async def _boom(messages):
+    async def _boom(messages, extra_messages=None):
         raise RuntimeError("provider down")
 
     agent._get_next_action_internal = _boom
@@ -88,24 +84,13 @@ def test_the_note_is_a_typed_control_message():
 
 # --- 2026-09-20 06:40Z: the cut is REASONING, not a long write --------------------------
 
-class _ReasoningClient(_Client):
-    """OpenRouter/DeepSeek shape: usage.completion_tokens_details.reasoning_tokens."""
-    def __init__(self, reason, tokens, reasoning):
-        super().__init__(reason, tokens)
-        self.last_response.usage.completion_tokens_details = types.SimpleNamespace(
-            reasoning_tokens=reasoning)
-
-
-def test_reasoning_tokens_are_read_from_the_last_response():
-    from modules.llm.output_budget import last_reasoning_tokens
-    llm = types.SimpleNamespace(_client=_ReasoningClient("length", 8192, 7981))
-    assert last_reasoning_tokens(llm) == 7981
-    plain = types.SimpleNamespace(_client=_Client("length", 8192))
-    assert last_reasoning_tokens(plain) is None               # not reported → unknown, never 0
-    as_dict = types.SimpleNamespace(_client=types.SimpleNamespace(last_response={
-        "choices": [{"finish_reason": "length"}],
-        "usage": {"completion_tokens": 8192, "completion_tokens_details": {"reasoning_tokens": 8000}}}))
-    assert last_reasoning_tokens(as_dict) == 8000
+def test_the_facts_are_this_sessions_own(monkeypatch):
+    """S2: another session's call on the shared client cannot change what this step reads."""
+    from modules.llm.call_result import output_was_truncated
+    assert output_was_truncated(_Agent("length", 8192).last_call_facts) is True
+    assert output_was_truncated(_Agent("stop", 8192).last_call_facts) is False
+    no_call = types.SimpleNamespace()
+    assert output_was_truncated(getattr(no_call, "last_call_facts", None)) is False
 
 
 @pytest.mark.asyncio
@@ -119,8 +104,7 @@ async def test_reasoning_bound_cut_gets_a_different_note_and_is_counted_apart(mo
     assert reasoning_bound(8192, 7981) is True
     assert reasoning_bound(8192, 3000) is False
     assert reasoning_bound(8192, None) is False               # unknown → the write note
-    agent = _Agent("length", 8192)
-    agent.llm = types.SimpleNamespace(_client=_ReasoningClient("length", 8192, 7981))
+    agent = _Agent("length", 8192, reasoning=7981)
     events = []
     monkeypatch.setattr("core.event_log.emit", lambda kind, **kw: events.append((kind, kw)))
     out = await handle_truncated_output(agent, ["m"], 90.0, "FIRST")
@@ -175,3 +159,44 @@ async def test_flag_on_retry_does_not_also_push_the_used_note(monkeypatch):
     agent.message_manager = _MM()
     assert await handle_truncated_output(agent, ["m"], 90.0, "FIRST") == "RETRIED"
     assert agent.message_manager.ephemeral == []
+
+
+# --- prod 2026-11-07: four 16,384-token calls in a row, each spent on reasoning alone.
+
+class _LevelAgent(_Agent):
+    async def _get_next_action_internal(self, messages, extra_messages=None):
+        from modules.llm.call_scope import session_reasoning_level
+        self.retries.append(session_reasoning_level())
+        return "RETRIED"
+
+
+@pytest.mark.asyncio
+async def test_a_reasoning_bound_cut_retries_with_thinking_off_for_that_call(monkeypatch):
+    from modules.llm.call_scope import session_reasoning, session_reasoning_level
+    monkeypatch.setenv("LLM_OUTPUT_TRUNCATION_RETRY", "true")
+    agent = _LevelAgent("length", 16384, reasoning=16384)
+    with session_reasoning("high"):
+        assert await handle_truncated_output(agent, ["m"], 90.0, "FIRST") == "RETRIED"
+        assert session_reasoning_level() == "high", "the owner's level returns after the call"
+    assert agent.retries == ["off"]
+
+
+@pytest.mark.asyncio
+async def test_a_long_answer_cut_keeps_the_level_in_force(monkeypatch):
+    from modules.llm.call_scope import session_reasoning
+    monkeypatch.setenv("LLM_OUTPUT_TRUNCATION_RETRY", "true")
+    agent = _LevelAgent("length", 16384, reasoning=100)
+    with session_reasoning("high"):
+        await handle_truncated_output(agent, ["m"], 90.0, "FIRST")
+    assert agent.retries == ["high"]
+
+
+def test_a_cut_call_is_not_reissued_as_an_empty_one():
+    from agents.task.agent.core.call_quality import worth_empty_retry
+    empty = types.SimpleNamespace(content="", tool_calls=None,
+                                  call_facts=CallFacts(finish_reason="stop", output_tokens=0))
+    cut = types.SimpleNamespace(content="", tool_calls=None,
+                                call_facts=CallFacts(finish_reason="length", output_tokens=16384))
+    assert worth_empty_retry(empty) is True
+    assert worth_empty_retry(cut) is False
+    assert worth_empty_retry(types.SimpleNamespace(content="", tool_calls=None)) is True

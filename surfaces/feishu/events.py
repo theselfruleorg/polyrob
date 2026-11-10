@@ -121,8 +121,9 @@ def parse_event(payload: dict, bot_open_id: str,
     chat_id = str(message.get("chat_id") or "")
     source = SessionSource(surface_id="feishu", chat_id=chat_id,
                            chat_type="dm" if is_dm else "group")
-    user_id = None
-    if user_directory is not None:
+    from core.instance import owner_surface_alias
+    user_id = owner_surface_alias(author, "feishu")
+    if not user_id and user_directory is not None:
         try:
             user_id = user_directory.resolve_internal(author, "feishu")
         except Exception:

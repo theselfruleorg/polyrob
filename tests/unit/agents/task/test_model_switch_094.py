@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from core import model_switch as ms
+from core.price_guard import guard_reason
 
 PIN_ENV = {"DEFAULT_PROVIDER": "openrouter", "DEFAULT_MODEL": "deepseek/deepseek-v4.1-flash"}
 
@@ -91,10 +92,10 @@ def test_ids_and_provider_prefix():
 
 def test_guard():
     flash, sonnet = (0.045, 0.5), (2.0, 10.0)
-    assert "input price" in ms.guard_reason(flash, sonnet)
-    assert ms.guard_reason(sonnet, flash) == ""
-    assert "per million output" in ms.guard_reason(None, (5.0, 31.0))
-    assert ms.guard_reason(flash, None) == ""
+    assert "input price" in guard_reason(flash, sonnet)
+    assert guard_reason(sonnet, flash) == ""
+    assert "per million output" in guard_reason(None, (5.0, 31.0))
+    assert guard_reason(flash, None) == ""
 
 
 # --- the owner store and the chat tier -------------------------------------------- #
@@ -138,11 +139,12 @@ def test_chat_tier_precedence(home):
 
 def test_session_reasoning_scope_wins_over_env_and_ends(monkeypatch):
     from modules.llm import openrouter_reasoning as orr
+    from modules.llm.call_scope import session_reasoning
     monkeypatch.setenv("OPENROUTER_REASONING_ENABLED", "false")
     assert orr.reasoning_extra_body(8000) == {"reasoning": {"enabled": False}}
-    with orr.session_reasoning("high"):
+    with session_reasoning("high"):
         assert orr.reasoning_extra_body(8000) == {"reasoning": {"effort": "high"}}
-    with orr.session_reasoning("64000"):
+    with session_reasoning("64000"):
         assert orr.reasoning_extra_body(8000) == {"reasoning": {"max_tokens": 6000}}
     assert orr.reasoning_extra_body(8000) == {"reasoning": {"enabled": False}}
 
@@ -393,6 +395,19 @@ def test_reasoning_during_a_queued_switch_rides_the_queued_pin(home, catalog, ke
     assert meta["model_pin"]["reasoning"] == "high"
 
 
+def test_reasoning_during_a_provider_fallback_keeps_the_sessions_own_model(home, catalog, keyed):
+    """A fallback is temporary: /model reasoning= must not make it the session's pin."""
+    agent = _FakeAgent()
+    agent._first_model = SimpleNamespace(provider="openrouter", model="deepseek/deepseek-v4.1-flash")
+    agent.model_name, agent.llm_provider = "z-ai/glm-5.2", "openrouter"
+    ta = _task_agent(agent)
+    out = _cmd(ta, ["reasoning=high"])
+    assert out.startswith("✅"), out
+    meta = ta.session_manager.meta["s-1"]
+    assert meta["request"]["model"] == "deepseek/deepseek-v4.1-flash"
+    assert meta["model_pin"]["model"] == "deepseek/deepseek-v4.1-flash"
+
+
 def test_no_session_queues_for_the_next_chat(home, catalog, keyed):
     from agents.task.model_switch_service import owner_chat_pin
     ta = _task_agent(None, bound=None)
@@ -400,6 +415,19 @@ def test_no_session_queues_for_the_next_chat(home, catalog, keyed):
     assert "when this chat starts" in out
     assert owner_chat_pin("tg:dm:9", "owner1")["model"] == "anthropic/claude-haiku-5.5"
     assert owner_chat_pin("tg:dm:9", "owner1") is None   # consumed once
+
+
+def test_a_call_with_no_chat_moves_only_the_default(home, catalog, keyed, no_env_write):
+    """The console picker names no chat: the reply must not promise one."""
+    from core.model_pins import chat_runtime_for
+    ta = _task_agent(None, bound=None)
+    out = _cmd(ta, ["glm", "default"], chat_key=None)
+    assert out.startswith("✅") and "default for every new chat" in out
+    assert "this chat" not in out and "next message" not in out
+    assert chat_runtime_for("owner1")[1] == "z-ai/glm-5.3"
+    out = _cmd(ta, ["haiku"], chat_key=None)
+    assert not out.startswith("✅") and "default" in out
+    assert chat_runtime_for("owner1")[1] == "z-ai/glm-5.3"
 
 
 def test_default_writes_the_owner_store_not_the_env(home, catalog, keyed, no_env_write):
@@ -556,6 +584,18 @@ def test_child_model_allowlist(home, catalog, keyed):
     assert run("anthropic/claude-sonnet-5.5") == ""
     parent.model_name = "anthropic/claude-sonnet-5.5"
     assert run("anthropic/claude-haiku-5.5") == ""   # cheaper than mine
+
+
+def test_child_allowed_model_on_a_foreign_provider_is_refused(home, catalog, keyed, monkeypatch):
+    """112 F3: an owner-chosen id is allowed on the owner's providers only."""
+    from agents.task.model_switch_service import child_model_refusal
+    monkeypatch.setenv("HEAVY_MODEL", "deepseek/deepseek-v4-pro")
+    parent = SimpleNamespace(model_name="deepseek/deepseek-v4.1-flash", user_id="owner1",
+                             llm_provider="openrouter")
+    run = lambda m, p: asyncio.run(child_model_refusal(parent, m, p))  # noqa: E731
+    assert run("deepseek/deepseek-v4-pro", None) == ""          # heavy, 5.2x input: allowed
+    assert run("deepseek/deepseek-v4-pro", "openrouter") == ""
+    assert "not on 'together'" in run("deepseek/deepseek-v4-pro", "together")
 
 
 # --- the owner-only job model ----------------------------------------------------------- #

@@ -1,6 +1,6 @@
 """Read-only client/model inventory for :class:`~modules.llm.llm_manager.LLMManager`.
 
-Extracted 2026-09-08 to bring `llm_manager.py` back under its shrink-only size
+Kept out of `llm_manager.py` to hold its shrink-only size
 ratchet ceiling (the god-file decomposition rule in AGENTS.md: new behaviour gets
 its own mixin rather than growing the manager). Pure introspection — every method
 here reports what exists and mutates nothing, which is exactly why it separates
@@ -18,16 +18,8 @@ from modules.llm.model_registry import get_model_config
 
 logger = logging.getLogger(__name__)
 
-#: Used when a client reports no completion ceiling and the registry has no
-#: opinion either. Conservative on purpose — the value it replaced (1000) silently
-#: truncated long answers.
-_FALLBACK_MAX_TOKENS = 8000
-
-
-def _pricing_block(model_config: Any) -> Optional[Dict[str, Any]]:
-    """The pricing sub-dict for one model, or None when the registry has no row."""
-    if not model_config:
-        return None
+def _pricing_block(model_config: Any) -> Dict[str, Any]:
+    """The pricing sub-dict for one model."""
     return {
         "input_price": model_config.pricing.input_price,
         "output_price": model_config.pricing.output_price,
@@ -51,9 +43,9 @@ class InventoryMixin:
         if not self._initialized:
             await self.initialize()
 
-        # Client names look like "openai_client" / "openai_fallback".
+        # Client names look like "openai_client".
         initialized_providers = {
-            name.replace("_client", "").replace("_fallback", "")
+            name.replace("_client", "")
             for name in self.clients.keys()
         }
 
@@ -67,7 +59,7 @@ class InventoryMixin:
         else:
             wanted = initialized_providers
 
-        # P0.6: the model list comes from the ONE catalog
+        # The model list comes from the ONE catalog
         # (modules.llm.available_models), never from AVAILABLE_MODELS directly.
         # Same tuples for the same initialized providers — an initialized provider
         # always has a usable key, so `usable ∩ wanted == wanted`.
@@ -88,16 +80,10 @@ class InventoryMixin:
 
         for name, client in self.clients.items():
             provider = name.replace("_client", "")
-            model_config = None
+            model_config = get_model_config(client.model_type)
             max_tokens = getattr(client, "max_tokens", None)
             if max_tokens is None:
-                # Prefer the registry's ceiling for this model over a blind default.
-                if getattr(client, "model_type", None):
-                    model_config = get_model_config(client.model_type)
-                    if model_config and model_config.max_completion_tokens:
-                        max_tokens = model_config.max_completion_tokens
-                if max_tokens is None:
-                    max_tokens = _FALLBACK_MAX_TOKENS
+                max_tokens = model_config.max_completion_tokens
 
             result[name] = {
                 "name": name,
@@ -108,7 +94,7 @@ class InventoryMixin:
                 "max_tokens": max_tokens,
                 "temperature": getattr(client, "temperature", 0.7),
                 "available_models": AVAILABLE_MODELS.get(provider, []),
-                "context_window": model_config.context_window if model_config else None,
+                "context_window": model_config.context_window,
                 "pricing": _pricing_block(model_config),
             }
 
@@ -121,17 +107,16 @@ class InventoryMixin:
             if not (config_data and "api_key" in config_data):
                 continue
             model_name = config_data.get("model") or get_default_model(provider)
-            model_config = get_model_config(model_name) if model_name else None
+            model_config = get_model_config(model_name)
             result[client_name] = {
                 "name": client_name,
                 "provider": provider,
                 "model": model_name,
                 "initialized": False,
                 "is_primary": False,
-                "max_tokens": (model_config.max_completion_tokens
-                               if model_config else _FALLBACK_MAX_TOKENS),
+                "max_tokens": model_config.max_completion_tokens,
                 "available_models": AVAILABLE_MODELS.get(provider, []),
-                "context_window": model_config.context_window if model_config else None,
+                "context_window": model_config.context_window,
                 "pricing": _pricing_block(model_config),
             }
 

@@ -21,6 +21,9 @@ import base64
 import logging
 import os
 import re
+import secrets
+import shutil
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from core.env import bool_env, float_env, int_env
@@ -40,6 +43,10 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 #: which told the agent it was a document — so it neither saw the picture nor
 #: knew that it was one. Named honestly instead.
 UNDECODABLE_IMAGE_EXTENSIONS = {".bmp", ".heic", ".heif", ".tif", ".tiff"}
+
+#: Video containers: stored and named, and no tool shows their picture or sound
+#: to the model.
+VIDEO_EXTENSIONS = {".mp4", ".m4v", ".mov", ".webm", ".mkv", ".avi"}
 
 #: Text-ish extensions whose whole body is inlined when small enough.
 INLINE_TEXT_EXTENSIONS = {
@@ -74,6 +81,12 @@ def inbound_media_enabled() -> bool:
 def inbound_media_max_mb() -> float:
     """Per-file cap for a file arriving from a chat surface."""
     return float_env("INBOUND_MEDIA_MAX_MB", 20.0)
+
+
+def inbound_video_max_mb() -> float:
+    """Per-file cap for a video the surface streams to disk. A surface that holds
+    the bytes in memory stays under ``inbound_media_max_mb``."""
+    return float_env("INBOUND_VIDEO_MAX_MB", 500.0)
 
 
 def inbound_media_max_files() -> int:
@@ -172,6 +185,73 @@ def persist_inbound_file(
         write_bytes(full, workspace_dir, data)
     except OSError as e:
         logger.warning("inbound attachment write failed (%s): %s", filename, e)
+        return None, f"could not be stored ({type(e).__name__})"
+    return os.path.join(INBOUND_DIR, basename), None
+
+
+#: What a large attachment must leave free on the workspace disk.
+_MIN_FREE_DISK_BYTES = 1024 ** 3
+
+
+def _no_disk_room(workspace_dir: str, size: Optional[int]) -> bool:
+    """True when the declared size would leave the disk too full. An unknown size
+    or an unreadable disk is not a refusal: the write then decides."""
+    if not isinstance(size, int):
+        return False
+    try:
+        return shutil.disk_usage(workspace_dir).free < size + _MIN_FREE_DISK_BYTES
+    except OSError:
+        return False
+
+
+def _open_spool(workspace_dir: str) -> str:
+    """A new, random, empty file in ``inbound/`` for a download to stream into."""
+    directory = os.path.join(workspace_dir, INBOUND_DIR)
+    os.makedirs(directory, exist_ok=True)
+    path = os.path.join(directory, f".spool-{secrets.token_hex(16)}")
+    # The ordinary permission shape: a sandbox with another uid reads this file.
+    os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o666))
+    return path
+
+
+def _discard_spool(spool: Optional[str], workspace_dir: str) -> None:
+    if not spool:
+        return
+    try:
+        from core.security.workspace_io import unlink
+        unlink(spool, workspace_dir)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        logger.warning("inbound spool file not removed (%s): %s", spool, e)
+
+
+def persist_inbound_spool(
+    workspace_dir: str,
+    filename: Optional[str],
+    spool: str,
+    *,
+    kind: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Rename a finished download to its name in ``inbound/``. Same return shape as
+    :func:`persist_inbound_file`; a refused spool stays for the caller to remove."""
+    try:
+        size = os.path.getsize(spool)
+    except OSError as e:
+        return None, f"could not be stored ({type(e).__name__})"
+    if not size:
+        return None, "the file arrived empty (0 bytes) and was not stored"
+    cap_mb = inbound_video_max_mb()
+    if size > cap_mb * 1024 * 1024:
+        return None, (f"the file is too large ({_human_size(size)}, "
+                      f"cap {cap_mb:g}MB) and was not stored")
+    directory = os.path.join(workspace_dir, INBOUND_DIR)
+    basename = _unique_path(directory, _safe_basename(filename, kind))
+    try:
+        from core.security.workspace_io import move
+        move(spool, os.path.join(directory, basename), workspace_dir)
+    except OSError as e:
+        logger.warning("inbound attachment move failed (%s): %s", filename, e)
         return None, f"could not be stored ({type(e).__name__})"
     return os.path.join(INBOUND_DIR, basename), None
 
@@ -289,6 +369,13 @@ def inject_file_content(
                 f"here. You CANNOT see it — say so rather than guessing its "
                 f"content. It IS saved at {rel_path}.]"), None
 
+    if ext in VIDEO_EXTENSIONS:
+        return (f"{message_text}\n\n[Attached video: {name} ({_human_size(size)}). It IS "
+                f"saved at {rel_path}. You CANNOT watch it — say so rather than guessing "
+                f"its content, and do not read it as text. You can send it on, or work on "
+                f"the file with a script through code_execution when that tool is "
+                f"loaded.]"), None
+
     if size < INLINE_SIZE_THRESHOLD and ext in INLINE_TEXT_EXTENSIONS:
         try:
             from core.security.workspace_io import read_bytes
@@ -387,20 +474,44 @@ async def absorb_inbound_media(
 
     for item in candidates[:cap]:
         label = getattr(item, "filename", None) or getattr(item, "kind", None) or "file"
+        refused = getattr(item, "refused", None)
+        if isinstance(refused, str) and refused:
+            logger.warning("inbound attachment refused (%s): %s", label, refused)
+            text = (f"{text}\n\n[Attachment {label} did NOT arrive: it {refused}. Tell the "
+                    f"sender this plainly and ask for a smaller file or a download link. "
+                    f"Do not guess its content.]")
+            continue
+        if _no_disk_room(workspace_dir, getattr(item, "size", None)):
+            logger.warning("inbound attachment refused (%s): the disk is too full", label)
+            text = (f"{text}\n\n[Attachment {label} did NOT arrive: the disk of this "
+                    f"machine has too little free space for it. Tell the sender this "
+                    f"plainly. Do not guess its content.]")
+            continue
+        kind = getattr(item, "kind", None)
+        spool = None
         try:
+            if kind == "video":
+                spool = _open_spool(workspace_dir)
+                item.spool = spool
             data = await fetch_bytes(item)
         except Exception as e:  # a transport fault is reported, never raised at the turn
             logger.warning("inbound media fetch failed (%s): %s", label, e)
             data = None
         if not data:
+            _discard_spool(spool, workspace_dir)
             text = (f"{text}\n\n[Attachment {label} could not be downloaded from the "
                     f"chat surface and is NOT available — say so rather than guessing "
                     f"its content.]")
             continue
 
-        rel, reason = persist_inbound_file(
-            workspace_dir, getattr(item, "filename", None), data,
-            kind=getattr(item, "kind", None))
+        if isinstance(data, Path):
+            rel, reason = persist_inbound_spool(
+                workspace_dir, getattr(item, "filename", None), str(data), kind=kind)
+        else:
+            rel, reason = persist_inbound_file(
+                workspace_dir, getattr(item, "filename", None), data, kind=kind)
+        _discard_spool(spool if rel is None or not isinstance(data, Path) else None,
+                       workspace_dir)
         if rel is None:
             text = f"{text}\n\n[Attachment {label} {reason}.]"
             continue

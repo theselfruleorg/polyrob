@@ -25,8 +25,8 @@ def docker_socket_unreachable_reason(backend_name: str) -> Optional[str]:
     daemon's unix socket; else ONE honest refusal to return before any docker call.
 
     Prod 2026-09-19: the agent runs as ``polyrob-agent``, deliberately outside the
-    ``docker`` group (security-rollout — rootful Docker authority removed until the
-    rootless sandbox of proposal 053 lands), so ``docker run`` failed with
+    ``docker`` group (rootful Docker authority is root; the agent uses only the
+    rootless sandbox daemon of ``deployment/hardening/install-sandbox.sh``), so ``docker run`` failed with
     "permission denied while trying to connect to the docker API". That text reads
     like a transient and the model retried it. The condition is a POSTURE, not a
     fault, and it is knowable before the CLI is spawned — so say so, once, and say
@@ -62,9 +62,10 @@ def docker_socket_unreachable_reason(backend_name: str) -> Optional[str]:
         return (
             f"code execution unavailable on this deploy: the agent identity cannot open "
             f"the Docker socket {sock} (permission denied). This is a deliberate hardening "
-            f"posture — rootful Docker access was removed from the agent until the rootless "
-            f"sandbox lands (proposal 053, owner approval pending). Do not retry run_tests/"
-            f"run_code; verify by reading files (coding_grep / read_file) instead."
+            f"posture — the agent never gets rootful Docker access. The operator runs a "
+            f"rootless Docker daemon under its own identity and points DOCKER_HOST at its "
+            f"socket. Do not retry run_tests/run_code; verify by reading "
+            f"files (coding_grep / read_file) instead."
         )
     except Exception:
         logger.debug("docker socket probe failed for %r", backend_name, exc_info=True)
@@ -140,10 +141,9 @@ def local_host_exec_refusal(execution_context: Any) -> Optional[str]:
     if not local_mode_enabled():
         return None
     try:
-        from core.instance import is_owner_local_safe, resolve_owner_principal
+        from core.instance import is_owner_uid
         uid = getattr(execution_context, "user_id", None)
-        if is_owner_local_safe(uid, owner_principal=resolve_owner_principal(),
-                               local_enabled=True):
+        if is_owner_uid(uid):
             return None
     except Exception:
         return "code execution refused: the owner check is unavailable."

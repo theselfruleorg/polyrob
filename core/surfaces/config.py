@@ -106,7 +106,7 @@ class SurfaceConfig:
     def correspondent_access_enabled() -> bool:
         """Resolve every inbound to an access tier (OWNER/CORRESPONDENT/DENIED) at the
         routing boundary. Default OFF — when off, route_inbound is byte-identical to
-        today (only the legacy pairing gate applies). When on, a non-owner is routable
+        today (only the pairing gate applies). When on, a non-owner is routable
         only as a known correspondent (its reply is DATA delivered to the originating
         session, never a steering turn).
         (ON under effective AUTONOMY_MODE=autonomous.)"""

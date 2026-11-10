@@ -44,3 +44,31 @@ def test_the_bridge_leg_parks_an_unknown_send_in_flight():
     leg = EvmOriginLeg.send(SimpleNamespace(rail=_Rail(), tx={}))
     assert leg.state == "unknown"
     assert "NOT sent" not in leg.detail and "nothing was sent" not in leg.detail
+
+
+@pytest.mark.parametrize("reply", [{}, {"tx_hash": ""}, {"tx_hash": "garbage"}, None])
+def test_a_remote_signer_reply_without_a_hash_is_unknown_and_holds_the_interlock(
+        monkeypatch, tmp_path, reply):
+    """The signer received the request and answered nonsense: it may have
+    broadcast. A plain error read as "failed" and a retry could pay twice."""
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+    from core.signer import attest
+    from core.wallet import submission_journal
+    from core.wallet.broadcast.evm import EvmRail
+
+    class _Signer:
+        address = "0x" + "1" * 40
+        remote_send = True
+
+        def send_transaction(self, tx, *, chain, intent):
+            return reply if reply is not None else {"tx_hash": None}
+
+    monkeypatch.setattr(attest, "take", lambda tx: object())
+    rail = EvmRail("base", _Signer())
+    rail.preflight = lambda: (True, "")
+    tx = {"chainId": rail.chain_id, "nonce": 1, "to": "0x" + "2" * 40, "value": 1}
+    with pytest.raises(BroadcastOutcomeUnknown) as info:
+        rail._remote_sign_and_send(tx)
+    assert outcome_unknown(info.value)
+    rows = submission_journal.unresolved()
+    assert len(rows) == 1 and rows[0]["tx_hash"].startswith("attempt:")

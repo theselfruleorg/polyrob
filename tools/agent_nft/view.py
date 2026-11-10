@@ -3,11 +3,13 @@
 Moved from the agent-NFT package (``polyrob_drop/inspect.py``) with its generic half: it works
 for ANY pinned collection. Order is part of the contract: OPEN APPROVALS FIRST (they survive a
 sale and ``state()`` does not see them), with their COVERAGE, then the named purchase checks,
-then owner, lock, state, identity, native balance. Every value that could not be read renders
+then owner, lock (Tokenbound AccountV3 only), state, identity, native balance. A PolyrobAccount (the
+collection's own account, ``transfer_safe`` in the profile) has no lock and signs nothing; its
+sale safety is the collection's ``saleReadyOf`` (polyrob-desk SPEC §7.3). Every value that could not be read renders
 ``unreadable`` — never 0, never empty (an unread approval table is NOT an empty one).
 
 All reads are taken at ONE block (read once, then every ``latest`` is rewritten to it), so owner,
-lock and approvals describe the same chain state. There is no ``safe_to_buy``: named checks, each
+lock, readiness and approvals describe the same chain state. There is no ``safe_to_buy``: named checks, each
 ``ok`` / ``FAIL`` / ``unknown`` / ``note``.
 
 What stays in the package: a collection's own lines (the face, the reveal state) through the
@@ -49,6 +51,10 @@ class AccountView:
     owner: Any = UNREADABLE
     owner_nested: Any = UNREADABLE        # True when the owner is itself a token-bound account
     implementation_ok: Any = UNREADABLE
+    #: ``collection_registry.KIND_ACCOUNT_V3`` or ``KIND_POLYROB`` (the profile's account version).
+    kind: str = "account_v3"
+    #: PolyrobAccount only: the collection's ``saleReadyOf(id)`` (None for AccountV3).
+    sale_ready: Any = None
     approvals: Any = UNREADABLE           # list[OpenApproval] or UNREADABLE
     coverage: Dict[str, Any] = field(default_factory=dict)
     locked: Any = UNREADABLE
@@ -59,6 +65,10 @@ class AccountView:
     treasury: Optional[str] = None        # this instance's treasury, when the caller named it
     owned_by_treasury: Any = UNREADABLE   # True when the treasury is the NFT's current owner
     notes: List[str] = field(default_factory=list)
+
+    @property
+    def is_polyrob(self) -> bool:
+        return self.kind == "polyrob_account"
 
     @property
     def coverage_complete(self) -> bool:
@@ -73,14 +83,43 @@ class AccountView:
                              "the approval scan failed — an unread table is not an empty one"))
         elif self.approvals:
             out.append(Check("approvals table complete & empty", FAIL,
-                             f"{len(self.approvals)} open approval(s); they survive a sale"))
+                             f"{len(self.approvals)} open approval(s); they survive a sale"
+                             + (f" ({erc6551.POLYROB_FOUND_APPROVAL})" if self.is_polyrob else "")))
         elif not self.coverage_complete:
             out.append(Check("approvals table complete & empty", UNKNOWN,
                              "no approval found, but the scan is INCOMPLETE: "
                              + "; ".join(self.coverage.get("gaps") or ["coverage unknown"])))
         else:
             out.append(Check("approvals table complete & empty", OK,
-                             f"none, blocks {self.coverage['from_block']}..{self.coverage['to_block']}"))
+                             f"none, blocks {self.coverage['from_block']}..{self.coverage['to_block']}"
+                             + (f" ({erc6551.POLYROB_NO_APPROVALS}; {erc6551.POLYROB_RESIDUALS})"
+                                if self.is_polyrob else "")))
+        if self.is_polyrob:
+            self._polyrob_checks(out)
+        else:
+            self._lock_checks(out, now)
+        if self.treasury:
+            if self.owned_by_treasury == UNREADABLE:
+                out.append(Check("treasury owns the NFT", UNKNOWN, "ownerOf() unreadable"))
+            elif self.owned_by_treasury:
+                out.append(Check("treasury owns the NFT", OK, "this instance may act through the account"))
+            else:
+                out.append(Check("treasury owns the NFT", FAIL, f"the owner is {self.owner}, not the "
+                                 f"treasury {self.treasury}: the guard refuses every call through the account"))
+        if self.implementation_ok is not True:
+            out.append(Check(f"account is the pinned {self.clone_name} clone",
+                             FAIL if self.implementation_ok is False else UNKNOWN, str(self.implementation_ok)))
+        if self.owner_nested is True:
+            out.append(Check("owner is a plain wallet", FAIL, "the owner is a token-bound account; nested "
+                             "ownership is not supported"))
+        return out
+
+    @property
+    def clone_name(self) -> str:
+        return "PolyrobAccount" if self.is_polyrob else "AccountV3"
+
+    def _lock_checks(self, out: List[Check], now: float) -> None:
+        """Tokenbound AccountV3: the lock is what holds the account's assets still for a buyer."""
         if self.locked == UNREADABLE:
             out.append(Check("locked", UNKNOWN, "isLocked() unreadable"))
         elif self.locked:
@@ -96,21 +135,20 @@ class AccountView:
                              f"survives the sale and blocks the buyer's execute until then"))
         else:
             out.append(Check("lockedUntil", NOTE, f"{int(self.locked_until)} (past or unset)"))
-        if self.treasury:
-            if self.owned_by_treasury == UNREADABLE:
-                out.append(Check("treasury owns the NFT", UNKNOWN, "ownerOf() unreadable"))
-            elif self.owned_by_treasury:
-                out.append(Check("treasury owns the NFT", OK, "this instance may act through the account"))
-            else:
-                out.append(Check("treasury owns the NFT", FAIL, f"the owner is {self.owner}, not the "
-                                 f"treasury {self.treasury}: the guard refuses every call through the account"))
-        if self.implementation_ok is not True:
-            out.append(Check("account is the pinned AccountV3 clone",
-                             FAIL if self.implementation_ok is False else UNKNOWN, str(self.implementation_ok)))
-        if self.owner_nested is True:
-            out.append(Check("owner is a plain wallet", FAIL, "the owner is a token-bound account; nested "
-                             "ownership is not supported"))
-        return out
+
+    def _polyrob_checks(self, out: List[Check]) -> None:
+        """PolyrobAccount: no lock. A plain marketplace sale needs ``readyToSell`` from an earlier
+        transaction (the collection's ``saleReadyOf``); a checked fill goes through the market."""
+        if self.sale_ready == UNREADABLE:
+            out.append(Check("sale ready", UNKNOWN, "saleReadyOf() unreadable"))
+        elif self.sale_ready:
+            out.append(Check("sale ready", NOTE, "saleReadyOf is true: a plain marketplace fill may move "
+                             "the NFT; the owner can still act through the account until it lands"))
+        else:
+            out.append(Check("sale ready", NOTE, "not ready: only an owner transfer or a checked fill "
+                             "through the collection's market moves the NFT"))
+        out.append(Check("account signs", NOTE, "nothing: ERC-1271 always fails and no address is a valid "
+                         "signer, so no off-chain order can be signed for the account"))
 
 
 def _iso(ts) -> str:
@@ -258,13 +296,13 @@ def build_view(rpc, chain: str, profile, token_id: int, *,
     why = collection_registry.runtime_refusal(rpc, profile)
     if why:
         raise ViewError(why)
-    erc6551.verify(rpc)
     version = profile.accounts[0]
+    erc6551.verify(rpc, version)
     account = erc6551.account_address(profile.chain_id, profile.address, int(token_id),
                                       salt=version.salt, implementation=version.implementation)
     v = AccountView(chain=chain, chain_id=profile.chain_id, collection=profile.address,
                     token_id=int(token_id), account=account, deploy_block=int(profile.deploy_block),
-                    treasury=treasury.lower() if treasury else None)
+                    treasury=treasury.lower() if treasury else None, kind=version.kind)
     v.block = _try(v, "block number", lambda: int(rpc("eth_blockNumber", []), 16))
     if v.block == UNREADABLE:
         raise ViewError("could not read the block number — refusing to assemble a view")
@@ -284,8 +322,14 @@ def build_view(rpc, chain: str, profile, token_id: int, *,
         gaps = ["the scan failed"] + gaps
     v.coverage = {"status": "incomplete" if gaps else "complete", "from_block": profile.deploy_block,
                   "to_block": v.block, "gaps": gaps}
-    v.locked = _try(v, "isLocked", lambda: erc6551.read_is_locked(r, account))
-    v.locked_until = _try(v, "lockedUntil", lambda: erc6551.read_locked_until(r, account))
+    if v.is_polyrob:  # no lock (the reads revert); readiness is the collection's
+        v.locked = v.locked_until = None
+        v.sale_ready = _try(v, "saleReadyOf", lambda: bool(abi.decode([{"type": "bool"}], r(
+            "eth_call", [{"to": profile.address, "data": abi.encode_call(
+                "saleReadyOf", [{"type": "uint256"}], [int(token_id)])}, "latest"]))[0]))
+    else:
+        v.locked = _try(v, "isLocked", lambda: erc6551.read_is_locked(r, account))
+        v.locked_until = _try(v, "lockedUntil", lambda: erc6551.read_locked_until(r, account))
     v.state = _try(v, "state", lambda: erc6551.read_state(r, account))
     v.identity_count = _try(v, "identity", lambda: identity_balance(r, chain, account))
     v.native_wei = _try(v, "native balance", lambda: int(r("eth_getBalance", [account, "latest"]), 16))
@@ -321,20 +365,29 @@ def render(v: AccountView, *, now: Optional[float] = None, extra: List[str] = ()
             out.append(f"    {a.kind:8} {a.contract} → {a.spender}  {what}"
                        + ("" if a.verified else "  (live read failed; kept)"))
     elif v.coverage_complete:
-        out.append("  open approvals: none found (log scan + live confirmation)")
+        out.append("  open approvals: none found (log scan + live confirmation)"
+                   + (f" — {erc6551.POLYROB_NO_APPROVALS}" if v.is_polyrob else ""))
     else:
         out.append("  open approvals: none found, but the table is INCOMPLETE (not \"empty\")")
     out.append(f"  {cov_line}")
+    if v.is_polyrob:
+        if v.approvals and v.approvals != UNREADABLE:
+            out.append(f"  ⚠ {erc6551.POLYROB_FOUND_APPROVAL}")
+        out.append(f"  {erc6551.POLYROB_RESIDUALS}")
     out.append("")
     out.append("CHECKS")
     for c in v.checks(now=now):
         out.append(f"  [{c.status:7}] {c.name}: {c.detail}")
     out.append("")
     out.append(f"  owner:     {v.owner}")
-    out.append(f"  clone:     {'AccountV3 (pinned)' if v.implementation_ok is True else v.implementation_ok}")
-    out.append(f"  locked:    {v.locked}")
-    out.append(f"  lockedUntil: {v.locked_until}"
-               + (f" ({_iso(v.locked_until)})" if isinstance(v.locked_until, int) and v.locked_until else ""))
+    out.append(f"  clone:     {f'{v.clone_name} (pinned)' if v.implementation_ok is True else v.implementation_ok}")
+    if v.is_polyrob:
+        out.append(f"  sale ready: {v.sale_ready}")
+        out.append("  signs:     nothing (no lock, no signer, no ERC-1271)")
+    else:
+        out.append(f"  locked:    {v.locked}")
+        out.append(f"  lockedUntil: {v.locked_until}"
+                   + (f" ({_iso(v.locked_until)})" if isinstance(v.locked_until, int) and v.locked_until else ""))
     out.append(f"  state():   {v.state}")
     out.append(f"  identity:  {v.identity_count} ERC-8004 token(s)")
     native = v.native_wei if v.native_wei == UNREADABLE else f"{v.native_wei / 1e18:.6f} ETH"

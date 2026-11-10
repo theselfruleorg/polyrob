@@ -156,10 +156,8 @@ def shared_identity_refusal(tool_id: str, user_id: Optional[str]) -> Optional[st
             name = name[4:]
         if name not in ids_with("shared_identity"):
             return None
-        from core.config_policy import local_mode_enabled
-        from core.instance import is_owner_local_safe, resolve_owner_principal
-        if is_owner_local_safe(user_id, owner_principal=resolve_owner_principal(),
-                               local_enabled=local_mode_enabled()):
+        from core.instance import is_owner_uid
+        if is_owner_uid(user_id):
             return None
     except Exception:
         pass

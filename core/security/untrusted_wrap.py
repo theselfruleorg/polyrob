@@ -72,12 +72,24 @@ UNTRUSTED_TOOL_NAMES = frozenset({
 UNTRUSTED_TOOL_PREFIXES = ("browser_", "mcp_", "web_")
 
 
+#: Verbs whose result is the harness's own receipt or refusal for a write the agent
+#: asked for: no third-party bytes. Framed as "retrieved from an external source", a
+#: post receipt led a run to tell the owner the post did not go out (prod 2026-11-06).
+OWN_RECEIPT_ACTIONS = frozenset({
+    "filesystem_write_file", "filesystem_append_file", "filesystem_jsonl_append",
+    "twitter_post", "twitter_reply", "twitter_quote", "twitter_thread",
+})
+
+
 def is_untrusted_tool(action_name: Optional[str], tool: Optional[str]) -> bool:
     """True if a result from ``action_name`` (registered ``tool`` namespace) is untrusted.
 
-    Over-wrapping is harmless; under-wrapping is the failure mode — so the set is
-    intentionally permissive (namespace OR exact-name OR prefix).
+    Over-wrapping is not free (see :data:`OWN_RECEIPT_ACTIONS`), but under-wrapping
+    is the failure mode — so the rest of the set is intentionally permissive
+    (namespace OR exact-name OR prefix).
     """
+    if action_name in OWN_RECEIPT_ACTIONS:
+        return False
     if tool and tool in _namespaces():
         return True
     if action_name:

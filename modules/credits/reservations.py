@@ -93,7 +93,8 @@ async def settle_reservation(balance, user_id: str, request_id: str, amount: int
     from core.billing_context import hold_handed_off
     hold_handed_off(request_id)
     db = balance.db
-    await db.connection.begin_transaction()
+    from modules.credits.balance_manager import _begin_own_transaction
+    await _begin_own_transaction(db.connection)   # waits while another task holds one
     try:
         row = await db.fetch_one(
             "SELECT id, amount, transaction_type FROM credit_transactions "

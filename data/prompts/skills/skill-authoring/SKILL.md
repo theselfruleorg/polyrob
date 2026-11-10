@@ -19,9 +19,9 @@ How to write a durable, safe skill in this system.
   rewrite a whole body from memory — a stale rewrite can lose hard-won detail.
 - A rule the owner stated is not a procedure: record it with `owner_doc_manage`, not in a
   skill. Only the terms of a programme the owner runs as jobs live in its pinned skill.
-- Every skill you create or change lands as a `.pending` draft by default, and the owner
-  promotes it (`promote` is owner-only). A fix to a bundled skill also waits for the owner.
-  Do not expect a change to take effect at once: say it is a draft and give its id.
+- A skill you create or change is live at once, a bundled skill's fix too; the prior body
+  is archived and `rollback` restores it. A write from a session with a correspondent's
+  message, a room or another tenant stays a `.pending` draft for the owner.
 
 ## The calls
 - Create: `skill_manage(action="create", skill_id=…, content=…, when="<= 60 chars",

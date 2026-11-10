@@ -222,3 +222,55 @@ def test_h16_create_session_stamps_and_recreate_restores_the_correspondent_flag(
     dsrc = inspect.getsource(delivery)
     assert "orchestrator._correspondent_session = (" in dsrc
     assert "session_info.get('creator')" in dsrc
+
+
+def test_an_unreadable_store_keeps_the_watermark(container, monkeypatch):
+    """A read error is not an empty thread: the watermark must not move past rows the
+    session never saw, so the next step shows them."""
+    agent = _Agent(container, "mine", bootstrapped=True)
+    seen = time.time() - 100
+    agent.orchestrator._owner_thread_seen_ts = seen
+    ot.record_owner_out(container, "12345", "cron said this", via="telegram", session_id="cron-run",
+                        source="cron", now=time.time() - 40)
+
+    def broken(*_a, **_k):
+        raise RuntimeError("database is locked")
+    monkeypatch.setattr(ot.OwnerThreadStore, "rows_since", broken)
+    agent._inject_owner_thread_delta()
+    assert agent.message_manager.durable == []
+    assert agent.orchestrator._owner_thread_seen_ts == seen
+
+    monkeypatch.undo()
+    agent._inject_owner_thread_delta()
+    assert any("cron said this" in t for t in _texts(agent.message_manager))
+
+
+def test_an_unreadable_tail_marks_nothing_seen(container, monkeypatch):
+    ot.record_owner_out(container, "12345", "a line", via="telegram", session_id="x", source="cron")
+
+    def broken(*_a, **_k):
+        raise RuntimeError("database is locked")
+    monkeypatch.setattr(ot.OwnerThreadStore, "tail", broken)
+    agent = _Agent(container, "fresh")
+    _run(agent._maybe_inject_owner_thread())
+    assert agent.message_manager.durable == []
+    assert not getattr(agent.orchestrator, "_owner_thread_seen_ts", None)
+
+
+def test_an_unreadable_tail_is_read_again_on_the_next_turn(container, monkeypatch):
+    """The next turn is bootstrapped and would take the delta branch: the tail it never
+    read must be read then, not lost."""
+    ot.record_owner_out(container, "12345", "a line", via="telegram", session_id="x", source="cron")
+
+    def broken(*_a, **_k):
+        raise RuntimeError("database is locked")
+    monkeypatch.setattr(ot.OwnerThreadStore, "tail", broken)
+    agent = _Agent(container, "fresh")
+    _run(agent._maybe_inject_owner_thread())
+    assert agent.message_manager.durable == []
+    monkeypatch.undo()
+    agent._session_bootstrap_done = True       # the next turn
+    _run(agent._maybe_inject_owner_thread())
+    texts = _texts(agent.message_manager)
+    assert len(texts) == 1 and 'kind="tail"' in texts[0] and "a line" in texts[0]
+    assert getattr(agent.orchestrator, "_owner_thread_seen_ts", None)

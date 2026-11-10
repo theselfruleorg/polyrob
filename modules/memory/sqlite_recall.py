@@ -40,12 +40,28 @@ class KeywordRecallMixin:
         from modules.memory.fts_terms import select_terms
         return " OR ".join(f'"{t}"' for t in select_terms(terms))
 
-    def _keyword_rows(self, query: str, *, norm_user: str, limit: int,
+    def _keyword_rows(self, query: str, *, limit: int, sort: str = None,
+                      demote_automation: bool = True, **kw) -> list:
+        """The ranked rows for ``query`` (``_keyword_rows_for``). A rank-ordered read asks two
+        ways and fuses them: any term (the broad read) and all terms (a row that holds the whole
+        question can lose to a long row that repeats one word of it)."""
+        rows = self._keyword_rows_for(query, limit=limit, sort=sort,
+                                      demote_automation=demote_automation, **kw)
+        from modules.memory.fts_terms import select_terms
+        if sort in ("newest", "oldest") or len(select_terms(self._query_terms(query))) < 2:
+            return rows
+        from modules.memory.recall_rank import fuse_ranked
+        return fuse_ranked(rows, self._keyword_rows_for(
+            query, limit=limit, sort=sort, demote_automation=demote_automation, all_terms=True, **kw),
+            limit=limit, demote_automation=demote_automation)
+
+    def _keyword_rows_for(self, query: str, *, norm_user: str, limit: int,
                       sort: str = None, allow_browse: bool = True,
                       exclude_session_id: str = None, before_id: int = None,
                       scope=None, demote_automation: bool = True,
                       prefer_job_id: str = None, prefer_goal_id: str = None,
-                      max_age_days: float = None, drop_unverified: bool = False) -> list:
+                      max_age_days: float = None, drop_unverified: bool = False,
+                      weak_floor: bool = False, all_terms: bool = False) -> list:
         """FTS5 recall -> ranked list of ``{"content", "ts", "rowid"}`` dicts (no
         formatting). ``ts`` comes from the B2 provenance sidecar (None for legacy
         rows). Discover when `query` has >=3-char terms; otherwise browse
@@ -98,25 +114,29 @@ class KeywordRecallMixin:
         exactly as before.
 
         F7 (prod review 2026-10-29): an owner-chat reader passes ``max_age_days``
-        (an EPISODIC row — ``recall_rank.EPISODIC_MARK`` — only when its
-        provenance stamp is that recent; a durable fact has no age limit) and ``drop_unverified`` (no ``[unverified]`` row). Both are
+        (a row only when its provenance stamp is that recent; a row of a
+        ``recall_rank.DURABLE_KINDS`` kind has no age limit) and ``drop_unverified`` (no ``[unverified]`` row). Both are
         WHERE predicates, so the candidate pool is filled from the rows that
         qualify, not cut after ranking.
+
+        ``weak_floor`` (an automatic recall): a weak bm25 match is out of the pool too,
+        so the result can be empty (``recall_rank.weak_match_sql``).
         """
         terms = self._query_terms(query)
         _excl_sql = " AND m.session_id != ?" if exclude_session_id else ""
         _excl_arg = (exclude_session_id,) if exclude_session_id else ()
         if drop_unverified:
-            from modules.memory.recall_rank import UNVERIFIED_MARK
-            _excl_sql += " AND substr(m.content, 1, ?) != ?"
-            _excl_arg += (len(UNVERIFIED_MARK), UNVERIFIED_MARK)
+            from modules.memory.recall_rank import unverified_row_sql
+            _sql, _args = unverified_row_sql()
+            _excl_sql += _sql
+            _excl_arg += _args
         if max_age_days is not None and float(max_age_days) > 0:
-            # Review M5: only an episodic row (a run's phase summary) ages out;
-            # a durable fact (an address, a handle, a preference) never does.
-            from modules.memory.recall_rank import EPISODIC_MARK
-            _excl_sql += (" AND (instr(m.content, ?) = 0 OR m.rowid IN "
-                          "(SELECT mem_rowid FROM mem_provenance WHERE ts >= ?))")
-            _excl_arg += (EPISODIC_MARK, int(time.time() - float(max_age_days) * 86400))
+            # A row ages out unless its kind says it is durable. A row with no
+            # stamp cannot prove it is recent, so it is out too.
+            from modules.memory.recall_rank import DURABLE_KINDS
+            _excl_sql += (" AND m.rowid IN (SELECT mem_rowid FROM mem_provenance WHERE ts >= ? "
+                          f"OR kind IN ({','.join('?' for _ in DURABLE_KINDS)}))")
+            _excl_arg += (int(time.time() - float(max_age_days) * 86400),) + DURABLE_KINDS
         _before_sql = " AND m.rowid < ?" if before_id is not None else ""
         _before_arg = (before_id,) if before_id is not None else ()
         # 025: the scope predicate rides the cursor slot on all three shapes.
@@ -124,7 +144,14 @@ class KeywordRecallMixin:
         _before_sql, _before_arg = _before_sql + _sc_sql, _before_arg + _sc_arg
         if terms:
             match = self._fts_match(terms)
+            if all_terms:
+                match = match.replace('" OR "', '" AND "')
             ranked = sort not in ("newest", "oldest")
+            if weak_floor and ranked:
+                from modules.memory.recall_rank import weak_match_sql
+                _sql, _args = weak_match_sql(execute_retry(
+                    self.db_path, "SELECT count(*) AS n FROM memories", (), fetch="one")["n"])
+                _before_sql, _before_arg = _before_sql + _sql, _before_arg + _args
             if not ranked:
                 order = "m.rowid DESC" if sort == "newest" else "m.rowid ASC"
                 cols, col_arg, fetch_n = "", (), limit
@@ -227,6 +254,22 @@ class KeywordRecallMixin:
                 logger.debug("mem provenance lookup skipped: %s", e)
         return {c: ts.get(rid) for c, rid in found.items()}
 
+    def _durable_contents(self, norm_user: str, contents: list) -> set:
+        """The contents whose row has a ``recall_rank.DURABLE_KINDS`` kind: the
+        vector half's copy of the age predicate in ``_keyword_rows``."""
+        from modules.memory.recall_rank import DURABLE_KINDS
+        contents = [c for c in dict.fromkeys(contents or []) if c]
+        if not contents:
+            return set()
+        rows = execute_retry(
+            self.db_path,
+            f"SELECT m.content AS content FROM memories m WHERE m.user_id = ? "
+            f"AND m.content IN ({','.join('?' for _ in contents)}) AND m.rowid IN "
+            f"(SELECT mem_rowid FROM mem_provenance WHERE kind IN "
+            f"({','.join('?' for _ in DURABLE_KINDS)}))",
+            (norm_user,) + tuple(contents) + DURABLE_KINDS, fetch="all") or []
+        return {r["content"] for r in rows}
+
     def _reader_flags(self, norm_user: str, contents: list, *, prefer_job_id: str = None,
                       prefer_goal_id: str = None) -> dict:
         """``{content: (own, auto)}`` for vector-only hits — the SAME two flags
@@ -267,25 +310,29 @@ class KeywordRecallMixin:
             allow_browse=allow_browse, exclude_session_id=exclude_session_id, scope=scope)]
 
     @staticmethod
-    def _recall_line(content: str, ts=None, rowid=None) -> str:
+    def _recall_line(content: str, ts=None, rowid=None, with_age: bool = False) -> str:
         """One recall bullet; date-prefixed when the write-time stamp is known (B2).
         T2.6: an ``(id N)`` suffix when `rowid` is given (opt-in, session_search
-        pagination) — omitted (legacy shape, byte-identical) when `rowid` is None."""
+        pagination) — omitted (legacy shape, byte-identical) when `rowid` is None.
+        ``with_age`` (opt-in, explicit search keeps old rows): the age beside the
+        date, and "age unknown" for a row with no stamp."""
         if ts:
             try:
                 day = time.strftime("%Y-%m-%d", time.localtime(int(ts)))
-                line = f"- [{day}] {content}"
+                age = f", {max(0, int((time.time() - int(ts)) // 86400))}d old" if with_age else ""
+                line = f"- [{day}{age}] {content}"
             except Exception:
                 line = f"- {content}"
         else:
-            line = f"- {content}"
+            line = f"- [age unknown] {content}" if with_age else f"- {content}"
         if rowid is not None:
             line = f"{line} (id {rowid})"
         return line
 
     @classmethod
-    def _format_recall_rows(cls, rows, *, with_ids: bool = False) -> str:
+    def _format_recall_rows(cls, rows, *, with_ids: bool = False, with_age: bool = False) -> str:
         return "\n".join(
-            cls._recall_line(r["content"], r.get("ts"), r.get("rowid") if with_ids else None)
+            cls._recall_line(r["content"], r.get("ts"), r.get("rowid") if with_ids else None,
+                             with_age=with_age)
             for r in rows
         )

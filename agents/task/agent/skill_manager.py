@@ -699,7 +699,8 @@ class SkillManager(SkillWriterMixin):
             out.update((rules.get("triggers") or {}).get("tool_ids") or [])
         return out
 
-    def _load_skill_content(self, skill_id: str, user_id: Optional[str] = None) -> str:
+    def _load_skill_content(self, skill_id: str, user_id: Optional[str] = None,
+                            *, strict: bool = False) -> str:
         """The skill's body, frontmatter stripped, by the ONE precedence order
         (``core.skills.scopes.resolve``: builtin > user > pack > project >
         user-external). ``""`` when nothing serves the id.
@@ -709,6 +710,11 @@ class SkillManager(SkillWriterMixin):
         (:meth:`_get_skill_meta`). A tenant skill with a recorded revision is
         hash-verified on EVERY load (another worker may have changed it), and is
         refused when its revision metadata cannot be read.
+
+        ``strict=True`` raises instead of returning ``""`` when the skill EXISTS but
+        cannot be served (an unreadable file, unreadable revision metadata, a body
+        that does not match its revision): a reader that must tell "unreadable"
+        from "missing" asks for it. Every other caller keeps the quiet ``""``.
         """
         if (not skill_id or "/" in skill_id or "\\" in skill_id or ".." in skill_id
                 or skill_id != skill_id.strip()):
@@ -729,8 +735,10 @@ class SkillManager(SkillWriterMixin):
             if res.scope == "user":
                 try:
                     expected = self._expected_content_hash(user_id, skill_id)
-                except Exception:
+                except Exception as exc:
                     logger.warning("refusing user skill %s: could not read revision metadata", skill_id)
+                    if strict:
+                        raise RuntimeError(f"skill '{skill_id}': could not read its revision record") from exc
                     return ""
             revision = self._file_revision(res.path / "SKILL.md") if expected is None else None
             if (cache_key in self.skill_cache and expected is None
@@ -742,9 +750,13 @@ class SkillManager(SkillWriterMixin):
                        else skill_file.read_text(encoding='utf-8'))
             except Exception as e:
                 logger.error(f"Failed to load skill content for '{skill_id}': {e}")
+                if strict:
+                    raise
                 return ""
             if expected is not None and hashlib.sha256(raw.encode("utf-8")).hexdigest() != expected:
                 logger.warning("refusing mismatched user skill body for '%s'", skill_id)
+                if strict:
+                    raise RuntimeError(f"skill '{skill_id}': the body does not match its recorded revision")
                 return ""
             meta, body = parse_frontmatter(raw)
             if expected is None:

@@ -1,24 +1,22 @@
-"""Declarative LLM provider registry (proposal 024, L0).
+"""Declarative LLM provider registry.
 
 One ``ProviderSpec`` row describes a provider completely — identity, credential
-shape, transport, base URL, capabilities, derivation data — so the historical
+shape, transport, base URL, capabilities, derivation data — so the
 per-provider literal lists (``PROFILES``, ``PROVIDER_CONFIG``, ``DEFAULT_MODELS``,
 ``SCHEMA_GENERATORS``, ``native_providers``, ``_KEY_TO_PROVIDER``,
 ``FALLBACK_HIERARCHY``, ``_KNOWN_PROVIDERS``, ``_PREFIX_TO_PROVIDER``) become
 *derivations* of this table instead of hand-maintained copies. Same move
-``core/tool_capabilities.py`` made for tools in WS-2.
+``core/tool_capabilities.py`` makes for tools.
 
 User-declared providers load from ``~/.polyrob/providers.yaml`` (path override:
 ``LLM_CUSTOM_PROVIDERS``; set-but-empty disables). Loading is lazy + cached —
 this module must stay light at import (entry-point weight test) and must never
 pull agents.*/aiogram/provider SDKs (layering test on ``modules.llm.profiles``).
 
-The ``LLM_PROVIDER_REGISTRY`` kill-switch (and the duplicate legacy literal tables
-behind it) was removed 2026-08-29, two releases after it shipped in 0.10.0; every seam
-derives from ``get_specs()`` and falls back to ``BUILTIN_SPECS`` (this module's own
-data) on a registry fault, never to a second hand-maintained copy.
+Every seam derives from ``get_specs()`` and falls back to ``BUILTIN_SPECS`` (this
+module's own data) on a registry fault, never to a second hand-maintained copy.
 
-Security invariants (proposal 024 §4.0.3, §7.1):
+Security invariants:
 - user YAML may NEVER name a ``client_class_name`` — it can only select an
   existing generic transport (otherwise a file on disk is a code-exec vector);
 - ``providers.yaml`` is credential-equivalent (it redirects ``base_url``) and is
@@ -100,6 +98,12 @@ class ProviderSpec:
     name: str
     display_name: str
     aliases: Tuple[str, ...] = ()
+    #: The cheap model of the aux tasks (compaction, judge, reflection) on this provider.
+    #: None = aux runs on the main model, unless ``aux_family_map`` has a row.
+    aux_model: Optional[str] = None
+    #: ``((main-model prefix, cheap model), ...)`` for a provider that serves many families.
+    #: First match wins, and a family with no row keeps the main model.
+    aux_family_map: Tuple[Tuple[str, str], ...] = ()
 
     # credentials
     auth_type: AuthType = AuthType.API_KEY
@@ -147,10 +151,10 @@ class ProviderSpec:
     signup_url: Optional[str] = None
     tos_note: Optional[str] = None           # surfaced at connect time (§7.4)
     prompt_in_init: bool = True              # ask for this key in `polyrob init`
-    # How prompt caching is achieved on this provider (UP-08 / S4 2026-08-29):
+    # How prompt caching is achieved on this provider ):
     # "in_client" (the client marks the stable prefix itself), "automatic"
-    # (server-side, no request change), "explicit" (Gemini cachedContents),
-    # "breakpoints" (cache_control markers), "none". None => derive: an
+    # (server-side, no request change), "breakpoints" (cache_control markers),
+    # "none". None => derive: an
     # OpenRouter route is model-dependent (cache_hints.openrouter_cache_strategy);
     # an ANTHROPIC_MESSAGES transport inherits the Anthropic client's in-client
     # breakpoints; anything else "none". Consumed by cache_hints.provider_cache_strategy.
@@ -202,13 +206,16 @@ class ProviderSpec:
 
 # ---------------------------------------------------------------------------
 # Built-in specs — canonical order IS the "first provider with a key" order
-# (mirrors the legacy modules/llm/profiles.py PROFILES table; fallback_rank
-# mirrors the legacy LLMManager.FALLBACK_HIERARCHY order; model_prefixes mirror
-# the pre-024 api/openai_compat/model_map prefix table).
+# (mirrors modules/llm/profiles.py PROFILES order; fallback_rank
+# mirrors the LLMManager.FALLBACK_HIERARCHY order; model_prefixes mirror
+# the api/openai_compat/model_map prefix table).
 # ---------------------------------------------------------------------------
 BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
     ProviderSpec(
         name="openrouter", display_name="OpenRouter", env_key="OPENROUTER_API_KEY",
+        # Any other `deepseek/*` has no row: its flash IS the cheap tier.
+        aux_family_map=(("z-ai/glm-5", "z-ai/glm-5.3-flash"),
+                        ("deepseek/deepseek-v4-pro", "deepseek/deepseek-v4.1-flash")),
         transport=Transport.CHAT_COMPLETIONS, base_url="https://openrouter.ai/api/v1",
         supports_native_tools=True, supports_vision=True,
         signup_url="https://openrouter.ai/", client_class_name="OpenRouterClient",
@@ -216,6 +223,7 @@ BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
     ),
     ProviderSpec(
         name="anthropic", display_name="Anthropic", env_key="ANTHROPIC_API_KEY",
+        aux_model="claude-haiku-5-5",
         transport=Transport.ANTHROPIC_MESSAGES, base_url="https://api.anthropic.com",
         supports_native_tools=True, supports_vision=True,
         signup_url="https://console.anthropic.com/", client_class_name="AnthropicClient",
@@ -224,6 +232,7 @@ BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
     ),
     ProviderSpec(
         name="openai", display_name="OpenAI", env_key="OPENAI_API_KEY",
+        aux_model="gpt-5-mini",
         transport=Transport.CHAT_COMPLETIONS,
         supports_native_tools=True, supports_vision=True,
         signup_url="https://platform.openai.com/", client_class_name="OpenAIClient",
@@ -233,6 +242,7 @@ BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
     ),
     ProviderSpec(
         name="gemini", display_name="Google Gemini", env_key="GEMINI_API_KEY",
+        aliases=("google",), aux_model="gemini-2.5-flash",
         # transport is INERT for builtins with a bespoke client_class_name (the
         # factory/schema paths match on name first) — gemini actually speaks the
         # google SDK, not chat_completions. Do not trust spec.transport for a
@@ -240,8 +250,8 @@ BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
         transport=Transport.CHAT_COMPLETIONS,
         supports_native_tools=True, supports_vision=True,
         signup_url="https://aistudio.google.com/", client_class_name="GeminiClient",
-        fallback_eligible=True, fallback_rank=3, model_prefixes=("gemini",), builtin=True,
-        cache_strategy="explicit",  # implicit is free + needs no code; explicit is opt-in
+        fallback_eligible=True, fallback_rank=4, model_prefixes=("gemini",), builtin=True,
+        cache_strategy="automatic",  # implicit caching, server-side
     ),
     ProviderSpec(
         name="nvidia", display_name="NVIDIA NIM", env_key="NVIDIA_API_KEY",
@@ -254,18 +264,19 @@ BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
     ),
     ProviderSpec(
         name="deepseek", display_name="DeepSeek", env_key="DEEPSEEK_API_KEY",
+        aux_model="deepseek-flash",
         transport=Transport.CHAT_COMPLETIONS, base_url="https://api.deepseek.com/v1",
         supports_native_tools=True, supports_vision=False,
         signup_url="https://platform.deepseek.com/", client_class_name="DeepSeekClient",
-        model_prefixes=("deepseek",), builtin=True,
+        fallback_eligible=True, fallback_rank=3, model_prefixes=("deepseek",), builtin=True,
         cache_strategy="automatic",  # disk cache, server-side
     ),
 
     # -----------------------------------------------------------------------
-    # Subscription / flat-rate plans that issue an API KEY (024 T0, 2026-08-11)
+    # Subscription / flat-rate plans that issue an API KEY
     # -----------------------------------------------------------------------
     # These are the plans a user CAN connect today — no OAuth needed, the vendor
-    # hands out a key. Before this they had to hand-author a providers.yaml row.
+    # hands out a key; no providers.yaml row is needed.
     #
     # Rules for a row in this block:
     #   * appended AFTER the six legacy built-ins, so the canonical
@@ -290,13 +301,11 @@ BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
     #     ``is_flat_rate``). An endpoint that ALSO serves pay-as-you-go keeps
     #     the metered default.
     #
-    # 024 §8 live-verification status (2026-08-14): `zai-coding` is
-    # LIVE-VERIFIED — real key, full tool-calling agent runs on prod
-    # (glm-4.6, VPS) and local (glm-5), AnthropicCompatClient over
-    # api.z.ai/api/anthropic. ⚠ `cerebras` / `ollama-cloud` remain declared
+    # Live-verification status: `zai-coding` is
+    # LIVE-VERIFIED — real key, full tool-calling agent runs,
+    # AnthropicCompatClient over api.z.ai/api/anthropic. ⚠ `cerebras` / `ollama-cloud` remain declared
     # from vendor documentation only (no key on any box); a wrong model
     # id/base URL surfaces as a provider 4xx, never a silent wrong answer.
-    # See proposal 024 §8 and the 2026-08-11 subscription-auth status ledger.
     ProviderSpec(
         name="ollama-cloud", display_name="Ollama Cloud", aliases=("ollama_cloud",),
         env_key="OLLAMA_API_KEY",
@@ -325,6 +334,7 @@ BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
         # pay-as-you-go API on a DIFFERENT endpoint). An alias that shadows a
         # real provider name is a routing bug waiting to happen.
         name="zai-coding", display_name="z.ai GLM Coding Plan", aliases=("zai-code",),
+        aux_model="glm-5.3-flash",
         env_key="ZAI_API_KEY",
         transport=Transport.ANTHROPIC_MESSAGES, base_url="https://api.z.ai/api/anthropic",
         bearer_auth=True,   # z.ai authenticates Bearer, not x-api-key
@@ -332,7 +342,7 @@ BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
         # this seat's flagship (glm-5.3) is text-only. Per-model truth lives in the
         # model registry, which `_check_vision_support` consults FIRST — so a
         # session pinned to glm-5.3-flash (the one multimodal model on this plan,
-        # live-verified 2026-09-15) still gets vision.
+        # live-verified) still gets vision.
         supports_native_tools=True, supports_vision=False,
         # Newest first. glm-5/glm-5.2 stay listed: a pinned older model must keep
         # resolving, and `polyrob doctor` renders this tuple as what the seat serves.
@@ -373,7 +383,7 @@ BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
         ),
     ),
     # -----------------------------------------------------------------------
-    # Extended provider breadth (2026-08-12)
+    # Extended provider breadth
     # -----------------------------------------------------------------------
     # Endpoints + env-var chains taken from each vendor's public docs; model
     # ids and tool-call capability verified against models.dev.
@@ -393,16 +403,14 @@ BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
     # or non-key auth — separate work).
     ProviderSpec(
         name="zai", display_name="Z.AI (GLM)", aliases=("glm",),
+        aux_model="glm-5.3-flash",
         env_key="GLM_API_KEY", env_key_aliases=("Z_AI_API_KEY",),
         transport=Transport.CHAT_COMPLETIONS,
         base_url="https://api.z.ai/api/paas/v4", base_url_env="GLM_BASE_URL",
         supports_native_tools=True, supports_vision=False,
-        # The default stays glm-5.2 deliberately: this row is METERED, and moving it
-        # to the pricier 5.3 would raise every existing user's bill without them
-        # asking. The two 5.3 ids are listed because the endpoint serves them (live
-        # /api/paas/v4/models, 2026-09-15) and because AUX_MODEL_MAP routes this
-        # provider's aux work to glm-5.3-flash — a map row naming a model absent from
-        # the seat's own tuple is exactly the drift this file exists to prevent.
+        # The default stays glm-5.2 deliberately: this row is METERED, and the pricier 5.3
+        # would raise every existing user's bill. The endpoint serves both 5.3 ids, and
+        # this row's ``aux_model`` must be in its own tuple.
         default_model="glm-5.2",
         models=("glm-5.3", "glm-5.3-flash", "glm-5.2", "glm-5.1", "glm-5",
                 "glm-4.7-flash", "glm-4.6v"),
@@ -625,7 +633,7 @@ BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
         tos_note="Copilot is a flat-rate subscription; usage is not metered per token.",
     ),
     # -----------------------------------------------------------------------
-    # OAuth subscription seats (2026-08-12) — sign in with a plan you pay for
+    # OAuth subscription seats — sign in with a plan you pay for
     # -----------------------------------------------------------------------
     # ⚠ TERMS OF SERVICE. These plans issue no OAuth client_id to third-party
     # applications. The client_ids below are the ones published in the vendors'
@@ -674,7 +682,8 @@ BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
             ("x-app", "cli"),
         ),
         supports_native_tools=True, supports_vision=True,
-        default_model="claude-sonnet-4-5", models=("claude-sonnet-4-5",),
+        default_model="claude-sonnet-5-5",
+        models=("claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"),
         fallback_eligible=False, builtin=True, subscription=True, prompt_in_init=False,
         tos_note=(
             "Connects your Claude Pro/Max seat using Claude Code's OAuth client id — "
@@ -699,9 +708,6 @@ BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
         supports_native_tools=True, supports_vision=False,
         default_model="gpt-5-codex", models=("gpt-5-codex",),
         fallback_eligible=False, builtin=True, subscription=True, prompt_in_init=False,
-        # ⚠ transport RESPONSES has no generic client yet — the row is declared
-        # so the connect flow and the catalog are complete, but inference needs
-        # the Responses client (see the transport gap in the handoff).
         tos_note=(
             "Connects your ChatGPT plan using the Codex CLI's OAuth client id — "
             "OpenAI issues none to third-party apps. Your account, your risk."
@@ -805,16 +811,11 @@ BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
 # ---------------------------------------------------------------------------
 # User-declared providers (~/.polyrob/providers.yaml)
 # ---------------------------------------------------------------------------
-# Fields a providers.yaml row may set. client_class_name / builtin /
-# fallback_rank are deliberately absent (code-selection and internal ordering
-# are never user data).
-#
-# ``oauth`` IS user-settable (024 L2). It has to be: POLYROB ships no built-in
-# OAuth providers, because the plans people want to connect issue no client_id
-# to third-party apps and borrowing a vendor CLI's id would make POLYROB
-# impersonate their product. So the client_id is the user's to supply. The block
-# is validated exactly like base_url (https only, never a metadata endpoint) —
-# see _parse_oauth_block.
+# Fields a providers.yaml row may set. client_class_name / builtin / fallback_rank /
+# aux_model / aux_family_map are deliberately absent (code selection and internal ordering
+# are never user data). ``oauth`` is settable because a plan may issue no client_id to
+# third-party apps, so the client_id is the user's to supply. The block is validated exactly
+# like base_url (https only, never a metadata endpoint): see _parse_oauth_block.
 _USER_SETTABLE_FIELDS = frozenset({
     "display_name", "aliases", "auth_type", "env_key", "transport", "base_url",
     "base_url_env", "extra_headers", "bearer_auth", "supports_native_tools",
@@ -867,7 +868,7 @@ def _coerce_str_tuple(value) -> Tuple[str, ...]:
     return tuple(str(v) for v in value)
 
 
-# --- providers.yaml row validation (024 security review C1, 2026-08-07) -----
+# --- providers.yaml row validation -----
 # A row's env_key/base_url are what the generic clients SEND CREDENTIALS to —
 # an unvalidated row could name any process secret (WALLET_MASTER_SEED,
 # TELEGRAM_BOT_TOKEN, ...) as its "api key" and ship it to an arbitrary URL.
@@ -991,7 +992,7 @@ def _validate_base_url(url: str) -> Optional[str]:
 
 
 # Queryable load state for the last providers.yaml parse — what `polyrob
-# doctor` renders as the "providers file" block (UX assessment 2026-08-07, Q7).
+# doctor` renders as the "providers file" block.
 # Shape: {"path", "loaded": [names], "rejected": [(name, reason)], "file_error"}.
 # Empty dict = no file configured/present. Reset with the registry cache.
 _LOAD_REPORT: Dict[str, object] = {}
@@ -1028,7 +1029,7 @@ def _parse_user_row(name: str, row: dict, base: Optional[ProviderSpec]) -> Optio
     if name.endswith("_client"):
         # llm_manager derives provider names by stripping '_client' from service
         # names — a provider literally named '*_client' would alias into another
-        # provider's service slot (review M7).
+        # provider's service slot.
         _reject(name, "provider name may not end in '_client'")
         return None
 
@@ -1080,7 +1081,7 @@ def _parse_user_row(name: str, row: dict, base: Optional[ProviderSpec]) -> Optio
         # but the client class / builtin provenance / fallback rank are kept.
         # transport is bound to the built-in's bespoke client — never movable.
         # A row that RESTATES the built-in's own transport is a no-op, not a
-        # conflict: since 024 T0 ships built-in rows for plans users already
+        # conflict: built-in rows ship for plans users already
         # hand-authored (zai-coding), warning there would fire on every load of
         # a file that is exactly right. Only a genuine CHANGE is refused.
         if "transport" in kwargs:
@@ -1100,7 +1101,7 @@ def _parse_user_row(name: str, row: dict, base: Optional[ProviderSpec]) -> Optio
         return None
     if not spec.base_url and not spec.base_url_env:
         # Without an endpoint the generic client would ride its DEFAULT base URL
-        # (silent traffic misdirection) — refuse the row (assessment Q14).
+        # (silent traffic misdirection) — refuse the row.
         _reject(name, "no base_url (or base_url_env) declared")
         return None
     if not spec.models:
@@ -1132,7 +1133,7 @@ def _load_user_specs() -> Tuple[ProviderSpec, ...]:
         )
     try:
         # Group/world-writable providers.yaml = anyone on the box can redirect
-        # the agent's inference endpoint (review M6) — refuse to load it.
+        # the agent's inference endpoint — refuse to load it.
         mode = os.stat(path).st_mode
         if mode & 0o022:
             logger.warning(
@@ -1165,7 +1166,7 @@ def _load_user_specs() -> Tuple[ProviderSpec, ...]:
         spec = _parse_user_row(name, row, builtin_by_name.get(str(name).strip().lower()))
         if spec is not None:
             # Make every endpoint redirect VISIBLE — a silent redirect is the
-            # threat model here (review C1 fix #4).
+            # threat model here.
             logger.info(
                 "provider registry: user row %r → base_url=%s env_key=%s transport=%s",
                 spec.name, spec.resolved_base_url(), spec.env_key, spec.transport.value,
@@ -1184,12 +1185,9 @@ _SPECS_CACHE: Optional[Tuple[ProviderSpec, ...]] = None
 def _mark_uninitializable_without_a_client(spec: ProviderSpec) -> ProviderSpec:
     """Force ``initializable=False`` when nothing can construct a client.
 
-    A spec declaring a transport with no generic client (RESPONSES today) and no
-    bespoke ``client_class_name`` is absent from ``PROVIDER_CONFIG`` — so it
-    would be reported USABLE by the gating oracles, auto-selected by the
-    resolver, and then die in ``create_llm_client`` with "Unknown LLM client
-    type". Derived rather than hand-set: the next row to declare an
-    unimplemented transport gets the same protection for free.
+    A spec with a transport that has no generic client and no ``client_class_name`` is
+    absent from ``PROVIDER_CONFIG``. It would read USABLE to the gating oracles and then die
+    in ``create_llm_client``, so this value is derived and never hand-set.
     """
     if spec.initializable and spec.client_class_name is None \
             and generic_client_class_name(spec.transport) is None:
@@ -1255,8 +1253,7 @@ def user_declared_specs() -> Tuple[ProviderSpec, ...]:
 def is_flat_rate(provider: Optional[str]) -> bool:
     """True when *provider*'s plan is flat-rate, so per-token cost is meaningless.
 
-    THE consumer of ``ProviderSpec.subscription`` (before 024 T0 the field was
-    declared and read by nothing). A flat-rate seat bills a fixed
+    THE consumer of ``ProviderSpec.subscription``. A flat-rate seat bills a fixed
     monthly/quarterly fee — or GPU-time under it — so multiplying this call's
     tokens by a per-token price does not describe any real charge. The billing
     entry point (``modules.credits.pricing.compute_llm_cost``) therefore records

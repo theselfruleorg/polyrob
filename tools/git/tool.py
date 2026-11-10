@@ -162,9 +162,20 @@ class GitTool(BaseTool):
             return False, refusal
         root = self._resolve_root(execution_context)
         workdir = cwd or root
-        argv = ["git", "-C", workdir] + list(args)
         env = {k: os.environ[k] for k in ("PATH", "HOME", "LANG", "LC_ALL") if k in os.environ}
         env.setdefault("GIT_TERMINAL_PROMPT", "0")  # never block on a credential prompt
+        # A tree that sandboxed code can write is not trusted: its .git/config and
+        # hooks must not run a command as this identity (tools/git/hardening.py).
+        from tools.git import hardening
+        overrides: List[str] = []
+        if hardening.sandboxed_tree():
+            import asyncio as _aio
+            refused = await _aio.get_event_loop().run_in_executor(
+                None, hardening.repo_config_refusal, workdir, env)
+            if refused:
+                return False, refused
+            overrides = list(hardening.OVERRIDES)
+        argv = ["git", "-C", workdir] + overrides + list(args)
         # Defense-in-depth: even though our own `_unsafe_remote` check rejects `::`-bearing
         # values before git ever runs, also tell git itself to refuse the `ext`/`fd`
         # transports (and anything else) natively — belt-and-suspenders in case a future

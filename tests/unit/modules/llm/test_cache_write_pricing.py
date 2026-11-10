@@ -104,7 +104,7 @@ class TestCacheWrite1hPricingF4:
             usage_metadata = {"input_tokens": 100, "output_tokens": 10,
                               "cache_creation_input_tokens": 40,
                               "cache_creation_1h_tokens": 30}
-        assert extract_token_usage(_Resp(), "anthropic")["cache_creation_1h_tokens"] == 30
+        assert extract_token_usage(_Resp())["cache_creation_1h_tokens"] == 30
 
     def test_compute_llm_cost_forwards_the_split(self):
         from modules.credits.pricing import compute_llm_cost
@@ -131,7 +131,7 @@ class TestCacheWriteThreadingG3:
                 "cache_creation_input_tokens": 4000,
             }
 
-        tu = extract_token_usage(_Resp(), "anthropic")
+        tu = extract_token_usage(_Resp())
         assert tu.get("cache_creation_tokens") == 4000
         assert tu.get("cached_tokens") == 2000
 

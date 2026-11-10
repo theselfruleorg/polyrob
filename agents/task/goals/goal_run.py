@@ -31,6 +31,8 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from agents.task.goals.board import Goal
+from core.money.classify import is_money_class as _money_class  # 112 F2
+from core.model_routing import record_stored_tier  # 112 W2
 
 #: The regime seam's row for a goal run (`agents.task.session_class`).
 _GOAL_REGIME = "goal"
@@ -70,6 +72,7 @@ class _GoalRunCtx:
     gap_note: str = ""
     salvaged_without_done: bool = False
     judge_on: bool = False
+    verify_reason: str = ""
 
 
 class GoalRunMixin:
@@ -169,6 +172,15 @@ class GoalRunMixin:
         # A goal's stored provider pin is a preference, not a death pact —
         # same rule as a durable cron pin (cron/runner.resolve_job_provider).
         provider = resolve_live_provider(payload.get("provider") or default_provider)
+        _pinned = payload.get("provider")
+        if provider is not None and _pinned and provider != _pinned and payload.get("model"):
+            # 112 F4: the model belongs to the provider that was pinned — drop it so the
+            # run fills a model the NEW provider serves (the cron rail does the same,
+            # cron/runner.py). Never mutate the stored row's payload in place.
+            logger.info("goal %s: pinned provider %s is unavailable — routing to %s "
+                        "and dropping its model %s", goal.id, _pinned, provider,
+                        payload.get("model"))
+            payload = {k: v for k, v in payload.items() if k != "model"}
         if provider is None:
             # 2026-08-18 intel finding: `dispatch_blocked_by_providers()` is a
             # once-per-tick, tenant-wide gate — it can pass (SOME provider is
@@ -198,13 +210,17 @@ class GoalRunMixin:
         # payload.model > HEAVY_MODEL for a money-class goal > the provider default
         # (the GOAL row's model_tier, agents/task/session_class.py).
         from agents.task.session_class import GOAL as _GOAL_REGIME, regime_model_for
+        import core.skills.catalog  # noqa: F401 — 112: registers the money-skill probe; at CALL time (an import-time catalog build refuses pack policy rows)
         model = regime_model_for(_GOAL_REGIME, payload, provider)
+        _tiered = not model and payload.get("tier") in ("heavy", "light")
         if not model:
             try:
                 from modules.llm.llm_client_registry import get_default_model
                 model = get_default_model(provider)
             except Exception:
                 model = None
+        record_stored_tier(kind="goal", payload=payload, model=model, absent=_tiered,
+                           user_id=goal.user_id, ref=goal.id)  # 112 W2
         from agents.task.goals.context import build_goal_run_task
         # 057 WS-C (B9): the restart note leads the task body unconditionally
         # (it was written and read nowhere), and with GOAL_RESUME_SAME_SESSION
@@ -229,6 +245,8 @@ class GoalRunMixin:
             "max_steps": AutonomyConfig.autonomous_max_steps(),
             "temperature": 0.0,
             "goal_id": goal.id,
+            # 112 F2: the fallback ladder keeps a money run on a money model.
+            "money_class": _money_class(payload),
             # B1: recall searches the goal itself, not the restart note and
             # objective/boilerplate the run task opens with.
             "recall_seed": f"{goal.title}\n{goal.body or ''}".strip(),
@@ -448,6 +466,12 @@ class GoalRunMixin:
             # a provider outage never hides inside the generic refusal.
             error = "run did not complete (refusal or empty)"
             block_kind_hint = None
+            from core.exceptions import REFUSAL_HALT_PREFIX
+            # A model refusal or a safety filter: name it, and block now (a retry
+            # gets the same answer). Checked before the provider-death test, which
+            # must never read a refusal as an outage.
+            refused = (getattr(run, "stop_reason", None) != "run_budget"
+                       and REFUSAL_HALT_PREFIX in str(run.status or ""))
             # Budget marker FIRST: the halt text embeds dollar amounts, and
             # a large-enough budget (e.g. "$402.00") would satisfy the
             # credit-death classifier inside _is_llm_provider_exhausted —
@@ -455,6 +479,9 @@ class GoalRunMixin:
             if (getattr(run, "stop_reason", None) == "run_budget"
                     or _d().RUN_BUDGET_MARKER in str(run.status or "")):
                 error = f"{_d().RUN_BUDGET_MARKER}: {str(run.status)[:400]}"
+                refused = False
+            elif refused:
+                error = f"llm_refused: {str(run.status)[:400]}"
             elif _d()._is_llm_provider_exhausted(run.status):
                 error = f"{_d().LLM_EXHAUSTED_MARKER}: {str(run.status)[:400]}"
                 block_kind_hint = "provider_outage"
@@ -462,7 +489,7 @@ class GoalRunMixin:
             # Prod 2026-10-14: a run a rate guard cut short (the X post cooldown
             # names retry_after_sec) is a timer, not a failure — come back then.
             # A budget halt is NOT a timer: deferring it re-runs (and re-spends).
-            if (run.retry_after_sec and block_kind_hint is None
+            if (run.retry_after_sec and block_kind_hint is None and not refused
                     and _d().RUN_BUDGET_MARKER not in error):
                 _d_g = self.board.defer_run(
                     goal.id, retry_after_sec=run.retry_after_sec,
@@ -477,6 +504,12 @@ class GoalRunMixin:
                 goal.id, error=error, session_id=session_id, claim_token=goal.claim_token)
             if getattr(_g, "claim_token", None) != goal.claim_token:
                 return False
+            if refused and getattr(_g, "status", None) == _d().STATUS_READY:
+                try:
+                    if self.board.block_from_ready(goal.id, error=error):
+                        _g = self.board.get(goal.id) or _g
+                except Exception:
+                    logger.debug("block_from_ready failed for %s", goal.id, exc_info=True)
             # T2.1 Task-3 review fix (finding #1, CRITICAL): this path never
             # goes through _fail_run, so it must pass the SAME classification
             # as a hint into _maybe_escalate_blocked (the single block_kind
@@ -487,7 +520,8 @@ class GoalRunMixin:
             # 012 #1: the envelope's real provenance (zeros for a pre-loop
             # refusal, honest values when work preceded it).
             await self._goal_record(goal, session_id, "failed", run=run,
-                                    reason="the run was refused or produced nothing",
+                                    reason=("the model refused the request" if refused
+                                            else "the run was refused or produced nothing"),
                                     error=error)
             return False
         # §2: every downstream read comes from the envelope — the done() ledger
@@ -610,6 +644,7 @@ class GoalRunMixin:
                     artifacts=run.artifacts, run=run)
                 return False
             run.verified = "verified" if verdict == _cj.VERDICT_MET else "unverified"
+            ctx.verify_reason = reason
         elif salvaged_without_done:
             run.verified = "verified"  # every declared acceptance check passed
         ctx.final, ctx.outcome, ctx.gap_note = final, outcome, gap_note
@@ -695,11 +730,17 @@ class GoalRunMixin:
         # agent's own send_message (delivered live via the §3.1 rail) is the
         # primary channel. The framework only speaks when the agent said
         # nothing to its user during the run.
+        _unverified = judge_on and run.verified == "unverified"
         if _d().effective_goal_notify_on_done(goal.user_id, self._home_dir()) \
                 and not run.user_messages:
             await self._notify_owner_done(goal, session_id, result_record,
                                           verified=run.verified if judge_on else "verified",
-                                          artifacts=run.artifacts, promoted=_promoted)
+                                          artifacts=run.artifacts, promoted=_promoted,
+                                          verify_reason=ctx.verify_reason if _unverified else "")
+        elif _unverified:
+            # 107 WS-5: a done that nothing verified is told whatever the done setting says.
+            from agents.task.goals.escalation import tell_unverified
+            await tell_unverified(self.task_agent, goal, ctx.verify_reason)
         # §4.3: an UNVERIFIED completion earns nothing downstream — no
         # self-wake re-entry. With the judge disabled, legacy behavior holds.
         if AutonomyConfig.goal_self_wake_enabled() and \
@@ -735,17 +776,27 @@ class GoalRunMixin:
                  duration_sec=self._elapsed(goal.id),
                  stop_reason=(StopReason.WALL_CLOCK.value if timed_out
                               else getattr(run, "stop_reason", None)))
+        # Three steps, each its own try: one that raised used to skip the rest
+        # unlogged, so a failure that was never recorded left no trace.
         try:
             hb_task.cancel()
+        except Exception:
+            logger.error("goal %s: heartbeat cancel failed", goal.id, exc_info=True)
+        _g = None
+        try:
             _g = self.board.record_failure(goal.id, error=error_text, session_id=session_id, claim_token=goal.claim_token)
+        except Exception:
+            logger.error("goal %s: the failure was not recorded", goal.id, exc_info=True)
+        if _g is not None:
             if getattr(_g, "claim_token", None) != goal.claim_token:
                 return
             # T2.1 Task-3 review fix (finding #1, CRITICAL): this path also
             # never goes through _fail_run — same hint mechanism, same
             # rationale as the refusal-status site above.
-            await self._maybe_escalate_blocked(_g, block_kind_hint=block_kind_hint)
-        except Exception:
-            pass
+            try:
+                await self._maybe_escalate_blocked(_g, block_kind_hint=block_kind_hint)
+            except Exception:
+                logger.error("goal %s: block escalation failed", goal.id, exc_info=True)
         if not recorded_success:
             # 012 #1: whatever provenance the run envelope already computed (run
             # stays None when the raise preceded run_session — or when the

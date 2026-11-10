@@ -1048,7 +1048,9 @@ def _mcp_section(user_id: str = "", tenant: tuple = None) -> dict:
     named note when the operator file is not readable from this process."""
     try:
         from tools.mcp.inventory import mcp_inventory
-        return mcp_inventory(tenant, _mcp_container(), detail=_mcp_detail)
+        from webview.mcp_view import local_absent_file_is_empty   # 113 W5 (ST-1)
+        return local_absent_file_is_empty(
+            mcp_inventory(tenant, _mcp_container(), detail=_mcp_detail), _mcp_container())
     except Exception as exc:
         return {"items": [], "error": _reason(exc), "enabled": False}
 
@@ -1309,7 +1311,7 @@ async def api_chats(request: Request, offset: int = 0, limit: int = 50):
     from starlette.concurrency import run_in_threadpool
     body = await run_in_threadpool(session_page, pm().data_root, scope, user_id,
                                   offset=max(0, offset), limit=max(1, min(100, limit)))
-    body["sessions"] = _annotate_runtime(body["sessions"])
+    body["sessions"] = chats_routes.annotate(request, _annotate_runtime(body["sessions"]))
     return JSONResponse(body)
 
 
@@ -1378,7 +1380,8 @@ def _chat(request: Request, session_id: str = ""):
 async def new(request: Request):
     if _public_visitor(request):
         return _status_page(request)
-    return _chat(request)
+    go = None if "new" in request.query_params else chats_routes.main_redirect(request)
+    return go if go is not None else _chat(request)   # 113: Chat = the main chat
 
 
 @router.get("/c/{session_id}", response_class=HTMLResponse, name="console_chat")
@@ -1390,6 +1393,9 @@ async def chat(request: Request, session_id: str):
         raise HTTPException(status_code=404)
     if _public_visitor(request):
         return _status_page(request)
+    from webview.chat_open import chat_exists
+    if not chat_exists(session_id):   # 113 W0: "could not be read. Reload" was false
+        raise HTTPException(status_code=404)
     return _chat(request, session_id)
 
 
@@ -1847,3 +1853,6 @@ def _mount_one(app, one) -> None:
 from webview.contributions import register_console_router  # noqa: E402
 
 register_console_router(money_api_router, destination="money", source="webview.pages_new")
+
+
+from webview import chats_routes  # noqa: E402 — 113: registers on api_router

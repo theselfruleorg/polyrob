@@ -152,6 +152,74 @@ def test_autonomous_admission_needs_no_trading_flag_for_an_order_run(monkeypatch
     assert not tx_guard._autonomous_turn_allowed(_ctx("ord_abc"), None, ok, offer_scoped=True)
 
 
+def test_a_spend_with_no_destination_is_refused(order):
+    v = _verdict(order.id, {"chain": "base", "destinations": [None], "is_resource_call": False})
+    assert v.refused and "names no destination" in v.reason
+
+
+# -- the guard books an order's budget only for an ALLOWED transaction ------------------
+
+_SCOPE = {"chain": "base", "destinations": [], "is_resource_call": True, "contract": CONTRACT,
+          "selector": MINT}
+
+
+def _dry(order_id, usd, key):
+    return authorize_spend(
+        SpendIntent.turn_origin(usd=usd, offer_scope=_SCOPE, idempotency_key=key,
+                                dry_run=True),
+        _ctx(order_id), forged_fn=lambda c, t: True, autonomous_ok_fn=lambda c, t: True)
+
+
+def _guard_ctx(order_id, key):
+    from core.wallet import tx_guard
+    return SimpleNamespace(
+        offer_scope=dict(_SCOPE), execution_context=_ctx(order_id), forged_fn=lambda c, t: True,
+        tool_self=None, intent=tx_guard.TxIntent(chain="base", token=None, to=CONTRACT,
+                                                 amount_raw=0, max_spend_usd=0.4,
+                                                 idempotency_key=key))
+
+
+def test_the_guards_check_books_nothing(order):
+    assert not _dry(order.id, 0.4, "k1").refused
+    assert ords.get(order.id).spent_usd == 0
+
+
+def test_the_booking_after_the_allow_is_once_per_key_and_decides_the_budget(order):
+    from core.wallet.tx_guard_steps.turn import reserve_offer_budget
+    assert reserve_offer_budget(_guard_ctx(order.id, "k1")) is None
+    assert reserve_offer_budget(_guard_ctx(order.id, "k1")) is None   # dry run, then the send
+    assert ords.get(order.id).spent_usd == pytest.approx(0.4)
+    # the real send of a booked dry run passes the check although 0.4 + 0.4 > 0.5
+    assert not _dry(order.id, 0.4, "k1").refused
+    d = reserve_offer_budget(_guard_ctx(order.id, "k2"))
+    assert d is not None and not d.allowed and "spend budget" in d.reason
+
+
+def test_step_2_only_checks_an_orders_budget(order, monkeypatch):
+    from core.wallet.tx_guard_steps import turn
+    seen = {}
+    import core.money.authorize as kernel
+
+    def spy(intent, *a, **k):
+        seen["dry_run"] = intent.dry_run
+        return kernel.Verdict("refuse", "stop here", step="turn")
+    monkeypatch.setattr(kernel, "authorize_spend", spy)
+    from core.wallet import tx_guard
+    from core.wallet.tx_guard_steps.context import GuardContext
+    none = {k: None for k in ("tool_self", "simulate_fn", "price_fn", "fallback_price_fn",
+                              "rpc_is_pinned_fn", "halted_fn", "entry_paused_fn", "forged_fn",
+                              "autonomous_ok_fn", "liquidity_rpc", "account_rpc")}
+    c = GuardContext(intent=tx_guard.TxIntent(chain="base", token=None, to=CONTRACT,
+                                              amount_raw=0, max_spend_usd=0.4,
+                                              is_resource_call=True,
+                                              resource_recipient=RECIPIENT),
+                     tx={"to": CONTRACT, "data": MINT + "00" * 32, "value": 0, "nonce": 1},
+                     holder="0x" + "22" * 20, gate=None, execution_context=_ctx(order.id),
+                     **none)
+    turn.step_2_turn_origin(c)
+    assert seen["dry_run"] is True and c.offer_scope["contract"] == CONTRACT
+
+
 # -- the receipt -----------------------------------------------------------------------
 
 def _log(topics, address=CONTRACT):

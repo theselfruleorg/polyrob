@@ -11,13 +11,17 @@ from this list; never invent a verb that is not on it. Pack verbs (such as
 ## talk
 
 - `/start` — A welcome and a short tour of what I can do
+- `/new` — Open a separate chat beside the main one
+- `/chats` (also /sessions) — Your chats: the main one and each separate one (not inside a group)
+- `/chat` — Switch to another of your chats (not inside a group)
+- `/rename` — Name the chat you are in (not inside a group)
+- `/close` — Close a separate chat and go back to the main one (not inside a group)
 - `/clear` — Clear this chat and keep my instructions (only in the terminal REPL)
 - `/compact` (also /compress) — Shorten this chat's history in the background (only in the terminal REPL)
 - `/history` — The turns of this chat (only in the terminal REPL)
 - `/attach` — Attach local files or images to my next step (only in the terminal REPL)
-- `/steer` — Give the running turn one more instruction (only in the terminal REPL)
+- `/steer` — Give the running turn one more instruction (in a chat app, just send it) (only in the terminal REPL)
 - `/session` (also /info) — Who and where this chat is: owner, model, memory, files (only in the terminal REPL)
-- `/sessions` — Every chat I know about (only in the terminal REPL)
 - `/replay` — Replay a chat's feed (only in the terminal REPL)
 - `/export` — Export this chat's data (only in the terminal REPL)
 
@@ -37,11 +41,10 @@ from this list; never invent a verb that is not on it. Pack verbs (such as
 
 - `/goal` — Add, show, retry, grant, pause, or stop one goal (not inside a group)
 - `/goals` — The goal board summary
-- `/jobs` — Scheduled jobs: next run, last outcome, and who wrote each
-- `/job` — Add, change, grant, pause, resume, run, or stop one scheduled job (not inside a group)
+- `/job` (also /jobs) — Scheduled jobs: the list, or add, change, grant, pause, resume, run, or stop one (not inside a group)
 - `/apps` — Deployed apps: approve an address, check health, stop, start or remove one (not inside a group)
-- `/skills` — The skills I can load, and what each one does; /skills <id> shows one skill's text (not inside a group)
-- `/learn` — Describe how to do something and I draft a skill for you to check (only in the terminal REPL)
+- `/skills` — The skills I can load, and what each one does; /skills <id> shows one skill's text. You install or approve a skill in the terminal (not inside a group)
+- `/learn` — Describe how to do something and I save it as a skill (only in the terminal REPL)
 - `/todos` — The todo list in my working files (only in the terminal REPL)
 - `/subagents` — What I can hand to a helper (only in the terminal REPL)
 
@@ -70,10 +73,9 @@ from this list; never invent a verb that is not on it. Pack verbs (such as
 
 ## control
 
-- `/cancel` — Stop the task I am running now
-- `/pause` — Stop autonomous work now, all of it or one scope (not inside a group)
+- `/cancel` (also /stop) — Stop the task I am running now
+- `/pause` (also /halt) — Stop autonomous work now, all of it or one scope (not inside a group)
 - `/resume` — Lift the pause (not inside a group)
-- `/halt` — Stop all autonomous work now (not inside a group)
 - `/run` — Pause, resume or stop one background run (not inside a group)
 - `/mode` — What I may do without you, what I do when you are away, and how to change it
 - `/dev` — Pass a message to an operator-run maintenance script, if this host has one (not inside a group)
@@ -83,13 +85,12 @@ from this list; never invent a verb that is not on it. Pack verbs (such as
 
 ## remember
 
-- `/recap` — The same as /journey
 - `/thread` — Our conversation across every session and rail, newest last (not inside a group)
-- `/journey` — What I have done over a recent window
+- `/journey` (also /recap) — What I have done over a recent window
 - `/rules` — Your rules for me and my operating contract, numbered (not inside a group)
 - `/kb` — Search and list my knowledge base
-- `/memory` — Recall across sessions and inspect memory scopes (only in the terminal REPL)
-- `/self` (also /soul) — My identity documents, read-only (only in the terminal REPL)
+- `/memory` — Recall across sessions and inspect memory scopes (not inside a group)
+- `/self` (also /soul) — My identity documents, read-only (not inside a group)
 
 ## look
 
@@ -114,14 +115,15 @@ from this list; never invent a verb that is not on it. Pack verbs (such as
 - `/allow` — Allow me to message a target (not inside a group)
 - `/deny` — Revoke a message permission (not inside a group)
 - `/allowlist` — Who I am allowed to message
+- `/pair` — Strangers who asked to talk to me: list, approve or revoke (not inside a group)
 - `/groups` — Room presence admin: allow, deny, mode, roles, and more
 - `/mute` — Silence a room, or mute a member for a while
-- `/ban` — Ban a member for a while
-- `/unban` — Lift a member's ban
-- `/unmute` — End a member's mute early
+- `/ban` — Ban a member for a while (only in Telegram, the terminal REPL, the console)
+- `/unban` — Lift a member's ban (only in Telegram, the terminal REPL, the console)
+- `/unmute` — End a member's mute early (only in Telegram, the terminal REPL, the console)
 - `/config` — Read or set preferences (not inside a group)
 - `/workers` — Named helpers: approve them, and stop or steer a running one (only in the terminal REPL)
-- `/prefs` — The preferences you have set (not inside a group)
+- `/prefs` (also /settings) — The preferences you have set (not inside a group)
 - `/mcp` — MCP servers I can use: add, remove, or test (not inside a group)
 - `/model` — The model this chat runs on — switch it live, set your default, pick reasoning (not inside a group)
 - `/auth` — The provider keys I have, and how to connect one (only in the terminal REPL)
@@ -133,7 +135,7 @@ from this list; never invent a verb that is not on it. Pack verbs (such as
 
 - `/avatar` — This instance's avatar image — show, set, clear
 - `/identity` — My on-chain identity: register it, or update where it is published (spends gas) (not inside a group)
-- `/quiet` — Hide or show the step transcript (only in the terminal REPL)
+- `/brief` (also /quiet) — Hide or show the step transcript (only in the terminal REPL)
 - `/verbose` — Show or hide the live trace (only in the terminal REPL)
 
 ## leave

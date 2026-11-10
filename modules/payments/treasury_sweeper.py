@@ -224,6 +224,12 @@ class TreasurySweeper:
             # Those release the group (-> unswept, retried next tick); holding
             # them in `sweeping` blocked every later deposit of the
             # user/chain/token for ever (098 review).
+            # ⚠️ The signer sweeps the WHOLE latest balance while the monitor
+            # credits at the finalized block: funds that arrived after the
+            # last credit would leave uncredited. Wait for the credit.
+            if not await self._latest_is_credited(deposit, chain_name, chain_config):
+                await self._settle_claim(deposit, None)   # nothing sent -> unswept
+                return
             deposit['_broadcast'] = True
             try:
                 tx_hash = await asyncio.to_thread(
@@ -266,6 +272,58 @@ class TreasurySweeper:
             submission_journal.mark_booked(tx_hash)
         else:
             await self._settle_claim(deposit, None)
+
+    async def _latest_is_credited(self, deposit: Dict, chain_name: str,
+                                  chain_config: Dict) -> bool:
+        """True only when the address's LATEST balance is not above the
+        deposit monitor's credited mark. An unreadable balance or no mark is
+        not proof: the remote sweep waits for the next tick."""
+        from decimal import Decimal
+        from modules.payments.deposit_monitor import ensure_marks_schema
+        token = deposit['token_symbol']
+        await ensure_marks_schema(self.db)
+        row = await self.db.fetch_one(
+            "SELECT balance FROM deposit_balance_marks "
+            "WHERE user_id = ? AND chain = ? AND token_symbol = ?",
+            (deposit['user_id'], chain_name, token))
+        latest = await self._latest_balance(chain_config, chain_name,
+                                            deposit['deposit_address'], token)
+        if row is None or row['balance'] is None or latest is None:
+            self.logger.warning(
+                f"Deposit {deposit['id']}: remote sweep waits — the latest balance or "
+                f"the credited mark is unknown")
+            return False
+        if Decimal(str(latest)) > Decimal(str(row['balance'])):
+            self.logger.warning(
+                f"Deposit {deposit['id']}: remote sweep waits — the address holds "
+                f"{token} not yet credited (latest above the credited mark)")
+            return False
+        return True
+
+    async def _latest_balance(self, chain_config: Dict, chain_name: str,
+                              address: str, token_symbol: str):
+        """The address balance at ``latest`` in the monitor's mark units (wei
+        for ETH, the 6-decimal token amount otherwise), or None (unknown)."""
+        from decimal import Decimal
+        try:
+            from web3 import Web3
+            w3 = Web3(Web3.HTTPProvider(
+                chain_config['rpc_url'], request_kwargs={'timeout': 15}))
+            if await asyncio.to_thread(lambda: w3.eth.chain_id) != chain_config['chain_id']:
+                return None
+            address = Web3.to_checksum_address(address)
+            if token_symbol == 'ETH':
+                return int(await asyncio.to_thread(w3.eth.get_balance, address, 'latest'))
+            token_address = self.token_addresses.get(chain_name, {}).get(token_symbol)
+            if not token_address:
+                return None
+            contract = w3.eth.contract(address=token_address, abi=ERC20_TRANSFER_ABI)
+            raw = await asyncio.to_thread(
+                contract.functions.balanceOf(address).call, block_identifier='latest')
+            return Decimal(int(raw)) / 10**6
+        except Exception as e:
+            self.logger.warning(f"latest balance read failed on {chain_name} ({type(e).__name__})")
+            return None
 
     async def _record_sweep(self, deposit: Dict, tx_hash: str, chain_name: str,
                             state: str = 'swept') -> None:

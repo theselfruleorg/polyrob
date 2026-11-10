@@ -275,3 +275,60 @@ def test_plain_branch_names_still_pass(name):
 async def test_branch_create_refuses_refspec_name(tmp_path):
     result = await _git(tmp_path).git_branch(GitBranchParams(name="a:b"))
     assert result.error and "unsafe git branch name" in result.error
+
+
+# --- a tree that sandboxed code can write (the host git must run nothing it names) ---
+
+def _sandbox(monkeypatch, on=True):
+    monkeypatch.setenv("CODE_EXEC_BACKEND", "docker" if on else "local_subprocess")
+
+
+@pytest.mark.asyncio
+async def test_sandboxed_tree_planted_fsmonitor_and_hook_do_not_run(tmp_path, monkeypatch):
+    _sandbox(monkeypatch)
+    repo = tmp_path / "r"; _init_repo(repo)
+    marker = tmp_path / "ran"
+    subprocess.run(["git", "-C", str(repo), "config", "core.fsmonitor",
+                    f"touch {marker}; false"], check=True)
+    hook = repo / ".git" / "hooks" / "pre-commit"
+    hook.write_text(f"#!/bin/sh\ntouch {marker}\n"); hook.chmod(0o755)
+    (repo / "a.txt").write_text("x")
+    t = _git(repo)
+    ok, _ = await t._run_git(["status", "--porcelain=v1", "-b"])
+    assert ok
+    ok, _ = await t._run_git(["add", "a.txt"])
+    assert ok
+    ok, text = await t._run_git(["commit", "-m", "c"])
+    assert ok, text
+    assert not marker.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", [
+    "filter.x.clean", "core.sshCommand", "credential.helper", "diff.d.textconv",
+    "alias.st", "remote.origin.uploadpack", "core.pager",
+])
+async def test_sandboxed_tree_refuses_a_repo_config_command(tmp_path, monkeypatch, key):
+    _sandbox(monkeypatch)
+    repo = tmp_path / "r"; _init_repo(repo)
+    marker = tmp_path / "ran"
+    subprocess.run(["git", "-C", str(repo), "config", key, f"touch {marker}"], check=True)
+    ok, text = await _git(repo)._run_git(["status"])
+    assert not ok and "git refused" in text and key.lower() in text.lower()
+    assert not marker.exists()
+
+
+@pytest.mark.asyncio
+async def test_local_backend_keeps_the_repository_config(tmp_path, monkeypatch):
+    _sandbox(monkeypatch, on=False)
+    repo = tmp_path / "r"; _init_repo(repo)
+    subprocess.run(["git", "-C", str(repo), "config", "alias.st", "status"], check=True)
+    ok, _ = await _git(repo)._run_git(["status"])
+    assert ok
+
+
+@pytest.mark.asyncio
+async def test_sandboxed_tree_with_no_repository_still_reaches_git(tmp_path, monkeypatch):
+    _sandbox(monkeypatch)
+    ok, _ = await _git(tmp_path)._run_git(["init", "-q", str(tmp_path / "new")])
+    assert ok

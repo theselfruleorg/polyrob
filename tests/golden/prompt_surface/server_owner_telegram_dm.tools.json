@@ -1,20 +1,52 @@
 {
   "tools": [
     {
-      "name": "agent_status",
-      "sha": "8fc50f12c5ac"
-    },
-    {
-      "name": "autonomy_control",
-      "sha": "b0d4a83e3e43"
-    },
-    {
-      "name": "delegate_task",
-      "sha": "99c7f57cb8f9"
-    },
-    {
       "name": "done",
       "sha": "d52ce43147c8"
+    },
+    {
+      "name": "send_message",
+      "sha": "5639154a5361"
+    },
+    {
+      "name": "load_skill",
+      "sha": "1cf2893b4073"
+    },
+    {
+      "name": "read_skill_resource",
+      "sha": "5157194c3386"
+    },
+    {
+      "name": "task_todo_add",
+      "sha": "11502431e548"
+    },
+    {
+      "name": "task_todo_complete",
+      "sha": "5dd6ac7cf5af"
+    },
+    {
+      "name": "task_todo_list",
+      "sha": "e1cd22ac08bd"
+    },
+    {
+      "name": "task_todo_next",
+      "sha": "1164773d627d"
+    },
+    {
+      "name": "task_todo_progress",
+      "sha": "20d5a866a3d7"
+    },
+    {
+      "name": "tool_describe",
+      "sha": "5b897a46f500"
+    },
+    {
+      "name": "tool_search",
+      "sha": "7d8f9245f92d"
+    },
+    {
+      "name": "compute",
+      "sha": "30a9af73bd55"
     },
     {
       "name": "filesystem_append_file",
@@ -61,16 +93,32 @@
       "sha": "0b42d4b5f38a"
     },
     {
-      "name": "load_skill",
-      "sha": "1cf2893b4073"
+      "name": "web_fetch_fetch_url",
+      "sha": "3bbc659950d4"
+    },
+    {
+      "name": "agent_status",
+      "sha": "8fc50f12c5ac"
     },
     {
       "name": "load_tool",
       "sha": "a7b2720e3dbc"
     },
     {
+      "name": "tool_call",
+      "sha": "b3cde26d9db1"
+    },
+    {
+      "name": "autonomy_control",
+      "sha": "b0d4a83e3e43"
+    },
+    {
+      "name": "delegate_task",
+      "sha": "24cec158d9c4"
+    },
+    {
       "name": "offer_manage",
-      "sha": "33b8b7853317"
+      "sha": "8f2695997d09"
     },
     {
       "name": "order_deliver",
@@ -78,75 +126,27 @@
     },
     {
       "name": "owner_ask",
-      "sha": "fff14dbc6121"
+      "sha": "3de09cdb975b"
     },
     {
       "name": "preferences",
       "sha": "3d2b5f4db8b4"
     },
     {
-      "name": "present_choice",
-      "sha": "e65bf115d368"
-    },
-    {
       "name": "propose_action",
       "sha": "8adf404efe07"
-    },
-    {
-      "name": "propose_setting",
-      "sha": "fc030760ca08"
-    },
-    {
-      "name": "read_skill_resource",
-      "sha": "5157194c3386"
-    },
-    {
-      "name": "send_message",
-      "sha": "5639154a5361"
-    },
-    {
-      "name": "session_search",
-      "sha": "f6fbe7338f45"
-    },
-    {
-      "name": "task_todo_add",
-      "sha": "11502431e548"
-    },
-    {
-      "name": "task_todo_complete",
-      "sha": "5dd6ac7cf5af"
-    },
-    {
-      "name": "task_todo_list",
-      "sha": "e1cd22ac08bd"
-    },
-    {
-      "name": "task_todo_next",
-      "sha": "1164773d627d"
-    },
-    {
-      "name": "task_todo_progress",
-      "sha": "20d5a866a3d7"
-    },
-    {
-      "name": "tool_call",
-      "sha": "b3cde26d9db1"
-    },
-    {
-      "name": "tool_describe",
-      "sha": "5b897a46f500"
-    },
-    {
-      "name": "tool_search",
-      "sha": "7d8f9245f92d"
     },
     {
       "name": "trade_mandate_propose",
       "sha": "a10e0c5bdc0d"
     },
     {
-      "name": "web_fetch_fetch_url",
-      "sha": "3bbc659950d4"
+      "name": "propose_setting",
+      "sha": "fc030760ca08"
+    },
+    {
+      "name": "session_search",
+      "sha": "5dcee213b089"
     }
   ]
 }

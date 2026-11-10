@@ -34,16 +34,28 @@ def test_pair_pending_lists_codes(data_home):
 def test_pair_approve_pairs_the_user(data_home):
     from cli.commands.owner import owner
     store = _store(data_home)
-    code = store.request("tg:12345")
-    res = CliRunner().invoke(owner, ["pair", "approve", code])
+    code = store.request("tg:12345", surface="telegram", raw_id="12345")
+    res = CliRunner().invoke(owner, ["pair", "approve", "telegram", code])
     assert res.exit_code == 0
-    assert "tg:12345" in res.output
+    assert "telegram:12345" in res.output
     assert store.is_paired("tg:12345") is True
+
+
+def test_pair_approve_without_the_chat_app_is_a_usage_error(data_home):
+    # Before: a bare code paired whoever held it on any chat app, although the
+    # chat verb already required the app the code came from.
+    from cli.commands.owner import owner
+    store = _store(data_home)
+    code = store.request("tg:12345", surface="telegram", raw_id="12345")
+    res = CliRunner().invoke(owner, ["pair", "approve", code])
+    assert res.exit_code == 2
+    assert "name the chat app the code came from" in res.output
+    assert store.is_paired("tg:12345") is False
 
 
 def test_pair_approve_unknown_code_fails(data_home):
     from cli.commands.owner import owner
-    res = CliRunner().invoke(owner, ["pair", "approve", "deadbeef"])
+    res = CliRunner().invoke(owner, ["pair", "approve", "telegram", "deadbeef"])
     assert res.exit_code != 0
     assert "no pending" in res.output.lower()
 

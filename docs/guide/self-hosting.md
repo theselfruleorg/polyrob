@@ -130,7 +130,8 @@ Instance data (memory, sessions, skills, cron jobs) survives container restarts 
 |-----------|---------------|---------|
 | `./.polyrob/` | `/app/.polyrob/` | Memory DB, sessions, skills, cron jobs (the server-side data home: the image sets `POLYROB_DATA_DIR=/app/.polyrob`, so a plain `docker run` with no env file uses it too) |
 
-To back up your instance data, copy the `.polyrob/` directory. Your own MCP servers
+To back up your data, stop the service and copy the `.polyrob/` directory
+(on a running service, `bot.db-wal` and `bot.db-shm` belong to `bot.db`: copy them with it). Your own MCP servers
 live in the service user's `~/.polyrob/mcp.json`, which is outside the data
 directory: back it up too.
 
@@ -147,7 +148,9 @@ the API restarts and a new message arrives for an existing session:
   does not survive a restart, so the first message to an old session recreates it
   from that session's persisted `request`/`config` and **restores its message
   history from disk** (`message_history.json`) plus any queued HITL messages
-  (`hitl_state.json`).
+  (`hitl_state.json`). A history file that cannot be read is moved aside as
+  `message_history.json.corrupt-<epoch>` (never deleted), the log names it, and
+  the chat starts without it.
 - **A crash-interrupted session resumes.** A session left `status="running"` when
   the process died is picked up and re-run on the next inbound message (rather
   than the message being dropped).
@@ -479,14 +482,10 @@ HF_DEPLOY_ORG=your-hf-username   # or an org you have write access to
 HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxx # the fine-grained write token from step 1
 ```
 
-**3. First-publish approval vs. approved-app redeploy.** The first `deploy` of a
-NEW app name is gated by a real approving provider: the tool resolves the SAME
-interactive-default provider the Controller uses at `AGENT_COMPUTE_POSTURE>=2`
-(`interactive_cli` unless you set `APPROVAL_PROVIDER` to something else). On an
-attended terminal that prompts you to approve; on an **unattended/headless** run
-`interactive_cli` cannot prompt and **fail-closes to deny**, so a brand-new
-PUBLIC app can never be first-published by an autonomous run — you approve the
-first publish yourself, interactively.
+**3. First publish and redeploy.** Your own turn or scheduled job deploys a NEW app name
+with no tap. Any other turn reaches the approving provider the Controller uses at
+`AGENT_COMPUTE_POSTURE>=2` (`interactive_cli` unless you set `APPROVAL_PROVIDER`), which
+**fail-closes to deny** when nobody can answer.
 
 Once an app name is approved (its `deployed_apps.db` row records `approved_at`),
 later redeploys of that SAME app **skip the approver entirely and run
@@ -507,6 +506,33 @@ token-scrubbed). `hf_deploy` is excluded from delegated sub-agents
 (`DELEGATE_BLOCKED_TOOLS`) and from correspondent-tainted sessions.
 
 ---
+
+## Large Telegram files (a local Bot API server)
+
+The public Bot API server gives a bot files only up to 20 MB. A local server started with `--local`
+gives up to 2000 MB, and `INBOUND_VIDEO_MAX_MB` (500) binds a video. Without it, nothing else is
+needed: a larger file is named on the turn as not received.
+
+1. Get `api_id` and `api_hash` from <https://my.telegram.org>.
+2. Run the server on loopback only. Its file directory must have the same path on the host, and
+   the user that runs POLYROB must be able to read it:
+
+   ```bash
+   docker run -d --name telegram-bot-api --restart unless-stopped \
+     -e TELEGRAM_API_ID=<api_id> -e TELEGRAM_API_HASH=<api_hash> -e TELEGRAM_LOCAL=1 \
+     -p 127.0.0.1:8081:8081 \
+     -v /var/lib/telegram-bot-api:/var/lib/telegram-bot-api aiogram/telegram-bot-api:latest
+   ```
+
+3. ⚠️ Log the bot out of the public server. You cannot log it back in there for 10 minutes:
+   `curl -s "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/logOut"`.
+4. Add `TELEGRAM_BOT_API_URL=http://127.0.0.1:8081` to the env of every process that uses this
+   token, then restart. A process that still calls the public server logs the bot back in there.
+5. Send a video over 20 MB and find it in the `inbound/` directory of that chat's data.
+
+The server does not remove its files. Remove old ones with a timer, for example
+`find /var/lib/telegram-bot-api -type f -mtime +2 -delete`. To go back: remove the env line, call
+`logOut` on the local server, and wait 10 minutes.
 
 ## Logs
 

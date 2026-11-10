@@ -43,7 +43,7 @@ def test_goal_create_exposes_report_back_and_no_step_budget():
     a = GoalCreateAction(title="test goal", body="b", report_back=True)
     assert a.report_back is True
     b = GoalCreateAction(title="test goal", body="b")
-    assert b.report_back is False
+    assert b.report_back is None   # 112 W3: decided at create time (true from the owner's chat)
     # 083 WS-4: the step cap is the operator's — an old argument is a schema error.
     with pytest.raises(ValidationError):
         GoalCreateAction(title="test goal", body="b", max_steps=30)

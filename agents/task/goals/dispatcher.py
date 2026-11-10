@@ -204,6 +204,9 @@ def imminent_cron_job(data_dir: str, now, headroom_sec: int) -> Optional[str]:
     until it ends, so the dispatcher uses this to let a due rail go FIRST."""
     if headroom_sec <= 0:
         return None
+    from core.config_policy import AutonomyConfig
+    if not AutonomyConfig.cron_enabled():
+        return None  # no tick will run the job, so an overdue row would hold the board for ever
     from datetime import timedelta
     db_path = cron_db_path(data_dir)
     if not os.path.exists(db_path):
@@ -539,6 +542,12 @@ class GoalDispatcher(GoalRunMixin):
                 logger.info("goal dispatch: closed %d expired owner ask(s)", expired)
         except Exception:
             logger.debug("ask expiry sweep skipped", exc_info=True)
+        # 107 WS-1: every stop above, and every run's block, reaches the owner once.
+        try:
+            from agents.task.goals.escalation import tell_stops
+            await tell_stops(self.board, self.task_agent)
+        except Exception:
+            logger.warning("goal stop sweep failed", exc_info=True)
 
         if not AutonomyConfig.goals_enabled():
             return 0
@@ -1123,13 +1132,14 @@ class GoalDispatcher(GoalRunMixin):
 
     async def _maybe_escalate_blocked(self, goal, *, agent_reported: bool = False,
                                       block_kind_hint: Optional[str] = None) -> None:
-        """§7.2: when record_failure tripped the breaker (goal now 'blocked'), surface
-        a concrete ask to the owner instead of letting it die silently. Fail-open.
+        """§7.2: when record_failure tripped the breaker (goal now 'blocked'), stamp
+        its kind and leave a durable ask. The stop sweep (``escalation.tell_stops``)
+        sends the owner line on a later tick. Fail-open.
 
-        §3.4: the escalation PUSH is a safety net — when the agent itself already
-        reported the block to its user during the run (``agent_reported``, from
-        RunOutcome.user_messages), the push is skipped; the durable ask below is
-        ALWAYS left either way.
+        §3.4: the owner line is a safety net — when the agent itself already reported
+        the block to its user during the run (``agent_reported``, from
+        RunOutcome.user_messages), the sweep is told to stay quiet; the durable ask
+        below is ALWAYS left either way.
 
         T2.1 Task-3 review fix (finding #1, CRITICAL): this is the SINGLE
         block_kind stamping choke point. ``block_kind_hint`` lets a caller that
@@ -1139,19 +1149,15 @@ class GoalDispatcher(GoalRunMixin):
         here, ``only_if_absent`` — BEFORE the generic ``needs_input`` fallback
         below, so a real provider death is never mis-labeled ``needs_input``
         (which kind-aware aging leaves blocked with no auto-requeue at all)."""
-        if not agent_reported:
+        if agent_reported:
             try:
                 from agents.task.goals import escalation as _escalation
-                await _escalation.maybe_escalate_blocked(self.task_agent, goal)
+                _escalation.mark_stop_told(self.board, goal.id)
             except Exception:
-                logger.debug("blocker escalation skipped", exc_info=True)
+                logger.debug("stop mark skipped", exc_info=True)
         # §7.2b / T2-03 / T4-04: ALWAYS leave a TRACKED ask for a blocked goal so the
-        # need survives even when no owner push went out. This ask creation was gated on
-        # the SAME goal_blocker_escalation() flag as the push, so with the default OFF a
-        # blocked goal left NO ask and `owner asks/fulfill` had nothing to consume — the
-        # need evaporated silently (the prod "X-write gap never escalated" shape). The
-        # ask is silent + durable + tenant-scoped and create_ask dedup-refreshes, so it
-        # is safe unconditionally; only the PUSH above stays posture-gated.
+        # need survives. The ask is silent + durable + tenant-scoped and create_ask
+        # dedup-refreshes, so it is safe unconditionally.
         try:
             from agents.task.goals.board import STATUS_BLOCKED
             if getattr(goal, "status", None) == STATUS_BLOCKED:
@@ -1253,7 +1259,8 @@ class GoalDispatcher(GoalRunMixin):
 
     async def _notify_owner_done(self, goal: Goal, session_id: str, final: str,
                                  verified: str = "verified",
-                                 artifacts: Optional[list] = None, promoted: int = 0) -> bool:
+                                 artifacts: Optional[list] = None, promoted: int = 0,
+                                 verify_reason: str = "") -> bool:
         """Tell the OWNER a background goal COMPLETED — surface-independent + durable.
 
         This is the completion-communication rail, DECOUPLED from the self-wake
@@ -1304,6 +1311,8 @@ class GoalDispatcher(GoalRunMixin):
             text = self._completion_text(goal, final, verified=verified,
                                          deliverable_lines=deliverable_lines,
                                          session_link=session_link, promoted=promoted)
+            if verify_reason:
+                text += f"\nNot verified: {verify_reason[:200]}"
             container = getattr(self.task_agent, "container", None)
             if attachments:
                 owner_told = await push_owner_message(container, text,

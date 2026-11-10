@@ -64,13 +64,19 @@ def test_window_seconds_parse():
 
 
 def test_h_journey_handler_emits(monkeypatch):
-    monkeypatch.setattr(h_journey, "render_journey",
-                        lambda **kw: f"RENDERED:{kw['user_id']}:{kw['since_label']}")
+    """113 W4 item 3: the REPL emits the chat seat's own `/journey` reply."""
+    import asyncio
+
+    async def fake_reply(user_id, data_dir, task_agent, args):
+        return f"RENDERED:{user_id}:{args[0]}"
+
+    monkeypatch.setattr("surfaces.telegram.status_ops.journey_reply", fake_reply)
+    monkeypatch.setattr("cli._admin_home.admin_owner_tenant", lambda uid=None: uid)
     emitted = {}
     ctx = SimpleNamespace(
         args=["24h"], user_id="u1", container=None,
         emit=lambda text, title=None: emitted.update({"text": text, "title": title}))
-    h_journey.h_journey(ctx)
+    asyncio.run(h_journey.h_journey(ctx))
     assert emitted["text"] == "RENDERED:u1:24h"
     assert emitted["title"] == "journey"
 

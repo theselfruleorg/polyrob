@@ -3,7 +3,7 @@
 o3 and o4-mini, which are NOT substrings of any entry, so temperature=0.0 was sent and
 OpenAI 400'd both models. Derive the decision from one SSOT prefix-based helper.
 """
-from modules.llm.model_registry import openai_reasoning_model, openai_omits_temperature
+from modules.llm.model_types import openai_reasoning_model, openai_omits_temperature
 
 
 def test_o3_and_o4_mini_are_reasoning_models():

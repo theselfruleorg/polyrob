@@ -27,6 +27,8 @@ STRINGS = {
     "shell.search": "Open your chats",
     # 070 E.7: the chats button has a visible word beside its ⌘K hint.
     "shell.chats": "Chats",
+    "shell.commands": "Commands",   # 113 W5 (IA-2): the palette's button
+    "shell.commands_label": "Open the command list",
     "shell.title": "{page} – POLYROB",
 
     # The five destinations. Five is the ceiling for a bottom bar, so this list
@@ -113,6 +115,16 @@ STRINGS = {
     # A failed read is not an empty list, so it never renders as one.
     "chats.unreadable": "I could not load your chats. Try again in a moment.",
     "chats.untitled": "Untitled chat",
+    # 113: the Chat destination opens the main chat; this starts a separate one.
+    "chats.new": "New chat",
+    "chats.main": "Main chat",
+    "chats.rename": "Rename",
+    "chats.close_chat": "Close chat",
+    "chats.rename_ask": "A name for this chat",
+    "chats.box_new": "Open it with New chat in Chats (or /?new=1); your first message starts it.",
+    "chats.box_open": "{name} is on its own page: {page}",
+    "chats.box_main": "Your main chat: {page}",
+    "chats.box_no_row": "This page is not in your chat list, so there is nothing to name or close here. /chats shows your chats.",
     # A row with a part that would not read (a missing status.json, say). The
     # raw reason never reaches the row text; it rides in the tooltip only.
     "chats.part_missing": "Part of this chat is missing.",
@@ -126,6 +138,7 @@ STRINGS = {
     "chats.creator_cron": "a scheduled job",
     "chats.creator_goal": "The agent, working on a goal",
     "chats.creator_correspondent": "someone the agent wrote to",
+    "chats.creator_group": "a group chat",
     "chats.creator_unknown": "not known",
 
     # Three states, and an unrecognised status is UNKNOWN rather than one of
@@ -270,6 +283,7 @@ STRINGS = {
     "money.tokens.src_owner_pin": "your pin",
     "money.tokens.src_owner_approved": "you approved it",
     "money.tokens.rejected_title": "You said these are not the real token",
+    "money.tokens.show": "Show the {count} trusted tokens",
     "money.tokens.unreadable": "I could not read {what}, so this list may be incomplete.",
     "money.tokens.trust": "Trust",
     "money.tokens.untrust": "Not trusted",
@@ -313,6 +327,9 @@ STRINGS = {
         "has nothing true to say."
     ),
     "money.book.empty_why": "Why",
+    # 113 W5 (IA-4): the one action. The console has no wallet control, so it is
+    # the terminal command, said once.
+    "money.book.empty_how": "To give it one, run polyrob wallet init in a terminal on the agent's machine.",
 
     # Loading and a read that failed outright.
     "money.book.loading": "Reading the book.",
@@ -526,7 +543,12 @@ STRINGS = {
     "agent.ov_health_none": "Everything checked out",
     "agent.ov_report_link": "See the full health report",
     "agent.ov_unverified": "I could not check: {sources}",
-    "agent.ov_identity_no_avatar": "No avatar set. To set one, run: polyrob avatar set <image>",
+    # 113 W5 (ST-3, C-10): a remedy names the console control first (the Chat box
+    # runs the verb), the terminal command second.
+    "agent.ov_identity_no_avatar": (
+        "No avatar set. To set one, type /avatar set <image URL> in Chat, or run "
+        "polyrob avatar set <image> in a terminal."
+    ),
     "agent.ov_posture_title": "What the agent may do",
     "agent.ov_posture_aside": "How the agent is set up to act",
     "agent.ov_axis_local_title": "Treat this computer as yours alone?",
@@ -582,7 +604,8 @@ STRINGS = {
     "agent.id_face_body": (
         "The agent's avatar is one image, used everywhere: this console, chat, its "
         "accounts and its identity on the network. Set or change it with "
-        "`polyrob avatar set <image>` (a file, a URL, or an NFT)."
+        "/avatar set <image URL> in Chat, or with `polyrob avatar set <image>` in a "
+        "terminal (a file, a URL, or an NFT)."
     ),
     "agent.id_persona_title": "How the agent should behave",
     "agent.id_persona_aside": "written by you",
@@ -740,7 +763,12 @@ STRINGS = {
     "work.create.cron_unreadable": "I could not read the job list, so I did not schedule it. Try again in a moment.",
     "work.create.tools_shape": "The tools must be a list of names.",
 
+    # 113 W5 (IA-3): the page line names the five tabs; the Log tab keeps its own.
     "work.sub": (
+        "What the agent is doing now, its goals, its scheduled jobs, the apps it "
+        "built, and a log of what it did."
+    ),
+    "work.log.lead": (
         "Everything the agent has done, newest first — the work it starts itself, "
         "your chats, the scheduled jobs, the money, the messages it sent you, "
         "and what it changed about itself."
@@ -1038,7 +1066,6 @@ STRINGS = {
     "chat.run_head.task": "What it was asked to do",
     "chat.composer.label": "Message the agent",
     "chat.composer.placeholder": "Ask the agent, or tell it what to do",
-    "chat.composer.placeholder_busy": "Write to the agent",
     "chat.composer.hint": "Type a slash for commands.",
     "chat.send": "Send",
     "chat.stop": "Stop",
@@ -1099,7 +1126,7 @@ STRINGS = {
     # 070 W0.13: a server console process has no language model (until the seat).
     "chat.open.no_model": (
         "Chat in this console cannot answer yet. Your text is still here. To talk to "
-        "the agent, run polyrob in a terminal."
+        "the agent, write to it on Telegram or run polyrob in a terminal."
     ),
     "chat.open.starters_label": "Things you could ask",
 
@@ -1161,7 +1188,7 @@ STRINGS = {
     ),
 
     "chat.terminal.composer": "This chat runs in the terminal.",
-    "chat.terminal.note": "To continue it: polyrob run --resume {id}. Or start a new chat here.",
+    "chat.terminal.note": "To continue it: polyrob run --resume {id} \"your message\". Or start a new chat here.",
     "chat.read_only.composer": "This console is set to look, not touch.",
     "chat.read_only.note": (
         "Talk to me on Telegram, or run polyrob in a terminal. To let this "
@@ -1247,6 +1274,10 @@ STRINGS.update({
 })
 
 STRINGS.update({"chats.more": "Load older chats"})
+STRINGS.update({"chat.load_older": "Load older messages",   # 113 W5 (C-07, CH-4)
+                "chat.load_older_failed": "I could not load the older messages. Try again.",
+                "chat.log_label": "Messages in this chat",
+                "chat.no_model_link": "Open Agent › Settings"})
 
 # --- 2026-09-21 interface audit, section A (console) -------------------------- #
 # One block, appended: the words the findings below need. Each row names the
@@ -1281,6 +1312,8 @@ STRINGS.update({
     "error.title": "Something went wrong – POLYROB",
     "error.heading": "Something went wrong.",
     "error.not_found": "This page does not exist.",
+    "error.chat_not_found": "This chat does not exist.",
+    "error.new_chat": "New chat",
     "error.forbidden": "You cannot open this page.",
     "error.server": "Something broke on the agent's side. Try again in a minute.",
     "error.other": "This page could not open.",
@@ -1291,7 +1324,10 @@ STRINGS.update({
     "error.home": "Go to Chat",
 
     # A1 — the agent's face on Agent, read from the one avatar slot (core/avatar.py).
-    "agent.ov_identity_default": "The default polyrob mark. To set your own, run: polyrob avatar set <image>",
+    "agent.ov_identity_default": (
+        "The default polyrob mark. To set your own, type /avatar set <image URL> in "
+        "Chat, or run polyrob avatar set <image> in a terminal."
+    ),
     "agent.ov_identity_source": "Set from {source}",
     "agent.ov_identity_made": "Set on {when}",
     "agent.ov_identity_unreadable": "There is an avatar here, but I could not read its record.",
@@ -1300,8 +1336,8 @@ STRINGS.update({
     # A26 — connected services are an inventory here, and the label says where
     # the verbs live.
     "agent.cap_mcp_note": (
-        "Connected services are listed here only. Add or remove one from a "
-        "terminal with polyrob, or on Telegram with /mcp."
+        "Connected services are listed here only. Add or remove one with /mcp in "
+        "Chat or on Telegram, or with polyrob in a terminal."
     ),
 
     # A6 / A37 — a count over a partial read is a floor, and it says so.
@@ -1346,9 +1382,9 @@ STRINGS.update({
     "money.invoices.unpriced": "{count} outstanding invoices carry no amount I could read, so they are not in that total.",
     # A25 — Money shows what the money verbs did; it is not where they are run.
     "money.moves.reach": (
-        "Bridging, launching and deploying run from a terminal with polyrob "
-        "wallet, or on Telegram with /bridge, /launch and /deploy. This page "
-        "shows what they did."
+        "Bridging, launching and deploying run in Chat or on Telegram with "
+        "/bridge, /launch and /deploy, or from a terminal with polyrob wallet. "
+        "This page shows what they did."
     ),
 
     # A18 — the palette off a chat screen said nothing and closed.
@@ -1381,99 +1417,16 @@ STRINGS.update({
         "from a terminal with polyrob."
     ),
 
-    # Work › Goals (2026-10-27) — the goal board: one lane per live status, the
-    # open decisions first, the finished goals folded away. Read by
-    # static/app/work-goals.js off #work-goals-copy.
-    "work.tab.goals": "Goals",
-    "work.create.depends_label": "Does it wait for other goals?",
-    "work.create.depends_hint": "Goal ids, one per line. It starts when they are done.",
-    "work.create.depends_shape": "The goals it waits for must be a list of goal ids.",
-    "work.board.loading": "Reading the goal board.",
-    "work.board.empty": "There are no goals on the board.",
-    "work.board.col_ask": "Your decisions",
-    "work.board.col_triage": "Being sorted",
-    "work.board.col_waiting": "Waiting for other goals",
-    "work.board.col_ready": "Ready",
-    "work.board.col_running": "Running",
-    "work.board.col_blocked": "Needs a fix",
-    "work.board.col_paused": "Paused",
-    "work.board.col_empty": "None",
-    "work.board.finished_title": "Finished",
-    "work.board.finished_summary": "{done} done, {cancelled} stopped",
-    "work.board.finished_none": "Nothing has finished yet.",
-    "work.board.show_more": "Show more",
-    "work.board.kind_goal": "Goal",
-    "work.board.kind_ask": "Decision",
-    "work.board.origin_owner": "You started it",
-    "work.board.origin_granted": "Granted by you: {name}",
-    "work.board.origin_granted_any": "Granted by you",
-    "work.board.origin_asked": "You asked for it in a chat",
-    "work.board.origin_self": "The agent started it",
-    "work.board.origin_legacy": "Not recorded who started it",
-    "work.board.added": "added {elapsed} ago",
-    "work.board.changed": "last change {elapsed} ago",
-    "work.board.cost": "last run {cost} of the {limit} limit",
-    "work.board.cost_no_limit": "last run {cost}",
-    "work.board.cost_none": "no AI cost recorded yet",
-    "work.board.waits_on": "Waits for: {goals}",
-    "work.board.waited_on_by": "Goals waiting for it: {goals}",
-    "work.board.held_by": "Waiting for your decision: {title}",
-    "work.board.holds_one": "One goal waits for this.",
-    "work.board.holds": "{count} goals wait for this.",
-    "work.board.sub_goals": "Sub-goals: {goals}",
-    "work.board.unknown_goal": "a goal I cannot see",
-    "work.board.failures": "{count} of {max} tries failed",
-    "work.board.filter_text": "Find a goal",
-    "work.board.filter_kind": "Kind",
-    "work.board.filter_source": "Who started it",
-    "work.board.filter_all": "All",
-    "work.board.filter_finished": "Show finished",
-    "work.board.filtered_none": "No goal matches this filter.",
-    "work.board.updated": "Updated {time}",
-    "work.board.stale": "Live updates are off. This board may be out of date.",
-    "work.board.part_unreadable": "Part of the board could not be read.",
-    "work.board.truncated": "There are more goals than this board shows.",
-    "work.board.titles_capped": "I did not look up the names of {count} more goals.",
-    "work.board.d_loading": "Reading this goal.",
-    "work.board.d_unreadable": "I could not read this goal.",
-    "work.board.d_close": "Close",
-    "work.board.d_what": "What it is",
-    "work.board.d_done_when": "Done when",
-    "work.board.d_checks": "Checks",
-    "work.board.d_result": "Result",
-    "work.board.d_failure": "Last failure",
-    "work.board.d_tries": "Earlier tries",
-    "work.board.d_waits_on": "Waits for",
-    "work.board.d_waited_on_by": "Goals waiting for it",
-    "work.board.d_sub_goals": "Sub-goals",
-    "work.board.d_parent": "Part of",
-    "work.board.d_decision": "Your decision",
-    "work.board.d_decide_inbox": "Decide this one in the Inbox.",
-    "work.board.d_runs": "Runs",
-    "work.board.d_runs_none": "No run recorded yet.",
-    "work.board.d_run_steps": "{count} steps",
-    "work.board.d_files": "Files",
-    "work.board.d_files_none": "No files recorded for its chats.",
-    "work.board.d_files_unreadable": "I could not read the files of one of its chats.",
-    "work.board.d_history": "History",
-    "work.board.d_history_none": "No history recorded.",
-    "work.board.d_limits": "Each run may use up to {steps} steps and {limit} of AI cost.",
-    "work.board.event.created": "Added",
-    "work.board.event.claimed": "Started a run",
-    "work.board.event.succeeded": "Finished",
-    "work.board.event.failed": "A run failed",
-    "work.board.event.gave_up": "Stopped after repeated failures",
-    "work.board.event.cancelled": "Stopped",
-    "work.board.event.deferred": "Put off for later",
-    "work.board.event.yielded": "Made way for other work",
-    "work.board.event.edited": "Changed",
-    "work.board.event.unblocked": "Started again",
-    "work.board.event.unblocked_by_ask": "Started again after your decision",
-    "work.board.event.held_by_ask": "Waiting for your decision",
-    "work.board.event.waiting_on_deps": "Waiting for other goals",
-    "work.board.event.deps_satisfied": "The goals it waited for are done",
-    "work.board.event.deps_added": "Now waits for more goals",
-    "work.board.event.dep_failed": "A goal it waits for failed or was stopped",
-    "work.board.event.requeued_on_boot": "Put back in line after a restart",
-    "work.board.event.stale_completion": "A late result arrived after you changed it",
 })
+
+from webview.copy.en_work_board import WORK_BOARD  # noqa: E402 — Work › Goals
+
+STRINGS.update(WORK_BOARD)
+
+from webview.copy.en_prefs import PREF_WORDS  # noqa: E402 — Agent › Settings (113 W5)
+
+STRINGS.update(PREF_WORDS)
+
+from webview.copy.en_coverage import COVERAGE  # noqa: E402 — 113 W6 coverage
+
+STRINGS.update(COVERAGE)

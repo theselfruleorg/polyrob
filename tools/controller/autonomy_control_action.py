@@ -67,8 +67,6 @@ def register_autonomy_control_action(controller) -> None:
 		param_model=AutonomyControlAction,
 	)
 	async def autonomy_control(params: AutonomyControlAction, execution_context=None) -> ActionResult:
-		from core.config_policy import local_mode_enabled
-		from core.instance import is_owner_local_safe, resolve_owner_principal
 		from core.surfaces.owner_admin import (pause_autonomy, pause_state,
 		                                       render_pause_result)
 		from tools.controller.turn_origin import _is_forged_or_autonomous_turn
@@ -82,8 +80,8 @@ def register_autonomy_control_action(controller) -> None:
 
 		is_forged = bool(_is_forged_or_autonomous_turn(execution_context, controller))
 		try:
-			owner_ok = is_owner_local_safe(user_id, owner_principal=resolve_owner_principal(),
-			                               local_enabled=local_mode_enabled())
+			from core.instance import is_owner_uid
+			owner_ok = is_owner_uid(user_id)
 		except Exception:
 			logger.warning("autonomy_control: owner probe failed — refusing", exc_info=True)
 			owner_ok = False

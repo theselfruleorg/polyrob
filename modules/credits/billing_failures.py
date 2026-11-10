@@ -65,7 +65,9 @@ async def ensure_columns(db, log=logger) -> None:
     ``AuthTables.create_tables`` and migration v1.13.0."""
     try:
         cols = await db.fetch_all("PRAGMA table_info(billing_failures)")
-    except Exception:
+    except Exception as e:
+        log.warning("billing_failures: could not read the table (%s) — resolution "
+                    "columns not checked", type(e).__name__)
         cols = None
     if cols:
         have = {c["name"] for c in cols}
@@ -193,6 +195,24 @@ async def record_holds_unresolved(db, user_id: str, session_id, request_ids) -> 
     return n
 
 
+def _one_charge_violation(exc: BaseException) -> bool:
+    """True when *exc* is the UNIQUE one-charge index firing. The
+    DatabaseManager re-wraps a sqlite error as ``core.exceptions.DatabaseError``
+    (the original rides ``__cause__``/``__context__``, and its text the message),
+    so a bare ``except sqlite3.IntegrityError`` never fired."""
+    import sqlite3
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        text = str(exc)
+        if ((isinstance(exc, sqlite3.IntegrityError) or "IntegrityError" in type(exc).__name__
+                or "Failed to execute query" in text)
+                and "UNIQUE constraint failed" in text):
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
 def _now_text() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
 
@@ -239,12 +259,13 @@ async def resolve(db, balance_mgr_fn, fid: int, resolution: str, *, notes: str =
             if not ok:
                 await back(409, "Reservation could not be reconciled; no new charge was made")
         elif resolution == "charged":
-            import sqlite3
             try:
                 ok = await mgr.deduct_credits(
                     user_id=row["user_id"], amount=charge,
                     reason=f"{REASON_PREFIX}{fid}")
-            except sqlite3.IntegrityError:
+            except Exception as e:
+                if not _one_charge_violation(e):
+                    raise
                 ok = True  # the one-charge index: this failure was already charged
             if not ok:
                 await back(400, "Failed to deduct credits - user may still have "

@@ -18,6 +18,8 @@ import json
 import os
 from typing import Any, Dict, List, Optional
 
+from core.stop_reason import normalize_stop
+
 WINDOW_SEC_DEFAULT = 86400
 RUNWAY_CRIT_DAYS = 1.0
 RUNWAY_WARN_DAYS = 3.0
@@ -134,11 +136,10 @@ def truncation_event_count(user_id: str, data_dir: str, since_ts: float,
                            until_ts: Optional[float] = None) -> Optional[int]:
     """Output truncations in the window from the durable event log — the 057
     ``llm_output_truncated`` event the runner emits whether or not the retry is
-    on. This is the honest source: the usage tracker writes no ``finish_reason``
-    into ``usage_records.metadata``, so a metadata-only count reads ``0`` while
-    a call sits at exactly the output cap (prod 2026-09-20 05:05Z, 8,192 tokens,
-    retry fired, Economics said 0). ``None`` = the log is absent or unreadable
-    (could not tell), never 0."""
+    on. This is the honest source: a usage record has a ``finish_reason`` only when
+    the provider gave one, so a metadata-only count can read ``0`` while a call sits
+    at exactly the output cap. ``None`` = the log is absent or unreadable (could not
+    tell), never 0."""
     from core.event_log import telemetry_db_path
     from core.status_snapshot import _rows
     path = telemetry_db_path(data_dir)
@@ -215,7 +216,7 @@ def compute_economics(rows: List[Dict[str, Any]], window_sec: int,
         d = md.get("duration_seconds")
         if isinstance(d, (int, float)):
             durations.append(float(d))
-        if md.get("finish_reason") == "length" or md.get("truncated"):
+        if normalize_stop(md.get("finish_reason")) == "length" or md.get("truncated"):
             truncated += 1
         err = str(md.get("error") or "")
         if "timeout" in err.lower():
@@ -245,6 +246,40 @@ def compute_economics(rows: List[Dict[str, Any]], window_sec: int,
         "truncated_source": "event_log" if truncation_events is not None else "metadata",
         "timeouts": timeouts,
     }
+
+
+#: The doctor warns when the last day's hit ratio falls this far under the 7-day median.
+CACHE_RATIO_MARGIN = 0.15
+_CACHE_RATIO_MIN_CALLS = 20
+_CACHE_RATIO_MIN_DAYS = 3
+
+
+def cache_ratio_warning(db_path: str) -> Optional[str]:
+    """The doctor's one cache line: a ``!`` warning when the last 24 h fell under the median
+    of the 7 days before it by :data:`CACHE_RATIO_MARGIN`. None when nothing is wrong or
+    too few calls can say so; a named line when the database cannot be read."""
+    if not os.path.isfile(db_path):
+        return None
+    from core.status_snapshot import _rows
+    sql = ("SELECT date(timestamp) d, SUM(input_tokens) i, SUM(cached_tokens) c, COUNT(*) n "
+           "FROM usage_records WHERE resource_type = 'llm_call' AND timestamp >= datetime('now', ?) "
+           "AND timestamp < datetime('now', ?) GROUP BY d")
+    try:
+        days = _rows(db_path, sql, ("-8 days", "-1 days"))
+        recent = _rows(db_path, sql, ("-1 days", "+1 days"))
+    except Exception:
+        return "cache hit ratio: unreadable (could not query usage_records)"
+    ratios = [float(r["c"] or 0) / r["i"] for r in days if r["i"]]
+    inp = sum(r["i"] or 0 for r in recent)
+    calls = sum(r["n"] or 0 for r in recent)
+    if len(ratios) < _CACHE_RATIO_MIN_DAYS or calls < _CACHE_RATIO_MIN_CALLS or not inp:
+        return None
+    median = _median(ratios)
+    now = sum(r["c"] or 0 for r in recent) / inp
+    if median is None or now >= median - CACHE_RATIO_MARGIN:
+        return None
+    return (f"! cache hit ratio, last 24 h: {now:.0%} against a 7-day median of {median:.0%} "
+            f"({calls} calls). See `cold_cause` in usage_records")
 
 
 # -- the owner spend view (2026-10-14 review D-11 / E-6, owner decision D6) --
@@ -302,6 +337,8 @@ def episode_useful(meta: Any) -> bool:
 def _splits(rows: List[Dict[str, Any]], runs: Optional[Dict[str, Dict[str, Any]]]
             ) -> Dict[str, Any]:
     by_model: Dict[str, Dict[str, Any]] = {}
+    by_upstream: Dict[str, Dict[str, Any]] = {}
+    cold_causes: Dict[str, int] = {}
     by_purpose: Dict[str, Dict[str, Any]] = {}
     by_day: Dict[str, Dict[str, Any]] = {}
     by_regime: Dict[str, Dict[str, Any]] = {}
@@ -310,9 +347,12 @@ def _splits(rows: List[Dict[str, Any]], runs: Optional[Dict[str, Dict[str, Any]]
     billed = 0
     for r in rows:
         md = _md(r)
-        if md.get("billed_cost_usd") is not None:
+        if md.get("billed_cost_usd") is not None and md.get("billed_source") != "estimate":
             billed += 1
+        if md.get("cold_cause"):
+            cold_causes[str(md["cold_cause"])] = cold_causes.get(str(md["cold_cause"]), 0) + 1
         _bucket(by_model, str(md.get("model") or "unknown"), r)
+        _bucket(by_upstream, str(md.get("upstream") or "unknown"), r)
         _bucket(by_purpose, str(md.get("purpose") or "unknown"), r)
         _bucket(by_day, str(r.get("timestamp") or "")[:10] or "unknown", r)
         sid = str(r.get("session_id") or "")
@@ -325,7 +365,8 @@ def _splits(rows: List[Dict[str, Any]], runs: Optional[Dict[str, Dict[str, Any]]
         if run and run.get("kind") in _RUN_KINDS:
             run_cost[sid] = run_cost.get(sid, 0.0) + float(r.get("api_cost_usd") or 0.0)
     out: Dict[str, Any] = {
-        "by_model": _ranked(by_model), "by_purpose": _ranked(by_purpose),
+        "by_model": _ranked(by_model), "by_upstream": _ranked(by_upstream),
+        "cold_causes": cold_causes, "by_purpose": _ranked(by_purpose),
         "by_day": sorted(_ranked(by_day), key=lambda x: x["key"]),
         "billed_share": (billed / len(rows)) if rows else None,
         "by_regime": _ranked(by_regime) if (runs is not None or by_regime) else None,
@@ -455,6 +496,11 @@ def spend_view_lines(view: Dict[str, Any], *, names: Optional[Dict[str, str]] = 
                        f"something · {_money(per) if per is not None else 'no useful run'} per "
                        f"useful run · {_money(e['noop_run_cost_usd'])} on runs that did nothing")
     _block("by model", e.get("by_model"))
+    _block("by upstream", e.get("by_upstream"))
+    if e.get("cold_causes"):
+        out.append("cold calls: " + ", ".join(
+            f"{count} {cause.replace('_', ' ')}" for cause, count
+            in sorted(e["cold_causes"].items(), key=lambda kv: (-kv[1], kv[0]))))
     _block("by purpose", e.get("by_purpose"))
     if days > 1:
         _block("by day", e.get("by_day"))

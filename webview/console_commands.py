@@ -8,10 +8,9 @@ logger = logging.getLogger(__name__)
 #: UI for them (see the `/task`/`/new` short-circuit below) — so they are
 #: filtered out of the console's rendered `/help` body rather than advertised
 #: as chat-box commands nobody can actually run there.
-CONSOLE_HELP_EXCLUDED = ("/task", "/new")
+CONSOLE_HELP_EXCLUDED = ("/task",)
 
-#: Answer for `/help task` / `/help new` on the console — ONE sentence so the
-#: wording can't drift between the two verbs.
+#: Answer for `/help task` on the console.
 _CONSOLE_HELP_UNAVAILABLE = (
     "not available on this seat — the console has its own controls for that"
 )
@@ -79,6 +78,17 @@ def _console_deliver(task_agent, clean_id: str, user_id: str):
     return _deliver
 
 
+def _chat_box_verb(clean_id: str, user_id: str, text: str, token: str) -> str:
+    """The five chat verbs and the tap ``/chat_<slug>``, for the chat of this page."""
+    from core.surfaces import chats
+    from webview import chats_routes
+    args = text.strip().split()[1:]
+    slug = chats.parse_chat_tap(token)
+    if slug:
+        token, args = "/chat", [slug]
+    return chats_routes.box_verb(user_id, clean_id, token, args)
+
+
 async def maybe_handle_console_command(task_agent, clean_id: str, user_id: str, text: str):
     """Returns the reply text for a slash verb, or None for anything that
     should reach the agent as a normal message.
@@ -95,16 +105,20 @@ async def maybe_handle_console_command(task_agent, clean_id: str, user_id: str, 
         token = (text or "").strip().split()[0].lower() if (text or "").strip() else ""
         if not token.startswith("/"):
             return None
-        token = token.split("@", 1)[0]
-        from core.surfaces.dispatcher import _COMMAND_SHAPE_RE, command_names
+        from core.surfaces.dispatcher import (
+            _COMMAND_SHAPE_RE, _command_token, command_names)
         from core.surfaces.tappable import is_tappable_token
+        token = _command_token(text.strip())  # 113 W0: `/h`, `/cost`, `/stop` resolve here too
         known = token in command_names() or is_tappable_token(token)
         shaped = bool(_COMMAND_SHAPE_RE.fullmatch(token))
     except Exception:
         logger.debug("console command classification skipped (fail-open)", exc_info=True)
         return None
-    if token in ("/task", "/new"):
-        return None  # session-creating verbs: the console has real UI for these
+    if token in CONSOLE_HELP_EXCLUDED:
+        return None  # `/task`, the session-creating verb: the console has real UI for it
+    from core.surfaces.chats import CHAT_VERBS
+    if token in CHAT_VERBS or token.startswith("/chat_"):
+        return _chat_box_verb(clean_id, user_id, text, token)
     if task_agent is None:
         return None  # two-service shape: let the :9000 proxy carry it
     if not known:
@@ -219,17 +233,18 @@ def looks_like_console_verb(text) -> bool:
     token = (str(text or "").strip().split() or [""])[0].lower()
     if not token.startswith("/"):
         return False
-    token = token.split("@", 1)[0]
     try:
-        from core.surfaces.dispatcher import _COMMAND_SHAPE_RE, command_names
+        from core.surfaces.dispatcher import (
+            _COMMAND_SHAPE_RE, _command_token, command_names)
     except Exception:  # pragma: no cover — the dispatcher is always importable
         return False
+    token = _command_token(str(text).strip())
     from core.surfaces.tappable import is_tappable_token
     # A command-SHAPED unknown verb is answered too (the help reply, audit
     # CLI11): a typo in an empty chat box must not start a session. A
     # MALFORMED tap token (``/card_nothex_ok``, ``/approve_zz``) is not: its
     # base is a real verb, and the tap parser already refused it.
-    if token in ("/task", "/new"):
+    if token in CONSOLE_HELP_EXCLUDED:
         return False
     if token in command_names() or is_tappable_token(token):
         return True
@@ -279,6 +294,14 @@ def build_console_create_router():
                 # No session created, and the seat says so in the one field the
                 # bound-chat path already answers with.
                 return JSONResponse({"success": True, "command_reply": reply})
-        return await create_session(request_body, req, agent)
+        if (request_body or {}).get("wait_for_uploads") or (request_body or {}).get("auto_start") is False:
+            # 113 W6 (C-02): an unstarted chat (the start-page attach) starts on its first
+            # line; with no model here that line is refused, so refuse before a folder exists.
+            from api.session_preflight import refuse_no_model
+            refuse_no_model(agent)
+        response = await create_session(request_body, req, agent)
+        from webview import chats_routes   # 113: the new chat gets its row (fail-open)
+        chats_routes.bind_created(req, response)
+        return response
 
     return router

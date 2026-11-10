@@ -8,6 +8,15 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 
+@pytest.fixture(autouse=True)
+def _readable_empty_block_list(monkeypatch):
+    """Multitenant auth reads the account block list; a readable, empty one admits."""
+    from types import SimpleNamespace as _NS
+    from unittest.mock import AsyncMock
+    store = _NS(fetch_one=AsyncMock(return_value=None))
+    monkeypatch.setattr("api.dependencies.require_service", lambda *a, **kw: store)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path", ["/session/private", "/api/session/private/feed/events", "/api/session/private/workspace/file/secret.txt"])
 @pytest.mark.parametrize("caller,expected", [(None, 401), ("other", 403), ("owner", 200)])

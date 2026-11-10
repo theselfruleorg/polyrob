@@ -125,10 +125,10 @@ class _FakeCompat(_FakeAnthropic):
 def test_real_anthropic_client_reads_the_stamp():
     from modules.llm.cache_hints import apply_cache_ttl
     client = _FakeAnthropic()
-    assert client._cache_ttl() is None          # unstamped
-    apply_cache_ttl(client, "1h")
+    assert client._cache_ttl() is None          # unscoped
+    apply_cache_ttl("1h")
     assert client._cache_ttl() == "1h"
-    apply_cache_ttl(client, "5m")
+    apply_cache_ttl("5m")
     assert client._cache_ttl() is None          # 5m renders as the bare marker
 
 
@@ -136,8 +136,11 @@ def test_compat_client_never_sends_a_ttl():
     """A third-party /v1/messages validator may 4xx on a key it does not know."""
     from modules.llm.cache_hints import apply_cache_ttl
     client = _FakeCompat()
-    apply_cache_ttl(client, "1h")
-    assert client._cache_ttl() is None
+    apply_cache_ttl("1h")
+    try:
+        assert client._cache_ttl() is None
+    finally:
+        apply_cache_ttl("5m")
 
 
 # ---------------------------------------------------------------------------
@@ -213,15 +216,16 @@ def test_moving_markers_land_on_the_last_two_tool_results():
 def test_a_trailing_state_message_does_not_orphan_the_transactions():
     """The per-step state message is a plain user row AFTER the last tool_result.
 
-    The tail must still be marked (it is the newest byte), and the other moving
-    marker stays on a settled transaction endpoint.
+    It rides one call and leaves, so a marker on it pays a write premium each step for
+    bytes nothing reads. Both moving markers stay on settled transaction endpoints.
     """
     msgs = _wire(foundation_rows=7, transactions=5)
     msgs.append({"role": "user", "content": "state: step 6/50"})
     marked = _marked(_apply_conversation_cache(msgs, foundation_len=7))
-    assert marked[0] == 6
-    assert marked[-1] == len(msgs) - 1
-    assert msgs[marked[1]]["content"][0]["type"] == "tool_result"
+    assert marked[0] == 6 and len(marked) == 3
+    assert len(msgs) - 1 not in marked
+    assert all(msgs[i]["content"][0]["type"] == "tool_result" for i in marked[1:])
+    assert marked[-1] == len(msgs) - 2
 
 
 def test_no_foundation_len_is_byte_identical_to_the_old_last_three():

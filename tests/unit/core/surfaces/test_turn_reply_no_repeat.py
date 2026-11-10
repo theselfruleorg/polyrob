@@ -91,3 +91,36 @@ def test_caption_from_message_tool_does_not_hide_an_earlier_long_reply():
     assert is_repeat_reply(orch, "A different, new message.") is False
     reset_turn(orch)
     assert is_repeat_reply(orch, long_text) is False
+
+
+def test_a_second_version_goes_out_when_the_same_text_is_sent_again():
+    """Prod 2026-11-07: two versions of one post scored 0.878. The second was refused as
+    "exact", the model could not deliver it, and it spent four calls on reasoning alone."""
+    body = "POLYROB pool, three steps, about three minutes to finish the whole thing. " * 5
+    first, second = "VERSION 1\n\n" + body, "VERSION 2\n\n" + body + "and it is hardcore"
+    orch = SimpleNamespace()
+    turn_reply.mark_reply_published(orch, first)
+    assert turn_reply.is_repeat_reply(orch, second) is True
+    assert turn_reply.is_repeat_reply(orch, second) is False
+    turn_reply.mark_reply_published(orch, second)
+    assert turn_reply.is_repeat_reply(orch, second) is True, "identical text never passes"
+    assert "exact" not in turn_reply.REPEAT_REPLY_NOTE
+
+
+def test_a_new_reword_is_refused_even_after_another_passed():
+    body = "POLYROB pool, three steps, about three minutes to finish the whole thing. " * 5
+    orch = SimpleNamespace()
+    turn_reply.mark_reply_published(orch, body)
+    assert turn_reply.is_repeat_reply(orch, body + " one") is True
+    assert turn_reply.is_repeat_reply(orch, body + " one") is False
+    assert turn_reply.is_repeat_reply(orch, body + " two") is True
+
+
+def test_a_new_turn_forgets_what_was_refused():
+    body = "POLYROB pool, three steps, about three minutes to finish the whole thing. " * 5
+    orch = SimpleNamespace()
+    turn_reply.mark_reply_published(orch, body)
+    assert turn_reply.is_repeat_reply(orch, body + " one") is True
+    turn_reply.reset_turn(orch)
+    turn_reply.mark_reply_published(orch, body)
+    assert turn_reply.is_repeat_reply(orch, body + " one") is True

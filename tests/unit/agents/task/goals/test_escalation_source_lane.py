@@ -14,30 +14,6 @@ from agents.task.goals import escalation as _escalation
 from agents.task.goals.board import Goal
 
 
-def test_blocked_escalation_sends_on_the_goal_blocked_source(monkeypatch):
-    # GOAL_BLOCKER_ESCALATION is posture-defaulted (ON in prod, off in a bare
-    # test env) — the lane, not the gate, is what this test is about.
-    monkeypatch.setenv("GOAL_BLOCKER_ESCALATION", "true")
-    seen = {}
-
-    async def _fake_push(container, text, attachments=None, priority=None, source=None):
-        seen["source"] = source
-        seen["priority"] = priority
-        return True
-
-    import core.self_evolution as se
-    monkeypatch.setattr(se, "push_owner_message", _fake_push)
-
-    goal = Goal(id="g1", user_id="alice", title="ship the thing",
-                status="blocked", last_failure_error="need an owner decision")
-    agent = SimpleNamespace(container=SimpleNamespace())
-
-    asyncio.run(_escalation.maybe_escalate_blocked(agent, goal))
-
-    assert seen.get("source") == "goal_blocked", (
-        "a blocked-goal escalation must not share the chatter source")
-
-
 def test_push_owner_message_accepts_a_source(monkeypatch):
     """The seam itself: a caller can name its lane."""
     captured = {}

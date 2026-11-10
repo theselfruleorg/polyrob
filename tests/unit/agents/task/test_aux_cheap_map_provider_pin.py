@@ -9,7 +9,8 @@ with nothing in the logs naming the move.
 """
 import pytest
 
-from agents.task.constants import AUX_MODEL_MAP, resolve_aux_chain
+from agents.task.constants import resolve_aux_chain
+from modules.llm.provider_spec import get_spec
 
 
 @pytest.fixture(autouse=True)
@@ -25,8 +26,8 @@ def _clean_aux_env(monkeypatch):
 
 class TestZaiSeatRouting:
     def test_map_has_both_zai_rows(self):
-        assert AUX_MODEL_MAP["zai-coding"] == "glm-5.3-flash"
-        assert AUX_MODEL_MAP["zai"] == "glm-5.3-flash"
+        assert get_spec("zai-coding").aux_model == "glm-5.3-flash"
+        assert get_spec("zai").aux_model == "glm-5.3-flash"
 
     @pytest.mark.parametrize("task", ["compaction", "judge", "reflection"])
     def test_every_aux_slot_stays_on_the_flat_rate_seat(self, task, monkeypatch):
@@ -55,9 +56,9 @@ class TestPrecedenceAndBlastRadius:
         assert chain[0] == {"model": "gpt-5-mini", "provider": None}
 
     @pytest.mark.parametrize("provider,model", [
-        ("anthropic", "claude-haiku-4-5"),
+        ("anthropic", "claude-haiku-5-5"),
         ("openai", "gpt-5-mini"),
-        ("gemini", "gemini-flash"),
+        ("gemini", "gemini-2.5-flash"),
     ])
     def test_spec_backed_rows_pin_to_themselves(self, provider, model, monkeypatch):
         # Equivalent to the legacy auto-detect for these three, just explicit.
@@ -71,9 +72,9 @@ class TestPrecedenceAndBlastRadius:
         # happens to name the same string. An explicit env is not an auto-route.
         monkeypatch.setenv("AUX_MODEL_COMPACTION", "gpt-5-mini")
         monkeypatch.setenv("AUX_PROVIDER_COMPACTION", "openai")
-        monkeypatch.setenv("AUX_MODEL_REFLECTION", "claude-haiku-4-5")
+        monkeypatch.setenv("AUX_MODEL_REFLECTION", "claude-haiku-5-5")
         chain = resolve_aux_chain("reflection", "anthropic")
-        assert chain[0] == {"model": "claude-haiku-4-5", "provider": None}
+        assert chain[0] == {"model": "claude-haiku-5-5", "provider": None}
 
     def test_reflection_inherits_the_pin_from_compaction(self, monkeypatch):
         # Reflection with no env of its own inherits compaction's cheap-map model —
@@ -82,9 +83,7 @@ class TestPrecedenceAndBlastRadius:
         chain = resolve_aux_chain("reflection", provider="zai-coding")
         assert chain[0] == {"model": "glm-5.3-flash", "provider": "zai-coding"}
 
-    def test_google_row_keeps_legacy_autodetect(self, monkeypatch):
-        # "google" is not a provider SPEC name, so pinning it would look up a
-        # "google_client" that does not exist and kill a working aux path.
+    def test_the_google_alias_pins_the_gemini_row(self, monkeypatch):
         monkeypatch.setenv("AUX_AUTO", "true")
         chain = resolve_aux_chain("judge", provider="google")
-        assert chain[0] == {"model": "gemini-flash", "provider": None}
+        assert chain[0] == {"model": "gemini-2.5-flash", "provider": "gemini"}

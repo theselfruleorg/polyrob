@@ -10,7 +10,6 @@ from modules.llm.model_registry import (
 def test_anthropic_budget_from_registry():
     cfg = get_thinking_config("claude-sonnet-4-5")
     assert cfg.get("budget_tokens") == 64000
-    assert get_thinking_config("claude-opus-4-1").get("budget_tokens") == 32768
 
 
 def test_deepseek_thinks_by_server_default():

@@ -377,64 +377,58 @@ class JSONFallbackSchemaGenerator(ToolSchemaGenerator):
         }
 
 
-# Provider registry mapping
-# NOTE: DeepSeek V3+ uses OpenAI-compatible function calling API
-# NOTE: OpenRouter proxies to many providers and uses OpenAI-compatible format
+# One generator per wire shape. ProviderSpec decides which one a provider gets.
 SCHEMA_GENERATORS = {
     "openai": OpenAISchemaGenerator(),
     "anthropic": AnthropicSchemaGenerator(),
     "gemini": GeminiSchemaGenerator(),
-    "google": GeminiSchemaGenerator(),  # Alias
-    "deepseek": OpenAISchemaGenerator(),  # DeepSeek V3+ is OpenAI-compatible
-    "openrouter": OpenAISchemaGenerator(),  # OpenRouter uses OpenAI-compatible format
-    "nvidia": OpenAISchemaGenerator(),  # NVIDIA NIM uses OpenAI-compatible format
-    "groq": JSONFallbackSchemaGenerator(),
-    "fireworks": JSONFallbackSchemaGenerator(),
     "default": JSONFallbackSchemaGenerator(),
 }
 
 
-# Providers that have intentionally fallen back to the JSON generator are tracked
-# so we warn exactly once per unrecognized provider string (avoids log spam).
+# A provider with no generator is warned about once (avoids log spam).
 _warned_fallback_providers: set = set()
 
 
+def _generator_for_spec(spec: Any) -> ToolSchemaGenerator:
+    from modules.llm.provider_spec import Transport
+    if not spec.supports_native_tools:
+        return SCHEMA_GENERATORS["default"]
+    if spec.client_class_name == "GeminiClient":
+        return SCHEMA_GENERATORS["gemini"]
+    if spec.transport is Transport.ANTHROPIC_MESSAGES:
+        return SCHEMA_GENERATORS["anthropic"]
+    # Chat completions, and Responses: to_responses_tools reads the OpenAI shape.
+    return SCHEMA_GENERATORS["openai"]
+
+
 def get_schema_generator(provider: str) -> ToolSchemaGenerator:
-    """Get the appropriate schema generator for a provider.
-
-    Falls back to the JSON generator for unknown providers — but warns once so a
-    misspelled/new provider silently losing native tool-calling is visible
-    (see the new-provider checklist: SCHEMA_GENERATORS is the easy-to-miss seam).
-    """
+    """The generator of *provider*: its ProviderSpec first, built-ins and ``providers.yaml``
+    rows alike. A name with no spec (``openai-gpt4``, ``google``) reads the built-in name it
+    holds. Any other name gets the JSON fallback and one warning."""
+    from modules.llm.provider_spec import BUILTIN_SPECS, get_spec
     provider_lower = provider.lower()
-
-    # Check for partial matches (e.g., "openai-gpt4" -> "openai")
-    for key in SCHEMA_GENERATORS:
-        if key != "default" and key in provider_lower:
-            return SCHEMA_GENERATORS[key]
-
-    # Proposal 024 (L0): a registry provider absent from the literal table routes
-    # by its declared TRANSPORT — this is the seam that used to silently zero
-    # native tool-calling for any new provider (the checklist landmine). A spec
-    # that declares supports_native_tools=False falls through to the JSON
-    # fallback below, which is then intentional (no warning needed... but the
-    # once-per-provider warn is cheap and still points at the spec, so keep it).
     try:
-        from modules.llm.provider_spec import Transport, get_spec
         spec = get_spec(provider_lower)
-        if spec is not None and spec.supports_native_tools:
-            if spec.transport is Transport.ANTHROPIC_MESSAGES:
-                return SCHEMA_GENERATORS["anthropic"]
-            if spec.transport is Transport.CHAT_COMPLETIONS:
-                return SCHEMA_GENERATORS["openai"]
     except Exception:
-        pass  # fail-open to the JSON fallback — schema routing must never crash
+        spec = None  # a broken providers.yaml must not break schema routing
+    if spec is not None:
+        return _generator_for_spec(spec)
+    if "google" in provider_lower:
+        return SCHEMA_GENERATORS["gemini"]
+    for builtin in sorted(BUILTIN_SPECS, key=lambda row: len(row.name), reverse=True):
+        if builtin.name in provider_lower:
+            return _generator_for_spec(builtin)
 
     if provider_lower not in _warned_fallback_providers:
         _warned_fallback_providers.add(provider_lower)
         logger.warning(
-            f"No native schema generator matched provider '{provider}' — using JSON "
-            f"fallback (native tool-calling disabled). If this provider supports native "
-            f"tools, add it to SCHEMA_GENERATORS."
+            f"No ProviderSpec matches provider '{provider}': JSON fallback, no native "
+            f"tool-calling. Declare it in providers.yaml if it has native tools."
         )
     return SCHEMA_GENERATORS["default"]
+
+
+def supports_native_tools(provider: str) -> bool:
+    """The one answer: a provider has native tools when it gets a native generator."""
+    return not isinstance(get_schema_generator(provider), JSONFallbackSchemaGenerator)

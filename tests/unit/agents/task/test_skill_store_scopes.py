@@ -86,7 +86,6 @@ def test_writer_targets_data_home_with_default_construction(monkeypatch, tmp_pat
     mask a regression here.
     """
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
     from agents.task.agent.skill_manager import SkillManager
 
     sm = SkillManager()
@@ -112,7 +111,6 @@ def test_writer_targets_data_home_survives_simulated_update(monkeypatch, tmp_pat
     package skills dir at all), then a FRESH SkillManager() (as if reconstructed
     post-update) still finds it via the SAME data-home root."""
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
     from agents.task.agent.skill_manager import SkillManager
 
     sm1 = SkillManager()
@@ -141,7 +139,6 @@ def test_injection_still_rejected_on_default_construction(monkeypatch, tmp_path)
     """Regression guard: wiring scan_exempt into create_skill must not weaken
     the live (user-scope) write path."""
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
     from agents.task.agent.skill_manager import SkillManager
 
     sm = SkillManager()
@@ -155,7 +152,6 @@ def test_injection_still_rejected_on_default_construction(monkeypatch, tmp_path)
 def test_override_contract_preserved_via_constructor_arg(monkeypatch, tmp_path):
     """SkillManager(skills_dir=tmp_path) — used by ~8 existing test files — must
     keep routing BOTH builtin skills AND user_* writes under that one root."""
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
     from agents.task.agent.skill_manager import SkillManager
 
     sm = SkillManager(skills_dir=tmp_path)
@@ -168,7 +164,6 @@ def test_override_contract_preserved_via_attribute_mutation(monkeypatch, tmp_pat
     """sm.skills_dir = tmp_path (post-construction mutation) — the pattern
     test_skill_overwrite_protect.py uses — must ALSO still route user writes
     to that same tmp root (dynamic re-check, not a frozen-at-init flag)."""
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
     from agents.task.agent.skill_manager import SkillManager
 
     sm = SkillManager()

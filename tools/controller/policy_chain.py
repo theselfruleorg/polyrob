@@ -86,8 +86,12 @@ def install_controller_policy(controller):
 	# one `external_write` row per outward act, on the failure path too.
 	# Registered here, never on an instance: a delegated sub-agent builds a fresh
 	# Controller, so a hook attached post-hoc would miss delegated work.
-	from tools.controller.effect_hooks import make_effect_gate_hook, make_effect_record_hook
+	from tools.controller.effect_hooks import (
+		make_effect_gate_hook, make_effect_record_hook, make_repeat_act_hook)
 	controller.register_pre_tool_call_hook(make_effect_gate_hook(controller), fail_mode="closed")
+	# 108: a repeat is refused before any approval ask is queued, so it costs no tap. Open:
+	# a telemetry fault must not stop a post.
+	controller.register_pre_tool_call_hook(make_repeat_act_hook(controller), fail_mode="open")
 	controller.register_post_tool_call_hook(make_effect_record_hook(controller), fail_mode="open")
 
 	# Approval seam (Item 7E): gate the resolved action set through an
@@ -134,6 +138,12 @@ def install_controller_policy(controller):
 	)
 	_shell_exempt = make_shell_command_exemption(_shell_mode, allow_globs=_shell_allow,
 												 inherited=_inherited)
+	from tools.controller.approval import owner_social_write_exemption
+
+	def _gate_exempt(action_name, params, context=None):
+		return (_shell_exempt(action_name, params, context)
+				or owner_social_write_exemption(action_name, params, context))
+	_gate_exempt.takes_context = True
 	if _required:
 		# H9: importing this module registers the 'interactive_cli' provider so an
 		# operator can actually select it via APPROVAL_PROVIDER.
@@ -195,7 +205,7 @@ def install_controller_policy(controller):
 						make_approval_hook(
 							_q_provider, _queued,
 							timeout=approval_wait_timeout_sec("owner_queue"),
-							exempt_fn=_shell_exempt),
+							exempt_fn=_gate_exempt),
 						fail_mode="closed",  # approval failure must DENY
 					)
 				if _reported:
@@ -236,7 +246,7 @@ def install_controller_policy(controller):
 					make_approval_hook(
 						_provider, _required,
 						timeout=approval_wait_timeout_sec(_provider_name),
-						exempt_fn=_shell_exempt),
+						exempt_fn=_gate_exempt),
 					fail_mode="closed",  # approval failure must DENY
 				)
 				controller.logger.info(

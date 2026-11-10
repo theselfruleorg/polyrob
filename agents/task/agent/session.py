@@ -181,7 +181,7 @@ def resolve_creator(explicit: Optional[str] = None, session_source: Optional[Any
          a source that itself names a correspondent tier/kind resolves to
          ``"correspondent"`` (forward-compat hook; today's SessionSource carries
          none); a CLI/REPL/local surface resolves to ``"cli"``; a known chat
-         surface resolves to ``"owner"``.
+         surface resolves to ``"owner"`` for a direct chat and ``"group"`` for a room.
       3. Otherwise ``"api"`` — the HTTP/A2A default.
     """
     if explicit:
@@ -194,7 +194,9 @@ def resolve_creator(explicit: Optional[str] = None, session_source: Optional[Any
         if surface_id in _CLI_SURFACES:
             return "cli"
         if surface_id in _OWNER_CHAT_SURFACES:
-            return "owner"
+            # 113 (M-6): a room is not the owner's own chat — a label, never a grant.
+            chat_type = getattr(session_source, "chat_type", None) or "dm"
+            return "owner" if chat_type == "dm" else "group"
     return "api"
 
 

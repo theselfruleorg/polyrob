@@ -17,6 +17,8 @@ from typing import Optional, Tuple
 
 import click
 
+from cli.commands._options import yes_option
+
 
 def _home(*, write: Optional[bool]) -> Tuple[str, str]:
     from cli._admin_home import admin_data_dir
@@ -93,7 +95,7 @@ def set_cmd(image, nft_ref):
 
 
 @avatar.command("clear")
-@click.option("--yes", is_flag=True, default=False, help="Skip the confirmation.")
+@yes_option(help="Skip the confirmation.")
 def clear_cmd(yes):
     """Remove the avatar image (the agent then has no face on any surface)."""
     from core.avatar import clear_avatar

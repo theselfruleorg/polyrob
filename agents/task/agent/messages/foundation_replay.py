@@ -11,10 +11,14 @@ the one cost a long-lived gateway session pays most often.
 
 This module persists the rendered foundation with the history and replays it
 when the three things that MUST invalidate it are unchanged (a reference agent's three
-rebuild triggers): the model, the serving provider and the working directory —
-plus the running version (095 W1a: a deploy rebuilds a resumed chat once, so it
-states the version that runs). When any of them differs it logs ONE warning
-naming the cache cost and keeps the fresh render.
+rebuild triggers): the model, the serving provider and the working directory. When any
+of them differs it logs ONE warning naming the cache cost and keeps the fresh render.
+
+A deploy is not one of them: the running version rides the tail, so a resumed chat
+reads the version that runs and keeps its prefix. A row whose fresh render differs
+keeps its persisted bytes too, and its changed lines ride the tail
+(``delta_on_reload``). Only the system prompt and the identity row are rewritten: a
+rule of the system prompt cannot be replaced from a user-role row.
 
 Fail direction: a missing, partial or unreadable ``foundation`` object ALWAYS
 falls back to the freshly built foundation. It never yields an empty prompt —
@@ -43,38 +47,8 @@ FOUNDATION_SLOTS = tuple(
 #: slots a pre-060 blob may lack and still be whole.
 _OPTIONAL_KEYS = frozenset(layer.key for layer in FOUNDATION_LAYERS if layer.optional)
 
-#: the identity keys that decide replay vs rebuild. ``version`` (095 W1a) is
-#: absent from an older blob: that reads as "changed" (one rebuild), never as torn.
-IDENTITY_KEYS = ("model", "provider", "cwd", "version")
-_REQUIRED_IDENTITY_KEYS = ("model", "provider", "cwd")
-
-
-def _running_version() -> str:
-	try:
-		from core.version import running_version_line
-		return running_version_line()
-	except Exception:  # pragma: no cover - defensive
-		return ""
-
-
-def emitted_tool_names(tools: Optional[Sequence[Any]]) -> List[str]:
-	"""The tool names in the order the provider schema list emits them.
-
-	Handles both emitted shapes: OpenAI's ``{"type": "function", "function":
-	{"name": …}}`` and Anthropic's flat ``{"name": …}``. Unknown entries are
-	skipped — an order with holes is still a usable preference.
-	"""
-	names: List[str] = []
-	for entry in tools or []:
-		if not isinstance(entry, dict):
-			continue
-		name = entry.get("name")
-		if not name:
-			fn = entry.get("function")
-			name = fn.get("name") if isinstance(fn, dict) else None
-		if isinstance(name, str) and name:
-			names.append(name)
-	return names
+#: the identity keys that decide replay vs rebuild.
+IDENTITY_KEYS = ("model", "provider", "cwd")
 
 
 def _content_of(message: Any) -> Optional[str]:
@@ -112,7 +86,6 @@ def live_identity(manager: Any) -> Dict[str, str]:
 		"model": str(getattr(manager, "model_name", "") or ""),
 		"provider": str(getattr(manager, "provider_name", "") or ""),
 		"cwd": os.getcwd(),
-		"version": _running_version(),
 	}
 
 
@@ -125,7 +98,7 @@ def _validated(blob: Any) -> Optional[Dict[str, Any]]:
 	"""
 	if not isinstance(blob, dict):
 		return None
-	for key in _REQUIRED_IDENTITY_KEYS:
+	for key in IDENTITY_KEYS:
 		if not isinstance(blob.get(key), str):
 			return None
 	for key, _attr, _tokens_attr, _origin in FOUNDATION_SLOTS:
@@ -179,18 +152,38 @@ def _unit_contents(source, layers) -> List[str]:
 	return out
 
 
-def _stale_refresh_units(manager: Any, valid: Dict[str, Any]) -> set:
-	"""2026-10-13 review A2 — the ``refresh_on_reload`` units whose FRESH render
-	differs from the persisted bytes. Those keep the fresh render: an owner rule
-	approved since the save, a deployed system-prompt fix, a newly approved skill
-	and the live ``<environment>`` must reach the resumed chat. A unit with no
-	fresh render (not built yet) replays as before; a byte-identical unit replays
-	(no-op, the cache survives)."""
+def changed_lines(persisted: List[str], fresh: List[str]) -> str:
+	"""What the fresh render says that the persisted one does not, and the reverse.
+	"" when both hold the same lines (a row moved, nothing changed)."""
+	def lines(blocks: List[str]) -> List[str]:
+		return [line for block in blocks for line in block.splitlines() if line.strip()]
+	old, new = lines(persisted), lines(fresh)
+	added = [line for line in new if line not in set(old)]
+	removed = [line for line in old if line not in set(new)]
+	if not added and not removed:
+		return ""
+	text = "Changed since this chat's foundation was written. This overrides it."
+	if added:
+		text += "\nNow true:\n" + "\n".join(added)
+	if removed:
+		text += "\nNo longer true:\n" + "\n".join(removed)
+	return text
+
+
+def _reload_changes(manager: Any, valid: Dict[str, Any]):
+	"""2026-10-13 review A2: an owner rule approved since the save, a deployed
+	system-prompt fix, a newly approved skill and the live ``<environment>`` must reach
+	the resumed chat. Returns ``(units, parts)``: the units whose fresh render stands,
+	and the ``<state-delta>`` parts of the units that keep their persisted bytes. A unit
+	with no fresh render (not built yet) replays as before; a byte-identical unit
+	replays (no-op, the cache survives). A change too long for one part cannot ride
+	the tail whole, so a cut never hides a rule: that unit is rewritten once."""
 	units: Dict[str, List[Any]] = {}
 	for layer in FOUNDATION_LAYERS:
-		if layer.refresh_on_reload:
+		if layer.refresh_on_reload or layer.delta_on_reload:
 			units.setdefault(layer.group or layer.key, []).append(layer)
-	stale = set()
+	stale, parts = set(), {}
+	cap = getattr(manager, "STATE_DELTA_PART_CAP", 0)
 	for unit, layers in units.items():
 		if not all(layer_visible(manager, layer) for layer in layers):
 			continue
@@ -198,9 +191,14 @@ def _stale_refresh_units(manager: Any, valid: Dict[str, Any]) -> set:
 		if not fresh:
 			continue
 		persisted = _unit_contents(lambda l: valid.get(l.key), layers)
-		if fresh != persisted:
+		if fresh == persisted:
+			continue
+		text = changed_lines(persisted, fresh)
+		if not layers[0].delta_on_reload or len(text) > cap:
 			stale.add(unit)
-	return stale
+		elif text:
+			parts[f"{unit}_update"] = text
+	return stale, parts
 
 
 def replay_foundation(manager: Any, blob: Any, log: Optional[Any] = None) -> bool:
@@ -224,7 +222,7 @@ def replay_foundation(manager: Any, blob: Any, log: Optional[Any] = None) -> boo
 	live = live_identity(manager)
 	if any(valid.get(key) != live.get(key) for key in IDENTITY_KEYS):
 		log.warning(
-			"foundation rebuilt (model/provider/cwd/version changed): prefix cache will miss once")
+			"foundation rebuilt (model/provider/cwd changed): prefix cache will miss once")
 		return False
 
 	# Build EVERY replacement before touching the manager, so a failure halfway
@@ -237,11 +235,11 @@ def replay_foundation(manager: Any, blob: Any, log: Optional[Any] = None) -> boo
 		layer.group for layer in FOUNDATION_LAYERS
 		if layer.group and valid.get(layer.key) is not None
 	}
-	refreshed = _stale_refresh_units(manager, valid)
+	refreshed, delta_parts = _reload_changes(manager, valid)
 	for layer in FOUNDATION_LAYERS:
 		key, attr, tokens_attr, origin = layer.key, layer.attr, layer.tokens_attr, layer.origin
 		if (layer.group or layer.key) in refreshed:
-			continue  # A2: the fresh render differs — it stands (rules, prompt, skills)
+			continue  # A2: the fresh render differs — it stands
 		if not layer_visible(manager, layer):
 			planned.append((attr, tokens_attr, None))
 			continue
@@ -290,6 +288,8 @@ def replay_foundation(manager: Any, blob: Any, log: Optional[Any] = None) -> boo
 	# unchanged catalog is the no-op it should be.
 
 	manager._foundation_tool_names = list(valid.get("tool_names") or []) or None
+	if delta_parts:
+		manager._standing_state_parts.update(delta_parts)
 	if refreshed:
 		log.info("foundation layers re-rendered on reload (changed since the save): %s "
 		         "— prefix cache will miss once", ", ".join(sorted(refreshed)))

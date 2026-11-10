@@ -38,7 +38,6 @@ def test_golden_string_byte_for_byte():
     ("email_read_emails", "email"),          # attacker-authorable email bodies
     ("anysite_api", "anysite"),              # scraped web/social content (native-tool migration)
     ("read_file", "filesystem"),
-    ("filesystem_write_file", "filesystem"),
     ("git_show", "git"),
     ("github_read_issue", "github"),
     ("delegate_task", None),
@@ -150,3 +149,17 @@ def test_wrap_defangs_unicode_and_other_runtime_fences():
     assert "<owner-instructions>" not in wrapped
     assert "<owner_answer>" not in wrapped
     assert "＜" not in wrapped
+
+
+@pytest.mark.parametrize("name, tool", [
+    ("filesystem_write_file", "filesystem"), ("filesystem_jsonl_append", "filesystem"),
+    ("twitter_post", "twitter"), ("twitter_quote", "twitter"),
+])
+def test_a_write_receipt_is_not_framed_as_external_data(name, tool):
+    assert is_untrusted_tool(name, tool) is False
+    assert maybe_wrap(name, tool, "Posted tweet 1") == "Posted tweet 1"
+
+
+def test_reads_on_the_same_namespaces_stay_framed():
+    assert is_untrusted_tool("filesystem_read_file", "filesystem") is True
+    assert is_untrusted_tool("twitter_get_tweets", "twitter") is True

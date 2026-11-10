@@ -53,7 +53,9 @@ async def api_cron_verb(request: Request, job_id: str, verb: str):
     job = service.store.get(job_id, user_id=user_id)
     if job is None:
         return JSONResponse({"ok": False, "error": "no_such_job"}, status_code=404)
+    cut = ""
     if verb == "pause":
+        cut = service.cut_note(job_id, user_id=user_id)
         ok, why = service.pause(job_id, user_id=user_id, via="webview"), job.status
     elif verb == "resume":
         ok, why = service.resume(job_id, user_id=user_id, via="webview"), job.status
@@ -65,7 +67,7 @@ async def api_cron_verb(request: Request, job_id: str, verb: str):
     fresh = service.store.get(job_id, user_id=user_id)
     console_write(CONSOLE_CRON_VERB, user_id=user_id, attrs={"job_id": job_id, "verb": verb})
     return JSONResponse({"ok": True, "status": fresh.status if fresh else job.status,
-                         "scheduler_note": scheduler_off_note()})
+                         "scheduler_note": ((scheduler_off_note() or "") + cut).strip()})
 
 
 from webview.contributions import register_console_router  # noqa: E402

@@ -376,13 +376,20 @@ def overview(*, treasury: str, rpc_for: Optional[Callable[[str], Rpc]] = None, h
             head = int(rpc("eth_blockNumber", []), 16)
             approvals = erc6551.open_approvals(rpc, r["account"], profile.deploy_block, to_block=head)
             cover = f"complete: blocks {profile.deploy_block}..{head}, {'/'.join(erc6551.APPROVAL_KINDS)}"
+            version = profile.version_for_account(int(r["token_id"]), r["account"])
+            polyrob = bool(version and version.is_polyrob)
             if approvals:
                 lines.append(f"  approvals: {len(approvals)} OPEN ({cover}) — it cannot be sent until "
                              f"they are cleared (agent_nft_revoke_all)")
+                if polyrob:
+                    lines.append(f"    ⚠ {erc6551.POLYROB_FOUND_APPROVAL}")
                 for a in approvals[:5]:
                     lines.append(f"    {a.kind} {a.contract}"
                                  + (f" #{a.token_id}" if a.token_id is not None else "")
                                  + f" → {a.spender}" + ("" if a.verified else " (unconfirmed)"))
+            elif polyrob:
+                lines.append(f"  approvals: none — {erc6551.POLYROB_NO_APPROVALS} ({cover}; "
+                             f"{erc6551.POLYROB_RESIDUALS})")
             else:
                 lines.append(f"  approvals: none ({cover})")
         except Exception as exc:  # noqa: BLE001

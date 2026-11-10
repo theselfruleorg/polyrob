@@ -6,7 +6,7 @@ LIVE_COMMANDS = frozenset({
     "attach", "steer", "pause", "halt", "resume", "pending", "reject", "inbox", "asks",
     "fulfill", "status", "session", "info", "tools", "steps", "usage", "cost",
     "subagents", "goals", "cron", "crons", "files", "help", "h", "?",
-    "exit", "quit", "q", "quiet", "verbose",
+    "exit", "quit", "q", "brief", "quiet", "verbose",
     # C18/C5/E16: `/cancel` STOPS the running turn, so it must reach the
     # dispatcher while one is running — a stop verb the busy turn rejects is
     # not a stop verb. `/approve` and `/gates` decide the owner queue and

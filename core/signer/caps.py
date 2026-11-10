@@ -18,12 +18,19 @@ Layout::
     daily_usd = 100.0           # hard rolling-24h cap (the signer's own ledger)
     x402_per_payment_usd = 5.0  # optional, default $5 (085 D4); above it: root approval
     x402_daily_usd = 25.0       # optional x402 venue cap; a file without it = daily_usd
+    approve_above_usd = 250.0   # optional: a priced send above it needs the on-box
+                                # approval. A file without it = per_tx_usd: the caps
+                                # are the bound (owner decision 2026-11-10)
 
     [policy]
     chains = ["base"]           # EVM chains the signer will sign for
     approval_ttl_sec = 3600
     x402_max_window_sec = 600
     hyperliquid_orders = false  # 066 P3: sign Hyperliquid L1 (order) actions
+    unverified_sends = "approve"  # "approve" (default): a send with no spend-grade
+                                # price needs the on-box approval. "caps": a send the
+                                # weaker, liquidity-measured price valued is signed
+                                # inside the caps; one with no price still asks
 
     [server]
     socket = "/run/polyrob-signer/signer.sock"
@@ -68,8 +75,10 @@ DEFAULT_X402_PER_PAYMENT_USD = 5.0
 DEFAULT_X402_DAILY_USD = 25.0
 
 _TABLES = {
-    "caps": {"per_tx_usd", "daily_usd", "x402_per_payment_usd", "x402_daily_usd"},
-    "policy": {"chains", "approval_ttl_sec", "x402_max_window_sec", "hyperliquid_orders"},
+    "caps": {"per_tx_usd", "daily_usd", "x402_per_payment_usd", "x402_daily_usd",
+             "approve_above_usd"},
+    "policy": {"chains", "approval_ttl_sec", "x402_max_window_sec", "hyperliquid_orders",
+               "unverified_sends"},
     "server": {"socket", "socket_group", "state_dir", "client_uids", "peer_check"},
     "identity": {"network", "operational_venue", "treasury", "x402", "polymarket",
                  "hyperliquid", "solana"},
@@ -111,20 +120,28 @@ class SignerConfig:
     sweep_tokens: Dict[str, str] = field(default_factory=dict)
     env: Dict[str, str] = field(default_factory=dict, repr=False)
     x402_daily_usd: Optional[float] = None
+    #: A priced ``evm.send`` above this needs the on-box approval; None = ``per_tx_usd``.
+    approve_above_usd: Optional[float] = None
+    #: "approve" | "caps" — see the module docstring.
+    unverified_sends: str = "approve"
 
     def __post_init__(self):
         if self.x402_daily_usd is None:
             object.__setattr__(self, "x402_daily_usd", float(self.daily_usd))
+        if self.approve_above_usd is None or self.approve_above_usd > self.per_tx_usd:
+            object.__setattr__(self, "approve_above_usd", float(self.per_tx_usd))
 
     def summary(self) -> Dict[str, object]:
         """What ``ping`` reports: the caps, never the env (RPC URLs carry keys)."""
         return {"per_tx_usd": self.per_tx_usd, "daily_usd": self.daily_usd,
                 "x402_per_payment_usd": self.x402_per_payment_usd,
                 "x402_daily_usd": self.x402_daily_usd,
+                "approve_above_usd": self.approve_above_usd,
                 "x402_max_window_sec": self.x402_max_window_sec,
                 "chains": list(self.chains), "network": self.network,
                 "operational_venue": self.operational_venue,
                 "hyperliquid_orders": self.hyperliquid_orders,
+                "unverified_sends": self.unverified_sends,
                 "sweep": bool(self.sweep_destination)}
 
 
@@ -177,6 +194,9 @@ def parse_signer_config(data: dict) -> SignerConfig:
     x402 = _cap(caps, "x402_per_payment_usd", required=False,
                 default=DEFAULT_X402_PER_PAYMENT_USD)
     x402_daily = _cap(caps, "x402_daily_usd", required=False, default=daily)
+    approve_above = _cap(caps, "approve_above_usd", required=False, default=per_tx)
+    if approve_above > per_tx:
+        raise SignerConfigError("[caps] approve_above_usd must not be above per_tx_usd")
     chains = policy.get("chains", [])
     if not isinstance(chains, list) or not all(isinstance(c, str) and c for c in chains):
         raise SignerConfigError("[policy] chains must be a list of chain names")
@@ -217,12 +237,15 @@ def parse_signer_config(data: dict) -> SignerConfig:
     hl = policy.get("hyperliquid_orders", False)
     if not isinstance(hl, bool):
         raise SignerConfigError("[policy] hyperliquid_orders must be true or false")
+    unverified = policy.get("unverified_sends", "approve")
+    if unverified not in ("approve", "caps"):
+        raise SignerConfigError('[policy] unverified_sends must be "approve" or "caps"')
     venue = str(identity.get("operational_venue", "treasury")).strip().lower() or "treasury"
     if venue not in ("treasury", "x402"):
         raise SignerConfigError("[identity] operational_venue must be treasury or x402")
     return SignerConfig(
         per_tx_usd=per_tx, daily_usd=daily, x402_per_payment_usd=x402,
-        x402_daily_usd=x402_daily, chains=tuple(chains),
+        x402_daily_usd=x402_daily, approve_above_usd=approve_above, chains=tuple(chains),
         socket=str(server.get("socket") or "/run/polyrob-signer/signer.sock"),
         socket_group=(str(server["socket_group"]) if server.get("socket_group") else None),
         state_dir=str(server.get("state_dir") or "/var/lib/polyrob-signer"),
@@ -231,6 +254,7 @@ def parse_signer_config(data: dict) -> SignerConfig:
         approval_ttl_sec=_int(policy, "approval_ttl_sec", 3600, "policy"),
         x402_max_window_sec=_int(policy, "x402_max_window_sec", 600, "policy"),
         hyperliquid_orders=hl,
+        unverified_sends=unverified,
         network=str(identity.get("network", "mainnet")),
         operational_venue=venue,
         expected_addresses=expected,
@@ -266,11 +290,13 @@ def render_signer_toml(cfg: SignerConfig) -> str:
              f"daily_usd = {cfg.daily_usd!r}",
              f"x402_per_payment_usd = {cfg.x402_per_payment_usd!r}",
              f"x402_daily_usd = {cfg.x402_daily_usd!r}",
+             f"approve_above_usd = {cfg.approve_above_usd!r}",
              "", "[policy]",
              "chains = [" + ", ".join(_toml_str(c) for c in cfg.chains) + "]",
              f"approval_ttl_sec = {cfg.approval_ttl_sec}",
              f"x402_max_window_sec = {cfg.x402_max_window_sec}",
              f"hyperliquid_orders = {'true' if cfg.hyperliquid_orders else 'false'}",
+             f"unverified_sends = {_toml_str(cfg.unverified_sends)}",
              "", "[server]",
              f"socket = {_toml_str(cfg.socket)}",
              f"state_dir = {_toml_str(cfg.state_dir)}",

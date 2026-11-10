@@ -151,7 +151,7 @@ def test_help_finance_has_three_parts(_columns_80):
     out = rec.text
     # Part 1: the base line (usage + one-line help).
     assert "/finance [days]" in out
-    assert "Balance sheet" in out
+    assert "Income, spend" in out   # the verb table's one line
     # Part 2: help_long elaboration.
     assert "Two ledgers, never summed" in out
     # Part 3: elsewhere pointer.
@@ -166,7 +166,7 @@ def test_help_verb_alias_resolution(_columns_80):
     ctx, rec = _ctx(args=["?"])
     _h_help(ctx)
     assert "/help" in rec.text
-    assert "Show this help" in rec.text
+    assert "This help" in rec.text
 
 
 def test_help_verb_without_leading_slash_and_with(_columns_80):

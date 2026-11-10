@@ -107,7 +107,7 @@ def test_memory_search_no_results(monkeypatch):
     _patch_registry(monkeypatch, _FakeProvider(result=""))
     ctx, buf = _plain_ctx(user_id="u1", args=["search", "nothing"])
     asyncio.run(_h_memory(ctx))
-    assert "no matches for" in buf.getvalue()
+    assert "No matches for" in buf.getvalue()
 
 
 def test_memory_search_empty_query_shows_usage(monkeypatch):

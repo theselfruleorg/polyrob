@@ -41,7 +41,7 @@ def test_curator_never_archives_pending_draft(tmp_path, monkeypatch):
         "learned-thing",
         "# Learned Thing\n\nWhen to use it.\n\nSteps:\n1. Do the thing.\n",
         user_id="u1",
-        created_by="background_review",
+        created_by="untrusted_turn",
     )
     assert result.ok is True
     assert result.pending is True, "background_review authorship must always quarantine"
@@ -64,7 +64,6 @@ def test_curator_still_archives_stale_active_authored_skill(tmp_path, monkeypatc
     of a genuinely active (promoted / non-quarantined) authored skill."""
     monkeypatch.setenv("CURATOR_STALE_DAYS", "30")
     monkeypatch.setenv("CURATOR_ARCHIVE_DAYS", "90")
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
 
     usage = SkillUsageStore(str(tmp_path / "skill_usage.db"), clock=lambda: 1_000_000.0)
     monkeypatch.setattr("modules.skills.skill_usage.get_skill_usage_store", lambda: usage)

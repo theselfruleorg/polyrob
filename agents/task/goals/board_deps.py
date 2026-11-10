@@ -254,6 +254,7 @@ class BoardDepsMixin:
             )
             if rc2 == 1:
                 self._event(dep_id, "deps_satisfied", {"completed": completed_goal_id})
+                self.release_auto_unblock_asks(dep_id)  # the ask would hold it in ready()
 
     def _cascade_dep_failed(self, prerequisite_id: str) -> None:
         """T2.1 Task 2 inverse cascade: called ONLY after ``prerequisite_id``'s

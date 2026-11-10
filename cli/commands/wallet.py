@@ -23,6 +23,7 @@ from pathlib import Path
 
 import click
 
+from cli.commands._options import json_option, yes_option
 from cli.commands.config import _upsert_env
 from cli._admin_home import as_root_option
 from core.paths import polyrob_home
@@ -133,7 +134,7 @@ def _parse_cap_arg(kind: str, raw: str) -> str:
 
 
 @click.group("wallet", invoke_without_command=True)
-@click.option("--json", "as_json", is_flag=True, help="Machine-readable output.")
+@json_option(help="Machine-readable output.")
 @click.option("--no-balances", is_flag=True, help="Skip the on-chain balance lookups (offline/fast).")
 @click.pass_context
 def wallet_cmd(ctx: click.Context, as_json: bool, no_balances: bool):
@@ -314,8 +315,7 @@ def wallet_cmd(ctx: click.Context, as_json: bool, no_balances: bool):
 @wallet_cmd.command("set-cap")
 @click.argument("kind", type=click.Choice(sorted(_CAP_ENV_KEY)))
 @click.argument("usd")
-@click.option("--yes", "-y", is_flag=True, default=False,
-              help="Skip the confirmation prompt (non-interactive use).")
+@yes_option(help="Skip the confirmation prompt (non-interactive use).")
 @click.option("--env", "write_env", is_flag=True, default=False,
               help="Write the OPERATOR env value instead of the owner "
                    "preference (needs a restart; the only way to disable the "
@@ -692,7 +692,7 @@ def _seed_from_system_env_files() -> str:
               help="Import an existing BIP-39 mnemonic instead of generating one.")
 @click.option("--from-seed", "raw_seed", default=None,
               help="Import a legacy raw seed (>=32 chars) — keeps a pre-BIP44 install's addresses.")
-@click.option("--yes", "-y", is_flag=True, default=False, help="No prompts (accept defaults).")
+@yes_option(help="No prompts (accept defaults).")
 @click.option("--data-dir", "data_dir_opt", default=None, hidden=True,
               help="Override the wallet meta dir (test/ops only).")
 @click.option("--home", "home_dir_opt", default=None, hidden=True,
@@ -862,8 +862,7 @@ def wallet_book(user_id):
 @click.argument("address")
 @click.argument("symbol")
 @click.option("--note", default="", help="Why this is the real one (shown in `pins`).")
-@click.option("--yes", "-y", is_flag=True, default=False,
-              help="Skip the confirmation prompt (non-interactive use).")
+@yes_option(help="Skip the confirmation prompt (non-interactive use).")
 def wallet_pin_token(chain, address, symbol, note, yes):
     """Pin ADDRESS as THE SYMBOL on CHAIN (068 G1). Owner-only.
 
@@ -950,7 +949,7 @@ def _journal_permission_error(exc: BaseException, verb: str) -> "click.ClickExce
 
 
 @wallet_cmd.command("submissions")
-@click.option("--json", "as_json", is_flag=True, help="Machine-readable output.")
+@json_option(help="Machine-readable output.")
 def wallet_submissions(as_json):
     """Unresolved wallet submissions and the chain evidence for each (068 X2).
 
@@ -992,8 +991,7 @@ def wallet_submissions(as_json):
 @click.option("--no-replay-key", is_flag=True, default=False,
               help="Release a pre-068 x402 row that has no replay key. A retry of "
                    "that request could pay again. Requires --reason.")
-@click.option("--yes", "-y", is_flag=True, default=False,
-              help="Skip the confirmation prompt (non-interactive use).")
+@yes_option(help="Skip the confirmation prompt (non-interactive use).")
 def wallet_release_submission(reference, charge_usd, never_sent, reason, no_replay_key, yes):
     """Release a stuck submission by BOOKING it to the audit ledger (068 X2).
 
@@ -1110,8 +1108,7 @@ def wallet_bridges(user_id):
 @click.option("--execute", is_flag=True, default=False,
               help="Actually broadcast. Without it this is a quote + full "
                    "assertion pass that sends nothing.")
-@click.option("--yes", is_flag=True, default=False,
-              help="Skip the typed confirmation (for a non-interactive owner run).")
+@yes_option(help="Skip the typed confirmation (for a non-interactive owner run).")
 @click.option("--token-in", default="native", show_default=True,
               help="Origin: 'native' (SOL/ETH) or 'usdc' (the chain's PINNED USDC).")
 @click.option("--token-out", default="native", show_default=True,
@@ -1234,8 +1231,7 @@ def _echo_result(result, *, what: str):
               help="Actually broadcast. Without it this simulates, asserts the "
                    "produced bytecode against the pinned template, and reports "
                    "the address it WOULD land at.")
-@click.option("--yes", is_flag=True, default=False,
-              help="Skip the typed confirmation.")
+@yes_option(help="Skip the typed confirmation.")
 @as_root_option
 def wallet_deploy_token(symbol, supply, name, chain, decimals, max_usd,
                         vanity, salt, uri, execute, yes):
@@ -1336,8 +1332,7 @@ def wallet_deploy_token(symbol, supply, name, chain, decimals, max_usd,
 @click.option("--execute", is_flag=True, default=False,
               help="Actually broadcast. Without it this reads the live terms, "
                    "prices the opening buy and reports.")
-@click.option("--yes", is_flag=True, default=False,
-              help="Skip the typed confirmation.")
+@yes_option(help="Skip the typed confirmation.")
 @as_root_option
 def wallet_launch(symbol, name, buy, creator_tax_bps, logo, desc, twitter,
                   site, max_usd, execute, yes):
@@ -1430,8 +1425,7 @@ def wallet_curve(token, buy, sell):
 @click.option("--execute", is_flag=True, default=False,
               help="Actually broadcast. Without it this reads the escrow and "
                    "reports what would arrive.")
-@click.option("--yes", is_flag=True, default=False,
-              help="Skip the typed confirmation.")
+@yes_option(help="Skip the typed confirmation.")
 @as_root_option
 def wallet_claim(token, max_usd, execute, yes):
     """Claim the creator fees a token you launched has earned.
@@ -1516,8 +1510,7 @@ def wallet_nft_info(contract, token_id, chain):
                    "you are sending — an NFT has no reliable price.")
 @click.option("--execute", is_flag=True, default=False,
               help="Actually broadcast. Without it this simulates and reports.")
-@click.option("--yes", is_flag=True, default=False,
-              help="Skip the typed confirmation.")
+@yes_option(help="Skip the typed confirmation.")
 @as_root_option
 def wallet_nft_transfer(contract, token_id, to, chain, standard, amount,
                         max_usd, execute, yes):
@@ -1596,7 +1589,7 @@ def _dapp_store(*, write: "bool | None" = None):
 
 @wallet_dapp.command("list")
 @click.option("--user", "user_id", default=None, help="Tenant id (default: this identity).")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def wallet_dapp_list(user_id, as_json):
     """Every dapp wallet session this tenant has connected, newest first."""
     tenant = _admin_tenant(user_id)
@@ -1810,11 +1803,12 @@ from cli.commands.wallet_lp import lp_cmd
 wallet_cmd.add_command(lp_cmd)
 from cli.commands.wallet_signer import signer_reconcile  # 098 CO-22 (root, on the box)
 wallet_cmd.add_command(signer_reconcile)
+from cli.commands import wallet_verbs  # noqa: E402,F401 — 113 G-1: send, swap, check
 
 
 @wallet_cmd.command("overview")
 @click.option("--user", "user_id", default=None, help="Tenant id (default: this identity).")
-@click.option("--json", "as_json", is_flag=True)
+@json_option
 def wallet_overview(user_id, as_json):
     """Shared wallet identities, cached balances, limits and unresolved sends."""
     from dataclasses import asdict

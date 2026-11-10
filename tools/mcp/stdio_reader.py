@@ -58,6 +58,8 @@ class LineReader:
         item = await asyncio.wait_for(self._queue.get(), timeout)
         self._slots.release()
         if isinstance(item, Exception):
+            # The thread ended on it: nothing more can arrive, so the read is over (EOF).
+            self._eof = True
             raise item
         if not item:
             self._eof = True

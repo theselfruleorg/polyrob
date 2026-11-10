@@ -12,7 +12,7 @@ c = NextActionInternalMixin._classify_llm_error
     ("schema validation error", "parse"),
     ("429 rate limit exceeded", "rate_limit"),
     ("request limit reached", "rate_limit"),
-    ("llm_client bad parameter", "parameter_error"),
+    ("llm_client bad parameter", "other"),
     ("connection reset by peer", "other"),
 ])
 def test_classification_buckets(msg, expected):
@@ -24,11 +24,27 @@ ZAI_1113 = ("Error code: 429 - {'type': 'error', 'error': {'type': 'rate_limit_e
             "package. Please recharge.][2026100915015121e7ff0801f04d4c]'}}")
 
 
-def test_credit_refusal_dressed_as_429_is_billing_not_rate_limit():
+def test_credit_refusal_dressed_as_429_is_permanent_not_rate_limit():
     """D3 (prod 2026-10-09): z.ai code 1113 was retried 4x as a rate limit."""
-    assert c(Exception(ZAI_1113)) == "billing"
+    assert c(Exception(ZAI_1113)) == "permanent"
 
 
 def test_a_permanent_error_is_never_retried_as_rate_limit():
     from core.exceptions import LLMPermanentError
-    assert c(LLMPermanentError("from zai-coding: 429 something")) == "billing"
+    assert c(LLMPermanentError("from zai-coding: 429 something")) == "permanent"
+
+
+def test_a_pydantic_failure_is_parse_even_when_its_text_says_invalid():
+    from pydantic import BaseModel, ValidationError
+
+    class M(BaseModel):
+        x: int
+    try:
+        M(x="invalid value")
+    except ValidationError as e:
+        assert c(e) == "parse"
+
+
+def test_a_guard_valueerror_is_not_retried_as_a_parse_failure():
+    """A billing guard's ValueError fails the same way on every attempt."""
+    assert c(ValueError("Billed requests require an explicitly priced model")) == "other"

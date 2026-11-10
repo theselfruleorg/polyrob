@@ -63,3 +63,22 @@ def test_payload_round_trips(tmp_path):
     j = svc.schedule(task="t", schedule_spec="1h", user_id="u1",
                      payload={"provider": "anthropic", "model": "claude-opus-4-8"})
     assert store.get(j.id).payload["provider"] == "anthropic"
+
+
+def test_a_pause_reply_names_a_cut_run_that_the_pause_drops(tmp_path):
+    """A pause drops an unsettled cut mark, so the pause reply is the only place the
+    owner hears that a restart cut a run which cannot repeat by itself."""
+    svc, store = _svc(tmp_path)
+    model_job = svc.schedule(task="post the daily note", schedule_spec="*/15 * * * *", user_id="u1")
+    read_job = svc.schedule(task="read", schedule_spec="*/15 * * * *", user_id="u1",
+                            payload={"wake_agent": False})
+    assert svc.cut_note(model_job.id, user_id="u1") == ""
+    store.mark_cut_run(model_job.id)
+    store.mark_cut_run(read_job.id)
+    assert "cut by a restart" in svc.cut_note(model_job.id, user_id="u1")
+    assert svc.cut_note(read_job.id, user_id="u1") == ""
+    assert svc.cut_note(model_job.id, user_id="other") == ""
+    store.mark_cut_run(model_job.id, by="pause")
+    assert "cut by an owner pause" in svc.cut_note(model_job.id, user_id="u1")
+    assert svc.pause(model_job.id, user_id="u1", via="cli")
+    assert svc.cut_note(model_job.id, user_id="u1") == ""

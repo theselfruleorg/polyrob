@@ -38,8 +38,20 @@ Schema (JSON)::
         "journal_prefix": "POLYROB",            # optional
         "journal_log": "0x…",                   # optional: the JournalLog contract (on-chain journal)
         "call_shapes": {"mint": "mint(address,uint256,uint256)",
-                        "reveal": "reveal(uint256[])"}   # optional; must equal the known shapes
+                        "reveal": "reveal(uint256[])"},  # optional; must equal the known shapes
+        "transfer_safe": {                      # optional: the collection's own PolyrobAccount
+            "account_impl_runtime_sha256": "…",  # accounts[0].implementation's runtime code hash
+            "market": "0x…", "market_runtime_sha256": "…",
+            "zone": "0x…", "zone_runtime_sha256": "…"}
     }]}
+
+Account versions. Without ``transfer_safe`` every ``accounts[]`` entry is the canonical registry
++ Tokenbound AccountV3 (pinned by :data:`core.wallet.erc6551.CODE_SHA256`). With it,
+``accounts[0]`` is the collection's PolyrobAccount implementation (any address, pinned by
+``transfer_safe.account_impl_runtime_sha256``, re-checked against ``eth_getCode`` per call); any
+further entry is still AccountV3. A PolyrobAccount has no lock, no ERC-2771 forwarder and no
+ERC-1271 signer, and at rest it holds no modeled grant (polyrob-desk SPEC §7.1): the guard and
+the views branch on :attr:`AccountVersion.kind`.
 
 ``runtime_sha256`` is re-checked against the collection's live code
 (:func:`runtime_refusal`) by ``tx_guard`` whenever it judges a collection mint, a reveal or a
@@ -75,9 +87,16 @@ _ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _PROFILE_KEYS = frozenset({"spec", "capabilities", "chain_id", "address", "runtime_sha256",
                            "deploy_block", "max_supply", "accounts", "journal_prefix",
-                           "call_shapes", "journal_log"})
-_REQUIRED_KEYS = _PROFILE_KEYS - {"journal_prefix", "call_shapes", "journal_log"}
+                           "call_shapes", "journal_log", "transfer_safe"})
+_REQUIRED_KEYS = _PROFILE_KEYS - {"journal_prefix", "call_shapes", "journal_log", "transfer_safe"}
 _ACCOUNT_KEYS = frozenset({"registry", "implementation", "salt"})
+#: Every key of ``transfer_safe`` is required (``polyrob-desk/contracts/script/pin.py`` writes it).
+_TRANSFER_SAFE_KEYS = frozenset({"account_impl_runtime_sha256", "market", "market_runtime_sha256",
+                                 "zone", "zone_runtime_sha256"})
+
+#: The account kinds this build verifies (``AccountVersion.kind``).
+KIND_ACCOUNT_V3 = "account_v3"
+KIND_POLYROB = "polyrob_account"
 
 
 class CollectionRegistryError(RuntimeError):
@@ -89,6 +108,25 @@ class AccountVersion:
     registry: str        # lowercase
     implementation: str  # lowercase
     salt: int
+    #: :data:`KIND_ACCOUNT_V3` (Tokenbound AccountV3) or :data:`KIND_POLYROB` (PolyrobAccount).
+    kind: str = KIND_ACCOUNT_V3
+    #: The pinned runtime code hash of the implementation. None = AccountV3, pinned by
+    #: ``erc6551.CODE_SHA256``.
+    runtime_sha256: Optional[str] = None
+
+    @property
+    def is_polyrob(self) -> bool:
+        return self.kind == KIND_POLYROB
+
+
+@dataclass(frozen=True)
+class TransferSafe:
+    """The PolyrobAccount pins of one collection (all lowercase / 64 hex)."""
+    account_impl_runtime_sha256: str
+    market: str
+    market_runtime_sha256: str
+    zone: str
+    zone_runtime_sha256: str
 
 
 @dataclass(frozen=True)
@@ -106,6 +144,22 @@ class CollectionProfile:
     #: this collection's accounts write their journal to, in the same ``executeBatch`` as the
     #: action. None = no on-chain journal (the local file only).
     journal_log: Optional[str] = None  # lowercase
+    #: The collection's own transfer-safe account (PolyrobAccount), its market and zone; None
+    #: = the collection's accounts are Tokenbound AccountV3.
+    transfer_safe: Optional[TransferSafe] = None
+
+    def account_version(self, implementation: Optional[str]) -> Optional[AccountVersion]:
+        """The pinned account version whose implementation is *implementation*, or None."""
+        impl = str(implementation or "").lower()
+        return next((v for v in self.accounts if v.implementation == impl), None)
+
+    def version_for_account(self, token_id: int, account: str) -> Optional[AccountVersion]:
+        """The pinned account version whose CREATE2 account of *token_id* is *account*, or None."""
+        from core.wallet import erc6551
+        a = str(account or "").lower()
+        return next((v for v in self.accounts if erc6551.account_address(
+            self.chain_id, self.address, int(token_id), salt=v.salt,
+            implementation=v.implementation).lower() == a), None)
 
 
 def _int(value, what: str, *, minimum: int) -> int:
@@ -152,24 +206,39 @@ def _parse_profile(i: int, raw) -> CollectionProfile:
         if sig != KNOWN_CALL_SHAPES[cap]:
             raise CollectionRegistryError(f"{where} call shape {cap}={sig!r} is not the one "
                                           f"this build implements ({KNOWN_CALL_SHAPES[cap]})")
-    runtime = raw["runtime_sha256"]
-    if not isinstance(runtime, str) or not _SHA256.match(runtime):
-        raise CollectionRegistryError(f"{where} runtime_sha256 must be 64 lowercase hex")
+    runtime = _sha(raw["runtime_sha256"], f"{where} runtime_sha256")
+    transfer_safe = _transfer_safe(raw["transfer_safe"], f"{where}.transfer_safe") \
+        if "transfer_safe" in raw else None
     accounts_raw = raw["accounts"]
     if not isinstance(accounts_raw, list) or not accounts_raw:
         raise CollectionRegistryError(f"{where} accounts must list at least one account version")
     accounts = []
+    v3 = erc6551.ACCOUNT_V3_IMPL.lower()
     for j, acc in enumerate(accounts_raw):
         aw = f"{where}.accounts[{j}]"
         if not isinstance(acc, dict) or set(acc) != _ACCOUNT_KEYS:
             raise CollectionRegistryError(f"{aw} must have exactly {sorted(_ACCOUNT_KEYS)}")
         reg = _address(acc["registry"], f"{aw}.registry")
         impl = _address(acc["implementation"], f"{aw}.implementation")
-        if reg != erc6551.REGISTRY.lower() or impl != erc6551.ACCOUNT_V3_IMPL.lower():
+        salt = _int(acc["salt"], f"{aw}.salt", minimum=0)
+        if reg != erc6551.REGISTRY.lower():
             raise CollectionRegistryError(
-                f"{aw} is not the pinned ERC-6551 registry + AccountV3 — an account version "
-                f"this build does not verify; refusing the registry")
-        accounts.append(AccountVersion(reg, impl, _int(acc["salt"], f"{aw}.salt", minimum=0)))
+                f"{aw} is not the pinned ERC-6551 registry — an account version this build does "
+                f"not verify; refusing the registry")
+        if j == 0 and transfer_safe is not None:
+            if impl == v3:
+                raise CollectionRegistryError(
+                    f"{aw} is AccountV3, but transfer_safe pins a PolyrobAccount implementation "
+                    f"as accounts[0] — refusing the registry")
+            accounts.append(AccountVersion(reg, impl, salt, KIND_POLYROB,
+                                           transfer_safe.account_impl_runtime_sha256))
+            continue
+        if impl != v3:
+            raise CollectionRegistryError(
+                f"{aw} is not the pinned ERC-6551 registry + AccountV3 (and not accounts[0] of a "
+                f"profile with transfer_safe) — an account version this build does not verify; "
+                f"refusing the registry")
+        accounts.append(AccountVersion(reg, impl, salt))
     prefix = raw.get("journal_prefix")
     if prefix is not None and (not isinstance(prefix, str)
                                or not account_journal.JOURNAL_PREFIX_RE.fullmatch(prefix)):
@@ -183,7 +252,26 @@ def _parse_profile(i: int, raw) -> CollectionProfile:
         runtime_sha256=runtime,
         deploy_block=_int(raw["deploy_block"], f"{where}.deploy_block", minimum=0),
         max_supply=_int(raw["max_supply"], f"{where}.max_supply", minimum=1),
-        accounts=tuple(accounts), journal_prefix=prefix, journal_log=journal_log)
+        accounts=tuple(accounts), journal_prefix=prefix, journal_log=journal_log,
+        transfer_safe=transfer_safe)
+
+
+def _sha(value, what: str) -> str:
+    if not isinstance(value, str) or not _SHA256.match(value):
+        raise CollectionRegistryError(f"{what} must be 64 lowercase hex")
+    return value
+
+
+def _transfer_safe(raw, where: str) -> TransferSafe:
+    if not isinstance(raw, dict) or set(raw) != _TRANSFER_SAFE_KEYS:
+        raise CollectionRegistryError(f"{where} must have exactly {sorted(_TRANSFER_SAFE_KEYS)}")
+    return TransferSafe(
+        account_impl_runtime_sha256=_sha(raw["account_impl_runtime_sha256"],
+                                         f"{where}.account_impl_runtime_sha256"),
+        market=_address(raw["market"], f"{where}.market"),
+        market_runtime_sha256=_sha(raw["market_runtime_sha256"], f"{where}.market_runtime_sha256"),
+        zone=_address(raw["zone"], f"{where}.zone"),
+        zone_runtime_sha256=_sha(raw["zone_runtime_sha256"], f"{where}.zone_runtime_sha256"))
 
 
 def parse(data) -> Tuple[CollectionProfile, ...]:

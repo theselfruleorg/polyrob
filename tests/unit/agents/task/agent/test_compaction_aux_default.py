@@ -12,7 +12,8 @@ COMPACTION_AUTO_AUX is ignored).
 """
 import pytest
 
-from agents.task.constants import COMPACTION_AUX_MODEL_MAP, resolve_aux_model
+from modules.llm.provider_spec import get_spec
+from agents.task.constants import resolve_aux_model
 
 
 @pytest.fixture(autouse=True)
@@ -41,8 +42,8 @@ def test_explicit_model_wins_over_map_when_auto_aux_on(monkeypatch):
 
 def test_auto_aux_maps_known_provider_to_cheap_model(monkeypatch):
     monkeypatch.setenv("AUX_AUTO", "true")
-    assert resolve_aux_model("compaction", provider="anthropic") == COMPACTION_AUX_MODEL_MAP["anthropic"]
-    assert resolve_aux_model("compaction", provider="openai") == COMPACTION_AUX_MODEL_MAP["openai"]
+    assert resolve_aux_model("compaction", provider="anthropic") == get_spec("anthropic").aux_model
+    assert resolve_aux_model("compaction", provider="openai") == get_spec("openai").aux_model
 
 
 def test_auto_aux_openrouter_not_mapped(monkeypatch):
@@ -51,12 +52,12 @@ def test_auto_aux_openrouter_not_mapped(monkeypatch):
     # in explicitly via AUX_MODEL_COMPACTION (same-provider aux is safe — isolated client).
     monkeypatch.setenv("AUX_AUTO", "true")
     assert resolve_aux_model("compaction", provider="openrouter") is None
-    assert "openrouter" not in COMPACTION_AUX_MODEL_MAP
+    assert get_spec("openrouter").aux_model is None
 
 
 def test_auto_aux_provider_lookup_is_case_insensitive(monkeypatch):
     monkeypatch.setenv("AUX_AUTO", "true")
-    assert resolve_aux_model("compaction", provider="Anthropic") == COMPACTION_AUX_MODEL_MAP["anthropic"]
+    assert resolve_aux_model("compaction", provider="Anthropic") == get_spec("anthropic").aux_model
 
 
 def test_auto_aux_unknown_provider_returns_none(monkeypatch):

@@ -9,7 +9,7 @@ instead of a half-added chain.
 
 The excuse dicts live HERE, in the test: they are the audit trail, like the
 surface parity matrix. Each excuse is a visible debt row in
-the extension map (E-S1-01 Optimism P, E-S1-12 Robinhood P,
+the extension map (E-S1-01 Optimism P, E-S1-12 Robinhood closed 2026-11-08,
 E-S1-13 Polygon + Arbitrum LP). Removing a debt = adding the chain to the side
 table AND deleting its excuse; the test fails if an excuse outlives its debt.
 
@@ -32,17 +32,13 @@ TESTNETS = {"ethereum-sepolia", "base-sepolia", "optimism-sepolia",
 _TESTNET_ROW = "robinhood-testnet: a read-only testnet row (W13) — no Alchemy/NFT host/LP rows for 46630"
 
 EXCUSED_ALCHEMY = {
-    "robinhood": "no Alchemy network for Robinhood Chain (checked 2026-09-23) — E-S1-12",
     "robinhood-testnet": _TESTNET_ROW,
 }
 EXCUSED_NFT = {
-    "robinhood": "no Alchemy NFT host for Robinhood Chain (checked 2026-09-23) — E-S1-12",
     "robinhood-testnet": _TESTNET_ROW,
 }
 EXCUSED_8004: dict = {}  # robinhood pinned 2026-09-23 (measured; 050 §7.1 Phase 0)
 EXCUSED_DEX = {
-    "arbitrum": "no V3/V4 position-manager rows pinned for LP — E-S1-13",
-    "polygon": "no V3/V4 position-manager rows pinned for LP — E-S1-13",
     "optimism": "stage R only; LP rows are stage P — E-S1-01",
     "robinhood-testnet": _TESTNET_ROW,
 }
@@ -104,9 +100,23 @@ def test_the_new_optimism_row_is_read_only():
     """064 D2 (owner): arming money on a new chain stays OFF by default."""
     row = chains.get("optimism")
     assert row is not None and row.chain_id == 10
-    assert row.money_enabled is False and row.route_hints == ()
-    assert row.aggregator_spender is None and row.univ3_router is None
+    assert row.money_enabled is False
+    # Order 0014: the route is filled; only the owner flip is missing.
+    assert row.aggregator_spender == chains._LIFI_DIAMOND
+    assert row.univ3_router and row.univ3_quoter
+    assert chains.swap_ready("optimism") == (True, "")
     assert "optimism" not in chains.money_chains()
     assert "optimism" not in chains.swap_chains()
+    ok, why = chains.money_capable("optimism")
+    assert ok is False and "read-only" in why
     ok, why = chains.money_ready("optimism")
     assert ok is False and why
+
+
+def test_robinhood_alchemy_rows_are_the_measured_ones():
+    """E-S1-12 evidence (2026-11-08): ``robinhood-mainnet.g.alchemy.com`` served
+    ``/nft/v3/.../getNFTsForOwner`` with a contract whose ``eth_getCode`` on the
+    Robinhood public RPC (chain 4663) is non-empty; the host does not exist for a
+    made-up slug. The RPC row shares the slug (the demo key 429s eth_chainId)."""
+    assert onchain._ALCHEMY_NETWORK["robinhood"] == "robinhood-mainnet"
+    assert _nft_hosts()["robinhood"] == "robinhood-mainnet.g.alchemy.com"

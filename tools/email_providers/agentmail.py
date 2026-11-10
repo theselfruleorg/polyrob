@@ -37,7 +37,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
-from core.exceptions import APIError
+from core.exceptions import APIError, DeliveryUnknownError
 from core.instance import agent_mail_state_path
 
 logger = logging.getLogger(__name__)
@@ -301,12 +301,47 @@ class AgentMailClient:
                     "content_type": str(part.get("mime") or "application/octet-stream"),
                     "content": base64.b64encode(part["data"]).decode("ascii")})
 
-        data = await self._request(
-            "POST", f"/v0/inboxes/{self.inbox_id}/messages/send", json=body)
+        data = await self._send_request(body, mid)
         thread_id = data.get("thread_id")
         if thread_id:
             self._record_thread(thread_id, mid)
         return mid
+
+    async def _send_request(self, body: Dict[str, Any], mid: str) -> dict:
+        """POST the send; tell "nothing went out" from "it may have gone out".
+
+        ⚠️ Only a failure to CONNECT (or to get a pooled connection) proves the
+        request never left. A timeout or a lost connection after that, or a 5xx,
+        can follow an accepted send: that is :class:`DeliveryUnknownError`, which
+        the tool and the surface never retry (a retry can send twice). A 4xx is a
+        definite refusal.
+        """
+        path = f"/v0/inboxes/{self.inbox_id}/messages/send"
+        try:
+            resp = await self._client().request("POST", path, json=body)
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as e:
+            raise APIError(f"agentmail POST {path} failed: {e}")
+        except httpx.HTTPError as e:
+            self._delivery_unknown(mid, f"{type(e).__name__}: {e}")
+        if resp.status_code >= 500:
+            self._delivery_unknown(mid, f"HTTP {resp.status_code}")
+        if resp.status_code >= 400:
+            raise APIError(
+                f"agentmail POST {path} -> HTTP {resp.status_code}: {resp.text[:300]}")
+        try:
+            return resp.json()
+        except ValueError:
+            return {}  # accepted (2xx): the mail went out; only the thread id is lost
+
+    @staticmethod
+    def _delivery_unknown(mid: str, why: str) -> None:
+        from core.event_kinds import EMAIL_DELIVERY_UNKNOWN
+        from core.event_log import emit
+        emit(EMAIL_DELIVERY_UNKNOWN, source="email", attrs={"message_id": mid})
+        raise DeliveryUnknownError(
+            f"delivery unknown: AgentMail did not confirm the send ({why}), so this "
+            f"mail may have gone out (Message-ID {mid}). Do not send it again; check "
+            "the sent mail or ask the owner.")
 
     async def list_messages(self, limit: int = 25) -> List[dict]:
         """Most-recent message summaries (no bodies — use :meth:`get_message`)."""
@@ -315,8 +350,11 @@ class AgentMailClient:
         data = await self._request(
             "GET", f"/v0/inboxes/{self.inbox_id}/messages",
             params={"limit": limit})
-        msgs = data.get("messages")
-        return list(msgs) if isinstance(msgs, list) else []
+        msgs = data.get("messages") if isinstance(data, dict) else None
+        if not isinstance(msgs, list):
+            # An unreadable answer is not an empty inbox.
+            raise APIError(f"agentmail: message list has no 'messages' list: {str(data)[:200]}")
+        return list(msgs)
 
     async def get_message(self, message_id: str) -> dict:
         """Full single message (text / extracted_text / threading headers)."""

@@ -302,7 +302,7 @@ INHERIT_BY_DESIGN = frozenset({
     "mcp_connect_server", "mcp_disconnect_server", "mcp_reload_server",
     "mcp_subscribe_resource", "mcp_unsubscribe_resource",
     "twitter_poll_results",
-    "x_browser_x_dm", "x_browser_x_read_dms", "x_browser_x_reply",
+    "x_browser_x_dm", "x_browser_x_read_dms",
 })
 
 

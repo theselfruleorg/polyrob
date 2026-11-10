@@ -44,17 +44,15 @@ _CREDIT_DEATH_MARKERS = (
     # serve until its weekly reset.
     "limit exhausted",
     "insufficient balance",
+    "please recharge",
+    "add credits",
 )
 
-# "402" needs word boundaries, not bare-substring matching: the bare form
-# tripped on formatted spend amounts ("$0.4020"), token counts ("requested
-# 130402 tokens") and hex request ids ("req_9f402ab13c7e") — the 2026-07-18
-# sentinel false-positive class, reproduced again by the 2026-07-23 validation
-# in the chain-aware classifier (a coincidental chained "402" flipped a
-# retryable step fatal with billing failover off). \b keeps every real
-# provider shape matching: "Error code: 402", "HTTP/1.1 402", "(402)",
-# "status_code=402" all carry non-word neighbors.
-_CREDIT_DEATH_402_RE = re.compile(r"\b402\b")
+# "402" must stand alone as a status code. Bare-substring matching tripped on spend
+# amounts ("$0.4020", "$0.402"), token counts ("requested 130402 tokens", "1,402") and
+# hex request ids ("req_9f402ab13c7e"). Every real provider shape keeps matching:
+# "Error code: 402", "HTTP/1.1 402", "(402)", "status_code=402".
+_CREDIT_DEATH_402_RE = re.compile(r"(?<![\w.,$])402(?!\w|[.,]\d)")
 
 
 def credit_sentinel_enabled() -> bool:

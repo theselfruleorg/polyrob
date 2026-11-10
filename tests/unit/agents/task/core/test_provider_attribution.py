@@ -52,7 +52,7 @@ def test_current_provider_prefers_live_client_spec(zai_provider):
 
 
 def test_current_provider_falls_back_to_model_inference():
-    # a non-provider service name (openai_fallback_client) must not be trusted;
+    # a non-provider service name (openai_helper_client) must not be trusted;
     # model inference resolves gpt-5 → openai
     client = SimpleNamespace(_spec=None, name="openai_fallback_client")
     host = _mixin_host(SimpleNamespace(_client=client))
@@ -67,15 +67,17 @@ def test_current_provider_no_llm_uses_model_inference():
 def test_adapter_error_label_names_provider(zai_provider):
     """The adapter's translate prefix must carry the provider, never the
     client class name."""
-    from modules.llm.adapters import _client_provider_label
+    from modules.llm.llm_client import LLMClient
 
-    compat = SimpleNamespace(_spec=SimpleNamespace(name="zai-coding"))
-    assert _client_provider_label(compat) == "zai-coding"
+    label = LLMClient.provider_label.fget
 
-    class AnthropicClientStub:
+    compat = SimpleNamespace(_spec=SimpleNamespace(display_name="z.ai GLM Coding Plan"))
+    assert label(compat) == "z.ai GLM Coding Plan"
+
+    class AnthropicClient:
         _PROVIDER_LABEL = "Anthropic"
-    assert _client_provider_label(AnthropicClientStub()) == "Anthropic"
+    assert label(AnthropicClient()) == "Anthropic"
 
-    class Bare:
-        pass
-    assert _client_provider_label(Bare()) == "Bare"
+    class BareClient:
+        _PROVIDER_LABEL = None
+    assert label(BareClient()) == "Bare"

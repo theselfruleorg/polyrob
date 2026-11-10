@@ -70,26 +70,25 @@ def test_no_in_process_agent_passes_through(srv, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 043 A10/A45: the console's own /help does not advertise verbs it can't run
-# (the chat box short-circuits /task and /new to None — see the test above —
-# so /help listing them would just move the dead end into the help text).
+# 043 A10/A45: the console's own /help does not advertise a verb it can't run
+# (the chat box short-circuits /task to None — see the test above). 113: /new
+# is a chat verb the chat box runs, so /help lists it.
 # ---------------------------------------------------------------------------
 
-def test_console_help_excludes_task_and_new(srv, monkeypatch, tmp_path):
+def test_console_help_excludes_task(srv, monkeypatch, tmp_path):
     monkeypatch.setattr(srv, "_in_process_task_agent", lambda: _Agent(str(tmp_path)))
     reply = asyncio.run(srv._maybe_handle_console_command("sess1", "alice", "/help"))
     assert reply is not None
     assert "/task <goal>" not in reply
-    for line in reply.splitlines():
-        assert not line.startswith("/new ")
+    assert "/new" in reply and "/chats" in reply
 
 
-def test_console_help_new_answers_not_available(srv, monkeypatch, tmp_path):
+def test_console_help_new_is_the_chat_verb(srv, monkeypatch, tmp_path):
     from webview.console_commands import _CONSOLE_HELP_UNAVAILABLE
 
     monkeypatch.setattr(srv, "_in_process_task_agent", lambda: _Agent(str(tmp_path)))
     reply = asyncio.run(srv._maybe_handle_console_command("sess1", "alice", "/help new"))
-    assert reply == _CONSOLE_HELP_UNAVAILABLE
+    assert reply and reply != _CONSOLE_HELP_UNAVAILABLE and "chat" in reply
 
 
 def test_console_help_task_answers_not_available(srv, monkeypatch, tmp_path):

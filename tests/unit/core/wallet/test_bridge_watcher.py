@@ -32,6 +32,9 @@ def delivered(monkeypatch):
     monkeypatch.setattr(bridge_status, "read_out_txs", lambda rid: [f"0xfill{rid}"])
     monkeypatch.setattr(bridge_guard, "evm_tx_inflow",
                         lambda h, r, c, n, **k: (FLOOR, int(time.time())))
+    # The second check: the balance rise AT the delivering block.
+    monkeypatch.setattr(bridge_guard, "evm_block_rise",
+                        lambda h, r, c, n, **k: (1, FLOOR))
 
 
 def _quote(request_id="0xreq"):
@@ -352,8 +355,10 @@ def test_a_row_closed_as_never_sent_tells_the_owner_once(db):
     assert len(seen) == 1, "one notice per closed row, never repeated"
 
 
-def test_a_stale_row_relay_reports_filled_sends_no_notice(db):
+def test_a_stale_row_relay_reports_filled_sends_no_notice(db, monkeypatch):
     from core.sqlite_util import execute_retry
+    # The destination is unreadable: the fill is not proven, the row stays open.
+    monkeypatch.setattr(bridge_guard, "evm_block_rise", lambda *a, **k: None)
     bid = bridge_guard.record_pending(user_id="owner", quote=_quote("0xfilled"),
                                       amount_usd=1.0, balance_before=BEFORE, db_path=db)
     execute_retry(db, "UPDATE bridges SET created_at=?, driver_until=NULL WHERE id=?",
@@ -363,3 +368,91 @@ def test_a_stale_row_relay_reports_filled_sends_no_notice(db):
                  read_balance=lambda a, c: None, notify=notify))
     assert [n.state for _, n in seen if n.state == "never_sent"] == []
     assert bid in {r["id"] for r in bridge_guard.open_bridges("owner", db_path=db)}
+
+
+def test_an_arrival_the_wallet_spent_before_the_pass_is_proven(db):
+    """The live balance is back at the baseline (the wallet spent the arrived
+    asset); the rise AT the delivering block still proves it — the row must
+    not stay in_flight for ever and block every later bridge."""
+    _row(db)
+    out = _run(bw.tick(db_path=db, provider=_Provider("success", "filled"),
+                       read_balance=lambda a, c: BEFORE, notify=_collect_notices()[1]))
+    assert out.arrived == 1
+    assert bridge_guard.conflicting_open_bridge(
+        dest_chain_id=BASE_ID, recipient=RECIPIENT,
+        currency_out="0x0000000000000000000000000000000000000000", db_path=db) is None
+
+
+def test_a_refund_with_an_unreadable_destination_stays_in_flight(db):
+    """FAILED is terminal: "could not read" is not "did not arrive"."""
+    _row(db)
+    out = _run(bw.tick(db_path=db, provider=_Provider("failure", "refunded"),
+                       read_balance=lambda a, c: None, notify=_collect_notices()[1]))
+    assert out.failed == 0 and out.arrived == 0
+    assert bridge_guard.open_bridges("owner", db_path=db)
+
+
+def test_a_solana_destination_failure_needs_a_read_showing_no_arrival(monkeypatch):
+    from core.wallet import bridge_status
+    bridge_status.register_chain_alias(792703809, "solana")
+    settled = {}
+    row = {"id": "b1", "user_id": "owner", "dest_chain_id": 792703809,
+           "origin_chain_id": 8453, "recipient": "So1anaRecipient111111111111111111111111111",
+           "currency_out": "11111111111111111111111111111111",
+           "balance_before": "100", "min_out_raw": "50", "created_at": 0.0,
+           "request_id": "0xreq", "tx_ref": "0xabc"}
+    monkeypatch.setattr(bridge_guard, "open_bridges_all", lambda **k: [row])
+    monkeypatch.setattr(bridge_guard, "settle",
+                        lambda bid, **k: settled.update(k, bid=bid) or True)
+
+    async def _notify(*a, **k):
+        return None
+
+    class _Failed:
+        def status(self, rid):
+            return "failure", "refunded"
+    monkeypatch.setattr(bridge_status, "read_out_txs", lambda rid: None)   # unreadable
+    res = _run(bw.tick(provider=_Failed(), notify=_notify, now=lambda: 10.0))
+    assert res.failed == 0 and not settled
+    monkeypatch.setattr(bridge_status, "read_out_txs", lambda rid: [])     # read: none
+    res = _run(bw.tick(provider=_Failed(), notify=_notify, now=lambda: 10.0))
+    assert res.failed == 1 and settled["state"] == bridge_guard.STATE_FAILED
+
+
+def test_two_watchers_with_the_same_read_escalate_once(db, monkeypatch):
+    """Both watchers read the row before either stamped it: only the one whose
+    compare-and-set on escalated_at wins tells the owner."""
+    old = time.time() - (bw.ESCALATE_AFTER_SEC + 60)
+    _row(db, created_at=old)
+    stale = [dict(r) for r in bridge_guard.open_bridges_all(db_path=db)]
+    monkeypatch.setattr(bridge_guard, "open_bridges_all", lambda **k: [dict(r) for r in stale])
+    seen, notify = _collect_notices()
+    for _ in range(2):
+        _run(bw.tick(db_path=db, provider=_Provider(),
+                     read_balance=lambda a, c: BEFORE, notify=notify))
+    assert len(seen) == 1
+
+
+def test_an_unreadable_bridge_state_is_logged(db, monkeypatch, caplog):
+    import core.sqlite_util as su
+
+    def _boom(*a, **k):
+        raise RuntimeError("database is locked")
+    monkeypatch.setattr(su, "execute_retry", _boom)
+    with caplog.at_level("WARNING", logger=bridge_guard.logger.name):
+        assert bridge_guard.state_of("b1", db_path=db) is None
+    assert "could not read its state" in caplog.text
+
+
+def test_an_unreadable_status_in_the_never_sent_sweep_is_logged(db, caplog):
+    from core.sqlite_util import execute_retry
+    bid = bridge_guard.record_pending(user_id="owner", quote=_quote("0xq"),
+                                      amount_usd=1.0, balance_before=BEFORE, db_path=db)
+    execute_retry(db, "UPDATE bridges SET created_at=?, driver_until=NULL WHERE id=?",
+                  (time.time() - bridge_guard.UNSENT_STALE_SEC - 60, bid))
+
+    def _status(rid):
+        raise RuntimeError("relay down")
+    with caplog.at_level("WARNING", logger=bridge_guard.logger.name):
+        bridge_guard.close_stale_unsent(status=_status, db_path=db)
+    assert "provider status unreadable" in caplog.text

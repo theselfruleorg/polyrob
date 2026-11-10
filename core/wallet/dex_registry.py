@@ -6,8 +6,11 @@ tokens are sent. Same rule as `tools/launchpad/pons.py::verify_pins`: the code a
 the pin is re-hashed before every write and a mismatch REFUSES, it does not warn.
 
 Addresses verified 2026-09-16 from the Uniswap deployments feed and re-read via
-`eth_getCode` when the hashes below were measured. ⚠️ `polygon`/`arbitrum` are
-absent on purpose — no owner ask, no measured hash; `row_for` returns None.
+`eth_getCode` when the hashes below were measured. `polygon`/`arbitrum` were
+pinned 2026-11-09 (order 0013): addresses from the Uniswap deployments feed, code
+hashes measured by `eth_getCode` on two public RPCs and cross-linked on-chain
+(NPM.factory, PosM/StateView/V4Quoter.poolManager). Chains with no measured hash
+(e.g. optimism) are absent on purpose; `row_for` returns None.
 """
 from __future__ import annotations
 
@@ -65,6 +68,24 @@ _ROWS: Dict[Tuple[str, str], DexRow] = {
         position_manager="0xbd216513d74c8cf14cf4747e6aaa6420ff64ee9e",
         state_view="0x7ffe42c4a5deea5b0fec41c94c136cf115597227",
         quoter="0x52f0e24d1c21c8a0cb1e5a5dd6198556bd9e1203", permit2=_PERMIT2),
+    ("arbitrum", "v3"): DexRow("v3", "arbitrum", 42161,
+        factory="0x1F98431c8aD98523631AE4a59f267346ea31F984",
+        position_manager="0xC36442b4a4522E871399CD717aBDD847Ab11FE88",
+        quoter="0x61fFE014bA17989E743c5F6cB21bF9697530B21e"),
+    ("arbitrum", "v4"): DexRow("v4", "arbitrum", 42161,
+        pool_manager="0x360e68faccca8ca495c1b759fd9eee466db9fb32",
+        position_manager="0xd88f38f930b7952f2db2432cb002e7abbf3dd869",
+        state_view="0x76fd297e2d437cd7f76d50f01afe6160f86e9990",
+        quoter="0x8928074CA1b241D8Ec02815881c1Af11E8bC5219", permit2=_PERMIT2),
+    ("polygon", "v3"): DexRow("v3", "polygon", 137,
+        factory="0x1F98431c8aD98523631AE4a59f267346ea31F984",
+        position_manager="0xC36442b4a4522E871399CD717aBDD847Ab11FE88",
+        quoter="0x61fFE014bA17989E743c5F6cB21bF9697530B21e"),
+    ("polygon", "v4"): DexRow("v4", "polygon", 137,
+        pool_manager="0x67366782805870060151383f4bbff9dab53e5cd6",
+        position_manager="0x1ec2ebf4f37e7363fdfe3551602425af0b3ceef9",
+        state_view="0x5ea1bd7974c8a611cbab0bdcafcb1d9cc9b3ba5a",
+        quoter="0x31AB0Dea31FC0ad5A54F03cD59C896eCD067447B", permit2=_PERMIT2),
 }
 
 #: keccak(eth_getCode) per (chain, lowercase address) — MEASURED, pasted from the
@@ -86,6 +107,18 @@ CODE_HASHES: Dict[Tuple[str, str], str] = {
     ("ethereum", "0xc36442b4a4522e871399cd717abdd847ab11fe88"): "0x692e658b31cbe3407682854806658d315d61a58c7e4933a2f91d383dc00736c6",
     ("ethereum", "0x000000000004444c5dc75cb358380d2e3de08a90"): "0x785f1014552b7ce7d5fb7d0c970ca60edee94fd00425d7ca21609acac7ce1293",
     ("ethereum", "0xbd216513d74c8cf14cf4747e6aaa6420ff64ee9e"): "0x77e36c08b19959a30dde46dec9abe6208e371ff2f56884a56fe1e1a53615528b",
+    ("arbitrum", "0x1f98431c8ad98523631ae4a59f267346ea31f984"): "0x4d7b8525cd5d14343fa67a732fba5b24cddba11620ca88392f4ec6c52f91fd69",
+    ("arbitrum", "0xc36442b4a4522e871399cd717abdd847ab11fe88"): "0x45b4bff8136324d175c01151fd0fb715c82bcc8923019a4faba3eafb0cc3a20b",
+    ("arbitrum", "0x360e68faccca8ca495c1b759fd9eee466db9fb32"): "0xe4b2759e456c9c4ef763e3b4e257c5105e1ba283d7de8b131dd321197de794a4",
+    ("arbitrum", "0xd88f38f930b7952f2db2432cb002e7abbf3dd869"): "0x6156ddaa1c8cd2c26d37455a5dc57b1761dc2848856426c0ac261ae0c7fecd68",
+    ("arbitrum", "0x76fd297e2d437cd7f76d50f01afe6160f86e9990"): "0x4c0e823a0cd44b6b2d9485e774c421cf929db3996096d9b84ee6b23525184b9e",
+    ("arbitrum", "0x000000000022d473030f116ddee9f6b43ac78ba3"): "0x9e51dcb64cf56fc09a82cb41edbc17c6a2250f18dbd1b91e884c0aca02acd57c",
+    ("polygon", "0x1f98431c8ad98523631ae4a59f267346ea31f984"): "0x4d7b8525cd5d14343fa67a732fba5b24cddba11620ca88392f4ec6c52f91fd69",
+    ("polygon", "0xc36442b4a4522e871399cd717abdd847ab11fe88"): "0xdcffe49a687c3ea536e42193f2e0bc89c20282c7bd6106eddc2bfc19a091114e",
+    ("polygon", "0x67366782805870060151383f4bbff9dab53e5cd6"): "0xcfd0bc71e4f75b0c3e078e53baad950360d3e9f62b55c48b556f9de967aa80f7",
+    ("polygon", "0x1ec2ebf4f37e7363fdfe3551602425af0b3ceef9"): "0x876d8664907d1fa2b3f00e6f49671585abd614c836f110b36c1e76fd407e67ba",
+    ("polygon", "0x5ea1bd7974c8a611cbab0bdcafcb1d9cc9b3ba5a"): "0x7dc64bb4b52657a626a2cc9589d5db335ac6e51eea0d15fef3822d0293c21098",
+    ("polygon", "0x000000000022d473030f116ddee9f6b43ac78ba3"): "0xdb0dd198c1767513d04589d8b3da05423ddc97e543440f84afe0e216693af9bb",
 }
 
 

@@ -87,10 +87,15 @@ def resolve_invoice_asset(chain: Optional[str], asset_id: Optional[str]):
             # 085 M-2: the chain's USDC is the PINNED address, never a row
             # that only calls itself "USDC".
             from core.payments.quote import is_stable
-            for row in _assets.all_assets():
-                if (row.chain == chain and (row.symbol or "").upper() == "USDC"
-                        and is_stable(row)):
+            pegged = [row for row in _assets.all_assets()
+                      if row.chain == chain and is_stable(row)]
+            for row in pegged:
+                if (row.symbol or "").upper() == "USDC":
                     return row
+            # 109 W1: a chain whose dollar is not USDC (USDG on Robinhood) defaults
+            # to its ONE pinned stable; two or more is ambiguous and needs an id.
+            if len(pegged) == 1:
+                return pegged[0]
             raise ValueError(
                 f"no default payable asset for chain {chain!r} — pin one with "
                 f"`polyrob wallet asset add --chain {chain} ...`, or pass "

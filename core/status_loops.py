@@ -129,7 +129,37 @@ def _loops_section(user_id: str, cron_db: str, tele: Section, now: float,
     else:
         sec.lines.append(f"24h run/heartbeat counts unavailable ({tele.reason})")
     _resource_pressure_lines(sec, tele, now, data_dir)
+    _host_job_lines(sec, data_dir, now)
     return sec
+
+
+def _host_job_lines(sec: Section, data_dir: Optional[str], now: float) -> None:
+    """112 W1: the host jobs the agent depends on (``core.host_jobs`` status files). A
+    stale, failed, skewed or unreadable job is a health item; a missing directory is no
+    host jobs, and an unreadable one says so (never "none")."""
+    from datetime import datetime, timezone
+    from core import host_jobs
+    from core.runtime_paths import data_dir_or_home
+    read = host_jobs.read_statuses(data_dir_or_home(data_dir),
+                                   datetime.fromtimestamp(now, tz=timezone.utc))
+    if not read["available"]:
+        sec.data["host_jobs"], sec.data["host_jobs_reason"] = None, read["error"]
+        sec.lines.append(f"host jobs: could not read ({read['error'][:120]})")
+        sec.health.append(HealthItem(
+            key="host_jobs_unreadable", severity=SEVERITY_WARN,
+            text=f"host-job status could not be read: {read['error'][:120]}",
+            remedy="the operator fixes the permissions of <data home>/ops/host_jobs"))
+        return
+    sec.data["host_jobs"] = read["jobs"]
+    for job in read["jobs"]:
+        sec.lines.append(f"host job {job['name']}: {job['state']}"
+                         + (f" — {job['why']}" if job["why"] else ""))
+        if job["state"] != host_jobs.OK:
+            sec.health.append(HealthItem(
+                key=f"host_job:{job['name']}", severity=SEVERITY_WARN,
+                text=f"host job {job['name']} is {job['state']}: {job['why']}",
+                remedy="the operator checks the job on the host; its outputs may be "
+                       "missing or old — do not decide from them by hand"))
 
 
 def _resource_pressure_lines(sec: Section, tele: Section, now: float,

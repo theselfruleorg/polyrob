@@ -21,7 +21,7 @@ from core.verbs import (
 
 # The two verbs the console drops from /help (webview/console_commands.py
 # CONSOLE_HELP_EXCLUDED) and therefore from the palette / verb table.
-_EXCLUDED = frozenset({"/task", "/new"})
+_EXCLUDED = frozenset({"/task"})
 
 
 def _routable() -> set[str]:
@@ -88,7 +88,7 @@ def test_seat_verbs_filters_and_grouped_agrees():
     assert flat == telegram
 
 
-def test_the_two_excluded_verbs_have_no_row():
+def test_the_excluded_verb_has_no_row():
     names = {v.name for v in VERB_TABLE}
     assert not (_EXCLUDED & names)
 
@@ -142,9 +142,10 @@ def test_grouped_with_no_seat_covers_every_row_in_group_order():
     assert len(flat) == len(VERB_TABLE)
 
 
-def test_memory_scopes_command_is_in_the_repl_verb_table():
-    memory = verb_for("/memory")
-    assert memory is not None
-    assert memory.seats == ("repl",)
-    assert memory in seat_verbs("repl")
-    assert memory not in seat_verbs("telegram")
+def test_memory_and_self_are_owner_reads_on_every_seat():
+    """113 W6 G-6: the phone reads memory and the identity docs too; neither
+    runs inside a group room."""
+    for name in ("/memory", "/self"):
+        row = verb_for(name)
+        assert row is not None and row.seats == () and row.room_refused
+        assert row in seat_verbs("repl") and row in seat_verbs("telegram")

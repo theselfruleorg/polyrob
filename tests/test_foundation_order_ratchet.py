@@ -109,8 +109,8 @@ def _manager_with_every_block():
 def test_both_assemblies_share_the_table_order():
 	mm = _manager_with_every_block()
 	expected = FL.foundation_messages(mm)
-	# the two self-context layers are alternatives (060 WS-1): one is empty.
-	assert len(expected) == len(FL.FOUNDATION_LAYERS) - 1
+	# the welded self-context row is the alternative to the two block rows (060 WS-1).
+	assert len(expected) == len(FL.FOUNDATION_LAYERS) - 2
 	assert isinstance(expected[0], SystemMessage)
 	n = len(expected)
 	assert mm.get_messages()[:n] == expected
@@ -132,10 +132,35 @@ def test_one_self_context_layer_per_group():
 	for layer in FL.FOUNDATION_LAYERS:
 		if layer.group:
 			groups.setdefault(layer.group, []).append(layer)
-	assert {g: len(v) for g, v in groups.items()} == {"self_context": 2}
-	# alternatives sit next to each other so either render lands in one place.
+	assert {g: len(v) for g, v in groups.items()} == {"self_context": 3}
+	# the welded render lands where the operator-only blocks land.
 	idx = [FL.FOUNDATION_LAYERS.index(layer) for layer in groups["self_context"]]
 	assert idx[1] == idx[0] + 1
+
+
+def test_the_order_puts_what_is_written_later_after_what_is_not():
+	"""106 C5: a skill or SELF write colds only the rows after it. An owner or agent
+	document never sits before a catalog, and the identity row and the per-session
+	rows are last."""
+	assert [layer.key for layer in FL.FOUNDATION_LAYERS] == [
+		"system_prompt", "environment", "tool_catalog", "self_context", "self_context_soul",
+		"skill_catalog", "worker_catalog", "self_context_blocks", "project_context",
+		"runtime_identity", "workspace", "initial_task"]
+
+
+def test_the_block_order_keeps_the_agents_own_document_last():
+	assert [name for name, _tier in FL.SELF_CONTEXT_BLOCKS] == [
+		"awareness", "soul", "contract", "owner_rules", "self_doc"]
+
+
+def test_set_self_context_blocks_splits_by_tier_in_table_order():
+	mm = _manager_with_every_block()
+	mm.set_self_context_blocks((("self_doc", "B5"), ("owner_rules", "B4"), ("soul", "B2"),
+	                            ("contract", "B3"), ("awareness", "B1")))
+	rows = [str(m.content) for m in FL.foundation_messages(mm)[1:]]
+	at = {name: next(i for i, t in enumerate(rows) if name in t)
+	      for name in ("B1", "B2", "available-skills", "B3", "B4", "B5")}
+	assert at["B1"] < at["B2"] < at["available-skills"] < at["B3"] < at["B4"] < at["B5"]
 
 
 def test_layer_may_hold_several_messages():

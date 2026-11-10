@@ -22,6 +22,7 @@ def _tcm(enabled, llm):
     # Session-scoped reflection registry (normally built in __init__); empty here so
     # _llm_consolidate falls back to the instance-level attrs set above.
     tcm._reflection_by_session = {}
+    tcm._sessions = {}
     return tcm
 
 

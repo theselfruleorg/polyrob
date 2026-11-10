@@ -28,7 +28,9 @@ except ImportError:
     Posthog = None
     POSTHOG_AVAILABLE = False
 
-from agents.task.telemetry.views import BaseTelemetryEvent, LLMRequestTelemetryEvent, AgentStepTelemetryEvent
+from agents.task.telemetry.views import (
+	AgentStepTelemetryEvent, BaseTelemetryEvent, LLMRequestTelemetryEvent, model_provider,
+)
 from agents.task.telemetry.sequence import SequenceGenerator, generate_event_id, get_timestamp_ms
 from core.file_lock import SafeFileLock
 from core.data_perms import apply_birth_mode
@@ -710,15 +712,6 @@ class ProductTelemetry:
 			# File watcher will still pick up the event
 			pass
 
-	def _detect_provider(self, model_name: str) -> str:
-		"""Detect the provider based on model name"""
-		# Use centralized provider detection
-		from agents.task.utils import detect_llm_provider
-		provider = detect_llm_provider(None, model_name)
-
-		# Map 'generic' to 'unknown' for consistency with existing code
-		return 'unknown' if provider == 'generic' else provider
-
 	def _calculate_cost_from_registry(
 		self,
 		model_name: str,
@@ -867,7 +860,7 @@ class ProductTelemetry:
 			# so accept it from either route before falling back to detection.
 			if not provider and isinstance(parameters, dict):
 				provider = parameters.get('provider')
-			provider = provider or self._detect_provider(model_name)
+			provider = provider or model_provider(model_name)
 
 			# Calculate cost estimate using centralized model registry
 			cost_estimate = self._calculate_cost_from_registry(

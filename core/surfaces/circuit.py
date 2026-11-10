@@ -1,7 +1,7 @@
 """Per-surface circuit breaker for the outbound dispatcher.
 
 Opens automatically after K consecutive failures (stops hammering a dead platform).
-An operator holds a surface with `polyrob surface pause`, which writes the
+An operator holds a surface with `polyrob surfaces pause`, which writes the
 CircuitStore; the store is the ONE pause authority and ``is_open`` reads it on
 every call (098 CO-17: the breaker's own in-memory pause copy had no production
 writer and was removed).
@@ -231,7 +231,7 @@ class SurfaceCircuitBreaker:
         local = self._opened_at.get(surface_id)
         if (local is not None and surface_id in self._persisted
                 and readable and stored is None):
-            # Another process (`polyrob surface resume`) cleared the persisted
+            # Another process (`polyrob surfaces resume`) cleared the persisted
             # auto-open: the operator closed it, so this process closes too.
             self._counts[surface_id] = 0
             self._opened_at.pop(surface_id, None)

@@ -246,9 +246,11 @@ async def test_meter_plain():
 
 @pytest.mark.asyncio
 async def test_status_is_the_snapshot_not_the_meter():
-    """E16: ``/status`` renders the SAME snapshot ``/doctor`` does."""
+    """E16: ``/status`` renders the SAME snapshot ``/doctor`` does — under its
+    own name (113 I-4: ``/doctor`` is the health report)."""
+    from cli.ui.commands.h_diag import h_status
     reg = default_registry()
-    assert reg.lookup("status").handler is reg.lookup("doctor").handler
+    assert reg.lookup("status").handler is h_status
 
 
 @pytest.mark.asyncio
@@ -295,38 +297,9 @@ async def test_tools_missing_registry():
     assert "no registered tools" in buf.getvalue()
 
 
-@pytest.mark.asyncio
-async def test_sessions_table():
-    class _SM:
-        def get_all_sessions(self):
-            return [
-                {"id": "sess-1", "status": "created", "created_at": "2026-06-11T10:00:00",
-                 "agents": [{"model": "gemini-2.5-flash"}]},
-                {"id": "sess-2", "status": "completed", "created_at": "2026-06-11T11:00:00"},
-            ]
-
-    task_agent = type("TA", (), {})()
-    task_agent.session_manager = _SM()
+def test_sessions_is_the_old_name_of_chats():
     reg = default_registry()
-    ctx, buf = _plain_ctx(task_agent=task_agent)
-    await reg.dispatch("/sessions", ctx)
-    out = buf.getvalue()
-    assert "sess-1" in out and "sess-2" in out
-    assert "gemini-2.5-flash" in out
-
-
-@pytest.mark.asyncio
-async def test_sessions_empty():
-    class _SM:
-        def get_all_sessions(self):
-            return []
-
-    task_agent = type("TA", (), {})()
-    task_agent.session_manager = _SM()
-    reg = default_registry()
-    ctx, buf = _plain_ctx(task_agent=task_agent)
-    await reg.dispatch("/sessions", ctx)
-    assert "no sessions yet" in buf.getvalue()
+    assert reg.lookup("sessions") is reg.lookup("chats")
 
 
 @pytest.mark.asyncio
@@ -1007,7 +980,7 @@ def test_goals_not_initialized_uses_candy_grammar(monkeypatch, tmp_path):
     ctx, buf = _plain_ctx(user_id="u1")
     _h_goals(ctx)
     out = buf.getvalue()
-    assert "no goals yet" in out
+    assert "No goals yet" in out
     # 2026-09-21 revalidation: the remedy used to name `/goal create`, which is
     # not a subcommand `/goal` has (it STEERS: show|ready|pause|resume|retry|
     # cancel), so the owner was sent to a usage line instead of a board.
@@ -1026,7 +999,7 @@ def test_goals_empty_board_uses_candy_grammar(monkeypatch, tmp_path):
     ctx, buf = _plain_ctx(user_id="u1")
     _h_goals(ctx)
     out = buf.getvalue()
-    assert "no goals yet" in out
+    assert "No goals yet" in out
     assert "/goal create" not in out and "/goal new" in out
     assert "--- goals ---" in out
 
@@ -1056,7 +1029,7 @@ def test_pending_empty_uses_candy_grammar(tmp_path):
     )
     _h_pending(ctx)
     out = buf.getvalue()
-    assert "no pending proposals yet" in out
+    assert "No pending approvals." in out
     assert "--- pending ---" in out
 
 

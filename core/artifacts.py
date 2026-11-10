@@ -290,6 +290,16 @@ class ArtifactLedger:
         ) or []
         return [Artifact.from_row(r) for r in rows]
 
+    def list_recent(self, user_id: str, limit: int = 200) -> List[Artifact]:
+        """The tenant's newest files across every chat and goal (113 W0: Work › Apps
+        names no chat, and with only the per-session read it could show nothing)."""
+        rows = execute_retry(
+            self.db_path,
+            "SELECT * FROM artifacts WHERE user_id=? ORDER BY created_at DESC LIMIT ?",
+            (user_id, max(1, int(limit))), fetch="all",
+        ) or []
+        return [Artifact.from_row(r) for r in rows]
+
     # --- the verdict -----------------------------------------------------
 
     def verify(self, artifact_id: str, user_id: str) -> str:

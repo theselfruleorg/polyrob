@@ -4,7 +4,6 @@ you don't need in your own context. Write each goal/task as a complete,
 self-contained brief — the sub-agent starts with ONLY what you write, runs to
 completion, and returns a summary.
 
-Do the work directly instead when it is a few quick steps (file ops, a single
-search), when steps depend on each other, or when you need the raw intermediate
-state: a sub-agent run takes minutes and real tokens, and its summary can lose
-detail you would keep by doing it yourself.
+Do the work directly instead when it is a few quick steps that decide no money,
+when steps depend on each other, or when you need the raw intermediate state: a
+sub-agent run takes minutes and real tokens, and its summary can lose detail.

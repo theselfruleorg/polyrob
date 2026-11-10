@@ -32,7 +32,6 @@ def _resp_seq(*ids):
 
 def _tool(monkeypatch):
     monkeypatch.setenv("TWITTER_ENABLED", "true")
-    monkeypatch.setenv("TWITTER_REQUIRE_APPROVAL", "false")
     t = object.__new__(TwitterTool)
     t.logger = logging.getLogger("tw-test")
     t.name = "twitter"

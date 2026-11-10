@@ -2,8 +2,8 @@
 
 import logging
 import asyncio
-import os
-from typing import Dict, Any, Optional, List, Tuple, Set, Union
+import math
+from typing import Dict, Any, FrozenSet, Optional, List, Tuple, Set, Union
 
 # Native BaseChatModel
 from modules.llm.adapters import BaseChatModel
@@ -11,10 +11,14 @@ from modules.llm.adapters import BaseChatModel
 from core.base_component import BaseComponent
 from core.config import BotConfig
 from core.container import DependencyContainer
-from core.exceptions import LLMError, ServiceError
+from core.exceptions import LLMConfigError, LLMError, ServiceError
 
 from modules.llm.llm_client import LLMClient
-from modules.llm.init_gate import ProviderInitGate, recent_call_error
+from modules.llm.init_gate import (
+    ProviderInitGate,
+    provider_of_client_name as _provider_of,
+    recent_call_error,
+)
 from modules.llm.manager_inventory import InventoryMixin
 
 # NOTE: provider client classes (AnthropicClient/OpenAIClient/GeminiClient/…) are
@@ -30,8 +34,11 @@ from modules.llm.llm_client_registry import (
     create_llm_client
 )
 
-# FIXED: Import model registry for intelligent token limits and configuration
-from modules.llm.model_registry import get_model_config
+from core.price_guard import GUARD_RATIO, guard_reason
+
+from modules.llm.catalog_lookup import catalog_wire_id
+from modules.llm.model_registry import get_model_config, get_model_config_exact
+from modules.llm.model_types import model_family
 
 
 def _redact_llm_config(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -51,15 +58,47 @@ def _redact_llm_config(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return redacted
 
 
-def _provider_of(client_name: str) -> str:
-    """Provider name behind a registered client name.
+def _model_ids(model: Optional[str]) -> FrozenSet[str]:
+    """Every name of one model with the route's vendor slug removed, so a provider's
+    own id and the OpenRouter slug of the same model share a name."""
+    config = get_model_config_exact(model) if model else None
+    names = [model, *(([config.name, *config.aliases]) if config else [])]
+    return frozenset(n.rsplit("/", 1)[-1] for n in names if n)
 
-    ``_ensure_fallback_client`` registers 'openai_fallback_client', so stripping
-    only the '_client' suffix yields the bogus provider 'openai_fallback' — no
-    llm_config entry, no isolated client, silently skipped. This is the one
-    derivation; ``get_available_models`` uses the same two-step strip.
-    """
-    return (client_name or '').replace('_client', '').replace('_fallback', '')
+
+def _known_price(provider: Optional[str], model: Optional[str]) -> Optional[Tuple[float, float]]:
+    """``(input, output)`` USD per million tokens, or None when the price is unknown:
+    no exact row, or a variable (negative) price. A flat-rate seat costs nothing per token."""
+    from modules.llm.provider_spec import is_flat_rate
+    if provider and is_flat_rate(provider):
+        return (0.0, 0.0)
+    pricing = getattr(get_model_config_exact(model) if model else None, "pricing", None)
+    try:
+        rates = (float(pricing.input_price), float(pricing.output_price))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return rates if all(math.isfinite(r) and r >= 0 for r in rates) else None
+
+
+def _price_refusal(provider: str, model: str, original_model: Optional[str]) -> str:
+    """Why a fallback rung may not silently replace *original_model*: the rule of the
+    ``/model`` price guard, and the rung's own unknown price refuses (``""`` = allowed).
+    With no known current price, the guard reads the rung's own price only, so a model
+    with no catalog row can still fail over."""
+    if not original_model:
+        return ""
+    new = _known_price(provider, model)
+    if new is None:
+        return "its price is unknown"
+    return guard_reason(_known_price(None, original_model), new)
+
+
+def _money_refusal(model: str, original_model: Optional[str]) -> str:
+    """A money run stays on its own model (another route) or on ``HEAVY_MODEL``."""
+    from core.runtime_config import heavy_model_pin
+    if _model_ids(model) & (_model_ids(original_model) | _model_ids(heavy_model_pin())):
+        return ""
+    return "a money run stays on a money-class model"
 
 
 class LLMManager(InventoryMixin, BaseComponent):
@@ -98,25 +137,22 @@ class LLMManager(InventoryMixin, BaseComponent):
         super().__init__(name=name, config=config, container=container)
         self.clients: Dict[str, LLMClient] = {}  # Mapping of client_name to client instance
         self.primary_client_name: Optional[str] = None  # Name of the primary client
-        self.fallback_client_name: Optional[str] = None  # Name of the fallback client
         self.llm_config = config.get_llm_config()
-        self._client_initializing_lock = asyncio.Lock()
-        self._fallback_enabled = True  # Always enable fallback
-        # 098 MO-13: per-provider init state with backoff (never a permanent latch).
+        # Per-provider init state with backoff (never a permanent latch),
+        # and the per-provider health that real calls stamp through ``note_call_error``.
         self._init_gate = ProviderInitGate()
         
-        # Fallback hierarchy — derived from the ProviderSpec registry (024 seam 10).
+        # Fallback hierarchy — derived from the ProviderSpec registry.
         self.FALLBACK_HIERARCHY = self._build_fallback_hierarchy()
 
     @staticmethod
     def _build_fallback_hierarchy():
         """(client_name, model) fallback pairs.
 
-        Derived: fallback-eligible specs ordered by their ``fallback_rank``
-        (mirrors the legacy openai→anthropic→openrouter→gemini order exactly —
-        pinned by the characterization suite), models from the DEFAULT_MODELS
-        policy table (or the spec's own default for a providers.yaml row that
-        opted into ``fallback_eligible: true``, appended after the built-ins).
+        Derived: fallback-eligible specs ordered by their ``fallback_rank``, models
+        from the DEFAULT_MODELS policy table (or the spec's own default for a
+        providers.yaml row that opted into ``fallback_eligible: true``, appended after
+        the built-ins).
         """
         from modules.llm.provider_spec import BUILTIN_SPECS, get_specs
         try:
@@ -139,7 +175,7 @@ class LLMManager(InventoryMixin, BaseComponent):
     def _configure_client_token_limits(self, client: LLMClient, model_name: str) -> None:
         """Configure client with appropriate token limits from model registry.
         
-        REFACTORED (Dec 2025): Delegates to client._configure_from_model_registry()
+        Delegates to client._configure_from_model_registry()
         to avoid duplicating the configuration logic. Only handles extra 
         manager-specific settings like underlying LLM and temperature defaults.
         
@@ -156,15 +192,10 @@ class LLMManager(InventoryMixin, BaseComponent):
             if hasattr(client, '_configure_from_model_registry'):
                 client._configure_from_model_registry()
             
-            # Get model config for additional manager-specific settings
-            model_config = get_model_config(model_name)
-            
-            if model_config:
-                # Also set on underlying LLM if it exists (manager-specific)
-                if hasattr(client, 'llm') and hasattr(client.llm, 'max_tokens'):
-                    client.llm.max_tokens = model_config.max_completion_tokens
-                    self.logger.debug(f"Set underlying LLM max_tokens to {model_config.max_completion_tokens}")
-                    
+            # Also set on underlying LLM if it exists (manager-specific)
+            if hasattr(client, 'llm') and hasattr(client.llm, 'max_tokens'):
+                client.llm.max_tokens = get_model_config(model_name).max_completion_tokens
+
             # Set default temperature if not already configured
             if hasattr(client, 'temperature') and not hasattr(client, '_temperature_set'):
                 client.temperature = 0.7
@@ -189,9 +220,6 @@ class LLMManager(InventoryMixin, BaseComponent):
             # and this fires on every container build, incl. on the CLI's stdout).
             self.logger.info(f"LLM config (providers): {_redact_llm_config(self.llm_config)}")
             
-            # Always ensure OpenAI client for fallback
-            await self._ensure_fallback_client()
-            
             for client_name in clients_to_try:
                 config_data = self.llm_config.get(client_name, {})
                 self.logger.debug(f"Checking {client_name} config: {bool(config_data)}")
@@ -214,6 +242,7 @@ class LLMManager(InventoryMixin, BaseComponent):
                             if existing_client and getattr(existing_client, '_initialized', False):
                                 # Configure the existing client with proper token limits
                                 self._configure_client_token_limits(existing_client, model_type)
+                                existing_client._health_gate = self._init_gate
                                 
                                 # Use existing client
                                 self.clients[service_name] = existing_client
@@ -228,7 +257,8 @@ class LLMManager(InventoryMixin, BaseComponent):
                             container=self.container,
                             model_type=model_type
                         )
-                        
+                        client._health_gate = self._init_gate
+
                         # Configure client with intelligent token limits from registry
                         self._configure_client_token_limits(client, model_type)
                         
@@ -257,14 +287,10 @@ class LLMManager(InventoryMixin, BaseComponent):
 
             # Set primary client based on config preference or first available
             await self._set_primary_client()
-            
-            # Set fallback client
-            await self._set_fallback_client()
-            
+
             # Log summary
             self.logger.info(f"LLM Manager initialized with {len(self.clients)} clients")
             self.logger.info(f"Primary client: {self.primary_client_name}")
-            self.logger.info(f"Fallback client: {self.fallback_client_name}")
             
             if initialization_results:
                 self.logger.info("Client initialization summary:")
@@ -278,47 +304,15 @@ class LLMManager(InventoryMixin, BaseComponent):
                 # Reuse the single canonical no-key message (defined in the neutral
                 # profiles module — modules/ never imports cli/).
                 from modules.llm.profiles import no_key_message
-                raise LLMError(no_key_message())
+                raise LLMConfigError(no_key_message())
                 
             self._initialized = True
 
+        except LLMError:
+            raise
         except Exception as e:
             self.logger.error(f"Failed to initialize LLM manager: {e}")
-            raise LLMError(f"LLM manager initialization failed: {e}")
-
-    async def _ensure_fallback_client(self) -> None:
-        """Ensure an OpenAI fallback client (gpt-5) is available."""
-        try:
-            openai_config = self.llm_config.get('openai', {})
-            
-            # Check if OpenAI API key is available
-            api_key = (
-                openai_config.get('api_key') or 
-                os.environ.get('OPENAI_API_KEY')
-            )
-            
-            if not api_key:
-                self.logger.debug("No OpenAI API key found - fallback client unavailable")
-                return
-            
-            # Create fallback OpenAI client
-            from modules.llm.openai_client import OpenAIClient
-            fallback_client = OpenAIClient(self.config, name="openai_fallback_client")
-            fallback_client.api_key = api_key  # model: OpenAIClient → get_default_model('openai')
-            self._configure_client_token_limits(fallback_client, fallback_client.model_type)
-            
-            # Initialize the fallback client
-            await fallback_client.initialize()
-            
-            # Register fallback client
-            self.clients['openai_fallback_client'] = fallback_client
-            if self.container:
-                self.container.register_service('openai_fallback_client', fallback_client, is_optional=True)
-            
-            self.logger.info("✅ OpenAI fallback client initialized (gpt-5)")
-            
-        except Exception as e:
-            self.logger.error(f"Failed to initialize fallback client: {e}")
+            raise LLMConfigError(f"LLM manager initialization failed: {e}") from e
 
     async def _set_primary_client(self) -> None:
         """Set the primary client based on configuration or availability."""
@@ -359,25 +353,6 @@ class LLMManager(InventoryMixin, BaseComponent):
             self.primary_client_name = list(self.clients.keys())[0]
             self.logger.info(f"Using first available client as primary: {self.primary_client_name}")
 
-    async def _set_fallback_client(self) -> None:
-        """Set the fallback client."""
-        # Always prefer the dedicated fallback client
-        if 'openai_fallback_client' in self.clients:
-            self.fallback_client_name = 'openai_fallback_client'
-            return
-            
-        # Try the fallback hierarchy
-        for client_name, _ in self.FALLBACK_HIERARCHY:
-            if client_name in self.clients and client_name != self.primary_client_name:
-                self.fallback_client_name = client_name
-                return
-        
-        # Use any client except primary
-        for client_name in self.clients:
-            if client_name != self.primary_client_name:
-                self.fallback_client_name = client_name
-                return
-
     async def get_client(self, client_name: Optional[str] = None) -> Optional[LLMClient]:
         """Get LLM client by name or return primary client.
         
@@ -411,7 +386,7 @@ class LLMManager(InventoryMixin, BaseComponent):
                 except Exception as e:
                     self.logger.warning(f"Failed to initialize requested client {client_name}: {e}")
             
-            # CRITICAL FIX: Do NOT silently fallback to a different client!
+            # CRITICAL: Do NOT silently fallback to a different client!
             # If caller asked for a specific client and it's not available, return None.
             # This prevents confusing behavior where anthropic is requested but openai is used.
             self.logger.warning(f"Requested client '{client_name}' is not available")
@@ -429,49 +404,6 @@ class LLMManager(InventoryMixin, BaseComponent):
         
         return None
 
-    async def get_client_with_fallback(self, preferred_client: Optional[str] = None) -> Optional[LLMClient]:
-        """Get LLM client with automatic fallback on failure.
-        
-        Args:
-            preferred_client: Preferred client name
-            
-        Returns:
-            LLM client instance or None if all clients fail
-        """
-        if not self._fallback_enabled:
-            return await self.get_client(preferred_client)
-        
-        # Try preferred client first
-        if preferred_client:
-            client = await self.get_client(preferred_client)
-            if client and await self._test_client_health(client):
-                return client
-            self.logger.warning(f"Preferred client {preferred_client} unavailable or unhealthy")
-        
-        # Try primary client
-        if self.primary_client_name:
-            client = await self.get_client(self.primary_client_name)
-            if client and await self._test_client_health(client):
-                return client
-            self.logger.warning(f"Primary client {self.primary_client_name} unavailable or unhealthy")
-        
-        # Try fallback hierarchy
-        for client_name, model in self.FALLBACK_HIERARCHY:
-            if client_name in self.clients:
-                client = self.clients[client_name]
-                if await self._test_client_health(client):
-                    self.logger.info(f"Using fallback client: {client_name} with model {model}")
-                    return client
-        
-        # Last resort - try any available client
-        for client_name, client in self.clients.items():
-            if await self._test_client_health(client):
-                self.logger.warning(f"Using last resort client: {client_name}")
-                return client
-        
-        self.logger.error("All LLM clients are unavailable or unhealthy")
-        return None
-
     async def _test_client_health(self, client: LLMClient) -> bool:
         """Test if a client is healthy and responsive.
         
@@ -484,7 +416,7 @@ class LLMManager(InventoryMixin, BaseComponent):
         try:
             if not getattr(client, '_initialized', False):
                 return False
-            if recent_call_error(client):  # 098 MO-13: a real call just failed
+            if recent_call_error(client):  # a real call just failed
                 return False
             
             # Basic test - try to validate config
@@ -499,7 +431,7 @@ class LLMManager(InventoryMixin, BaseComponent):
 
     async def _try_initialize_client(self, provider: str) -> Optional[LLMClient]:
         """Initialize a provider's client on demand (None if not possible now).
-        098 MO-13: one attempt at a time per provider, a failure retries after
+        One attempt at a time per provider, a failure retries after
         a backoff; a key set after start-up is read on the next attempt."""
         return await self._init_gate.acquire(
             provider, lambda: self.clients.get(f"{provider}_client"),
@@ -525,8 +457,9 @@ class LLMManager(InventoryMixin, BaseComponent):
                 container=self.container,
                 model_type=model_type
             )
-            
-            # FIXED: Configure client with intelligent token limits from registry
+            client._health_gate = self._init_gate
+
+            # Configure client with intelligent token limits from registry
             self._configure_client_token_limits(client, model_type)
             
             await client.initialize()
@@ -549,10 +482,11 @@ class LLMManager(InventoryMixin, BaseComponent):
         """Build a FRESH, non-cached client for an isolated model (e.g. compaction aux).
 
         Mirrors :meth:`_try_initialize_client` but deliberately does NOT register the
-        client in ``self.clients`` / the container. Adapters mutate the wrapped client's
-        ``model_type``; using an isolated instance means a same-provider aux model can't
-        clobber the shared per-provider client the main agent uses. Returns None when the
-        provider has no API key (caller falls back to the main model).
+        client in ``self.clients`` / the container, and makes no validation call. Adapters
+        mutate the wrapped client's ``model_type``; using an isolated instance means a
+        same-provider aux model can't clobber the shared per-provider client the main agent
+        uses. The session that asked for it closes it. Returns None when the provider has
+        no API key (caller falls back to the main model).
         """
         if not self._initialized:
             await self.initialize()
@@ -568,7 +502,9 @@ class LLMManager(InventoryMixin, BaseComponent):
                 config=self.config,
                 container=self.container,
                 model_type=model,
+                isolated=True,
             )
+            client._health_gate = self._init_gate
             self._configure_client_token_limits(client, model)
             await client.initialize()
             self.logger.info(f"Isolated aux client built (not cached): {provider}/{model}")
@@ -590,7 +526,6 @@ class LLMManager(InventoryMixin, BaseComponent):
             
             self.clients.clear()
             self.primary_client_name = None
-            self.fallback_client_name = None
             self._init_gate.reset()
             self.logger.info("LLM Manager cleaned up successfully")
             
@@ -610,7 +545,7 @@ class LLMManager(InventoryMixin, BaseComponent):
         based on the provider and model type.
 
         Args:
-            provider: Provider name (openai, anthropic, llama, deepseek, gemini)
+            provider: Provider name (a ``ProviderSpec`` name)
             model: Model name
             temperature: Temperature for generation
             **kwargs: Additional parameters to pass to the model
@@ -642,7 +577,10 @@ class LLMManager(InventoryMixin, BaseComponent):
             # place — that mutation bleeds across concurrent sessions using the same
             # provider with different models. Refuse when isolation fails:
             # the shared client can belong to another tenant's active request.
-            if llm_client is not None and getattr(llm_client, "model_type", model) != model:
+            wire_ids = getattr(llm_client, "WIRE_ID_PROVIDER", None)
+            if llm_client is not None and (
+                    catalog_wire_id(getattr(llm_client, "model_type", model), wire_ids)
+                    != catalog_wire_id(model, wire_ids)):
                 try:
                     isolated = await self._create_isolated_client(provider, model)
                     if isolated is None:
@@ -652,7 +590,7 @@ class LLMManager(InventoryMixin, BaseComponent):
                     raise ValueError("Could not isolate the requested model; shared client unchanged") from e
 
         if not llm_client:
-            # FIXED: Don't fall back to different provider - fail with clear error
+            # Don't fall back to a different provider - fail with clear error
             # Silently changing providers is confusing and unexpected
             self.logger.error(f"No client found for provider {provider}")
 
@@ -664,7 +602,7 @@ class LLMManager(InventoryMixin, BaseComponent):
         # CRITICAL: Verify we got the RIGHT client type, not a fallback
         # get_client() can return a fallback client if the requested one isn't available
         # This causes confusing errors where GeminiAdapter gets an OpenAIClient
-        # 024 fix: a spec-backed generic client (OpenAICompatClient /
+        # A spec-backed generic client (OpenAICompatClient /
         # AnthropicCompatClient) carries its provider on `_spec.name` — the
         # class-name substring test below can NEVER match it ("ollama" is not in
         # "openaicompatclient"), so check the spec identity first.
@@ -681,25 +619,15 @@ class LLMManager(InventoryMixin, BaseComponent):
                 f"Check your API keys and initialization logs for '{provider}' provider."
             )
 
-        # 102 C-11a: a missing SDK polls time.sleep up to 120 s; the factory call is then a no-op.
-        if provider in ("anthropic", "gemini"):
-            from core.lazy_deps import ensure_provider
+        # A missing SDK polls time.sleep up to 120 s; the factory call is then a no-op.
+        from core.lazy_deps import LAZY_FEATURES, ensure_provider
+        if f"provider.{provider}" in LAZY_FEATURES:
             await asyncio.to_thread(ensure_provider, f"provider.{provider}")
 
         # Import here to avoid circular imports
         from modules.llm.llm_factory import create_chat_model
 
-        # FIXED: Get intelligent max_tokens from model registry
-        max_tokens = kwargs.pop('max_tokens', None)
-        if max_tokens is None:
-            model_config = get_model_config(model)
-            if model_config and model_config.max_completion_tokens:
-                max_tokens = model_config.max_completion_tokens
-                kwargs['max_tokens'] = max_tokens
-                self.logger.debug(f"Using max_tokens={max_tokens} from model registry for {model}")
-
-        # Create and return the appropriate chat model
-        # Provider is preserved - no silent fallback to OpenAI
+        # The factory resolves the per-request max_tokens. Provider is preserved: no silent fallback.
         return create_chat_model(
             provider=provider,
             model=model,
@@ -708,154 +636,153 @@ class LLMManager(InventoryMixin, BaseComponent):
             **kwargs
         )
 
+    def provider_ready(self, provider: str) -> bool:
+        """False while *provider* is credit-dead or a real call just failed on it."""
+        return not (self._credit_dead(provider) or self._init_gate.recent_call_error(provider))
+
+    @staticmethod
+    def _credit_dead(provider: str) -> bool:
+        """The credit sentinel has latched *provider*. A keyed but unfunded provider
+        passes the health check, and only its real call gets the 402. Fail-open: a
+        sentinel probe error never blocks a candidate."""
+        try:
+            from core.credit_sentinel import credit_sentinel_active
+            return bool(credit_sentinel_active(provider))
+        except Exception:
+            return False
+
+    def _provider_rungs(self) -> List[Tuple[str, str]]:
+        """``(client_name, model)`` of each provider: the primary first (it may be a seat
+        outside the hierarchy), and the pinned provider serves the operator's model."""
+        from core.runtime_config import operator_model_for
+        rungs = [(name, operator_model_for(_provider_of(name)) or model)
+                 for name, model in self.FALLBACK_HIERARCHY]
+        primary = self.primary_client_name
+        if primary:
+            primary_model = (getattr(self.clients.get(primary), 'model_type', None)
+                             or get_default_model(_provider_of(primary)))
+            rungs = [(primary, primary_model)] + [r for r in rungs if r[0] != primary]
+        return rungs
+
+    @staticmethod
+    def _family_model(provider: str, default: str, original_model: str,
+                      family: str) -> Optional[str]:
+        """The model of *family* on *provider* nearest to the failed model, or None: the
+        same model on this route first, else the nearest input price inside the guard's
+        ratio, so a rung keeps the tier. A far cheaper row of the family is not this model."""
+        ids = _model_ids(original_model)
+        price = _known_price(None, original_model)
+
+        def gap(model: str) -> float:
+            other = _known_price(None, model)
+            return (abs(math.log(other[0] / price[0]))
+                    if other and price and other[0] > 0 and price[0] > 0 else math.inf)
+
+        rows = [(not _model_ids(m) & ids, gap(m), m)
+                for m in dict.fromkeys([default, *AVAILABLE_MODELS.get(provider, [])])
+                if model_family(m) == family]
+        fitting = [r for r in rows if not r[0] or r[1] <= math.log(GUARD_RATIO)]
+        return min(fitting, key=lambda r: r[:2])[2] if fitting else None
+
+    def _fallback_ladder(self, original_model: Optional[str]) -> List[Tuple[str, str]]:
+        """The ONE ladder: the failed model's family on each provider, then each
+        provider's own model. Same-model retries with backoff live in the agent."""
+        rungs = self._provider_rungs()
+        family = model_family(original_model)
+        if not family:
+            return rungs
+        same_family = []
+        for name, default in rungs:
+            model = self._family_model(_provider_of(name), default, original_model, family)
+            if model:
+                same_family.append((name, model))
+        return same_family + [r for r in rungs if r not in same_family]
+
+    def _rung_refusal(self, provider: str, client_name: str, model: str, excluded: Set[str],
+                      original_model: Optional[str], money_run: bool) -> str:
+        """Why this rung may not serve (``""`` = it may)."""
+        from core.runtime_config import fallback_provider_allowlist
+        if provider in excluded or client_name in excluded:
+            return "excluded"
+        allowed = fallback_provider_allowlist()
+        if allowed is not None and provider not in allowed:
+            return "not in LLM_FALLBACK_PROVIDERS"
+        if self._credit_dead(provider):
+            return "credit-dead"
+        if money_run and original_model:
+            refusal = _money_refusal(model, original_model)
+            if refusal:
+                return refusal
+        return _price_refusal(provider, model, original_model)
+
     async def get_fallback_chat_model(
         self,
         exclude_providers: Optional[List[str]] = None,
         original_model: Optional[str] = None,
         temperature: float = 0.0,
+        money_run: bool = False,
         **kwargs
     ) -> Optional[BaseChatModel]:
-        """Get a fallback chat model after primary provider failure.
-        
-        This method is used by the task agent when the primary LLM provider fails
-        (rate limit, authentication error, etc.) to automatically switch to the
-        next available provider in the fallback hierarchy.
-        
+        """The first rung of the fallback ladder that may serve, on an isolated client.
+
         Args:
-            exclude_providers: List of providers to skip (e.g., ones that already failed)
-            original_model: Original model name for logging context
-            temperature: Temperature for generation (default 0.0)
+            exclude_providers: Providers to skip (the failed ones). Not changed.
+            original_model: The failed model. Its family orders the ladder and its price
+                guards each rung. None asks for any model, with no price rule.
+            temperature: Temperature for generation
+            money_run: The run is money-class, so it stays on a money-class model.
             **kwargs: Additional parameters to pass to the chat model
-            
+
         Returns:
-            Chat model from the next available provider, or None if all failed
-            
-        Example:
-            ```python
-            # In task agent after catching LLMRateLimitError
-            fallback_llm = await llm_manager.get_fallback_chat_model(
-                exclude_providers=['openai'],
-                original_model='gpt-5'
-            )
-            if fallback_llm:
-                response = await fallback_llm.ainvoke(messages)
-            ```
+            A chat model the caller owns and closes, or None: the caller then waits and
+            retries its own model.
         """
         from modules.llm.llm_factory import create_chat_model
-        
+
         if not self._initialized:
             await self.initialize()
-        
-        exclude_providers = exclude_providers or []
-        
+
+        excluded = set(exclude_providers or ())
         self.logger.info(
-            f"🔄 Searching for fallback provider (excluding: {exclude_providers}, "
+            f"Searching the fallback ladder (excluding: {sorted(excluded)}, "
             f"original: {original_model or 'unknown'})"
         )
-        
-        # Operator-pinned primary first: the deployment's actual serving client
-        # (e.g. a funded subscription seat with fallback_eligible=False, absent
-        # from FALLBACK_HIERARCHY) beats the generic hierarchy. Exclusions still
-        # apply below, so the provider that just failed is never retried here.
-        candidates = list(self.FALLBACK_HIERARCHY)
-        primary = self.primary_client_name
-        if primary:
-            primary_model = getattr(self.clients.get(primary), 'model_type', None)
-            if not primary_model:
-                try:
-                    from modules.llm.llm_client_registry import get_default_model
-                    primary_model = get_default_model(_provider_of(primary))
-                except Exception:
-                    primary_model = None
-            if primary_model:
-                candidates = [(primary, primary_model)] + [
-                    c for c in candidates if c[0] != primary
-                ]
 
-        # Try the primary, then each provider in the fallback hierarchy
-        for client_name, fallback_model in candidates:
+        for client_name, fallback_model in self._fallback_ladder(original_model):
             provider = _provider_of(client_name)
-
-            # Skip excluded providers
-            if provider in exclude_providers or client_name in exclude_providers:
-                self.logger.debug(f"Skipping excluded provider: {provider}")
+            refusal = self._rung_refusal(
+                provider, client_name, fallback_model, excluded, original_model, money_run)
+            if refusal:
+                self.logger.info(f"Fallback rung {provider}/{fallback_model} refused: {refusal}")
                 continue
 
-            # Skip a provider the credit sentinel has latched as credit-dead. A
-            # keyed-but-unfunded provider (e.g. OpenRouter at $0) passes the
-            # health check below — its /models endpoint answers 200 with zero
-            # credits — and is then tried for the real call, which 402s. Prod
-            # 2026-08-24..28: this fallback rung was the remaining source of
-            # OpenRouter 402s once the cron/goal paths already preferred the
-            # funded seat. Fail-open: a sentinel probe error never blocks a
-            # candidate (returns False).
-            try:
-                from core.credit_sentinel import credit_sentinel_active
-                if credit_sentinel_active(provider):
-                    self.logger.debug(
-                        f"Skipping credit-dead provider (sentinel active): {provider}")
-                    continue
-            except Exception:
-                pass
-            
-            # Check if client is available
-            if client_name not in self.clients:
-                self.logger.debug(f"Provider {provider} not initialized, trying to initialize...")
-                # Try to initialize on-demand
-                client = await self._try_initialize_client(provider)
-                if not client:
-                    self.logger.debug(f"Could not initialize {provider}, skipping")
-                    continue
-            else:
-                client = self.clients[client_name]
-            
-            # Test client health
+            client = self.clients.get(client_name) or await self._try_initialize_client(provider)
+            if not client:
+                self.logger.debug(f"Could not initialize {provider}, skipping")
+                continue
             if not await self._test_client_health(client):
                 self.logger.debug(f"Provider {provider} health check failed, skipping")
                 continue
-            
-            # Found a healthy provider - create chat model
-            self.logger.info(
-                f"✅ Found fallback provider: {provider} with model {fallback_model} "
-                f"(original was: {original_model or 'unknown'})"
-            )
-            
-            try:
-                # Get intelligent max_tokens from model registry
-                max_tokens = kwargs.pop('max_tokens', None)
-                if max_tokens is None:
-                    fallback_config = get_model_config(fallback_model)
-                    if fallback_config and fallback_config.max_completion_tokens:
-                        max_tokens = fallback_config.max_completion_tokens
-                        kwargs['max_tokens'] = max_tokens
 
-                # Build on an ISOLATED client so a same-provider failover can't clobber
-                # the main agent's live client. Adapters mutate model_type in place; the
-                # shared cached `client` above is fine for the health check, but the model
-                # itself must run on a fresh, non-cached client.
+            iso_client = None
+            try:
+                # An ISOLATED client: adapters mutate model_type in place, and the shared
+                # client above belongs to every session on this provider.
                 iso_client = await self._create_isolated_client(provider, fallback_model)
                 if iso_client is None:
-                    self.logger.debug(
-                        f"Could not build isolated {provider} client for {fallback_model}, skipping"
-                    )
+                    self.logger.debug(f"Could not build isolated {provider} client for {fallback_model}, skipping")
                     continue
-
-                return create_chat_model(
-                    provider=provider,
-                    model=fallback_model,
-                    temperature=temperature,
-                    llm_client=iso_client,
-                    **kwargs
-                )
+                chat_model = create_chat_model(provider=provider, model=fallback_model,
+                                               temperature=temperature, llm_client=iso_client, **kwargs)
             except Exception as e:
                 self.logger.warning(f"Failed to create chat model for {provider}: {e}")
-                # Add this provider to exclusions and continue
-                exclude_providers.append(provider)
+                excluded.add(provider)
+                close = getattr(iso_client, "cleanup", None)  # built for this rung only
+                if callable(close):
+                    await asyncio.gather(close(), return_exceptions=True)
                 continue
-        
-        # No fallback available
-        self.logger.error(
-            f"❌ No fallback providers available. Tried hierarchy, all failed or excluded. "
-            f"Excluded: {exclude_providers}"
-        )
+            self.logger.info(f"Fallback rung: {provider}/{fallback_model} (original was: {original_model or 'unknown'})")
+            return chat_model
+
+        self.logger.warning(f"No fallback rung may serve. Excluded: {sorted(excluded)}")
         return None

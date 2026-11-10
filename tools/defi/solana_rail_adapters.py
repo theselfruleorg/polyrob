@@ -45,12 +45,13 @@ class SolanaRailMixin:
         from tools.defi.trade_tool import _WSOL_MINT  # call-time
         if mint == _WSOL_MINT:
             try:
-                sol = solana_onchain.native_balance(owner)
+                lamports = solana_onchain.native_balance_raw(owner)
             except Exception:
-                sol = None
-            if sol is None:
+                lamports = None
+            if lamports is None:
                 return None
-            return int(sol * 1_000_000_000) + int((balances or {}).get(mint, 0))
+            # The raw integer, never ``int(sol * 1e9)``: a float loses lamports.
+            return int(lamports) + int((balances or {}).get(mint, 0))
         if balances is None:
             return None
         return int(balances.get(mint, 0))

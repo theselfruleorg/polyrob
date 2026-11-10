@@ -1,5 +1,5 @@
 r"""
-Model Registry for LLM Service - UPDATED DECEMBER 2025
+Model Registry for LLM Service
 
 This module centralizes all model configurations for currently available models.
 Single source of truth for model information based on official docs.
@@ -10,7 +10,7 @@ Sources:
 - Google: https://ai.google.dev/gemini-api/docs/models
 - DeepSeek: https://api-docs.deepseek.com/
 
-Layout since S4 (2026-08-29):
+Layout:
   * ``model_types``   — ``ModelProvider``, ``ModelPricing``, ``ModelCapabilities``,
                         ``ModelConfig``, cache multipliers, display-name helper
   * ``model_catalog`` — the built-in ``ModelConfig`` rows (data only)
@@ -20,7 +20,6 @@ Layout since S4 (2026-08-29):
 """
 from typing import Dict, Optional, List
 import logging
-import re  # noqa: F401  (namespace parity with the pre-split module)
 
 from modules.llm.model_types import (  # noqa: F401  (re-exported public surface)
     CACHE_READ_PRICE_MULTIPLIER,
@@ -31,10 +30,10 @@ from modules.llm.model_types import (  # noqa: F401  (re-exported public surface
     ModelPricing,
     ModelProvider,
     PROVIDER_CANONICAL_NAMES,
-    STREAMING_PROVIDER_NAMES,
     _DEFAULT_CACHE_READ_MULTIPLIER,
     _DISPLAY_NAME_ACRONYMS,
     _derive_display_name,
+    _family_target,
     canonical_provider_name,
 )
 from modules.llm.model_pricing import calculate_cost  # noqa: F401  (re-exported)
@@ -67,133 +66,20 @@ class ModelRegistry:
 
         logger.debug(f"Registered model: {config.name} with {len(config.aliases)} aliases")
 
-    def get_model(self, name: str) -> Optional[ModelConfig]:
-        """Get model configuration by name or alias with fallback support"""
-        # Check if it's an alias
-        canonical_name = self._aliases.get(name, name)
-
-        # Get model
-        model = self._models.get(canonical_name)
-
-        if not model:
-            # 102 C-3: one token count on an unknown id logged 266 lines.
-            if name not in self._warned_unknown:
-                self._warned_unknown.add(name)
-                logger.warning(f"Model '{name}' not found in registry, attempting fallback")
-
-            # Implement fallback logic based on model patterns
-            model_lower = name.lower()
-
-            # OpenAI models: default to 5.1, fallback chain: 5.1 -> 4.1 -> 4o
-            if any(x in model_lower for x in ['gpt', 'o1', 'o3', 'o4', 'openai']):
-                # Try 5.1 first (latest default)
-                model = self._models.get('gpt-5.1')
-                if model:
-                    logger.info(f"Fallback: '{name}' -> 'gpt-5.1' (default)")
-                else:
-                    # Fallback to 4.1
-                    model = self._models.get('gpt-4.1')
-                    if model:
-                        logger.info(f"Fallback: '{name}' -> 'gpt-4.1' (secondary)")
-                    else:
-                        # Fallback to 4o
-                        model = self._models.get('gpt-4o')
-                        if model:
-                            logger.info(f"Fallback: '{name}' -> 'gpt-4o' (tertiary)")
-            # Claude variants: a TIERED chain like the GLM/DeepSeek families
-            # (F31, 2026-09-22). The old single target was claude-sonnet-4-5 —
-            # a 200K row — so every unknown claude id (a model newer than this
-            # tree, or any id carrying the `[1m]` long-context suffix) silently
-            # lost 800K of window and was sized, budgeted and truncated against
-            # a context it does not have. Match the FAMILY, keep the tier, and
-            # default a bare `claude` to a 1M row.
-            elif 'claude' in model_lower:
-                # `claude-opus-5[1m]` is the 1M variant of an opus id — strip the
-                # suffix before matching so it lands on the opus row, not the default.
-                family = model_lower.split('[')[0]
-                if 'opus' in family:
-                    target = 'claude-opus-5'
-                elif 'sonnet' in family:
-                    target = 'claude-sonnet-4-6'
-                elif 'fable' in family:
-                    target = 'claude-fable-5'
-                elif 'haiku' in family:
-                    # Haiku is a 200K tier — sizing it as 1M would be the same
-                    # error in the other direction.
-                    target = 'claude-haiku-4-5'
-                else:
-                    target = 'claude-sonnet-4-6'
-                model = self._models.get(target)
-                if model:
-                    logger.info(f"Fallback: '{name}' -> '{target}'")
-                else:
-                    model = self._models.get('claude-sonnet-4-5')
-                    if model:
-                        logger.info(f"Fallback: '{name}' -> 'claude-sonnet-4-5' (last resort)")
-            # Gemini variants fallback chain: 2.5-flash (stable) -> 3-pro-preview -> 2.5-pro
-            elif 'gemini' in model_lower:
-                # Check if user wants a specific series
-                if '3' in model_lower or 'pro' in model_lower:
-                    # Try gemini-3-pro-preview first for pro/3 requests
-                    model = self._models.get('gemini-3-pro-preview')
-                    if model:
-                        logger.info(f"Fallback: '{name}' -> 'gemini-3-pro-preview'")
-                if not model and ('flash' in model_lower or '2.5' in model_lower or '2.0' in model_lower):
-                    # Try 2.5-flash for flash/2.x requests
-                    model = self._models.get('gemini-2.5-flash')
-                    if model:
-                        logger.info(f"Fallback: '{name}' -> 'gemini-2.5-flash'")
-                if not model:
-                    # Final gemini fallback: 2.5-flash (most stable, best price-performance)
-                    model = self._models.get('gemini-2.5-flash')
-                if model:
-                        logger.info(f"Fallback: '{name}' -> 'gemini-2.5-flash' (default)")
-            # DeepSeek variants: an OpenRouter slug keeps OpenRouter metadata,
-            # a bare name is DeepSeek's own API.
-            elif 'deepseek' in model_lower:
-                via_or = '/' in model_lower or 'openrouter' in model_lower or 'or-' in model_lower
-                target = 'deepseek/deepseek-chat' if via_or else 'deepseek-flash'
-                model = self._models.get(target)
-                if model:
-                    logger.info(f"Fallback: '{name}' -> '{target}'")
-            # GLM / Z.AI variants fallback to z-ai/glm-5.2 (must precede the
-            # final gpt fallback so an unknown glm id keeps GLM's metadata).
-            elif 'glm' in model_lower or 'z-ai' in model_lower or 'zhipu' in model_lower:
-                model = self._models.get('z-ai/glm-5.2')
-                if model:
-                    logger.info(f"Fallback: '{name}' -> 'z-ai/glm-5.2'")
-            # OpenRouter/Grok variants fallback to x-ai/grok-4.5 (newest live flagship;
-            # grok-4.1-fast is 404'd by OpenRouter so it must not be the fallback target).
-            elif 'grok' in model_lower:
-                model = self._models.get('x-ai/grok-4.5')
-                if model:
-                    logger.info(f"Fallback: '{name}' -> 'x-ai/grok-4.5'")
-            # Kimi variants fallback to moonshotai/kimi-k2-0905
-            elif 'kimi' in model_lower:
-                model = self._models.get('moonshotai/kimi-k2-0905')
-                if model:
-                    logger.info(f"Fallback: '{name}' -> 'moonshotai/kimi-k2-0905'")
-            # Qwen variants fallback to qwen/qwen3-235b-a22b
-            elif 'qwen' in model_lower:
-                model = self._models.get('qwen/qwen3-235b-a22b')
-                if model:
-                    logger.info(f"Fallback: '{name}' -> 'qwen/qwen3-235b-a22b'")
-
-            # Final fallback: gpt-5.1 (default) -> gpt-4.1 -> gpt-4o
-            if not model:
-                model = self._models.get('gpt-5.1')
-                if model:
-                    logger.info(f"Final fallback: '{name}' -> 'gpt-5.1' (default)")
-                else:
-                    model = self._models.get('gpt-4.1')
-                    if model:
-                        logger.info(f"Final fallback: '{name}' -> 'gpt-4.1' (secondary)")
-                    else:
-                        model = self._models.get('gpt-4o')
-                        if model:
-                            logger.info(f"Final fallback: '{name}' -> 'gpt-4o' (last resort)")
-
-        return model
+    def get_model(self, name: str) -> ModelConfig:
+        """The row a capability read uses, never None: the exact row or alias, else
+        the row of the same family, else a conservative default that carries the spec's
+        vision. Billing reads ``get_model_config_exact`` instead."""
+        exact = self._models.get(self._aliases.get(name, name))
+        if exact:
+            return exact
+        # Warn once per unknown id, not once per token count.
+        if name not in self._warned_unknown:
+            self._warned_unknown.add(name)
+            logger.warning(f"Model '{name}' has no catalog row; using its family or a "
+                           f"conservative default")
+        target = _family_target(str(name or "").lower())
+        return self._models.get(target) if target in self._models else _conservative_config(name)
 
     def list_models(self, provider: Optional[ModelProvider] = None,
                    include_deprecated: bool = False) -> List[ModelConfig]:
@@ -215,6 +101,39 @@ class ModelRegistry:
         return [m.name for m in models]
 
 
+#: The limits of a model with no row and no family. Small enough that the context budget
+#: fires early, and a request never asks for more output than the model may give.
+UNKNOWN_MODEL_CONTEXT_WINDOW = 128000
+UNKNOWN_MODEL_MAX_COMPLETION = 8192
+
+
+def _spec_declares_vision(name: str) -> bool:
+    """True when each provider spec that declares *name* says it sees images. A spec
+    that does not declare *name* says nothing, so the answer is the safe one."""
+    from modules.llm.provider_spec import BUILTIN_SPECS, get_specs
+    try:
+        specs = get_specs()
+    except Exception:
+        specs = BUILTIN_SPECS  # a broken providers.yaml must not break a capability read
+    declaring = [s for s in specs if name in s.models or name == s.default_model]
+    return bool(declaring) and all(s.supports_vision for s in declaring)
+
+
+def _conservative_config(name: str) -> ModelConfig:
+    """A row for an id the catalog does not know. It is not registered, so a price read
+    through ``get_model_config_exact`` stays None. Such an id speaks chat completions and
+    ``detect_llm_provider`` keys the tool schema on the provider: a ``vendor/model`` id is an
+    OpenRouter slug, so a build with no provider names OpenRouter, and a bare id names OpenAI."""
+    return ModelConfig(
+        name=str(name or ""),
+        provider=ModelProvider.OPENROUTER if "/" in str(name or "") else ModelProvider.OPENAI,
+        context_window=UNKNOWN_MODEL_CONTEXT_WINDOW,
+        max_completion_tokens=UNKNOWN_MODEL_MAX_COMPLETION,
+        pricing=ModelPricing(input_price=0.0, output_price=0.0),
+        capabilities=ModelCapabilities(supports_vision=_spec_declares_vision(name)),
+    )
+
+
 # Singleton instance
 _registry = None
 
@@ -226,38 +145,13 @@ def get_registry() -> ModelRegistry:
     return _registry
 
 
-# OpenAI temperature/param handling — SSOT for the "which models reject temperature"
-# decision (H1). Prefix-based so new o-series/gpt-5 variants are covered automatically;
-# the old inline substring lists (['o1','o1-mini','o3-mini','o1-preview']) missed the
-# registered o3 and o4-mini models -> temperature=0.0 was sent and OpenAI 400'd them.
-_OPENAI_REASONING_PREFIXES = ("o1", "o3", "o4")
-
-
-def openai_reasoning_model(model: str) -> bool:
-    """True for OpenAI o-series reasoning models (o1/o3/o4 families). These reject
-    ``temperature``, ``parallel_tool_calls`` and ``max_tokens``."""
-    if not model:
-        return False
-    m = model.lower().rsplit("/", 1)[-1]
-    return any(m.startswith(p) for p in _OPENAI_REASONING_PREFIXES)
-
-
-def openai_omits_temperature(model: str) -> bool:
-    """True if the OpenAI model rejects a custom ``temperature`` and it must be omitted:
-    the o-series reasoning models plus the gpt-5 family (default-temperature only)."""
-    if not model:
-        return False
-    m = model.lower().rsplit("/", 1)[-1]
-    return openai_reasoning_model(model) or m.startswith("gpt-5")
-
-
-def get_model_config(model_name: str) -> Optional[ModelConfig]:
-    """Convenience function to get model config"""
+def get_model_config(model_name: str) -> ModelConfig:
+    """The row a capability read uses, never None (``ModelRegistry.get_model``)."""
     return get_registry().get_model(model_name)
 
 
 def thinking_config_enabled() -> bool:
-    """UP-07 gate for SENDING per-model thinking params (Anthropic thinking block,
+    """Gate for SENDING per-model thinking params (Anthropic thinking block,
     DeepSeek / OpenAI reasoning_effort).
 
     Default **OFF** so the hot path is byte-identical today — enabling extended thinking
@@ -271,12 +165,12 @@ def thinking_config_enabled() -> bool:
 
 
 def get_thinking_config(model_name: str) -> Dict[str, object]:
-    """Per-model reasoning config (UP-07). Empty dict => no thinking params (provider/SDK
+    """Per-model reasoning config. Empty dict => no thinking params (provider/SDK
     default, current behavior). Returns {"budget_tokens": int} and/or
     {"reasoning_effort": str} for a thinking-capable model that has them set.
     """
     config = get_model_config(model_name)
-    if not config or not config.capabilities.supports_thinking:
+    if not config.capabilities.supports_thinking:
         return {}
     out: Dict[str, object] = {}
     budget = config.capabilities.thinking_budget_tokens
@@ -317,14 +211,25 @@ def get_all_models(provider: Optional[ModelProvider] = None,
 def get_model_config_exact(model_name: str):
     """Model config by exact name or declared alias — NO family fallback.
 
-    ``get_model_config`` falls back by family and ultimately to a default, which
-    is right for capability questions (context window, max_tokens: a sane
-    default beats nothing) and WRONG for billing: it silently answers "what does
-    MiniMax-M2.7 cost" with GPT-5.1's price. Billing uses this instead.
+    ``get_model_config`` falls back by family and ultimately to a conservative
+    default, which is right for capability questions and WRONG for billing: it has
+    no price for an id it does not know. Billing uses this instead.
     """
     registry = get_registry()
     canonical = registry._aliases.get(model_name, model_name)
     return registry._models.get(canonical)
+
+
+def provider_supports_streaming(name: str) -> bool:
+    """True when the provider's client streams: every spec row, built-in or user-declared,
+    except the RESPONSES transport, whose client has no stream path."""
+    from modules.llm.provider_spec import BUILTIN_SPECS, Transport, get_spec
+    name = (name or "").lower()
+    try:
+        spec = get_spec(name)
+    except Exception:
+        spec = next((s for s in BUILTIN_SPECS if name == s.name or name in s.aliases), None)
+    return spec is not None and spec.transport is not Transport.RESPONSES
 
 
 # ---------------------------------------------------------------------------
@@ -360,12 +265,11 @@ class _ProviderEntry:
 def _build_provider_config() -> "Dict[str, _ProviderEntry]":
     """Build PROVIDER_CONFIG dict.
 
-    Since proposal 024 (L0) the entries are DERIVED from the ProviderSpec
+    The entries are DERIVED from the ProviderSpec
     registry (built-ins + user-declared providers.yaml rows; a user row's
     client class is the generic client for its declared transport). A registry
     fault falls back to ``BUILTIN_SPECS`` — the registry's own data — never to a
-    second hand-maintained table (the legacy literal went with the
-    ``LLM_PROVIDER_REGISTRY`` kill-switch, 2026-08-29).
+    second hand-maintained table.
     """
     from modules.llm.provider_spec import BUILTIN_SPECS, generic_client_class_name, get_specs
     try:

@@ -316,19 +316,20 @@ async def test_command_cancel_never_claims_a_failed_stop():
 
 
 @pytest.mark.asyncio
-async def test_command_new_unbinds_chat_so_next_message_starts_fresh():
-    """a4: /new cancels the bound session AND drops its chat binding, so the next
-    message routes cold (a fresh session) instead of STEERing back into the old one."""
+async def test_command_new_in_a_direct_chat_stops_nothing_and_drops_no_binding():
+    """113: /new opens a chat BESIDE the one it leaves; that chat keeps its session
+    and its running turn (tests/unit/surfaces/telegram/test_chat_verbs.py has the
+    store side). With no chat store the reply says so and nothing changes."""
     ta = _FakeTaskAgent()
     out = await act_on_inbound(ta, _result(RouteKind.COMMAND, command="/new", session_id="sess_1"),
                                spawn=lambda c: None)
-    assert ta.cancelled == ["sess_1"]
-    assert getattr(ta, "unbound", []) == ["agent:main:telegram:dm:555:u_abc"]
-    assert isinstance(out, str)
+    assert ta.cancelled == [] and getattr(ta, "unbound", []) == []
+    assert "could not read the chats" in out
 
 
 @pytest.mark.asyncio
-async def test_command_help_returns_text():
+async def test_command_help_returns_text(monkeypatch):
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u_abc")   # the owner's /help (F-05)
     ta = _FakeTaskAgent()
     out = await act_on_inbound(ta, _result(RouteKind.COMMAND, command="/help"), spawn=lambda c: None)
     assert out and "/task" in out

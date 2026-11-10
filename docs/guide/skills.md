@@ -30,15 +30,14 @@ is logged.
 |-------|----------|-----------|-------------------|
 | **builtin** | `<data_home>/skills/bundled/`, a copy of the installed package's `data/prompts/skills/` | no — the agent suggests a fix, you accept it | ships with POLYROB; copied at each start |
 | **pack:<id>** | a loaded pack's contributed skills directory | read-only, trusted with the loaded pack | installed with the pack; absent when the pack is disabled/refused |
-| **user** | `<data_home>/skills/user_<uid>/` (local CLI: `~/.polyrob/data/skills/user_<uid>/`, or under `$POLYROB_DATA_DIR`) | yes | `polyrob skill install`, or the agent authoring a skill |
+| **user** | `<data_home>/skills/user_<uid>/` (local CLI: `~/.polyrob/data/skills/user_<uid>/`, or under `$POLYROB_DATA_DIR`) | yes | `polyrob skills install`, or the agent authoring a skill |
 | **external (discovered)** | `~/.agents/skills/`, `~/.claude/skills/` (user), and per-repo `./.agents/skills/`, `./.claude/skills/` (project) | no (loaded in place) | drop a skill folder in and it's auto-discovered |
 
 Builtin skills ship inside the installed package (`data/prompts/skills/`). Each start
 copies them to `<data_home>/skills/bundled/` and records the sha256 of every copied
 `SKILL.md` in `.bundled_manifest`; the agent reads the copy. So a fix to a builtin skill
-needs no deploy: the agent suggests it with `skill_manage patch` or `edit` (it waits for
-your decision, like any suggested change), and when you accept it (`/pending`, or
-`polyrob owner promote skill <id>`) the copy changes at once.
+needs no deploy: the agent writes it with `skill_manage patch` or `edit`, and the copy
+changes at once. To undo it, ask the agent to roll the skill back.
 
 An update replaces a copy only when you did not change it. A copy you changed is kept,
 and the update's own report names it (the "back online" message, or the output of
@@ -112,25 +111,25 @@ Use discovery for skills you author yourself or share with your other agents via
 
 ### 2. Install — managed, scanned, quarantined, audited
 
-Use `polyrob skill install` to bring a skill from a **tap, a local folder, a GitHub repo,
+Use `polyrob skills install` to bring a skill from a **tap, a local folder, a GitHub repo,
 or a URL** into your managed user scope. Unlike discovery, install **threat-scans** every
 file, **quarantines** the skill for review, records an **audit trail**, and the result
 **survives updates**.
 
 ```bash
-polyrob skill install <spec> [--ref REF] [--trust local|prompt] [--user UID]
+polyrob skills install <spec> [--ref REF] [--trust local|prompt] [--user UID]
 ```
 
 `<spec>` is auto-detected by shape:
 
 | Spec form | Example | Resolves via |
 |-----------|---------|--------------|
-| tap name `<tap>/<skill>` | `polyrob skill install anthropics/skills/pdf` | the tap's index, then a GitHub clone |
-| bare skill name | `polyrob skill install pdf` | every tap; refused if more than one tap has it |
-| local folder | `polyrob skill install ./my-skill` | filesystem |
-| `owner/repo[/subdir]` shorthand | `polyrob skill install acme/skills/pdf` | GitHub clone |
-| git URL (`https://`, `git@`, `ssh://`, `file://`) | `polyrob skill install https://github.com/acme/skills.git/pdf` | sandboxed clone |
-| direct `SKILL.md` URL | `polyrob skill install https://example.com/pdf/SKILL.md` | HTTPS fetch (https only) |
+| tap name `<tap>/<skill>` | `polyrob skills install anthropics/skills/pdf` | the tap's index, then a GitHub clone |
+| bare skill name | `polyrob skills install pdf` | every tap; refused if more than one tap has it |
+| local folder | `polyrob skills install ./my-skill` | filesystem |
+| `owner/repo[/subdir]` shorthand | `polyrob skills install acme/skills/pdf` | GitHub clone |
+| git URL (`https://`, `git@`, `ssh://`, `file://`) | `polyrob skills install https://github.com/acme/skills.git/pdf` | sandboxed clone |
+| direct `SKILL.md` URL | `polyrob skills install https://example.com/pdf/SKILL.md` | HTTPS fetch (https only) |
 
 A tap name is tried first. `owner/repo/<path>` for a repo that is not a tap is a plain
 GitHub clone, as before.
@@ -145,14 +144,14 @@ Options:
 **The install flow:**
 
 ```
-polyrob skill install acme/skills/pdf
+polyrob skills install acme/skills/pdf
   → clone (sandboxed) / fetch / read the folder
   → validate the SKILL.md (must have a description; name must be a valid identifier)
   → threat-scan the SKILL.md AND every text resource (fail-closed)
   → copy the whole folder into  <data_home>/skills/user_<uid>/.pending/pdf/
-  → prints:  "installed skill 'pdf' to quarantine — run `polyrob skill approve pdf`"
+  → prints:  "installed skill 'pdf' to quarantine — run `polyrob skills approve pdf`"
 
-polyrob skill approve pdf
+polyrob skills approve pdf
   → promotes the skill to active, ports its resources, records an audit row
   → the skill is now live in your user scope and survives `polyrob update`
 ```
@@ -170,10 +169,10 @@ built in and cannot be removed:
 | `anthropics/skills` | trusted |
 
 ```bash
-polyrob skill tap list
-polyrob skill tap add acme/skills[/subdir]     # your taps are "community"
-polyrob skill tap remove acme/skills
-polyrob skill search pdf [--refresh]
+polyrob skills tap list
+polyrob skills tap add acme/skills[/subdir]     # your taps are "community"
+polyrob skills tap remove acme/skills
+polyrob skills search pdf [--refresh]
 ```
 
 Search reads the tap's `skills/index.json` (a list of `{name, description, path}`, where
@@ -221,7 +220,7 @@ used.
 ### Update
 
 ```bash
-polyrob skill update [name]
+polyrob skills update [name]
 ```
 
 `update` fetches each locked skill again from its source at the latest commit (a tap
@@ -235,14 +234,10 @@ new version goes active (official or trusted tap) or waits in quarantine for
 
 ## Managing skills
 
-There are **two command groups**, and `polyrob --help` prints them as one row,
-`skills (related: skill)`:
-
-- **`polyrob skills`** — the read/authoring surface: `list`, `validate`, `export`.
-- **`polyrob skill`** — the install pipeline: `install`, `approve`, `list`, `info`,
-  `remove`, `tap`, `search`, `update`.
-
-Both names always work. Run either with `--help`, or see [cli.md](cli.md) for the
+One command group, **`polyrob skills`**, holds every skill verb: `list`, `validate`,
+`export`, and the install pipeline `install`, `approve`, `status`, `info`, `remove`,
+`tap`, `search`, `update`. `polyrob skill` is its old name: it still works and the
+help does not list it. Run `polyrob skills --help`, or see [cli.md](cli.md) for the
 full command reference.
 
 Inside the interactive REPL (`polyrob chat`, or bare `polyrob`) the same operations are
@@ -300,6 +295,13 @@ it is kept as `<data_home>/skills/user_<uid>/.archived/<id>/<sha256>-SKILL.md`.
 `rollback <id>` with `to_sha=<sha>` (a full sha or a unique prefix of 8 or more characters)
 restores a named revision. A rollback is an ordinary write: it is scanned again, and a
 rollback by the agent of an active skill waits for your decision.
+
+After a job or a goal run, the background reviewer runs only when you corrected the run,
+its check failed, or it stopped on an error. No change is the default. The curator
+compares each live change with the runs of its lane before the change. After a new
+correction on the lane, or when the error rate doubles, the curator rolls the change back
+and tells you in one line; the archive keeps the change. A lane with under 10 runs after
+14 days reads `unknown`. At low volume this test catches only a large harm.
 
 A delete by the background reviewer or the curator is a consolidation, so it must name
 `absorbed_into`, the skill that now holds those steps, and that skill must exist. The
@@ -380,8 +382,9 @@ skills:
 - `SKILLS_WRITABLE` — let the agent author its own skills. It is on by default only
   when `POLYROB_LOCAL` **and** `AUTONOMY_ENABLED` are both on (it belongs to the
   autonomy group, not the interactive one — see
-  [configuration.md](configuration.md#6-the-autonomy-dial)). What the agent writes
-  is quarantined for your review; `polyrob owner pending` lists it.
+  [configuration.md](configuration.md#6-the-autonomy-dial)). What the agent writes is
+  live at once and the earlier text is kept for a rollback. A write from a chat that holds
+  someone else's message, or from a group, stays a draft; `polyrob owner pending` lists it.
 - `POLYROB_DATA_DIR` — where user/installed skills are stored.
 
 Run `polyrob doctor --flags --group skills` for the live values on your box.

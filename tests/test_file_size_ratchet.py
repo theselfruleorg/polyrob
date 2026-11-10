@@ -39,7 +39,7 @@ CEILINGS = {
     # (/signin, /profile, /settings, /admin*) moved to webview/posture_routes.py
     # as ONE posture table — they were seven hand-registered routes that
     # disagreed about what a denial looks like.
-    "webview/server.py": 2992,  # 043 A12/A29/A30: the full-tree session catalog, the per-session stats route and the four consumer-less socket emits deleted; 070 W0.10: the feed events route moved to webview/feed_routes.py; 070 W0.14: the workspace tree moved to webview/workspace_routes.py; 070 W0.17: socket joins through webview/socket_limits.py; 070 W0.18/E.34: the error handler delegates to webview/error_page.py
+    "webview/server.py": 2911,  # 043 A12/A29/A30: the full-tree session catalog, the per-session stats route and the four consumer-less socket emits deleted; 070 W0.10: the feed events route moved to webview/feed_routes.py; 070 W0.14: the workspace tree moved to webview/workspace_routes.py; 070 W0.17: socket joins through webview/socket_limits.py; 070 W0.18/E.34: the error handler delegates to webview/error_page.py
     # S8 (2026-08-29): chat / delivery / lifecycle mixins + support helpers extracted
     # (agents/task/task_agent_{chat,delivery,lifecycle,support}.py).
     # Tightened 2026-09-08: the public session-control verbs (get_session_status /
@@ -55,12 +55,12 @@ CEILINGS = {
     # owner_doc_manage) moved to tools/controller/doc_authoring.py::DocAuthoringMixin.
     # Tightened 2026-10-30 (095 P0.2): the `preferences` action moved to
     # tools/controller/preferences_action.py::PreferencesActionMixin.
-    "tools/controller/action_registration.py": 1444,
+    "tools/controller/action_registration.py": 1406,
     "api/task_http_api.py": 1876,
     # Re-baselined 2026-07-25 (0.9.0 release cut): +3 net for the AUTONOMY_ENABLED
     # master state in `/autonomy` + `doctor`. The extraction debt on this file
     # STANDS — it is an extraction candidate, not a designated SSOT.
-    "cli/ui/commands/handlers.py": 1790,
+    "cli/ui/commands/handlers.py": 1577,
     # Split 2026-08-29 (S2, backlog B19): policy.py is now a FACADE over nine
     # submodules (_env, local_profile, autonomy_mode, autonomy_posture,
     # compute_posture, payment_policy, capability_toggles, autonomy_config,
@@ -69,22 +69,17 @@ CEILINGS = {
     "core/config_policy/policy.py": 120,
     # modules/ rows seeded 2026-08-29 (S4, backlog B09) at the live sizes after the
     # model_registry split (registry 418 / types 239 / catalog 1505 / pricing 57).
-    # The catalog is DATA (one ModelConfig per model) and may only grow by one
-    # model at a time — raise its row deliberately with the model, never by drift.
-    # Raised 2026-09-15 with the two models it names (+50): z-ai/glm-5.3 and
-    # z-ai/glm-5.3-flash, the ids the GLM Coding Plan seat actually serves.
-    # Raised 2026-09-23 with the two models it names (+36): claude-opus-5 and
-    # claude-fable-5-1 — the first Anthropic rows that accept mid-conversation
-    # tool changes (F9 shape (b)), plus the comment that says which do not.
-    "modules/llm/model_catalog.py": 1553,
+    # The catalog is DATA (one ModelConfig per model). A new row goes to
+    # modules/llm/model_catalog_recent.py, so this row only falls.
+    "modules/llm/model_catalog.py": 1289,
     # S6 (2026-08-29): scan / notify / subscriptions / reputation extracted to settlement_*.py mixins.
     "modules/x402/settlement_watcher.py": 330,
-    "modules/llm/gemini_client.py": 1360,
+    "modules/llm/gemini_client.py": 958,
     # Raised 2026-09-15 (+16): the glm-5.3 / glm-5.3-flash ids on BOTH z.ai rows,
     # plus the notes recording why zai-coding's provider-wide supports_vision stays
     # False while glm-5.3-flash has vision, and why the metered `zai` row keeps its
     # cheaper default. No new behaviour — two existing data rows.
-    "modules/llm/provider_spec.py": 1317,
+    "modules/llm/provider_spec.py": 1312,
     # S5 (2026-08-29): curated-notes / KB / episodes stores extracted to sqlite_*_store.py mixins.
     # 2026-09-22 (WS-K4): 492 -> 491. The recall-consolidation BEHAVIOUR went to a
     # new module (modules/memory/recall_consolidation.py); only the mixin wiring
@@ -94,21 +89,21 @@ CEILINGS = {
     # 2026-10-30 (095 W8): 320 -> 316. Recall consolidation deleted (no reader).
     "modules/memory/sqlite_memory_provider.py": 316,
     "modules/x402/invoicing.py": 1169,
-    "modules/llm/adapters.py": 1111,
+    "modules/llm/adapters.py": 900,
     "modules/memory/task/task_context_manager.py": 1135,
-    "modules/llm/openrouter_client.py": 960,
+    "modules/llm/openrouter_client.py": 888,
     # Tightened 2026-09-08: the read-only client/model inventory
     # (get_available_models / get_available_clients) moved to
     # modules/llm/manager_inventory.py::InventoryMixin, which the manager composes.
-    "modules/llm/llm_manager.py": 861,
-    "modules/llm/llm_client.py": 955,
-    "modules/llm/anthropic_client.py": 920,  # F12: breakpoint placement -> cache_hints.py; sampling routing + thinking clamp -> anthropic_sampling.py
-    "modules/llm/openai_client.py": 901,
+    "modules/llm/llm_manager.py": 794,
+    "modules/llm/llm_client.py": 714,
+    "modules/llm/anthropic_client.py": 686,  # the wire -> anthropic_wire.py, breakpoints -> cache_hints.py, sampling -> anthropic_sampling.py
+    "modules/llm/openai_client.py": 740,
     "modules/memory/task/hierarchical_memory.py": 821,
     # W2 (2026-10-10): every production file over DEFAULT_CEILING, frozen at its
     # live size. Each is a split candidate (structural review dim 3, W9); lower
     # the row in the commit that splits the file, delete it once <= the default.
-    "surfaces/telegram/harness.py":     2899,  # W9: admin verbs -> admin_verbs.py + *_ops.py
+    "surfaces/telegram/harness.py":     2898,  # W9: admin verbs -> admin_verbs.py + *_ops.py
     "core/wallet/tx_guard.py": 1579,  # W6: _authorize -> core/wallet/tx_guard_steps/
     "packs/x/polyrob_x/twitter_tool.py": 2824,
     "packs/markets/polyrob_markets/polymarket/service.py": 2184,
@@ -116,12 +111,12 @@ CEILINGS = {
     "webview/pages_new.py": 1858,
     "cli/commands/wallet.py": 1841,
     "webview/pages.py": 1841,
-    "tools/browser/context.py": 1793,
-    "cli/commands/owner.py": 1646,
-    "agents/task/agent/core/next_action_internal.py": 1614,
-    "tools/browser/browser.py": 1604,
+    "tools/browser/context.py": 1685,
+    "cli/commands/owner.py": 1539,
+    "agents/task/agent/core/next_action_internal.py": 1383,
+    "tools/browser/browser.py": 1470,
     "core/prefs.py": 1405,
-    "tools/controller/registry/service.py": 1535,
+    "tools/controller/registry/service.py": 1518,
     "api/admin_endpoints.py": 1328,
 }
 

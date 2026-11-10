@@ -26,6 +26,7 @@ _EXPORTS: Dict[str, str] = {
     # W5: the ONE owner-turn definition and the ONE taint view
     "is_genuine_owner_turn": "core.security.owner_turn:is_genuine_owner_turn",
     "is_leaf_or_forged": "core.security.owner_turn:is_leaf_or_forged",
+    "is_owner_standing_run": "core.security.owner_turn:is_owner_standing_run",
     "is_leaf": "core.security.owner_turn:is_leaf",
     "forged_kind": "core.security.owner_turn:forged_kind",
     # the ONE external-address key (dead targets, correspondents, conversations)
@@ -72,6 +73,12 @@ _EXPORTS: Dict[str, str] = {
     "process_identity": "core.state.proc:process_identity",
     "ProcIdentity": "core.state.proc:ProcIdentity",
     "is_alive": "core.state.proc:is_alive",
+    # --- 109 public-thread commerce (a pack's thread adapter and storefront mark)
+    "PublicPost": "core.commerce.thread:PublicPost",
+    "ThreadUnavailable": "core.commerce.thread:ThreadUnavailable",
+    "offer_of": "core.commerce.thread:offer_of",
+    "storefront_thread_line": "modules.commerce.storefront:thread_line",
+    "record_external_write": "core.effects:record_external_write",
     # --- the pack contract ---------------------------------------------------
     # W4: a pack derives its verb lists from its own policy rows (pack.toml)
     "action_ids_where": "core.verb_policy:ids_where",

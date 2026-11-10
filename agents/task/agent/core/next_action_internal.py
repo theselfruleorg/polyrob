@@ -35,6 +35,8 @@ from agents.task.constants import (
 # and this per-step reminder must both name it. utils_json.
 # extract_brain_state_from_json reads the nested ``current_state`` object first
 # (a flat object is only a tolerated legacy fallback).
+_PARSE_FAILURE_RE = re.compile(r"\bpars(?:e|ing)\b|\bjson\b|\bvalidation\b")
+
 NATIVE_TOOLS_BRAIN_HINT = (
     "REMINDER: Your text content must be valid JSON with the brain state nested "
     "under \"current_state\":\n"
@@ -67,6 +69,8 @@ from modules.llm.messages import (
 	ToolMessage,
 )
 from modules.llm.adapters import BaseChatModel
+from modules.llm.call_result import read_stamps, replay_fields
+from modules.llm.llm_client import translate_llm_error
 from modules.llm.retry_log import log_exhausted
 from core.exceptions import (
     RateLimitError,
@@ -103,7 +107,7 @@ from agents.task.telemetry.views import (
     ProviderFailureEvent,
     ProviderFallbackSuccessEvent,
 )
-# ProductTelemetry no longer directly used - accessed via TelemetryManager
+# ProductTelemetry is accessed via TelemetryManager
 from agents.task.utils import (
 	time_execution_async, detect_llm_provider, extract_token_usage,
 	resolve_serving_provider,
@@ -122,35 +126,40 @@ from agents.task.logging_config import get_task_logger
 # Import centralized path management
 from agents.task.path import pm
 
-# G-1: rate limiter for the swallowed usage_tracker.record_llm_usage failure log
+# Rate limiter for the swallowed usage_tracker.record_llm_usage failure log
 from agents.task.agent.core.metering_failure_log import metering_failure_limiter
 
-# G-26 reachability fix (Task 5c): STABLE per-completion idempotency key for
+# STABLE per-completion idempotency key for
 # usage_tracker.record_llm_usage's request_id dedup.
 from modules.llm.aux_metering import extract_stable_request_id
 
-# 2026-10-14 review E-2/E-3/E-7/E-8/D-1: call-quality causes, name repair, regime.
+# Call-quality causes, name repair, regime.
 from agents.task.agent.core import call_quality as cq
 
 
 
 
 
-def _prefix_stamps(agent) -> dict:
-	"""The usage-record metadata: the last call's prefix identity (`prefix_sha`/
-	`tools_sha`, stamped by the OpenRouter request path) plus the session
-	`regime` (review D-1) — never a failure (metadata must not break billing)."""
-	try:
-		from modules.llm.prefix_stamp import read_stamps
-		stamps = read_stamps(getattr(agent, "llm", None))
-	except Exception:
-		stamps = {}
-	return cq.with_regime(stamps, agent)
+def _prefix_stamps(agent, response) -> dict:
+	"""The usage-record metadata: the stamps of this call plus the session `regime`
+	— never a failure (metadata must not break billing)."""
+	return cq.with_regime(read_stamps(response), agent)
+
+
+#: What a call's message carries for its billing, kept when a stream rebuilds the message.
+_CALL_MARKS = ("_polyrob_provider_response_id", "_polyrob_billing_reservation_id", "call_facts")
+
+
+def _carry_call_marks(chunk, marks: dict) -> None:
+	for name in _CALL_MARKS:
+		value = getattr(chunk, name, None)
+		if value:
+			marks[name] = value
 
 
 class NextActionInternalMixin:
 	"""Core LLM-invocation method (_get_next_action_internal) split whole out of
-	LLMRunnerMixin so llm_runner.py drops under 700L (P9). Agent composes it;
+	LLMRunnerMixin so llm_runner.py drops under 700L. Agent composes it;
 	get_next_action calls it via MRO. Imports above are llm_runner's full set,
 	replicated so every name the method references resolves (post-MAX_MCP defense)."""
 
@@ -175,7 +184,7 @@ class NextActionInternalMixin:
 				parts.append(f"'{name}' exists but its arguments failed validation"
 				             + (f": {reason[:300]}" if reason else ""))
 			else:
-				parts.append(self.controller.describe_unloaded_action(name) if hasattr(self.controller, "describe_unloaded_action") else f"'{name}' is not a registered action")  # 081 WS-3.1
+				parts.append(self.controller.describe_unloaded_action(name) if hasattr(self.controller, "describe_unloaded_action") else f"'{name}' is not a registered action")  
 		return "; ".join(parts) or "no tool call could be converted"
 
 	def _push_rejected_tool_calls_feedback(self, detail: str) -> None:
@@ -183,55 +192,55 @@ class NextActionInternalMixin:
 		try:
 			note = HumanMessage(content=("⚠️ Your tool call was rejected before execution and did NOT run:\n"
 				f"{detail}\n\nFix the arguments (or pick an action that exists) and call again."))
-			note.metadata = {"per_call": True}  # answers ONE call: a C-1 restore must not stack it
+			note.metadata = {"per_call": True}  # answers ONE call: a restore must not stack it
 			self.message_manager.push_ephemeral_message(note)
 		except Exception:
 			self.logger.debug("rejected-tool-call feedback not pushed", exc_info=True)
 
+	async def _scoped_llm_call(self, messages, tools, timeout_seconds, input_tokens=None):
+		"""One model call of this step, ``(response, chunk_count)``. The call's inputs end
+		with it, so a later aux call of this task reads defaults."""
+		with cq.step_call_scope(self, timeout=timeout_seconds, input_tokens=input_tokens):
+			cq.stamp_step_context(self)  # Context slots onto the usage record
+			if self._supports_streaming() and self.hitl_manager.has_streaming_callbacks():
+				if tools is None:
+					return await self._stream_plain_fallback(messages, timeout_seconds), 0
+				return await self._stream_with_tools(messages, tools, timeout_seconds)
+			response = await asyncio.wait_for(self.llm.ainvoke(messages, tools=tools), timeout=timeout_seconds)
+			return response, 0
+
 	async def _stream_plain_fallback(self, current_messages, timeout_seconds) -> AIMessage:
-		"""Stream a plain (non-structured) LLM fallback call, accumulating content and
-		usage metadata into one AIMessage. Shared by both structured-output fallback
-		branches (H2: the two inline copies had drifted — one referenced an undefined
-		``usage_metadata`` and raised NameError every time that branch streamed)."""
+		"""Stream the plain call of a provider with no native tools, accumulating content
+		and usage metadata into one AIMessage."""
 		reset_stream = getattr(self.hitl_manager, "reset_output_stream", None)
 		if callable(reset_stream):
 			reset_stream()
 		full_content = ""
 		fallback_usage_metadata = None
-		# Fix pass 2 (money-correctness): astream() yields the single already-
-		# stamped AIMessage from adapters.py._agenerate as its one chunk;
-		# propagate its per-call `_polyrob_provider_response_id` onto the
-		# rebuilt response so this fallback's billing gets the same stable,
-		# race-proof dedup key as the primary path instead of falling back to
-		# the shared, concurrency-racy `<client>.last_response` read.
-		stamped_provider_response_id = None
+		marks = {}
 
 		async def _run():
-			nonlocal full_content, fallback_usage_metadata, stamped_provider_response_id
-			async for chunk in self.llm.astream(current_messages):
+			nonlocal full_content, fallback_usage_metadata
+			async for chunk in self.llm.astream(current_messages, tools=None):
 				if hasattr(chunk, 'content') and chunk.content:
 					full_content += chunk.content
 					await self.hitl_manager.stream_output(chunk.content)
 				if hasattr(chunk, 'usage_metadata') and chunk.usage_metadata:
 					fallback_usage_metadata = chunk.usage_metadata
-				chunk_stamped_id = getattr(chunk, '_polyrob_provider_response_id', None)
-				if chunk_stamped_id:
-					stamped_provider_response_id = chunk_stamped_id
+				_carry_call_marks(chunk, marks)
 
 		await asyncio.wait_for(_run(), timeout=timeout_seconds)
 		result = AIMessage(content=full_content, usage_metadata=fallback_usage_metadata)
-		if stamped_provider_response_id:
-			result._polyrob_provider_response_id = stamped_provider_response_id
+		for name, value in marks.items():
+			setattr(result, name, value)
 		return result
 
 	async def _bill_llm_response(self, response, llm_duration, provider=None,
 								 purpose="next_action"):
 		"""Bill exactly one finalized LLM response through the single billing path.
 
-		G1/G2 (telemetry audit 2026-07-04): billing used to be inline in the
-		native-tool branch only, so the structured-output and plain fallback
-		completions consumed tokens with NO billing record. This helper is called
-		from EVERY response-producing path. Idempotent per response object (marks
+		Billing runs for EVERY response-producing path, so no completion
+		consumes tokens without a billing record. Idempotent per response object (marks
 		``_polyrob_billed``) so the same object is never charged twice; distinct
 		responses (a real 2nd API call) are each billed. Returns the token_usage dict.
 		"""
@@ -244,20 +253,18 @@ class NextActionInternalMixin:
 		except Exception:
 			pass
 
+		self.last_call_facts = getattr(response, "call_facts", None)
 		provider = provider or getattr(self, 'llm_provider', 'unknown')
-		token_usage = extract_token_usage(response, provider)
+		token_usage = extract_token_usage(response)
 		input_tokens = token_usage.get('prompt_tokens', 0) or 0
 		output_tokens = token_usage.get('completion_tokens', 0) or 0
 		cached_tokens = token_usage.get('cached_tokens', 0) or 0
 		cache_creation_tokens = token_usage.get('cache_creation_tokens', 0) or 0
-		# G-26 reachability fix: extract the provider's own response id (when
-		# available) as the STABLE dedup key for this completion. Must run
-		# synchronously here, with no await between the LLM call that produced
-		# `response` and this point, so a concurrent call on a shared client
-		# can't overwrite the source before we read it.
-		request_id = extract_stable_request_id(getattr(self, 'llm', None), response, provider)
+		# The provider's own response id (when available)
+		# as the STABLE dedup key for this completion, from its own message.
+		request_id = extract_stable_request_id(response, provider)
 
-		# 057 WS-B: feed the output-scaled timeout from the SAME extraction the
+		# Feed the output-scaled timeout from the SAME extraction the
 		# billing record uses — one read of the provider's usage block, not two.
 		try:
 			self.message_manager.note_call_usage(
@@ -285,12 +292,12 @@ class NextActionInternalMixin:
 					purpose=purpose,
 					success=True,
 					request_id=request_id,
-					# F23: when the provider reports what it actually billed
+					# When the provider reports what it actually billed
 					# (OpenRouter's `usage.cost`), that figure outranks our
 					# per-token estimate. None = not reported, never $0.
 					billed_cost_usd=token_usage.get('billed_cost_usd'),
 					cache_discount_usd=token_usage.get('cache_discount_usd'),
-					metadata=_prefix_stamps(self)
+					metadata=_prefix_stamps(self, response)
 				)
 				self.logger.info(
 					f"✓ Step {getattr(getattr(self, 'state', None), 'n_steps', '?')}: "
@@ -304,13 +311,13 @@ class NextActionInternalMixin:
 				self.logger.warning("⚠️ Session suspended due to insufficient credits")
 				raise
 			except Exception as e:
-				# G-1: full traceback the first time per process, then rate-limited
+				# Full traceback the first time per process, then rate-limited
 				# (was: a full traceback on EVERY LLM call, flooding the journal
 				# when metering was FK-blocked by an unseeded user_profiles row).
 				metering_failure_limiter.record(self.logger, e)
 		elif self.user_id:
 			# Fallback: telemetry only, NO billing (usage_tracker should always exist
-			# in production). G5: made visible so JSON/DB divergence is diagnosable.
+			# in production). Visible so JSON/DB divergence is diagnosable.
 			self.logger.warning(
 				"usage_tracker not available - telemetry only, NO BILLING! "
 				"Check orchestrator initialization."
@@ -336,33 +343,32 @@ class NextActionInternalMixin:
 
 	@staticmethod
 	def _classify_llm_error(e: Exception) -> str:
-		"""Classify an LLM-call exception into a retry bucket (P7 finalization:
-		extracted from _get_next_action_internal's except handler). Pure — decides
-		billing / auth / parse / rate_limit / parameter_error / other from the text.
-		027: auth is checked FIRST and is never retried here (AUTH_PERMANENT —
-		the same key fails identically on every attempt), and the rate-limit
-		match is word-precise — the old bare ``"rate" in s`` matched 'geneRATE',
-		so every 'Failed to generate response: …' provider error (including a
-		401) was retried with backoff."""
-		s = str(e).lower()
-		# D3: z.ai "429 code 1113 Insufficient balance" is billing, never a retried rate limit.
-		from core.credit_sentinel import looks_like_credit_death
-		if isinstance(e, LLMPermanentError) or looks_like_credit_death(s):
-			return "billing"
-		if ("401" in s or "unauthorized" in s or "authentication" in s
-				or "invalid api key" in s or "api key not valid" in s):
+		"""The retry bucket of a failed attempt: the verdict of ``translate_llm_error``,
+		and a parse bucket for what no provider said. Only ``parse`` and ``rate_limit``
+		retry here: the same key or a dead account fails the same way on every attempt."""
+		verdict = translate_llm_error(e)
+		if isinstance(verdict, (LLMPermanentError, InsufficientCreditsError)):
+			return "permanent"
+		if isinstance(verdict, LLMAuthenticationError):
 			return "auth"
-		if "parse" in s or "json" in s or "validation" in s:
-			return "parse"
-		if ("rate limit" in s or "rate_limit" in s or "ratelimit" in s
-				or "429" in s or "too many requests" in s or "limit reached" in s):
+		if isinstance(verdict, LLMRateLimitError):
 			return "rate_limit"
-		if "llm_client" in s:
-			return "parameter_error"
+		if isinstance(e, ValidationError) or (
+				type(verdict) is LLMError and _PARSE_FAILURE_RE.search(str(e).lower())):
+			return "parse"
 		return "other"
 
+	def _anchored_input_tokens(self) -> Optional[int]:
+		"""The manager's input count for this call: the provider's own number for what it
+		already billed, plus the tool schemas. None when it cannot answer."""
+		try:
+			count = self.message_manager.get_actual_token_count()
+		except Exception:
+			return None
+		return count if isinstance(count, int) and count > 0 else None
+
 	def _verify_vision_post_response(self, response) -> None:
-		"""Post-response vision diagnostics (P7 finalization: extracted verbatim from
+		"""Post-response vision diagnostics (extracted verbatim from
 		_get_next_action_internal). Pure logging + reset of the expected-image counter —
 		reads `response` and `self._expected_image_count`, mutates only that counter, and
 		is a no-op when no images were expected. No load-bearing local leaks out."""
@@ -448,7 +454,7 @@ class NextActionInternalMixin:
 					f"Images ({self._expected_image_count}) likely processed."
 				)
 			else:
-				# FIXED: Don't log ERROR for non-visual tasks
+				# Don't log ERROR for non-visual tasks
 				# The LLM may correctly ignore screenshots when executing filesystem/tool tasks
 				# Only log at DEBUG level since this is expected behavior for non-visual tasks
 				self.logger.debug(
@@ -463,8 +469,8 @@ class NextActionInternalMixin:
 	async def _stream_with_tools(self, current_messages, tools, timeout_seconds) -> Tuple[AIMessage, int]:
 		"""Stream the native-tools LLM call, accumulating content / tool calls / usage into one
 		AIMessage. Returns ``(response, chunk_count)``. Extracted verbatim from
-		``_get_next_action_internal`` (S7, 2026-08-29) — the third inline ``stream_with_timeout``
-		copy; ``_stream_plain_fallback`` is the structured-fallback twin."""
+		``_get_next_action_internal`` — the third inline ``stream_with_timeout``
+		copy; ``_stream_plain_fallback`` is the plain-call twin."""
 		chunk_count = 0
 		self.logger.debug("Using streaming mode for LLM call")
 		self.logger.info(f"[DEBUG_TOOLS] Calling llm.astream with tools={len(tools) if tools else 0}")
@@ -475,13 +481,10 @@ class NextActionInternalMixin:
 		collected_tool_calls = []
 
 		usage_metadata = None  # Collect usage metadata from final chunk
-		# Fix pass 2 (money-correctness): carry the per-call `_polyrob_provider_response_id`
-		# (stamped by adapters.py._agenerate) and the chunk's additional_kwargs (DeepSeek's
-		# reasoning_content) onto the rebuilt `response` — never the racy shared client read.
-		stamped_provider_response_id = None
 		extra_kwargs = {}
+		marks = {}
 		async def stream_with_timeout():
-			nonlocal full_content, collected_tool_calls, chunk_count, usage_metadata, stamped_provider_response_id
+			nonlocal full_content, collected_tool_calls, chunk_count, usage_metadata
 			async for chunk in self.llm.astream(current_messages, tools=tools):
 				# Extract content
 				if hasattr(chunk, 'content') and chunk.content:
@@ -495,9 +498,7 @@ class NextActionInternalMixin:
 				if hasattr(chunk, 'tool_calls') and chunk.tool_calls:
 					collected_tool_calls.extend(chunk.tool_calls)
 				extra_kwargs.update(getattr(chunk, 'additional_kwargs', None) or {})
-				chunk_stamped_id = getattr(chunk, '_polyrob_provider_response_id', None)
-				if chunk_stamped_id:
-					stamped_provider_response_id = chunk_stamped_id
+				_carry_call_marks(chunk, marks)
 
 			# Collect usage metadata (usually in final chunk)
 			if hasattr(chunk, 'usage_metadata') and chunk.usage_metadata:
@@ -511,15 +512,15 @@ class NextActionInternalMixin:
 		response.additional_kwargs.update(extra_kwargs)
 		if collected_tool_calls:
 			response.tool_calls = collected_tool_calls
-		if stamped_provider_response_id:
-			response._polyrob_provider_response_id = stamped_provider_response_id
+		for name, value in marks.items():
+			setattr(response, name, value)
 		return response, chunk_count
 
 	@staticmethod
 	def _extract_response_content(response) -> Optional[str]:
 		"""Pull the text content out of any LLM response shape (AIMessage / dict / str /
 		generations / additional_kwargs), normalizing list content to one string. Pure;
-		extracted verbatim from ``_get_next_action_internal`` (S7, 2026-08-29)."""
+		extracted verbatim from ``_get_next_action_internal``."""
 		content = None
 
 		# Try multiple ways to extract content from different response formats
@@ -576,12 +577,11 @@ class NextActionInternalMixin:
 
 	def _parse_fallback_content(self, content: str):
 		"""Manual JSON extraction + normalization + ``AgentOutput`` validation for the
-		structured-output fallback path. Raises ``LLMResponseError`` on any failure.
-		Extracted verbatim from ``_get_next_action_internal`` (S7, 2026-08-29)."""
+		plain fallback path. Raises ``LLMResponseError`` on any failure.
+		Extracted verbatim from ``_get_next_action_internal``."""
 		try:
 			# Direct JSON extraction using centralized utility
-			# REFACTORED (Dec 2025): Removed duplicate preprocessing logic
-			# normalize_action_schema now handles all action field corrections
+						# normalize_action_schema now handles all action field corrections
 			from agents.task.utils_json import (
 				extract_json_from_model_output,
 				normalize_action_schema,
@@ -617,7 +617,7 @@ class NextActionInternalMixin:
 		return parsed
 
 	def _safe_default_output(self, *, memory: str, reasoning: str):
-		"""A VALID ``AgentOutput`` for the graceful-degradation paths (P0-5): a real
+		"""A VALID ``AgentOutput`` for the graceful-degradation paths: a real
 		``AgentBrain`` (a bare error dict raised ValidationError and was reclassified as a
 		parse error), no actions."""
 		return self.AgentOutput(
@@ -630,13 +630,15 @@ class NextActionInternalMixin:
 			action=[]
 		)
 
-	async def _get_next_action_internal(self, input_messages: list[BaseMessage]) -> AgentOutput:
-		"""Internal implementation of get_next_action."""
+	async def _get_next_action_internal(self, input_messages: list[BaseMessage],
+										extra_messages: Optional[list] = None) -> AgentOutput:
+		"""One step's call. The request is rebuilt from the message manager (``input_messages``
+		is not read); ``extra_messages`` ride the end of this call only (``_call_messages``)."""
 		from agents.task.robust_parse_config import RobustParseConfig
 		import asyncio
 		import time
 
-		# CRITICAL FIX: Clear tool call tracker at start of each get_next_action call
+		# Clear tool call tracker at start of each get_next_action call
 		# This prevents accumulation of IDs across multiple calls within the same step
 		if self.tool_call_tracker and self.tool_call_tracker.has_active_calls():
 			active_calls = self.tool_call_tracker.get_current_step_calls()
@@ -647,7 +649,7 @@ class NextActionInternalMixin:
 		# Clear any previous normalized tool calls (but use tracker for IDs)
 		if hasattr(self, '_current_normalized_tool_calls'):
 			delattr(self, '_current_normalized_tool_calls')
-		cq.set_call_issue(self, None)  # E-3: this call's tool-free cause, if any
+		cq.set_call_issue(self, None)  # This call's tool-free cause, if any
 
 		# Cut messages before LLM call only if we're really close to the limit
 		estimated_usage = self.message_manager.get_estimated_context_usage()
@@ -664,7 +666,7 @@ class NextActionInternalMixin:
 			self.controller.supports_native_tools(provider)  # Provider capability
 		)
 
-		# Use ephemeral message API for format hints (P0 fix from upgrade_tasks.md)
+		# Use ephemeral message API for format hints
 		format_hint_added = False
 		if RobustParseConfig.INJECT_FORMAT_HINT_EARLY and not will_use_native_tools:
 			# Only inject JSON format hint when NOT using native tools
@@ -685,7 +687,7 @@ Your response MUST be valid JSON with this exact structure:
 CRITICAL: For "done" action use {{"done": {{"text": "message"}}}} - NOT "message" field!
 Use double quotes only. Max {self.max_actions_per_step} actions."""
 			)
-			formatting_message.metadata = {"per_call": True}  # C-1: never re-queued
+			formatting_message.metadata = {"per_call": True}  # Never re-queued
 
 			# Check if hint would fit within token limits using safety check
 			safety = self.message_manager.check_token_safety([formatting_message])
@@ -703,13 +705,13 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 			# family-note design deliberately gives it none, so the per-step nag was
 			# one wasted uncached message per step there.
 			native_tools_hint = HumanMessage(content=NATIVE_TOOLS_BRAIN_HINT)
-			native_tools_hint.metadata = {"per_call": True}  # C-1: never re-queued
+			native_tools_hint.metadata = {"per_call": True}  # Never re-queued
 			# Use the new ephemeral message API
 			self.message_manager.push_ephemeral_message(native_tools_hint)
 			format_hint_added = True
 			self.logger.debug("Format hint prepared for injection")
 
-		# CRITICAL FIX: Don't consume ephemeral message yet - get regular messages first
+		# Don't consume ephemeral message yet - get regular messages first
 		# This prevents losing the format hint during token management
 		converted_input_messages = self.message_manager.get_messages()  # NOT get_messages_for_llm() yet!
 
@@ -724,36 +726,17 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 		)
 
 		# NOW get final messages with ephemeral message included (one-shot consumption)
-		converted_input_messages = self.message_manager.get_messages_for_llm()
+		converted_input_messages = self._call_messages(
+			self.message_manager.get_messages_for_llm(), extra_messages)
 
-		# F12: hand the client the wire foundation length the assembly just
-		# measured, so the Anthropic breakpoint placer pins one cache_control
-		# marker at the END of the static block instead of spending all three on
-		# the tail. Stamped here — the ONE place the assembled list is produced —
-		# and re-stamped every step, because a billing failover mints a new client
-		# mid-run (the same reason apply_session_cache_ttl re-stamps). Fail-open.
-		try:
-			from modules.llm.cache_hints import apply_foundation_len
-			apply_foundation_len(
-				self.llm, getattr(self.message_manager, '_last_foundation_len', None))
-		except Exception:
-			pass
+		self.last_call_facts = None
 
-
-		# Prepare request info for session data
-		request_info = {
-			"model": self.model_name,
-			"model_library": self.chat_model_library,
-			"parameters": self._get_llm_parameters(),
-			"estimated_input_tokens": self.message_manager.get_token_count(),
-			"message_count": len(converted_input_messages),
-			"timestamp": __import__("time").time()
-		}
+		estimated_input_tokens = self.message_manager.get_token_count()
 		
 		retry_count = 0
-		empty_retry_left = 1  # E-8: one in-call retry of a truly empty completion
+		empty_retry_left = 1  # One in-call retry of a truly empty completion
 		last_error = None
-		last_error_type = None  # FIXED: Track error type for better retry logic
+		last_error_type = None  # Track error type for better retry logic
 		start_time = time.time()
 		
 		while retry_count <= RobustParseConfig.MAX_PARSE_RETRIES:
@@ -761,7 +744,7 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 				# Prepare messages for this attempt
 				current_messages = converted_input_messages.copy()
 				
-				# FIXED: Only add retry hint on parse errors, not on first attempt
+				# Only add retry hint on parse errors, not on first attempt
 				# Make retry hints provider-aware
 				if retry_count > 0 and last_error_type == "parse":
 					if will_use_native_tools:
@@ -777,722 +760,525 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 						self.logger.debug(f"Added retry hint on attempt {retry_count + 1}")
 				
 				# Unified tool calling via registry
-				try:
-					# Track if we've already warned about structured output issues for this session
-					if not hasattr(self, '_structured_output_warned'):
-						self._structured_output_warned = False
+				parsed = None
+				# The provider SERVING this session — not the vendor the model
+				# registry credits with the model id. A `zai-coding` session
+				# serving `glm-5` (an OpenRouter row in the registry) must emit
+				# Anthropic-shaped tools or z.ai answers 422.
+				provider = resolve_serving_provider(self.llm, self.model_name)
+				self.logger.info(f"[DEBUG_TOOLS] Serving provider: {provider}")
 
-					# The provider SERVING this session — not the vendor the model
-					# registry credits with the model id. A `zai-coding` session
-					# serving `glm-5` (an OpenRouter row in the registry) must emit
-					# Anthropic-shaped tools or z.ai answers 422.
-					provider = resolve_serving_provider(self.llm, self.model_name)
-					self.logger.info(f"[DEBUG_TOOLS] Serving provider: {provider}")
+				# Check if provider supports native tool calling
+				# Use Controller's high-level API instead of directly accessing registry
+				supports_native = self.controller and self.controller.supports_native_tools(provider)
+				self.logger.info(f"[DEBUG_TOOLS] Provider {provider} supports native tools: {supports_native}")
+				self.logger.info(f"[DEBUG_TOOLS] Has controller: {bool(self.controller)}")
 
-					# Check if provider supports native tool calling
+				if supports_native:
+					# Get ALL actions (core + tools) for this provider
 					# Use Controller's high-level API instead of directly accessing registry
-					supports_native = self.controller and self.controller.supports_native_tools(provider)
-					self.logger.info(f"[DEBUG_TOOLS] Provider {provider} supports native tools: {supports_native}")
-					self.logger.info(f"[DEBUG_TOOLS] Has controller: {bool(self.controller)}")
-
-					if supports_native:
-						# Get ALL actions (core + tools) for this provider
-						# Use Controller's high-level API instead of directly accessing registry
-						# F13: a session restored from disk asks for the tool order it
-						# emitted BEFORE the restart, so the tools block — the largest
-						# cached bytes in the request — comes back identical. None on a
-						# fresh session ⇒ the plain F1 sorted order.
-						tools = self.controller.get_all_actions_for_provider(
-							provider,
-							preferred_order=getattr(
-								self.message_manager, '_foundation_tool_names', None),
-						)
-						# F13: remember what actually went out, so the next save_to_disk
-						# persists the live order (a tool loaded mid-session included).
-						try:
-							from agents.task.agent.messages.foundation_replay import emitted_tool_names
-							self.message_manager._foundation_tool_names = \
-								emitted_tool_names(tools) or None
-						except Exception:
-							pass
-						# P4 (context-usage audit): stamp the schema list's token cost
-						# onto the gauge — real billed prompt bytes every step that were
-						# invisible to get_actual_token_count. Fail-open; memoized in
-						# the registry so this is a cheap dict read per step.
-						try:
-							self.message_manager.set_tool_schema_tokens(
-								self.controller.get_tool_schema_token_estimate(provider))
-						except Exception:
-							pass
-						self.logger.info(f"[DEBUG_TOOLS] Provider {provider} - Got {len(tools) if tools else 0} actions from registry")
-						self.logger.debug(f"Provider {provider} - Got {len(tools) if tools else 0} actions from registry")
-
-						# Debug: Log the actual schemas being generated (only on first step)
-						if tools and self.state.n_steps == 1:
-							import json
-							self.logger.debug(f"Generated {len(tools)} tool schemas for {provider}:")
-							# Ensure tools is a list for safe slicing
-							tools_list = list(tools) if not isinstance(tools, list) else tools
-							for i, tool in enumerate(tools_list[:3]):  # Log first 3
-								tool_str = json.dumps(tool, indent=2) if isinstance(tool, dict) else str(tool)
-								self.logger.debug(f"  Tool schema {i}: {tool_str[:300]}...")
-
-						# The RIG is the limit (057 WS-A). Every registered action is
-						# emitted here — there is deliberately no second filter at this
-						# seam, because a filter here would disagree with the catalog the
-						# agent was shown and with what `load_tool` can materialize.
-						# Narrowing belongs where the session is BUILT:
-						# `core/config_policy/rigs.py` picks the tool_ids a cron/goal run
-						# loads, and progressive disclosure lets that run widen itself.
-						# ("tools" = LLM function-calling schemas; "actions" = internal
-						# Registry actions.)
-						self.logger.info(f"Using all {len(tools) if tools else 0} tools for native function calling")
-
-						if tools and len(tools) > 0:
-							# Ensure tools is a list for safe slicing
-							tools_list = list(tools) if not isinstance(tools, list) else tools
-							action_names = [t.get('function', {}).get('name') if isinstance(t, dict) else getattr(t, 'name', 'unknown') for t in tools_list[:5]]
-							if len(tools_list) > 5:
-								action_names.append(f"... +{len(tools_list)-5} more")
-							self.logger.debug(f"Sample tool names: {action_names}")
-
-							# Try native tool calling first
-							self.logger.debug(f"Using native tool calling for {provider} with {len(tools)} actions")
-							self.logger.info(f"[DEBUG_TOOLS] About to call LLM with tools parameter")
-							self.logger.info(f"[DEBUG_TOOLS] Tools type: {type(tools)}, Tools count: {len(tools) if tools else 0}")
-							self.logger.info(f"[DEBUG_TOOLS] LLM adapter type: {type(self.llm).__name__}")
-							try:
-								# Calculate timeout using MessageManager
-								tool_count = len(self.controller.get_action_names()) if self.controller else 0
-								timeout_seconds = self.message_manager.calculate_llm_timeout(
-									tool_count=tool_count,
-									use_vision=self.use_vision
-								)
-
-								# Call with tools with better error handling
-								try:
-									parsed = None  # Initialize to prevent NameError
-									llm_start = time.time()
-									
-									# 098 AG-19: in flight for the stall watchdog; cleared in finally, so a
-									# raise or a cancel never leaves the watchdog blind.
-									from agents.task.agent.core.run_state import llm_call_state
-									with llm_call_state(self).active(llm_start):
-										# 019 P0: llm_started span event — surfaces render
-										# "thinking" instead of dead air during LLM latency
-										# (the llm_usage completion record never reaches the
-										# feed). Fail-open.
-										try:
-											from agents.task.telemetry.views import LLMStartedEvent
-											self.telemetry_manager.capture_event(LLMStartedEvent(
-												agent_id=self.agent_id,
-												step=self.state.n_steps,
-												provider=provider,
-												model_name=self.model_name,
-												attempt=retry_count,
-												context_tokens_est=request_info.get("estimated_input_tokens"),
-											))
-										except Exception:
-											pass
-
-										# CONSISTENT ADAPTER PATTERN:
-										# Our adapters (OpenAIAdapter, DeepSeekAdapter, etc.) accept tools via kwargs
-										# They extract tools from kwargs and call client.generate_agent_response()
-										# This provides consistent interface across all providers
-										# Stream if supported and callbacks registered
-										chunk_count = 0  # Track streaming chunks for telemetry
-										cq.stamp_step_context(self)  # D-7: context slots onto the usage record
-										if self._supports_streaming() and self.hitl_manager.has_streaming_callbacks():
-											response, chunk_count = await self._stream_with_tools(current_messages, tools, timeout_seconds)
-										else:
-											# Regular batch call
-											self.logger.info(f"[DEBUG_TOOLS] Calling llm.ainvoke with tools={len(tools) if tools else 0}")
-											response = await asyncio.wait_for(
-												self.llm.ainvoke(current_messages, tools=tools),
-												timeout=timeout_seconds
-											)
-											self.logger.info(f"[DEBUG_TOOLS] llm.ainvoke returned, response type: {type(response).__name__}")
-										llm_duration = time.time() - llm_start
-
-									# Extract token usage from response using centralized utility
-									token_usage = extract_token_usage(response, provider)
-									input_tokens = token_usage.get('prompt_tokens', 0) or 0
-									output_tokens = token_usage.get('completion_tokens', 0) or 0
-									cached_tokens = token_usage.get('cached_tokens', 0) or 0
-									cache_creation_tokens = token_usage.get('cache_creation_tokens', 0) or 0
-
-									self.logger.debug(
-										f"Extracted tokens: {input_tokens} input + {output_tokens} output "
-										f"(cached: {cached_tokens})"
-									)
-									# 057 WS-B: the NATIVE-tools path is the one prod runs (purpose
-									# "next_action"); it billed but never fed the output-scaled timeout,
-									# so every call read the 1,024-token default (prod 2026-09-20 04:50Z,
-									# six steps flat at 136 s). Same extraction, one read.
-									try:
-										self.message_manager.note_call_usage(
-											output_tokens=output_tokens, input_tokens=input_tokens,
-											cached_tokens=cached_tokens,
-											cache_creation_tokens=cache_creation_tokens)
-									except Exception:
-										pass
-
-									# G-26 reachability fix: extract the provider's own response id
-									# (when available) as the STABLE dedup key for this completion.
-									# Runs synchronously right after the LLM call above returned, with
-									# no intervening await, so a concurrent call on a shared client
-									# can't overwrite the source before we read it.
-									_native_provider = getattr(self, 'llm_provider', 'unknown')
-									request_id = extract_stable_request_id(getattr(self, 'llm', None), response, _native_provider)
-
-									# Record LLM usage to ALL systems atomically (SINGLE WRITE PATH)
-									# This replaces separate calls to usage_meter + telemetry_manager
-									if self.usage_tracker and self.user_id:
-										try:
-											usage_record = await self.usage_tracker.record_llm_usage(
-												user_id=self.user_id,
-												session_id=self.session_id,
-												agent_id=self.agent_id,
-												model=self.model_name,
-												provider=_native_provider,
-												input_tokens=input_tokens,
-												output_tokens=output_tokens,
-												cached_tokens=cached_tokens,
-												cache_creation_tokens=cache_creation_tokens,
-												cache_creation_1h_tokens=token_usage.get('cache_creation_1h_tokens', 0) or 0,
-												duration_seconds=llm_duration,
-												component="agent",
-												purpose="next_action",
-												success=True,
-												request_id=request_id,
-												# F23: the provider's billed cost (see the helper above).
-												billed_cost_usd=token_usage.get('billed_cost_usd'),
-												cache_discount_usd=token_usage.get('cache_discount_usd'),
-												metadata=_prefix_stamps(self)
-											)
-
-											# Log what user was charged (transparent billing)
-											self.logger.info(
-												f"✓ Step {self.state.n_steps}: {input_tokens:,} in + {output_tokens:,} out = "
-												f"{input_tokens + output_tokens:,} tokens | "
-												f"API: ${usage_record.costs.api_cost_usd:.6f} → "
-												f"User: ${usage_record.costs.user_cost_usd:.6f} "
-												f"({usage_record.costs.credits_charged} credits)"
-											)
-
-										except InsufficientCreditsError:
-											# Billing error - stop execution immediately
-											self.logger.warning(
-												f"⚠️ Session suspended due to insufficient credits"
-											)
-											# Re-raise to propagate up to orchestrator
-											raise
-										except Exception as e:
-											self.logger.error(f"Failed to record LLM usage: {e}", exc_info=True)
-											# Continue execution - don't fail agent for tracking errors
-									elif self.user_id:
-										# Fallback: just log telemetry without billing
-										# In production, usage_tracker should always be available
-										self.logger.warning(
-											"usage_tracker not available - telemetry only, NO BILLING! "
-											"Check orchestrator initialization."
-										)
-
-										# Capture to telemetry for display (no billing)
-										if self.telemetry_manager:
-											try:
-												self.telemetry_manager.capture_llm_usage(
-													component="agent",
-													purpose="next_action",
-													model_name=self.model_name,
-													duration_seconds=llm_duration,
-													success=True,
-													prompt_tokens=input_tokens,
-													completion_tokens=output_tokens,
-													cached_tokens=cached_tokens,
-													agent_id=self.agent_id,
-													provider=resolve_serving_provider(self.llm, self.model_name)
-												)
-											except Exception as e:
-												self.logger.debug(f"Failed to capture LLM telemetry: {e}")
-
-									# E-8: a truly empty completion (no text, no tool call) re-issues the
-									# SAME call once here instead of costing a whole agent step.
-									if empty_retry_left and cq.is_truly_empty(response):
-										empty_retry_left = 0
-										cq.emit_call_quality(self, cq.EMPTY, in_call_retry=True)
-										self.logger.warning("Empty completion (no text, no tool call) — re-issuing the same call once")
-										llm_start = time.time()
-										if self._supports_streaming() and self.hitl_manager.has_streaming_callbacks():
-											response, chunk_count = await self._stream_with_tools(current_messages, tools, timeout_seconds)
-										else:
-											response = await asyncio.wait_for(self.llm.ainvoke(current_messages, tools=tools), timeout=timeout_seconds)
-										await self._bill_llm_response(response, time.time() - llm_start, _native_provider, purpose="next_action_empty_retry")
-
-									# Emit streaming telemetry if streaming was used
-									if self._supports_streaming() and self.hitl_manager.has_streaming_callbacks() and chunk_count > 0:
-										if self.telemetry_manager:
-											try:
-												from agents.task.telemetry.views import StreamingOutputEvent
-
-												event = StreamingOutputEvent(
-													agent_id=self.agent_id,
-													step=self.state.n_steps,
-													total_chunks=chunk_count,
-													total_chars=len(full_content) if full_content else 0,
-													provider=getattr(self, 'llm_provider', 'unknown'),
-													duration_seconds=llm_duration,
-													callbacks_count=self.hitl_manager.get_callback_count(),
-													callback_failures=self.hitl_manager._callback_failures
-												)
-												self.telemetry_manager.capture_event(event)
-											except Exception as e:
-												self.logger.debug(f"Failed to emit streaming telemetry: {e}")
-
-									self.logger.debug(
-										f"Tool calls in response: {len(getattr(response, 'tool_calls', None) or [])}; "
-										f"content preview: {str(getattr(response, 'content', None) or 'None')[:200]}...")
-									# Store the raw response for later token extraction
-									raw_tool_response = response
-
-									# Initialize actions to empty list (will be populated if tool calls exist)
-									actions = []
-									normalized_tool_calls = []
-
-									# E-2 (owner D3): in an autonomous run that has acted, a text-only
-									# reply IS the final report — it becomes done(text=...).
-									_final = cq.prose_final_report(self, response)
-									if _final:
-										response.tool_calls = [_final]
-									elif not getattr(response, 'tool_calls', None):
-										cq.set_call_issue(self, cq.EMPTY if cq.is_truly_empty(response) else cq.TEXT_ONLY)
-									# Check if response contains tool calls
-									if hasattr(response, 'tool_calls') and response.tool_calls:
-										self.logger.info(f"[NATIVE_TOOLS] Received {len(response.tool_calls)} tool_calls from LLM")
-
-										# Get provider name for normalization
-										provider = getattr(self, 'llm_provider', None) or 'unknown'
-
-									# Process tool calls using ToolCallBuilder + Registry pipeline
-										try:
-											from agents.task.agent.message_manager.tool_call_builder import ToolCallBuilder
-
-											# STEP 1: Normalize tool calls using ToolCallBuilder
-											normalized_tool_calls = [
-												ToolCallBuilder.normalize_and_correct(tc, provider=provider)
-												for tc in response.tool_calls
-											]
-											self.logger.info(f"Normalized {len(response.tool_calls)} tool_calls via ToolCallBuilder")
-											# E-7: repair near-miss names (same registry/permission path after).
-											cq.repair_tool_call_names(self, normalized_tool_calls)
-
-											# STEP 2: Register with tracker FIRST (before MessageManager)
-											if self.tool_call_tracker and normalized_tool_calls:
-												registered_ids = self.tool_call_tracker.register_tool_calls(normalized_tool_calls)
-												self.logger.info(f"[NATIVE_TOOLS] ✅ Registered {len(registered_ids)} tool calls with tracker")
-
-											# FIX #6: step() adds the model output (once); keep its reasoning for that.
-											self._current_reasoning_content = (response.additional_kwargs or {}).get('reasoning_content')
-
-											# STEP 3: Convert to actions using Controller's high-level API
-											actions = self.controller.tool_calls_to_actions(normalized_tool_calls)
-											cq.note_rejected_calls(self, normalized_tool_calls, actions)
-											self.logger.info(f"Converted {len(normalized_tool_calls)} tool_calls -> {len(actions)} actions via Controller")
-
-											# Extract tool call IDs for debugging
-											tool_call_ids = [tc.get('id') for tc in normalized_tool_calls if tc.get('id')]
-											
-											# Store normalized tool calls for MessageManager (but NOT IDs - use tracker)
-											self._current_normalized_tool_calls = normalized_tool_calls  # Store for MessageManager
-											
-											# Log for debugging
-											self.logger.debug(f"Stored {len(tool_call_ids)} tool call IDs: {tool_call_ids}")
-											self.logger.debug(f"Stored {len(normalized_tool_calls)} normalized tool calls")
-											
-											# Check if we got zero actions despite having tool calls
-											if len(actions) == 0 and len(normalized_tool_calls) > 0:
-												self.logger.error(f"❌ Failed to convert {len(normalized_tool_calls)} tool_calls to actions")
-												
-												# Log what failed
-												for i, tc in enumerate(normalized_tool_calls):
-													tc_name = tc.get('name', 'unknown')
-													tc_args = tc.get('args', {})
-													self.logger.error(f"  Tool call {i}: name='{tc_name}', args={tc_args}")
-
-												# Log available actions for comparison
-												# Use Controller's high-level API instead of directly accessing registry
-												available = self.controller.list_actions()[:20]
-												self.logger.error(f"  Available actions (first 20): {available}")
-
-												# Say what actually happened. Prod 2026-08-24..28: 24 rejected
-												# `message` calls were logged as "these actions don't exist in
-												# registry" — the action existed, its arguments failed validation.
-												# The model never saw the reason, repeated the same call, and two
-												# empty steps tripped the thinking-loop escalation.
-												detail = self._describe_rejected_tool_calls(normalized_tool_calls)
-												self._push_rejected_tool_calls_feedback(detail)
-												raise ValueError(f"Tool call conversion failed: {detail}")
-											
-										except Exception as conversion_error:
-											self.logger.error(f"Error processing tool_calls: {conversion_error}", exc_info=True)
-											# Fall back to safe default
-											actions = []
-											normalized_tool_calls = []
-											# Let execution continue with empty actions - will trigger appropriate error handling
-									
-									# Initialize action_list to prevent undefined variable errors
-									action_list = []
-									action_tool_call_ids = []  # P0-2: parallel to action_list; re-stamped onto parsed.action
-
-									if actions:
-										# AgentOutput needs dicts (a list of ActionModel SUBCLASSES fails its
-										# list[ActionModel] validation), so each action is dumped to a dict.
-										# P0-2: model_dump drops the `_tool_call_id` PrivateAttr, so the ids
-										# are captured here and re-stamped onto parsed.action below — else
-										# result<->call pairing silently falls back to list POSITION.
-										action_tool_call_ids = []
-										for action in actions:
-											action_tool_call_ids.append(getattr(action, '_tool_call_id', None))
-											if hasattr(action, 'model_dump'):
-												# Convert to dict - validator accepts both dicts and instances
-												action_list.append(action.model_dump(exclude_unset=True))
-											else:
-												action_list.append(action)
-
-									# Extract brain state from response content using JSON parser
-									from agents.task.utils_json import extract_brain_state_from_json
-
-									brain_state = None
-									# Normalize content to string (handles both string and list formats)
-									# Some providers (Gemini) return content as list of blocks
-									content_str = None
-									if response.content:
-										if isinstance(response.content, str):
-											content_str = response.content
-										elif isinstance(response.content, list):
-											# Extract text from content blocks
-											content_str = ""
-											for block in response.content:
-												if isinstance(block, str):
-													content_str += block
-												elif hasattr(block, 'text'):
-													content_str += block.text
-												elif isinstance(block, dict) and 'text' in block:
-													content_str += block['text']
-										else:
-											content_str = str(response.content)
-
-									content_available = content_str and content_str.strip()
-
-									if content_available:
-										try:
-											brain_fields = extract_brain_state_from_json(content_str)
-											brain_state = AgentBrain(**brain_fields)
-											self.logger.info(f"✅ Extracted brain state: {brain_state.memory[:100]}")
-											
-											# ✅ CRITICAL FIX (Nov 17, 2025): Validate memory is NOT identical to previous step
-											# This prevents the memory rejection loop where LLM repeats same text
-											if hasattr(self, '_last_brain_state') and self._last_brain_state:
-												previous_memory = self._last_brain_state.memory if hasattr(self._last_brain_state, 'memory') else ""
-												current_memory = brain_state.memory
-												
-												# Check if memory is identical (exact match)
-												if previous_memory and current_memory and previous_memory.strip() == current_memory.strip():
-													self.logger.warning(
-														f"⚠️  MEMORY VALIDATION FAILED: Memory identical to previous step!\n"
-														f"   Previous: {previous_memory[:150]}...\n"
-														f"   Current:  {current_memory[:150]}...\n"
-														f"   This violates CRITICAL MEMORY RULE #3: Memory MUST be unique each step.\n"
-														f"   Will attempt to auto-fix by synthesizing step-specific memory from actions."
-													)
-													# Mark for synthesis - will be regenerated after actions execute
-													brain_state = None
-												
-												# Check if memory is suspiciously similar (>90% overlap by simple word count)
-												elif previous_memory and current_memory:
-													prev_words = set(previous_memory.lower().split())
-													curr_words = set(current_memory.lower().split())
-													if prev_words and curr_words:
-														overlap = len(prev_words & curr_words) / max(len(prev_words), len(curr_words))
-														if overlap > 0.90:
-															self.logger.warning(
-																f"⚠️  MEMORY VALIDATION WARNING: Memory {overlap:.0%} similar to previous step.\n"
-																f"   LLM may be repeating instead of adding new step-specific information."
-															)
-											
-											# Store current brain state for next validation
-											self._last_brain_state = brain_state if brain_state else self._last_brain_state
-											
-										except Exception as e:
-											# ✅ FIX: Defer synthesis until after actions execute
-											# This allows synthesis to use actual action results
-											self.logger.info(f"Brain state extraction failed: {e}. Will synthesize after actions execute.")
-											brain_state = None  # Synthesis #1 will handle this after actions
-									else:
-										# ✅ FIX: LLM returned tool calls WITHOUT text content
-										# Defer synthesis until after actions execute to use actual results
-										self.logger.info(
-											f"LLM returned tool calls without content (common with OpenAI). "
-											f"Will synthesize brain state after actions execute."
-										)
-										brain_state = None  # Synthesis #1 will handle this after actions
-
-									# Create parsed output with extracted brain state and converted actions
-									# This happens for BOTH cases: with actions or without actions
-									# If brain_state is None, use a placeholder that will be replaced by synthesis
-									if brain_state is None:
-										brain_state = AgentBrain(
-											page_summary="",
-											memory="Synthesis pending - will be generated after actions execute",
-											evaluation_previous_goal="Pending",
-											next_goal="Pending",
-											reasoning="Synthesis pending"
-										)
-										self.logger.info("Using placeholder brain state - will synthesize after actions")
-
-									parsed = self.AgentOutput(
-										current_state=brain_state,
-										action=action_list
-									)
-
-									# P0-2: re-stamp the tool_call_id PrivateAttr that AgentOutput's
-									# re-validation dropped, so identity pairing (result_processing.
-									# _pair_results_to_calls) works instead of falling to position.
-									# parsed.action is built 1:1 in-order from action_list, so zip aligns.
-									try:
-										for _act, _tcid in zip(parsed.action, action_tool_call_ids):
-											if _tcid is not None:
-												_act._tool_call_id = _tcid
-									except Exception as _restamp_err:
-										self.logger.debug(f"tool_call_id re-stamp skipped: {_restamp_err}")
-
-								except asyncio.TimeoutError:
-									# A12 fix round (2026-09-14, 043 §4.6): per-attempt — this
-									# `raise`s onward to the outer retry loop, which owns the
-									# turn's one final ERROR line.
-									self.logger.warning(f"LLM call timed out after {timeout_seconds} seconds with {len(tools)} tools", exc_info=True)
-									raise
-								except TypeError as type_error:
-									# Handle cases where bind_tools() is not supported or has invalid tool schemas
-									# A12 fix round: per-attempt, falls through (doesn't raise) —
-									# already paired with the warning below.
-									self.logger.warning(f"Failed to bind tools to LLM: {type_error}", exc_info=True)
-									self.logger.warning("Falling back to non-tool calling mode")
-									# Set parsed to None to trigger fallback to structured output
-									parsed = None
-									# Don't raise - let it fall through to structured output fallback
-								except Exception as llm_error:
-									# A12 fix round (2026-09-14, 043 §4.6): the tool-calling
-									# attempt failed and we're about to fall back to plain —
-									# per-attempt, `raise`s onward to the outer retry loop.
-									self.logger.warning(f"LLM call failed with {len(tools)} tools: {llm_error}", exc_info=True)
-									# Log tool sample for debugging
-									if tools:
-										sample = tools[:2] if len(tools) > 2 else tools
-										self.logger.debug(f"Sample tools that caused error: {sample}")
-									raise
-
-							except (InsufficientCreditsError, LLMPermanentError):
-								# Credit death is FAIL-FAST, never a "try the next shape"
-								# signal. Without this the inline billing block's deliberate
-								# re-raise (see `except InsufficientCreditsError: raise` in the
-								# native-tools path above) was caught by the generic handler
-								# below, turned into `parsed = None`, and fell through to the
-								# structured-output -> plain -> manual-parse chain, each of
-								# which bills again: ONE out-of-credits step made up to FOUR
-								# paid provider calls and delayed the credit sentinel by three.
-								raise
-							except Exception as tool_error:
-								if not self._structured_output_warned:
-									self.logger.warning(f"Native tool calling failed for {provider}: {tool_error}")
-									self._structured_output_warned = True
-								parsed = None
-						else:
-							# No tools available - fall back to structured output
-							parsed = None
-					else:
-						# Provider doesn't support native tools - use structured output
-						parsed = None
-
-					# Fall back to structured output if native tools didn't work
-					if parsed is None:
-						self.logger.info("Native tool calling didn't produce parsed output - falling back to structured output")
-						try:
-							# Try structured output based on provider capabilities
-							if provider == 'openai' or 'gpt' in self.model_name.lower():
-								# OpenAI - use function_calling method
-								structured_llm = self.llm.with_structured_output(
-									self.AgentOutput,
-									method="function_calling",
-									include_raw=True
-								)
-							else:
-								# Other providers - use default structured output
-								structured_llm = self.llm.with_structured_output(
-									self.AgentOutput,
-									include_raw=True
-								)
-
-							# Make the call
-							tool_count = len(self.controller.get_action_names()) if self.controller else 0
-							timeout_seconds = self.message_manager.calculate_llm_timeout(
-								tool_count=tool_count,
-								use_vision=self.use_vision
-							)
-							_fb_start = time.time()
-							response = await asyncio.wait_for(
-								structured_llm.ainvoke(current_messages),
-								timeout=timeout_seconds
-							)
-							# G2: structured-output fallback completion must be billed too.
-							await self._bill_llm_response(response, time.time() - _fb_start, provider, purpose="next_action_structured")
-
-							# Extract parsed result
-							if isinstance(response, dict) and 'parsed' in response:
-								parsed = response['parsed']
-								self.logger.info("Got parsed output from structured response")
-							elif isinstance(response, self.AgentOutput):
-								parsed = response
-								self.logger.info("Got direct AgentOutput from structured response")
-							else:
-								parsed = None
-								self.logger.warning("Structured output didn't return valid parsed output")
-
-						except (InsufficientCreditsError, LLMPermanentError):
-							raise  # fail-fast: never bill another shape (see above)
-						except Exception as struct_error:
-							if not self._structured_output_warned:
-								self.logger.warning(f"Structured output failed: {struct_error}")
-								self._structured_output_warned = True
-							self.logger.info("Falling back to regular LLM call")
-							# Fall back to regular call
-							try:
-								tool_count = len(self.controller.get_action_names()) if self.controller else 0
-								timeout_seconds = self.message_manager.calculate_llm_timeout(
-									tool_count=tool_count,
-									use_vision=self.use_vision
-								)
-								# Stream if supported and callbacks registered
-								_fb_start = time.time()
-								if self._supports_streaming() and self.hitl_manager.has_streaming_callbacks():
-									self.logger.debug("Using streaming mode for fallback LLM call")
-									response = await self._stream_plain_fallback(current_messages, timeout_seconds)
-								else:
-									response = await asyncio.wait_for(
-										self.llm.ainvoke(current_messages),
-										timeout=timeout_seconds
-									)
-								# G2: plain fallback completion must be billed too.
-								await self._bill_llm_response(response, time.time() - _fb_start, provider, purpose="next_action_fallback")
-							except asyncio.TimeoutError:
-								# A12 fix round (2026-09-14, 043 §4.6): per-attempt (first
-								# plain-fallback leg); `raise`s onward.
-								self.logger.warning(f"LLM call timed out after {timeout_seconds:.0f} seconds", exc_info=True)
-								raise
-							parsed = None
-				
-				except (InsufficientCreditsError, LLMPermanentError):
-					raise  # fail-fast: never bill another shape (see above)
-				except asyncio.TimeoutError:
-					# The inner fallbacks re-raise a timeout deliberately; without this
-					# arm that re-raise landed in the generic handler below, which
-					# answered a timeout by making ANOTHER full-timeout call. Let it
-					# propagate to get_next_action's timeout recovery instead.
-					raise
-				except Exception as structured_error:
-					if not self._structured_output_warned:
-						self.logger.warning(f"All structured output attempts failed: {structured_error}, using manual parsing")
-						self._structured_output_warned = True
-					# Fallback to regular LLM call with manual parsing
+					# A session restored from disk asks for the tool order it
+					# emitted BEFORE the restart, so the tools block — the largest
+					# cached bytes in the request — comes back identical. None on a
+					# fresh session ⇒ the plain sorted order.
+					tools = self.controller.get_all_actions_for_provider(
+						provider,
+						preferred_order=getattr(
+							self.message_manager, '_foundation_tool_names', None),
+					)
+					# Remember what actually went out, so the next save_to_disk
+					# persists the live order (a tool loaded mid-session included).
 					try:
+						from modules.llm.tool_schemas import schema_tool_names
+						self.message_manager._foundation_tool_names = \
+							schema_tool_names(tools) or None
+					except Exception:
+						pass
+					# Stamp the schema list's token cost
+					# onto the gauge — real billed prompt bytes every step that were
+					# invisible to get_actual_token_count. Fail-open; memoized in
+					# the registry so this is a cheap dict read per step.
+					try:
+						self.message_manager.set_tool_schema_tokens(
+							self.controller.get_tool_schema_token_estimate(provider))
+					except Exception:
+						pass
+					self.logger.info(f"[DEBUG_TOOLS] Provider {provider} - Got {len(tools) if tools else 0} actions from registry")
+					self.logger.debug(f"Provider {provider} - Got {len(tools) if tools else 0} actions from registry")
+
+					# Debug: Log the actual schemas being generated (only on first step)
+					if tools and self.state.n_steps == 1:
+						import json
+						self.logger.debug(f"Generated {len(tools)} tool schemas for {provider}:")
+						# Ensure tools is a list for safe slicing
+						tools_list = list(tools) if not isinstance(tools, list) else tools
+						for i, tool in enumerate(tools_list[:3]):  # Log first 3
+							tool_str = json.dumps(tool, indent=2) if isinstance(tool, dict) else str(tool)
+							self.logger.debug(f"  Tool schema {i}: {tool_str[:300]}...")
+
+					# The RIG is the limit. Every registered action is
+					# emitted here — there is deliberately no second filter at this
+					# seam, because a filter here would disagree with the catalog the
+					# agent was shown and with what `load_tool` can materialize.
+					# Narrowing belongs where the session is BUILT:
+					# `core/config_policy/rigs.py` picks the tool_ids a cron/goal run
+					# loads, and progressive disclosure lets that run widen itself.
+					# ("tools" = LLM function-calling schemas; "actions" = internal
+					# Registry actions.)
+					self.logger.info(f"Using all {len(tools) if tools else 0} tools for native function calling")
+
+					if tools and len(tools) > 0:
+						# Ensure tools is a list for safe slicing
+						tools_list = list(tools) if not isinstance(tools, list) else tools
+						action_names = [t.get('function', {}).get('name') if isinstance(t, dict) else getattr(t, 'name', 'unknown') for t in tools_list[:5]]
+						if len(tools_list) > 5:
+							action_names.append(f"... +{len(tools_list)-5} more")
+						self.logger.debug(f"Sample tool names: {action_names}")
+
+						# Try native tool calling first
+						self.logger.debug(f"Using native tool calling for {provider} with {len(tools)} actions")
+						self.logger.info(f"[DEBUG_TOOLS] About to call LLM with tools parameter")
+						self.logger.info(f"[DEBUG_TOOLS] Tools type: {type(tools)}, Tools count: {len(tools) if tools else 0}")
+						self.logger.info(f"[DEBUG_TOOLS] LLM adapter type: {type(self.llm).__name__}")
 						# Calculate timeout using MessageManager
 						tool_count = len(self.controller.get_action_names()) if self.controller else 0
 						timeout_seconds = self.message_manager.calculate_llm_timeout(
 							tool_count=tool_count,
 							use_vision=self.use_vision
 						)
-						# Stream if supported and callbacks registered
-						_fb_start = time.time()
-						if self._supports_streaming() and self.hitl_manager.has_streaming_callbacks():
-							self.logger.debug("Using streaming mode for final fallback LLM call")
-							response = await self._stream_plain_fallback(current_messages, timeout_seconds)
-						else:
-							response = await asyncio.wait_for(
-								self.llm.ainvoke(current_messages),
-								timeout=timeout_seconds
-							)
-						# G2: final manual-parse fallback completion must be billed too.
-						await self._bill_llm_response(response, time.time() - _fb_start, provider, purpose="next_action_fallback")
-					except asyncio.TimeoutError:
-						# A12 fix round (2026-09-14, 043 §4.6): per-attempt (the
-						# "final" plain-fallback leg is still one leg of the
-						# outer retry loop); `raise`s onward.
-						self.logger.warning(f"LLM call timed out after {timeout_seconds} seconds", exc_info=True)
-						raise
-					parsed = None
+						anchored_tokens = self._anchored_input_tokens()
 
-				# Handle manual parsing if structured output failed
+						# Call with tools with better error handling
+						try:
+							parsed = None  # Initialize to prevent NameError
+							llm_start = time.time()
+							
+							# In flight for the stall watchdog; cleared in finally, so a
+							# raise or a cancel never leaves the watchdog blind.
+							from agents.task.agent.core.run_state import llm_call_state
+							with llm_call_state(self).active(llm_start):
+								# llm_started span event — surfaces render
+								# "thinking" instead of dead air during LLM latency
+								# (the llm_usage completion record never reaches the
+								# feed). Fail-open.
+								try:
+									from agents.task.telemetry.views import LLMStartedEvent
+									self.telemetry_manager.capture_event(LLMStartedEvent(
+										agent_id=self.agent_id,
+										step=self.state.n_steps,
+										provider=provider,
+										model_name=self.model_name,
+										attempt=retry_count,
+										context_tokens_est=estimated_input_tokens,
+									))
+								except Exception:
+									pass
+
+								# CONSISTENT ADAPTER PATTERN:
+								# Our adapters (OpenAIAdapter, DeepSeekAdapter, etc.) accept tools via kwargs
+								# They extract tools from kwargs and call client.generate_agent_response()
+								# This provides consistent interface across all providers
+								# Stream if supported and callbacks registered
+								response, chunk_count = await self._scoped_llm_call(
+									current_messages, tools, timeout_seconds, anchored_tokens)
+								llm_duration = time.time() - llm_start
+
+							self.last_call_facts = getattr(response, "call_facts", None)
+							# Extract token usage from response using centralized utility
+							token_usage = extract_token_usage(response)
+							input_tokens = token_usage.get('prompt_tokens', 0) or 0
+							output_tokens = token_usage.get('completion_tokens', 0) or 0
+							cached_tokens = token_usage.get('cached_tokens', 0) or 0
+							cache_creation_tokens = token_usage.get('cache_creation_tokens', 0) or 0
+
+							self.logger.debug(
+								f"Extracted tokens: {input_tokens} input + {output_tokens} output "
+								f"(cached: {cached_tokens})"
+							)
+							# The NATIVE-tools path is the one prod runs (purpose
+							# "next_action"); it feeds the output-scaled timeout, which
+							# otherwise reads the 1,024-token default.
+							# Same extraction, one read.
+							try:
+								self.message_manager.note_call_usage(
+									output_tokens=output_tokens, input_tokens=input_tokens,
+									cached_tokens=cached_tokens,
+									cache_creation_tokens=cache_creation_tokens)
+							except Exception:
+								pass
+
+							# The provider's own response id (when
+							# available) as the STABLE dedup key, from this call's own message.
+							_native_provider = getattr(self, 'llm_provider', 'unknown')
+							request_id = extract_stable_request_id(response, _native_provider)
+
+							# Record LLM usage to ALL systems atomically (SINGLE WRITE PATH)
+							# This replaces separate calls to usage_meter + telemetry_manager
+							if self.usage_tracker and self.user_id:
+								try:
+									usage_record = await self.usage_tracker.record_llm_usage(
+										user_id=self.user_id,
+										session_id=self.session_id,
+										agent_id=self.agent_id,
+										model=self.model_name,
+										provider=_native_provider,
+										input_tokens=input_tokens,
+										output_tokens=output_tokens,
+										cached_tokens=cached_tokens,
+										cache_creation_tokens=cache_creation_tokens,
+										cache_creation_1h_tokens=token_usage.get('cache_creation_1h_tokens', 0) or 0,
+										duration_seconds=llm_duration,
+										component="agent",
+										purpose="next_action",
+										success=True,
+										request_id=request_id,
+										# The provider's billed cost (see the helper above).
+										billed_cost_usd=token_usage.get('billed_cost_usd'),
+										cache_discount_usd=token_usage.get('cache_discount_usd'),
+										metadata=_prefix_stamps(self, response)
+									)
+
+									# Log what user was charged (transparent billing)
+									self.logger.info(
+										f"✓ Step {self.state.n_steps}: {input_tokens:,} in + {output_tokens:,} out = "
+										f"{input_tokens + output_tokens:,} tokens | "
+										f"API: ${usage_record.costs.api_cost_usd:.6f} → "
+										f"User: ${usage_record.costs.user_cost_usd:.6f} "
+										f"({usage_record.costs.credits_charged} credits)"
+									)
+
+								except InsufficientCreditsError:
+									# Billing error - stop execution immediately
+									self.logger.warning(
+										f"⚠️ Session suspended due to insufficient credits"
+									)
+									# Re-raise to propagate up to orchestrator
+									raise
+								except Exception as e:
+									self.logger.error(f"Failed to record LLM usage: {e}", exc_info=True)
+									# Continue execution - don't fail agent for tracking errors
+							elif self.user_id:
+								# Fallback: just log telemetry without billing
+								# In production, usage_tracker should always be available
+								self.logger.warning(
+									"usage_tracker not available - telemetry only, NO BILLING! "
+									"Check orchestrator initialization."
+								)
+
+								# Capture to telemetry for display (no billing)
+								if self.telemetry_manager:
+									try:
+										self.telemetry_manager.capture_llm_usage(
+											component="agent",
+											purpose="next_action",
+											model_name=self.model_name,
+											duration_seconds=llm_duration,
+											success=True,
+											prompt_tokens=input_tokens,
+											completion_tokens=output_tokens,
+											cached_tokens=cached_tokens,
+											agent_id=self.agent_id,
+											provider=resolve_serving_provider(self.llm, self.model_name)
+										)
+									except Exception as e:
+										self.logger.debug(f"Failed to capture LLM telemetry: {e}")
+
+							# A truly empty completion (no text, no tool call) re-issues the
+							# SAME call once here instead of costing a whole agent step.
+							if empty_retry_left and cq.worth_empty_retry(response):
+								empty_retry_left = 0
+								cq.emit_call_quality(self, cq.EMPTY, in_call_retry=True)
+								self.logger.warning("Empty completion (no text, no tool call) — re-issuing the same call once")
+								llm_start = time.time()
+								response, chunk_count = await self._scoped_llm_call(
+									current_messages, tools, timeout_seconds, anchored_tokens)
+								await self._bill_llm_response(response, time.time() - llm_start, _native_provider, purpose="next_action_empty_retry")
+
+							# Emit streaming telemetry if streaming was used
+							if self._supports_streaming() and self.hitl_manager.has_streaming_callbacks() and chunk_count > 0:
+								if self.telemetry_manager:
+									try:
+										from agents.task.telemetry.views import StreamingOutputEvent
+
+										event = StreamingOutputEvent(
+											agent_id=self.agent_id,
+											step=self.state.n_steps,
+											total_chunks=chunk_count,
+											total_chars=len(str(getattr(response, "content", "") or "")),
+											provider=getattr(self, 'llm_provider', 'unknown'),
+											duration_seconds=llm_duration,
+											callbacks_count=self.hitl_manager.get_callback_count(),
+											callback_failures=self.hitl_manager._callback_failures
+										)
+										self.telemetry_manager.capture_event(event)
+									except Exception as e:
+										self.logger.debug(f"Failed to emit streaming telemetry: {e}")
+
+							self.logger.debug(
+								f"Tool calls in response: {len(getattr(response, 'tool_calls', None) or [])}; "
+								f"content preview: {str(getattr(response, 'content', None) or 'None')[:200]}...")
+							# Store the raw response for later token extraction
+							raw_tool_response = response
+
+							# Initialize actions to empty list (will be populated if tool calls exist)
+							actions = []
+							normalized_tool_calls = []
+
+							# In an autonomous run that has acted, a text-only
+							# reply IS the final report — it becomes done(text=...).
+							_final = cq.prose_final_report(self, response)
+							if _final:
+								response.tool_calls = [_final]
+							elif not getattr(response, 'tool_calls', None):
+								cq.set_call_issue(self, cq.EMPTY if cq.is_truly_empty(response) else cq.TEXT_ONLY)
+							# Check if response contains tool calls
+							if hasattr(response, 'tool_calls') and response.tool_calls:
+								self.logger.info(f"[NATIVE_TOOLS] Received {len(response.tool_calls)} tool_calls from LLM")
+
+								# Get provider name for normalization
+								provider = getattr(self, 'llm_provider', None) or 'unknown'
+
+							# Process tool calls using ToolCallBuilder + Registry pipeline
+								try:
+									from agents.task.agent.message_manager.tool_call_builder import ToolCallBuilder
+
+									# STEP 1: Normalize tool calls using ToolCallBuilder
+									normalized_tool_calls = [
+										ToolCallBuilder.normalize_and_correct(tc, provider=provider)
+										for tc in response.tool_calls
+									]
+									self.logger.info(f"Normalized {len(response.tool_calls)} tool_calls via ToolCallBuilder")
+									# Repair near-miss names (same registry/permission path after).
+									cq.repair_tool_call_names(self, normalized_tool_calls)
+
+									# STEP 2: Register with tracker FIRST (before MessageManager)
+									if self.tool_call_tracker and normalized_tool_calls:
+										registered_ids = self.tool_call_tracker.register_tool_calls(normalized_tool_calls)
+										self.logger.info(f"[NATIVE_TOOLS] ✅ Registered {len(registered_ids)} tool calls with tracker")
+
+									# step() adds the model output (once); keep its reasoning for that.
+									self._current_replay_fields = replay_fields(response.additional_kwargs)
+
+									# STEP 3: Convert to actions using Controller's high-level API
+									actions = self.controller.tool_calls_to_actions(normalized_tool_calls)
+									cq.note_rejected_calls(self, normalized_tool_calls, actions)
+									self.logger.info(f"Converted {len(normalized_tool_calls)} tool_calls -> {len(actions)} actions via Controller")
+
+									# Extract tool call IDs for debugging
+									tool_call_ids = [tc.get('id') for tc in normalized_tool_calls if tc.get('id')]
+									
+									# Store normalized tool calls for MessageManager (but NOT IDs - use tracker)
+									self._current_normalized_tool_calls = normalized_tool_calls  # Store for MessageManager
+									
+									# Log for debugging
+									self.logger.debug(f"Stored {len(tool_call_ids)} tool call IDs: {tool_call_ids}")
+									self.logger.debug(f"Stored {len(normalized_tool_calls)} normalized tool calls")
+									
+									# Check if we got zero actions despite having tool calls
+									if len(actions) == 0 and len(normalized_tool_calls) > 0:
+										self.logger.error(f"❌ Failed to convert {len(normalized_tool_calls)} tool_calls to actions")
+										
+										# Log what failed
+										for i, tc in enumerate(normalized_tool_calls):
+											tc_name = tc.get('name', 'unknown')
+											tc_args = tc.get('args', {})
+											self.logger.error(f"  Tool call {i}: name='{tc_name}', args={tc_args}")
+
+										# Log available actions for comparison
+										# Use Controller's high-level API instead of directly accessing registry
+										available = self.controller.list_actions()[:20]
+										self.logger.error(f"  Available actions (first 20): {available}")
+
+										# Say what actually happened: a rejected `message` call may
+										# name an action that exists whose arguments failed validation.
+										# The model must see the reason, or it repeats the same call and
+										# two empty steps trip the thinking-loop escalation.
+										detail = self._describe_rejected_tool_calls(normalized_tool_calls)
+										self._push_rejected_tool_calls_feedback(detail)
+										raise ValueError(f"Tool call conversion failed: {detail}")
+									
+								except Exception as conversion_error:
+									self.logger.error(f"Error processing tool_calls: {conversion_error}", exc_info=True)
+									# Fall back to safe default
+									actions = []
+									normalized_tool_calls = []
+									# Let execution continue with empty actions - will trigger appropriate error handling
+							
+							# Initialize action_list to prevent undefined variable errors
+							action_list = []
+							action_tool_call_ids = []  # Parallel to action_list; re-stamped onto parsed.action
+
+							if actions:
+								# AgentOutput needs dicts (a list of ActionModel SUBCLASSES fails its
+								# list[ActionModel] validation), so each action is dumped to a dict.
+								# Model_dump drops the `_tool_call_id` PrivateAttr, so the ids
+								# are captured here and re-stamped onto parsed.action below — else
+								# result<->call pairing silently falls back to list POSITION.
+								action_tool_call_ids = []
+								for action in actions:
+									action_tool_call_ids.append(getattr(action, '_tool_call_id', None))
+									if hasattr(action, 'model_dump'):
+										# Convert to dict - validator accepts both dicts and instances
+										action_list.append(action.model_dump(exclude_unset=True))
+									else:
+										action_list.append(action)
+
+							# Extract brain state from response content using JSON parser
+							from agents.task.utils_json import extract_brain_state_from_json
+
+							brain_state = None
+							# Normalize content to string (handles both string and list formats)
+							# Some providers (Gemini) return content as list of blocks
+							content_str = None
+							if response.content:
+								if isinstance(response.content, str):
+									content_str = response.content
+								elif isinstance(response.content, list):
+									# Extract text from content blocks
+									content_str = ""
+									for block in response.content:
+										if isinstance(block, str):
+											content_str += block
+										elif hasattr(block, 'text'):
+											content_str += block.text
+										elif isinstance(block, dict) and 'text' in block:
+											content_str += block['text']
+								else:
+									content_str = str(response.content)
+
+							content_available = content_str and content_str.strip()
+
+							if content_available:
+								try:
+									brain_fields = extract_brain_state_from_json(content_str)
+									brain_state = AgentBrain(**brain_fields)
+									self.logger.info(f"✅ Extracted brain state: {brain_state.memory[:100]}")
+									
+									# Validate memory is NOT identical to previous step
+									# This prevents the memory rejection loop where LLM repeats same text
+									if hasattr(self, '_last_brain_state') and self._last_brain_state:
+										previous_memory = self._last_brain_state.memory if hasattr(self._last_brain_state, 'memory') else ""
+										current_memory = brain_state.memory
+										
+										# Check if memory is identical (exact match)
+										if previous_memory and current_memory and previous_memory.strip() == current_memory.strip():
+											self.logger.warning(
+												f"⚠️  MEMORY VALIDATION FAILED: Memory identical to previous step!\n"
+												f"   Previous: {previous_memory[:150]}...\n"
+												f"   Current:  {current_memory[:150]}...\n"
+												f"   This violates CRITICAL MEMORY RULE #3: Memory MUST be unique each step.\n"
+												f"   Will attempt to auto-fix by synthesizing step-specific memory from actions."
+											)
+											# Mark for synthesis - will be regenerated after actions execute
+											brain_state = None
+										
+										# Check if memory is suspiciously similar (>90% overlap by simple word count)
+										elif previous_memory and current_memory:
+											prev_words = set(previous_memory.lower().split())
+											curr_words = set(current_memory.lower().split())
+											if prev_words and curr_words:
+												overlap = len(prev_words & curr_words) / max(len(prev_words), len(curr_words))
+												if overlap > 0.90:
+													self.logger.warning(
+														f"⚠️  MEMORY VALIDATION WARNING: Memory {overlap:.0%} similar to previous step.\n"
+														f"   LLM may be repeating instead of adding new step-specific information."
+													)
+									
+									# Store current brain state for next validation
+									self._last_brain_state = brain_state if brain_state else self._last_brain_state
+									
+								except Exception as e:
+									# Defer synthesis until after actions execute
+									# This allows synthesis to use actual action results
+									self.logger.info(f"Brain state extraction failed: {e}. Will synthesize after actions execute.")
+									brain_state = None  # Synthesis #1 will handle this after actions
+							else:
+								# LLM returned tool calls WITHOUT text content
+								# Defer synthesis until after actions execute to use actual results
+								self.logger.info(
+									f"LLM returned tool calls without content (common with OpenAI). "
+									f"Will synthesize brain state after actions execute."
+								)
+								brain_state = None  # Synthesis #1 will handle this after actions
+
+							# Create parsed output with extracted brain state and converted actions
+							# This happens for BOTH cases: with actions or without actions
+							# If brain_state is None, use a placeholder that will be replaced by synthesis
+							if brain_state is None:
+								brain_state = AgentBrain(
+									page_summary="",
+									memory="Synthesis pending - will be generated after actions execute",
+									evaluation_previous_goal="Pending",
+									next_goal="Pending",
+									reasoning="Synthesis pending"
+								)
+								self.logger.info("Using placeholder brain state - will synthesize after actions")
+
+							parsed = self.AgentOutput(
+								current_state=brain_state,
+								action=action_list
+							)
+
+							# Re-stamp the tool_call_id PrivateAttr that AgentOutput's
+							# re-validation dropped, so identity pairing (result_processing.
+							# _pair_results_to_calls) works instead of falling to position.
+							# parsed.action is built 1:1 in-order from action_list, so zip aligns.
+							try:
+								for _act, _tcid in zip(parsed.action, action_tool_call_ids):
+									if _tcid is not None:
+										_act._tool_call_id = _tcid
+							except Exception as _restamp_err:
+								self.logger.debug(f"tool_call_id re-stamp skipped: {_restamp_err}")
+
+						except asyncio.TimeoutError:
+							# Per-attempt: this
+							# `raise`s onward to the outer retry loop, which owns the
+							# turn's one final ERROR line.
+							self.logger.warning(f"LLM call timed out after {timeout_seconds} seconds with {len(tools)} tools", exc_info=True)
+							raise
+						except Exception as llm_error:
+							# The tool-calling
+							# attempt failed — per-attempt, `raise`s onward to the
+							# outer retry loop.
+							self.logger.warning(f"LLM call failed with {len(tools)} tools: {llm_error}", exc_info=True)
+							# Log tool sample for debugging
+							if tools:
+								sample = tools[:2] if len(tools) > 2 else tools
+								self.logger.debug(f"Sample tools that caused error: {sample}")
+							raise
+
+				# The provider has no native tools, or the registry emitted none: one plain
+				# call, parsed from its text. A failed native call never comes here: it would
+				# bill again with no tools and lose the tool calls.
 				if parsed is None:
-					self.logger.info("All structured methods failed - attempting manual JSON parsing")
-					# FIXED: More robust content extraction for different LLM response formats
+					tool_count = len(self.controller.get_action_names()) if self.controller else 0
+					timeout_seconds = self.message_manager.calculate_llm_timeout(
+						tool_count=tool_count,
+						use_vision=self.use_vision
+					)
+					_fb_start = time.time()
+					try:
+						response, _ = await self._scoped_llm_call(current_messages, None, timeout_seconds)
+					except asyncio.TimeoutError:
+						# Per-attempt; `raise`s onward.
+						self.logger.warning(f"LLM call timed out after {timeout_seconds:.0f} seconds", exc_info=True)
+						raise
+					await self._bill_llm_response(response, time.time() - _fb_start, provider, purpose="next_action_fallback")
+
+					# More robust content extraction for different LLM response formats
 					content = self._extract_response_content(response)
 
 					if content is not None and content.strip():
 						parsed = self._parse_fallback_content(content)
 					else:
 						# Log the full response for debugging when no content is found.
-						# A12 fix round (2026-09-14, 043 §4.6): per-attempt — this
+						# Per-attempt: this
 						# `raise`s onward to the outer retry loop, which owns the
 						# turn's one final ERROR line.
 						self.logger.warning(f"No content available for manual parsing. Response type: {type(response)}, Response: {str(response)[:1000]}", exc_info=True)
 						raise LLMResponseError("No content available for manual parsing")
 				
-				# Extract token usage and response metadata
-				response_for_metadata = raw_tool_response if 'raw_tool_response' in locals() else response if 'response' in locals() else None
-
-				# Try to extract usage from AIMessage.additional_kwargs first (new method)
-				token_usage = {}
-				if response_for_metadata and hasattr(response_for_metadata, 'additional_kwargs'):
-					usage_data = response_for_metadata.additional_kwargs.get('usage')
-					if usage_data:
-						token_usage = usage_data
-						self.logger.debug(f"Extracted usage from AIMessage.additional_kwargs: {token_usage}")
-
-				# Fallback to old extraction method if no usage found
-				if not token_usage or token_usage.get('total_tokens') is None:
-					self.logger.debug("No usage in additional_kwargs, falling back to extract_token_usage")
-					token_usage = extract_token_usage(response_for_metadata, provider)
-
-				total_tokens = token_usage.get("total_tokens")
-
-				# Extract model response metadata
-				response_metadata = {}
-				try:
-					raw_resp = response_for_metadata.get('raw') if response_for_metadata and isinstance(response_for_metadata, dict) else response_for_metadata
-					if raw_resp and hasattr(raw_resp, 'model'):
-						response_metadata['model'] = raw_resp.model
-					if raw_resp and hasattr(raw_resp, 'id'):
-						response_metadata['response_id'] = raw_resp.id
-					if raw_resp and hasattr(raw_resp, 'created'):
-						response_metadata['created'] = raw_resp.created
-				except Exception as e:
-					self.logger.debug(f"Error extracting response metadata: {e}")
-				
-				# Update request info with completion details
-				elapsed_time = time.time() - start_time
-				request_info.update({
-					"elapsed_time": elapsed_time,
-					"token_usage": token_usage,
-					"response_metadata": response_metadata
-				})
-
-				# Add request info to session data if available
-				if hasattr(self, 'session_data'):
-					if "llm_requests" not in self.session_data:
-						self.session_data["llm_requests"] = []
-					self.session_data["llm_requests"].append(request_info)
-				
-				# CRITICAL FIX: Ensure parsed is always an AgentOutput object, never a dict
+				# Ensure parsed is always an AgentOutput object, never a dict
 				if parsed is not None and not isinstance(parsed, self.AgentOutput):
 					try:
 						# If parsed is a dict, validate it into AgentOutput
@@ -1505,14 +1291,14 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 							self.logger.warning(f"Unexpected parsed type: {type(parsed)}, attempting validation")
 							parsed = self.AgentOutput.model_validate(parsed)
 					except Exception as validation_error:
-						# A12 fix round (2026-09-14, 043 §4.6): per-attempt —
+						# Per-attempt:
 						# doesn't raise, feeds the parse-retry decision below.
 						self.logger.warning(f"Failed to validate parsed response into AgentOutput: {validation_error}", exc_info=True)
 						parsed = None
 						last_error_type = "parse"
 				
 				if parsed is None and RobustParseConfig.should_retry_parse_error(retry_count):
-					# FIXED: Better retry logic with error type tracking
+					# Better retry logic with error type tracking
 					retry_count += 1
 					
 					delay = RobustParseConfig.get_exponential_backoff_delay(retry_count - 1)
@@ -1525,9 +1311,9 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 					continue
 				
 				if parsed is None:
-					# FIX 8: Return safe default instead of raising error after MAX_PARSE_RETRIES
+					# Return safe default instead of raising error after MAX_PARSE_RETRIES
 					self.logger.error('Could not parse response after all retry attempts, returning safe default', exc_info=True)
-					# P0-5: AgentBrain requires evaluation_previous_goal/memory/next_goal —
+					# AgentBrain requires evaluation_previous_goal/memory/next_goal —
 					# a bare {"error": ...} dict raises ValidationError, so this "safe
 					# default" actually re-raised and was reclassified as a parse error
 					# (dead graceful-degradation path). Build a VALID brain instead.
@@ -1545,9 +1331,9 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 
 				# FINAL VALIDATION: Double-check that we have a proper AgentOutput object
 				if not isinstance(parsed, self.AgentOutput):
-					# FIX 8: Convert to safe default instead of raising
+					# Convert to safe default instead of raising
 					self.logger.error(f'Parsed response is not an AgentOutput object, got: {type(parsed)}', exc_info=True)
-					# P0-5: same fix — a valid AgentBrain, not a bare error dict.
+					# Same fix — a valid AgentBrain, not a bare error dict.
 					parsed = self._safe_default_output(memory=f"Parsed response had the wrong type ({type(parsed).__name__}); expected AgentOutput.", reasoning="invalid_type: parser returned a non-AgentOutput object")
 
 				# NOTE: LLM telemetry is captured by usage_tracker.record_llm_usage() in the step loop
@@ -1556,7 +1342,7 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 
 				self._log_response(parsed)
 
-				# Post-response vision verification (extracted → _verify_vision_post_response, P7).
+				# Post-response vision verification (extracted → _verify_vision_post_response).
 				self._verify_vision_post_response(response)
 
 				# DEBUG: Log final parsed output
@@ -1570,36 +1356,23 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 				
 				last_error_type = self._classify_llm_error(e)
 
-				# A12 fix round (2026-09-14, 043 §4.6): "attempt N of M" —
+				# "attempt N of M":
 				# per-attempt, not the turn's final word (may retry below).
 				# The single final ERROR is the `else:` branch further down.
 				self.logger.warning(f"LLM request attempt {retry_count} failed after {elapsed_time:.2f}s: {str(e)}", exc_info=True)
-				
-				# Update request info with error details
-				request_info.update({
-					"elapsed_time": elapsed_time,
-					"error": str(e),
-					"error_type": last_error_type
-				})
-				
-				# Add error request to session data if available
-				if hasattr(self, 'session_data'):
-					if "llm_requests" not in self.session_data:
-						self.session_data["llm_requests"] = []
-					self.session_data["llm_requests"].append(request_info)
 				
 				# NOTE: LLM telemetry for failed requests is also captured by usage_tracker
 				# in the step loop. Do NOT add duplicate capture_llm_request() here.
 				
 				# Check if we should retry based on error type
-				if RobustParseConfig.should_retry_parse_error(retry_count - 1) and last_error_type in ["parse", "rate_limit", "parameter_error"]:
+				if RobustParseConfig.should_retry_parse_error(retry_count - 1) and last_error_type in ["parse", "rate_limit"]:
 					delay = RobustParseConfig.get_exponential_backoff_delay(retry_count - 1)
 					self.logger.warning(f"Retrying LLM call in {delay:.1f}s (attempt {retry_count + 1}, error: {last_error_type})")
 					await asyncio.sleep(delay)
 					continue
 				else:
-					# A12 fix round 5 (2026-09-14, 043 §4.6): the ONE final
-					# ERROR for this retry loop -- every per-attempt log above
+					# The ONE final ERROR for
+					# this retry loop -- every per-attempt log above
 					# is WARNING. Rendering extracted to modules/llm/retry_log.py.
 					log_exhausted(self.logger, retry_count=retry_count, provider=provider, exc=e)
 					raise

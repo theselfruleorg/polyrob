@@ -29,7 +29,7 @@
  * words, because no 043 template carries an inline script.
  */
 import { loadSocketIo } from './socket-client.js';
-import { postJson, serverAnswer } from './http.js';
+import { getJson, postJson, serverAnswer } from './http.js';
 import { fmtUsd } from './format.js';
 import { appendRichText } from './rich-text.js';
 
@@ -284,6 +284,11 @@ export class Transcript {
     // and the feed watcher), and the backfill may carry it too — one `_id`,
     // one row. Scheme B events have no `_id` and keep their own keys.
     this.seenIds = new Set();
+    // 113 W5: inline verb answers this tab drew, until the feed's copy arrives.
+    this.inlinePending = new Set();
+    // 113 W5 (C-07): how many feed files the backfill and "load older" read.
+    this.feedRead = 0;
+    this.olderNode = null;
     // Live events that arrive while the backfill loads wait here, then apply
     // in arrival order after it (`flush`). `null` = not buffering.
     this.buffer = null;
@@ -340,19 +345,82 @@ export class Transcript {
       const key = `c:${ts}:${text}`;
       if (!text || this.seen.has(key)) return null;
       this.seen.add(key);
-      return this._commandNote({ command_reply: text });
+      // 113 W5 (C-05): the feed keeps a chat-box verb's answer (`inline`). The
+      // tab that typed it drew it from the HTTP answer already: skip it once.
+      if (data.inline && this.inlinePending.has(text)) {
+        this.inlinePending.delete(text);
+        return null;
+      }
+      const line = String(data.line || '').trim();
+      const note = this._commandNote({ command_reply: text }, line);
+      if (line) this._cardButtons(note, line, { command_reply: text });
+      return note;
     }
     // Everything else (step, planner, evaluation, …) is not drawn in the
     // transcript — the acts and the reply are the visible turn.
   }
 
   /** Start holding live events (the room is joined before the backfill). */
-  startBuffer() { this.buffer = []; }
+  startBuffer() { this.buffer = []; this._syncBusy(); }
+
+  /**
+   * 113 W5 (C-07): the "Load older" control above the drawn history, when the
+   * feed says there is more. One control, reused by every backfill.
+   */
+  olderControl(hasMore, load) {
+    if (!this.thread) return null;
+    if (!hasMore) { this.olderNode?.remove(); this.olderNode = null; return null; }
+    if (!this.olderNode) {
+      const row = el('div', 'entry-actions');
+      row.dataset.loadOlder = '1';
+      const b = el('button', 'btn btn-quiet', this.copy.load_older || '');
+      b.type = 'button';
+      b.addEventListener('click', () => load());
+      row.appendChild(b);
+      const seed = this.thread.querySelector(':scope > .turn-person');
+      const first = seed && this.thread.firstElementChild === seed ? seed.nextSibling : this.thread.firstChild;
+      this.thread.insertBefore(row, first);
+      this.olderNode = row;
+    }
+    return this.olderNode;
+  }
+
+  /**
+   * Draw an older page ABOVE the history (after "Load older"). The page is
+   * drawn by its own Transcript over a detached node — so an old turn never
+   * becomes this chat's open turn — that shares this one's dedupe sets, then
+   * moved in place. Returns how many nodes it added.
+   */
+  prependOlder(events) {
+    if (!this.thread || !this.olderNode) return 0;
+    const holder = document.createElement('div');
+    const older = new Transcript(holder, this.copy, { sessionId: this.sessionId,
+      readOnly: this.readOnly, fetcher: this.fetcher, now: this.now, input: this.input,
+      runLive: false });
+    older.seen = this.seen; older.seenIds = this.seenIds; older.userBubbles = this.userBubbles;
+    older.applyAll(events);
+    older.flush();
+    const nodes = Array.from(holder.childNodes);
+    const after = this.olderNode.nextSibling;
+    nodes.forEach((n) => this.thread.insertBefore(n, after));
+    older.thread = this.thread;   // a card tap on an old answer draws below, like any send
+    return nodes.length;
+  }
 
   /** A live `feed_update`: held while the backfill loads, else applied. */
   receive(event) {
     if (this.buffer) this.buffer.push(event);
     else this.apply(event);
+    this._syncBusy();
+  }
+
+  /** 113 W5 (CH-4): the thread is a `role="log"` live region. It is busy while
+   *  the backfill loads and while a turn works, so a screen reader announces
+   *  the finished answer, not every step. */
+  _syncBusy() {
+    if (!this.thread || !this.thread.setAttribute) return;
+    const busy = this.buffer !== null || Boolean(this.turn && this.turn.state === 'working');
+    this.thread.setAttribute('aria-busy', busy ? 'true' : 'false');
   }
 
   /** The backfill is drawn: apply the held live events in arrival order, stop
@@ -366,6 +434,7 @@ export class Transcript {
       this._close(null, 'ended');
     }
     if (this.turn) this._receipt();
+    this._syncBusy();
   }
 
   /**
@@ -744,6 +813,10 @@ export class Transcript {
       // honest "live in the agent" line (with owner_pid + a retry hint), NEVER a
       // failure bubble. LOCAL/here sessions never see this.
       if (res && res.status === 409) this._remoteNotice(res.body);
+      // 113 W0/W5 (CH-3): this process has no language model — the same note,
+      // with the same link, the start page shows.
+      else if (res && res.status === 503 && /no_model/.test(JSON.stringify(res.body || '')))
+        this._noModelNote(document.getElementById('chat-composer')?.dataset);
       else if (!res.ok) this._errorNotice(res.body);
       return res;
     } catch (err) {
@@ -785,14 +858,23 @@ export class Transcript {
    * answered, not the agent. Each verb leaves its own answer rather than
    * replacing the previous one.
    */
-  _commandNote(body) {
+  _commandNote(body, line = '') {
     if (!this.thread || !body) return null;
     const reply = typeof body.command_reply === 'string' ? body.command_reply.trim() : '';
     if (!reply) return null;
     const note = el('p', 'note');
     note.dataset.commandReply = '1';
     note.setAttribute('role', 'status');
-    note.textContent = reply;
+    // A kept answer (from the feed) names the line it answers; an inline one
+    // sits right under the line the person just typed.
+    if (line) {
+      note.appendChild(el('span', 'why', line));
+      note.appendChild(document.createTextNode(' '));
+      note.appendChild(document.createTextNode(reply));
+    } else {
+      note.textContent = reply;
+      this.inlinePending.add(reply);
+    }
     this.thread.appendChild(note);
     return note;
   }
@@ -836,6 +918,31 @@ export class Transcript {
     this.errorNotice.textContent = serverAnswer(body, this.copy.action_unavailable);
   }
 
+  /**
+   * 113 W5 (CH-3): "this console has no model" is a note in the thread, with a
+   * link to Agent › Settings — not a grey line under the composer. One node,
+   * reused. `words` is the composer's dataset (`no_model`, `no_model_link`,
+   * `no_model_href`). Returns the note.
+   */
+  _noModelNote(words) {
+    if (!this.thread) return null;
+    const w = words || {};
+    if (!this.noModel) {
+      this.noModel = el('p', 'note');
+      this.noModel.dataset.noModel = '1';
+      this.noModel.setAttribute('role', 'status');
+    }
+    this.noModel.replaceChildren(document.createTextNode(w.no_model || ''));
+    if (w.no_model_href && w.no_model_link) {
+      const link = el('a', null, w.no_model_link);
+      link.href = w.no_model_href;
+      this.noModel.appendChild(document.createTextNode(' '));
+      this.noModel.appendChild(link);
+    }
+    this.thread.appendChild(this.noModel);
+    return this.noModel;
+  }
+
   _remoteNotice(body) {
     if (!this.thread) return;
     const detail = (body && body.detail && typeof body.detail === 'object')
@@ -875,10 +982,31 @@ async function backfill(transcript, sessionId) {
     const data = await resp.json();
     if (!Array.isArray(data.events)) throw new Error('Invalid feed');
     transcript.applyAll(data.events);
+    if (!transcript.feedRead) transcript.feedRead = Number(data.read) || data.events.length;
+    transcript.olderControl(Boolean(data.has_more), () => loadOlder(transcript, sessionId));
     transcript._readNotice('history', '');
   } catch (err) {
     transcript._readNotice('history', transcript.copy.history_unavailable);
     console.error('[transcript] backfill failed', err);
+  }
+}
+
+/** 113 W5 (C-07): one older page of the feed, drawn above the history. */
+export async function loadOlder(transcript, sessionId, fetcher) {
+  const url = `/api/session/${encodeURIComponent(sessionId)}/feed/events`
+    + `?limit=300&skip=${transcript.feedRead}`;
+  try {
+    const res = await getJson(url, { fetcher: fetcher || transcript.fetcher });
+    if (!res.ok || !res.body || !Array.isArray(res.body.events)) throw new Error(String(res.status));
+    transcript.feedRead += Number(res.body.read) || res.body.events.length;
+    transcript.prependOlder(res.body.events);
+    transcript.olderControl(Boolean(res.body.has_more), () => loadOlder(transcript, sessionId, fetcher));
+    transcript._readNotice('older', '');
+    return true;
+  } catch (err) {
+    transcript._readNotice('older', transcript.copy.load_older_failed || '');
+    console.error('[transcript] older page failed', err);
+    return false;
   }
 }
 
@@ -990,6 +1118,25 @@ async function connect(transcript, sessionId) {
  * `null` when there is no thread — the cold open, or the ownership-unknown
  * state, which render no thread and want no socket).
  */
+/**
+ * P-1 (113 W5): run *fn* every *ms* only while the page is visible. A hidden tab
+ * stops the interval; the tab coming back runs *fn* once at once (the clock is
+ * right on the first frame) and starts it again. Returns a stop function.
+ */
+export function visibleTicker(fn, ms, doc = document) {
+  let timer = null;
+  const start = () => { if (timer === null) timer = setInterval(fn, ms); };
+  const stop = () => { if (timer !== null) { clearInterval(timer); timer = null; } };
+  const onChange = () => {
+    if (doc.hidden) { stop(); return; }
+    fn();
+    start();
+  };
+  doc.addEventListener('visibilitychange', onChange);
+  if (!doc.hidden) start();
+  return () => { stop(); doc.removeEventListener('visibilitychange', onChange); };
+}
+
 export function mount() {
   const body = document.body;
   const thread = document.getElementById('chat-messages');
@@ -1026,7 +1173,7 @@ export function mount() {
   // Join first, then backfill: nothing written while the page loads is lost,
   // and an event in both the backfill and the room draws once (`_id`).
   // FE12: "Working for 3s" must count while the turn runs.
-  setInterval(() => transcript.tick(), 1000);
+  visibleTicker(() => transcript.tick(), 1000);
   transcript.startBuffer();
   connect(transcript, sessionId)
     .then(() => backfill(transcript, sessionId))

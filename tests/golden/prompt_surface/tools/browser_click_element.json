@@ -1,11 +1,28 @@
 {
   "function": {
-    "description": "Click on an element by its index from the previous observation.",
+    "description": "Click an element by its index from the page state. button=\"right\" opens a context menu; double=true double-clicks.",
     "name": "browser_click_element",
     "parameters": {
       "additionalProperties": false,
       "description": "Model for clicking an element on the page.",
       "properties": {
+        "button": {
+          "default": null,
+          "description": "The mouse button (default left); \"right\" opens a context menu",
+          "enum": [
+            "left",
+            "middle",
+            "right"
+          ],
+          "nullable": true,
+          "type": "string"
+        },
+        "double": {
+          "default": null,
+          "description": "true = double-click",
+          "nullable": true,
+          "type": "boolean"
+        },
         "elementIndex": {
           "type": "integer"
         },

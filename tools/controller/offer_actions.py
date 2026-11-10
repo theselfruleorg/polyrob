@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from agents.task.agent.views import ActionResult
 
 OPS = ("draft", "resource", "test", "propose_setup", "propose_live", "pause", "status",
-       "orders")
+       "orders", "announce")
 
 
 def register_offer_actions(controller) -> None:
@@ -37,6 +37,10 @@ def register_offer_actions(controller) -> None:
                               "[\"mint(address,string)\"]). test: the evidence.")
         budget_usd: Optional[float] = Field(None, ge=0, le=500,
                                             description="propose_setup: the on-chain setup budget")
+        surface: Optional[str] = Field(None, description="announce: the surface of the post (e.g. x)")
+        post_id: Optional[str] = Field(
+            None, description="announce: YOUR public post that announced this LIVE offer; code "
+                              "then answers order replies under it")
 
     @controller.registry.action(
         "Sell something: draft/edit an offer, record its resources and a test, see offers and "
@@ -70,6 +74,8 @@ def register_offer_actions(controller) -> None:
             if op == "test":
                 st.record_test(oid, user_id, params.data or {})
                 return _ok(f"Test evidence recorded on {oid}.")
+            if op == "announce":
+                return _ok(await announce_post(oid, user_id, params.surface, params.post_id))
             if op == "pause":
                 o = st.set_state(oid, user_id, st.PAUSED, actor="agent")
                 return _ok(f"Offer {o.id} is paused; nothing new can be ordered.")
@@ -173,6 +179,39 @@ def _deliver_refusal(controller, execution_context, order_id: str) -> Optional[s
         pass
     return "Refused: only the run fulfilling this order, or the owner, may deliver it."
 
+
+
+async def announce_post(oid: str, user_id: str, surface: Optional[str],
+                    post_id: Optional[str]) -> str:
+    """109: record the agent's own post as the offer's public thread root."""
+    from core.commerce import store as st
+    from core.commerce import thread
+    from core.commerce.hooks import thread_channel
+    surface = (surface or "").strip().lower()
+    post_id = (post_id or "").strip()
+    if not surface or not post_id:
+        raise st.CommerceError("announce needs surface and post_id")
+    o = st.get(oid)
+    if o is None or o.user_id != user_id:
+        raise st.CommerceError(f"no offer {oid!r}")
+    m = st.live_version(o.id, o.version) if o.state == st.LIVE else None
+    if m is None or f"native:{surface}" not in m.listings:
+        raise st.CommerceError(f"offer {oid} is not live with listing native:{surface}; "
+                               f"announce it after the owner's go-live Confirm")
+    ch = thread_channel(surface)
+    if ch is None:
+        raise st.CommerceError(f"{surface} has no public-thread reader here")
+    post = await ch.lookup(post_id)
+    if post is None:
+        raise st.CommerceError(f"post {post_id} could not be read on {surface}")
+    me = ch.agent_id()
+    if not me or post.author_id != me:
+        raise st.CommerceError(f"post {post_id} is not this agent's own post")
+    if post.root_id and post.root_id != post.post_id:
+        raise st.CommerceError(f"post {post_id} is a reply; announce with a top-level post")
+    thread.announce(o.id, surface, post_id)
+    return (f"Post {post_id} announces {o.id} on {surface}. Code now answers /buy and "
+            f"/order replies under it; do not answer them yourself.")
 
 def _ok(text: str) -> ActionResult:
     return ActionResult(extracted_content=text, include_in_memory=True)

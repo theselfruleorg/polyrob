@@ -15,6 +15,7 @@ the same "owner intent does not stick" failure one layer down.
 """
 from __future__ import annotations
 
+import hashlib
 from collections import OrderedDict
 from typing import Any, Optional
 
@@ -80,11 +81,32 @@ _JOBS: "OrderedDict[str, str]" = OrderedDict()
 _JOB_SPACING: "OrderedDict[str, float]" = OrderedDict()
 
 
+#: cron job id -> the job's current run skips KB auto-injection (proposal 108 D4). The value
+#: is True until the run's one event is emitted, then False.
+_JOB_KB_HOLDOUT: "OrderedDict[str, bool]" = OrderedDict()
+
+
+def kb_holdout_applies(job_id: str, scheduled_at: Any, pct: Any) -> bool:
+    """True when this run of the job is in the KB holdout: a stable hash of the job id and
+    its scheduled time, so one run gets one answer on every replay and in every process.
+    A ``pct`` that is absent or is not an int from 1 to 100 means no holdout."""
+    if type(pct) is not int or not 1 <= pct <= 100:
+        return False
+    digest = hashlib.sha256(f"{job_id}|{scheduled_at}".encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big") % 100 < pct
+
+
 def note_job(job_id: Optional[str], task: Optional[str], *,
-             post_spacing_hours: Any = None) -> None:
-    """Record a cron job's task text and post spacing (the cron runner calls this)."""
+             post_spacing_hours: Any = None, kb_holdout_pct: Any = None,
+             scheduled_at: Any = None) -> None:
+    """Record a cron job's task text, post spacing and KB holdout (the cron runner calls this)."""
     if not job_id:
         return
+    _JOB_KB_HOLDOUT.pop(job_id, None)
+    if kb_holdout_applies(job_id, scheduled_at, kb_holdout_pct):
+        _JOB_KB_HOLDOUT[job_id] = True
+        while len(_JOB_KB_HOLDOUT) > _MAX:
+            _JOB_KB_HOLDOUT.popitem(last=False)
     try:
         spacing = float(post_spacing_hours) if post_spacing_hours is not None else 0.0
     except (TypeError, ValueError):
@@ -102,6 +124,17 @@ def note_job(job_id: Optional[str], task: Optional[str], *,
     _JOBS.move_to_end(job_id)
     while len(_JOBS) > _MAX:
         _JOBS.popitem(last=False)
+
+
+def kb_holdout_for_session(session_id: Optional[str]) -> tuple:
+    """``(held_out, first)`` for this session. Only a cron run can be held out: an owner
+    chat has no job. ``first`` is True once per run, for its one event."""
+    job_id = cron_job_for_session(session_id)
+    if not job_id or job_id not in _JOB_KB_HOLDOUT:
+        return False, False
+    first = _JOB_KB_HOLDOUT[job_id]
+    _JOB_KB_HOLDOUT[job_id] = False
+    return True, first
 
 
 def post_spacing_for_job(job_id: Optional[str]) -> Optional[float]:

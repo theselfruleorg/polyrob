@@ -1,0 +1,25 @@
+{
+  "function": {
+    "description": "Tick or clear a checkbox, a radio button or a switch by its index.",
+    "name": "browser_set_checked",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for setting a checkbox, a radio button or a switch.",
+      "properties": {
+        "checked": {
+          "default": true,
+          "description": "true to tick, false to clear",
+          "type": "boolean"
+        },
+        "elementIndex": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "elementIndex"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

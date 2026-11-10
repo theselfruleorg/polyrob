@@ -341,3 +341,26 @@ async def test_tick_with_no_expired_rows_is_noop(tmp_path, monkeypatch):
         assert not owner_calls
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_wake_reap_does_not_skip_the_settled_poll(tmp_path):
+    """The reap of stale wake claims and the settled-notice poll are two reads:
+    a failed reap must not cost that tick its settled notices."""
+    db = await _setup_db(tmp_path)
+    try:
+        inv = await invoicing.create_payment_request(
+            user_id="alice", session_id="sess_9", amount_usd=2.0, purpose="p", db=db)
+        await invoicing.settle_payment_request(inv["request_id"], db=db)
+        agent = _WakeAgent()
+        watcher = SettlementWatcher(agent, db=db)
+
+        async def _broken_reap():
+            raise RuntimeError("database is locked")
+
+        watcher._reap_wakes = _broken_reap
+        out = await watcher.tick_once()
+        assert out["settled_notified"] == 1
+        assert len(agent.wakes) == 1
+    finally:
+        await db.close()

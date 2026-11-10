@@ -229,7 +229,7 @@ class TestProviderConfig:
         expected = {
             "openai": ("OpenAIClient", True),
             "anthropic": ("AnthropicClient", True),
-            "deepseek": ("DeepSeekClient", False),  # native, not in the fallback ladder
+            "deepseek": ("DeepSeekClient", True),  # native, ranked after openrouter
             "gemini": ("GeminiClient", True),
             "openrouter": ("OpenRouterClient", True),
             "nvidia": ("NvidiaClient", False),
@@ -246,7 +246,7 @@ class TestProviderConfig:
 # ---------------------------------------------------------------------------
 class TestDefaultModels:
     PINNED = {
-        "anthropic": "claude-sonnet-4-5",
+        "anthropic": "claude-sonnet-5-5",
         "openai": "gpt-5",
         "gemini": "gemini-2.5-flash",
         "deepseek": "deepseek-flash",
@@ -327,8 +327,9 @@ class TestFallbackHierarchy:
         mgr = LLMManager("llm_manager", _Cfg())
         assert mgr.FALLBACK_HIERARCHY == [
             ("openai_client", "gpt-5"),
-            ("anthropic_client", "claude-sonnet-4-5"),
+            ("anthropic_client", "claude-sonnet-5-5"),
             ("openrouter_client", "z-ai/glm-5.2"),
+            ("deepseek_client", "deepseek-flash"),
             ("gemini_client", "gemini-2.5-flash"),
         ]
 

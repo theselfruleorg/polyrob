@@ -396,7 +396,7 @@ describe("A24 — a file can be attached again", () => {
     expect(init.body instanceof FormData).toBe(true);
     // ⚠️ the browser must write the multipart boundary itself.
     expect(init.headers).toBeUndefined();
-    expect(res).toEqual({ ok: true, message: "brief.pdf is in this chat's folder." });
+    expect(res).toEqual({ ok: true, path: "brief.pdf", message: "brief.pdf is in this chat's folder." });
   });
 
   it("renders the endpoint's own refusal, never a silent drop", async () => {

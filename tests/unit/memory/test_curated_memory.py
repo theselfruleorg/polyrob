@@ -80,3 +80,22 @@ def test_d14_curated_read_failure_raises_not_empty(tmp_path, monkeypatch):
     monkeypatch.setattr(cs, "execute_retry", boom)
     with pytest.raises(RuntimeError):
         asyncio.run(p.curated_read("alice"))
+
+
+def test_a_failed_note_or_kb_read_raises_not_empty(tmp_path, monkeypatch):
+    """"No notes yet.", "Note not found." and "no KB results" are claims about the store:
+    a read that failed must raise so the caller names the failure."""
+    import modules.memory.sqlite_curated_store as cs
+    import modules.memory.sqlite_kb_store as ks
+    monkeypatch.setenv("MEMORY_REQUIRE_USER_ID", "false")
+    p = SqliteMemoryProvider(str(tmp_path / "m.db"))
+
+    def boom(*a, **k):
+        raise RuntimeError("disk I/O error")
+    monkeypatch.setattr(cs, "execute_retry", boom)
+    monkeypatch.setattr(ks, "execute_retry", boom)
+    for call in (p.note_list("alice"), p.note_get("alice", 1), p.note_backlinks("alice", "t"),
+                 p.kb_search("words here", user_id="alice"),
+                 p.kb_list_sources(user_id="alice")):
+        with pytest.raises(RuntimeError):
+            asyncio.run(call)

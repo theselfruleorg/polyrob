@@ -40,18 +40,27 @@ def lead_key(status_code: int) -> str:
 def error_context(request, status_code: int, detail) -> dict:
     """The template's context: the lead, the hints, and the raw detail."""
     path = request.url.path
+    on_chat = path.startswith(_CHAT_PREFIXES)
     hints = []
-    if path.startswith(_CHAT_PREFIXES):
+    if on_chat:
         hints.append(t("error.hint_chat"))
     hints.append(t("error.hint_url"))
+    # 113 W5 (CH-1): a chat that does not exist says so and offers a new chat.
+    chat_gone = on_chat and status_code == 404
     return {
         "request": request,
-        "lead": t(lead_key(status_code)),
+        "lead": t("error.chat_not_found" if chat_gone else lead_key(status_code)),
+        "new_chat": chat_gone and not _read_only(),
         "hints": hints,
         "details": "" if detail is None else str(detail),
         "ws_url": os.environ.get("WEBVIEW_WS_URL", ""),
         "version": os.environ.get("WEBVIEW_VERSION", "") or _version(),
     }
+
+
+def _read_only() -> bool:
+    from webview import webgate
+    return webgate.read_only()
 
 
 def _version() -> str:

@@ -685,7 +685,7 @@ profile*); the reference with a code anchor per row is
 | Verb | Seats | Effect |
 |------|-------|--------|
 | `/groups allow here [name]` · `polyrob owner groups allow <surface> <chat_id>` | Telegram (in the room), CLI | Allowlist the current room |
-| `/groups deny here` · `polyrob owner groups deny <surface> <chat_id>` | Telegram, CLI | Revoke; ledger kept until retention |
+| `/groups deny here` · `polyrob owner groups deny <surface> <chat_id>` | Telegram, CLI | Revoke; ledger kept until retention. Denying a room keeps its /admin bundles, room tools and roles; `/groups allow` restores them and names them in its reply |
 | `/groups list` · `polyrob owner groups list` | Telegram, CLI | Rooms, mode, replies today, last write |
 | `/groups mode here <mode>` · `polyrob owner groups mode <surface> <chat_id> <mode>` | Telegram (owner/admin), CLI | Set `chat.mode` |
 | `/groups set here <key> <value>` · `polyrob owner groups set <surface> <chat_id> <key> <value>` | Telegram (owner), CLI | Set any `chat.*` key |

@@ -45,12 +45,11 @@ def _resp(tid="111", text="hi"):
     return MagicMock(data={"id": tid, "text": text})
 
 
-def _tool(monkeypatch, *, enabled_env=True, require_approval=False):
+def _tool(monkeypatch, *, enabled_env=True):
     if enabled_env:
         monkeypatch.setenv("TWITTER_ENABLED", "true")
     else:
         monkeypatch.delenv("TWITTER_ENABLED", raising=False)
-    monkeypatch.setenv("TWITTER_REQUIRE_APPROVAL", "true" if require_approval else "false")
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
     t = object.__new__(TwitterTool)
     t.logger = logging.getLogger("tw-test")
@@ -111,11 +110,11 @@ def test_post_text_empty_rejected():
 @pytest.mark.asyncio
 async def test_post_calls_create_tweet(monkeypatch):
     t = _tool(monkeypatch)
-    t.client.create_tweet.return_value = _resp("900", "hello")
-    res = await t.twitter_post(TwitterPostAction(text="hello"))
+    t.client.create_tweet.return_value = _resp("900", "the release notes shipped")
+    res = await t.twitter_post(TwitterPostAction(text="the release notes shipped"))
     assert res.error is None
     t.client.create_tweet.assert_called_once()
-    assert t.client.create_tweet.call_args.kwargs["text"] == "hello"
+    assert t.client.create_tweet.call_args.kwargs["text"] == "the release notes shipped"
 
 
 @pytest.mark.asyncio
@@ -320,7 +319,7 @@ async def test_dm_calls_create_direct_message(monkeypatch):
 @pytest.mark.asyncio
 async def test_approval_deny_blocks_write(monkeypatch):
     monkeypatch.setenv("APPROVAL_PROVIDER", "deny")
-    t = _tool(monkeypatch, require_approval=True)
+    t = _tool(monkeypatch)
     t.client.create_tweet.return_value = _resp()
     res = await t.twitter_post(TwitterPostAction(text="blocked?"))
     assert res.error is not None and "approval" in res.error.lower()
@@ -328,8 +327,8 @@ async def test_approval_deny_blocks_write(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_approval_off_proceeds(monkeypatch):
-    t = _tool(monkeypatch, require_approval=False)
+async def test_owner_direct_post_proceeds(monkeypatch):
+    t = _tool(monkeypatch)
     t.client.create_tweet.return_value = _resp()
     res = await t.twitter_post(TwitterPostAction(text="ok"))
     assert res.error is None
@@ -341,7 +340,7 @@ async def test_approval_off_proceeds(monkeypatch):
 @pytest.mark.asyncio
 async def test_write_rate_limit_trips(monkeypatch):
     monkeypatch.setenv("TWITTER_WRITE_MAX_PER_HOUR", "2")
-    t = _tool(monkeypatch, require_approval=False)
+    t = _tool(monkeypatch)
     t.client.create_tweet.return_value = _resp()
     assert (await t.twitter_post(TwitterPostAction(text="1"))).error is None
     assert (await t.twitter_post(TwitterPostAction(text="2"))).error is None
@@ -354,7 +353,7 @@ async def test_write_rate_limit_trips(monkeypatch):
 async def test_dm_rate_limit_independent(monkeypatch):
     from polyrob_x.twitter_tool import TwitterDMAction
     monkeypatch.setenv("TWITTER_DM_MAX_PER_HOUR", "1")
-    t = _tool(monkeypatch, require_approval=False)
+    t = _tool(monkeypatch)
     t.client.create_direct_message.return_value = MagicMock(data={"dm_conversation_id": "c"})
     assert (await t.twitter_dm(TwitterDMAction(recipient="1", text="a", allow_plaintext=True))).error is None
     second = await t.twitter_dm(TwitterDMAction(recipient="1", text="b", allow_plaintext=True))
@@ -523,13 +522,13 @@ async def test_get_timeline_renders_tweets(monkeypatch):
     from types import SimpleNamespace
 
     t = _tool(monkeypatch, enabled_env=False)
-    tweet = SimpleNamespace(id="77", text="hello world", created_at=None,
+    tweet = SimpleNamespace(id="77", text="the release notes are out today", created_at=None,
                             public_metrics={"like_count": 3})
     t.client.get_users_tweets = MagicMock(return_value=MagicMock(data=[tweet]))
     from polyrob_x.twitter_tool import TwitterTimelineAction
     res = await t.twitter_get_timeline(TwitterTimelineAction(user="123456"))
     assert res.error is None
-    assert "hello world" in res.extracted_content
+    assert "the release notes are out today" in res.extracted_content
     call_kwargs = t.client.get_users_tweets.call_args.kwargs
     assert call_kwargs["id"] == "123456"
 
@@ -605,10 +604,9 @@ def test_poll_results_is_a_read_available_when_writes_are_off(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["auto", "auto_notify", ""])
 async def test_autonomous_write_needs_a_real_owner_approval(monkeypatch, provider):
-    """An automatic provider never approves a non-owner turn, and
-    TWITTER_REQUIRE_APPROVAL=false does not skip the gate for it."""
+    """An automatic provider never approves a non-owner turn."""
     monkeypatch.setenv("APPROVAL_PROVIDER", provider)
-    t = _tool(monkeypatch, require_approval=False)
+    t = _tool(monkeypatch)
     asked = []
 
     class _Queue:
@@ -623,7 +621,7 @@ async def test_autonomous_write_needs_a_real_owner_approval(monkeypatch, provide
     monkeypatch.setattr(approval, "get_approval_provider_or_deny",
                         lambda name, **k: _Queue() if name == "owner_queue" else real(name, **k))
     leaf = ActionExecutionContext(session_id="s1", user_id="u1")       # autonomous shape
-    res = await t.twitter_post(TwitterPostAction(text="x"), execution_context=leaf)
+    res = await t.twitter_post(TwitterPostAction(text="a real post"), execution_context=leaf)
     assert res.error and "approval denied" in res.error
     assert asked == ["twitter_post"]
     t.client.create_tweet.assert_not_called()
@@ -631,24 +629,23 @@ async def test_autonomous_write_needs_a_real_owner_approval(monkeypatch, provide
 
 @pytest.mark.asyncio
 async def test_correspondent_tainted_owner_turn_needs_approval(monkeypatch):
-    t = _tool(monkeypatch, require_approval=False)
+    t = _tool(monkeypatch)
     ctx = ActionExecutionContext(session_id="s1", user_id="u1", role="orchestrator")
     ctx.metadata = {"correspondent_tainted": True}
     import tools.controller.approval as approval
     monkeypatch.setattr(approval, "get_approval_provider_or_deny",
                         lambda name, **k: approval.DenyByDefaultApprover())
-    res = await t.twitter_post(TwitterPostAction(text="x"), execution_context=ctx)
+    res = await t.twitter_post(TwitterPostAction(text="a real post"), execution_context=ctx)
     assert res.error and "approval" in res.error.lower()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("require", [True, False])
-async def test_owner_turn_posts_with_no_provider_configured(monkeypatch, require):
+async def test_owner_turn_posts_with_no_provider_configured(monkeypatch):
     """Prod shape: APPROVAL_PROVIDER unset. The owner asking IS the approval."""
     monkeypatch.delenv("APPROVAL_PROVIDER", raising=False)
-    t = _tool(monkeypatch, require_approval=require)
+    t = _tool(monkeypatch)
     t.client.create_tweet.return_value = _resp()
-    res = await t.twitter_post(TwitterPostAction(text="hello"), execution_context=_ctx())
+    res = await t.twitter_post(TwitterPostAction(text="the release notes shipped"), execution_context=_ctx())
     assert res.error is None
     t.client.create_tweet.assert_called_once()
 
@@ -687,7 +684,7 @@ def _owner_queue(monkeypatch):
 @pytest.mark.asyncio
 async def test_standing_cron_posts_without_a_queue(monkeypatch):
     monkeypatch.delenv("APPROVAL_PROVIDER", raising=False)
-    t = _tool(monkeypatch, require_approval=False)
+    t = _tool(monkeypatch)
     asked = _owner_queue(monkeypatch)
     t.client.create_tweet.return_value = _resp()
     ctx = _cron_ctx(monkeypatch, "cron-rebuy-1", "job-rebuy")
@@ -697,22 +694,44 @@ async def test_standing_cron_posts_without_a_queue(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_standing_cron_posts_with_a_human_provider(monkeypatch):
+    monkeypatch.setenv("APPROVAL_PROVIDER", "owner_queue")
+    t = _tool(monkeypatch)
+    asked = _owner_queue(monkeypatch)
+    t.client.create_tweet.return_value = _resp()
+    ctx = _cron_ctx(monkeypatch, "cron-rebuy-2", "job-rebuy-2")
+    res = await t.twitter_post(TwitterPostAction(text="Rebuy done"), execution_context=ctx)
+    assert res.error is None and asked == []
+    t.client.create_tweet.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_standing_cron_still_obeys_the_operator_deny(monkeypatch):
+    monkeypatch.setenv("APPROVAL_PROVIDER", "deny")
+    t = _tool(monkeypatch)
+    ctx = _cron_ctx(monkeypatch, "cron-rebuy-3", "job-rebuy-3")
+    res = await t.twitter_post(TwitterPostAction(text="Rebuy done"), execution_context=ctx)
+    assert res.error and "approval denied" in res.error
+    t.client.create_tweet.assert_not_called()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("shape", ["unrecorded", "tainted", "sub_agent"])
 async def test_unrecorded_tainted_or_delegated_cron_still_needs_the_owner(monkeypatch, shape):
     monkeypatch.delenv("APPROVAL_PROVIDER", raising=False)
-    t = _tool(monkeypatch, require_approval=False)
+    t = _tool(monkeypatch)
     asked = _owner_queue(monkeypatch)
     ctx = _cron_ctx(monkeypatch, f"cron-{shape}", f"job-{shape}",
                     recorded=(shape != "unrecorded"),
                     tainted=(shape == "tainted"), sub_agent=(shape == "sub_agent"))
-    res = await t.twitter_post(TwitterPostAction(text="x"), execution_context=ctx)
+    res = await t.twitter_post(TwitterPostAction(text="a real post"), execution_context=ctx)
     assert res.error and "approval denied" in res.error
     assert asked == ["twitter_post"]
     t.client.create_tweet.assert_not_called()
 
 
 # --- prod 2026-10-08 12:05 (rebuy 0a1b2c3d4e5f): the REAL owner queue ---------
-# APPROVAL_PROVIDER unset, TWITTER_REQUIRE_APPROVAL=false, an agent-authored
+# APPROVAL_PROVIDER unset, an agent-authored
 # autonomous cron run. The queue created the ask and returned at once ("the
 # next run redeems the grant" — never, for a post: its text is new each run),
 # and the tool said "approval denied". The post now WAITS for the tap.
@@ -738,7 +757,7 @@ def _real_queue(monkeypatch, tmp_path, wait_s=0.6):
 @pytest.mark.asyncio
 async def test_prod_shape_agent_cron_post_asks_and_says_it_is_waiting(monkeypatch, tmp_path):
     monkeypatch.delenv("APPROVAL_PROVIDER", raising=False)
-    t = _tool(monkeypatch, require_approval=False)
+    t = _tool(monkeypatch)
     board, pushed = _real_queue(monkeypatch, tmp_path)
     ctx = _cron_ctx(monkeypatch, "cron-prod-1", "job-4def", recorded=False)
     res = await t.twitter_post(TwitterPostAction(text="Bought 0.05 ETH of TKN."),
@@ -755,7 +774,7 @@ async def test_prod_shape_agent_cron_post_asks_and_says_it_is_waiting(monkeypatc
 async def test_prod_shape_agent_cron_post_goes_out_when_the_owner_taps(monkeypatch, tmp_path):
     import asyncio as _asyncio
     monkeypatch.delenv("APPROVAL_PROVIDER", raising=False)
-    t = _tool(monkeypatch, require_approval=False)
+    t = _tool(monkeypatch)
     t.client.create_tweet.return_value = _resp()
     board, _pushed = _real_queue(monkeypatch, tmp_path, wait_s=5.0)
     ctx = _cron_ctx(monkeypatch, "cron-prod-2", "job-4def-b", recorded=False)
@@ -791,7 +810,7 @@ async def test_late_approval_posts_once_with_the_approved_text_and_no_second_swa
     import polyrob_x.cron_delivery as cd
 
     monkeypatch.delenv("APPROVAL_PROVIDER", raising=False)
-    t = _tool(monkeypatch, require_approval=False)
+    t = _tool(monkeypatch)
     t.client.create_tweet.return_value = _resp()
     client = t.client                     # send_approved closes the tool after the send
     monkeypatch.setattr(cd, "_build_twitter_tool", lambda config, container: t)
@@ -838,7 +857,7 @@ async def test_an_approval_inside_the_wait_is_sent_by_the_run_not_the_drain(
     from core.wake_queue import get_wake_queue
     from tools.controller.approval_queue import decide_tool_approval
     monkeypatch.delenv("APPROVAL_PROVIDER", raising=False)
-    t = _tool(monkeypatch, require_approval=False)
+    t = _tool(monkeypatch)
     t.client.create_tweet.return_value = _resp()
     board, _ = _real_queue(monkeypatch, tmp_path, wait_s=5.0)
     ctx = _cron_ctx(monkeypatch, "cron-late-2", "job-x", recorded=False)
@@ -852,7 +871,7 @@ async def test_an_approval_inside_the_wait_is_sent_by_the_run_not_the_drain(
             await _asyncio.sleep(0.02)
 
     tap = _asyncio.create_task(_tap())
-    res = await t.twitter_post(TwitterPostAction(text="hello"), execution_context=ctx)
+    res = await t.twitter_post(TwitterPostAction(text="the release notes shipped"), execution_context=ctx)
     await tap
     assert res.error is None
     t.client.create_tweet.assert_called_once()
@@ -870,7 +889,7 @@ async def test_approval_wait_ends_inside_the_controller_action_timeout(monkeypat
     import asyncio as _asyncio
     from agents.task.constants import TimeoutConfig
     monkeypatch.delenv("APPROVAL_PROVIDER", raising=False)
-    t = _tool(monkeypatch, require_approval=False)
+    t = _tool(monkeypatch)
     board, _pushed = _real_queue(monkeypatch, tmp_path, wait_s=300.0)
     monkeypatch.setitem(TimeoutConfig.TOOL_TIMEOUTS, "default", 1)
     monkeypatch.delitem(TimeoutConfig.TOOL_TIMEOUTS, "twitter", raising=False)
@@ -893,7 +912,7 @@ async def test_send_approved_initializes_a_freshly_built_tool(monkeypatch):
     import polyrob_x.cron_delivery as cd
     from polyrob_x import twitter_tool as tt
 
-    t = _tool(monkeypatch, require_approval=False)
+    t = _tool(monkeypatch)
     live_client = t.client
     live_client.create_tweet.return_value = _resp()
     t.client = None                       # what a fresh, uninitialized tool has
@@ -915,3 +934,32 @@ async def test_send_approved_initializes_a_freshly_built_tool(monkeypatch):
     assert ok, text
     live_client.create_tweet.assert_called_once()
     assert closed, "a one-use tool must close its clients (Unclosed client session)"
+
+
+# --- the browser rail: the owner's turn or job waits for no tap -------------------
+
+@pytest.mark.parametrize("verb", ["x_browser_x_post", "x_browser_x_reply"])
+def test_browser_post_is_exempt_on_a_standing_job(monkeypatch, verb):
+    from tools.controller.approval import owner_social_write_exemption as exempt
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
+    ctx = _cron_ctx(monkeypatch, f"cron-b-{verb}", f"job-b-{verb}")
+    assert exempt(verb, {}, ctx)
+
+
+@pytest.mark.parametrize("shape", ["unrecorded", "tainted", "sub_agent"])
+def test_browser_post_stays_gated_off_the_owner(monkeypatch, shape):
+    from tools.controller.approval import owner_social_write_exemption as exempt
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
+    ctx = _cron_ctx(monkeypatch, f"cron-g-{shape}", f"job-g-{shape}",
+                    recorded=(shape != "unrecorded"), tainted=(shape == "tainted"),
+                    sub_agent=(shape == "sub_agent"))
+    assert exempt("x_browser_x_post", {}, ctx) is None
+
+
+def test_exemption_covers_no_dm_signup_or_unplaced_call(monkeypatch):
+    from tools.controller.approval import owner_social_write_exemption as exempt
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
+    ctx = _cron_ctx(monkeypatch, "cron-other", "job-other")
+    assert exempt("x_browser_x_dm", {}, ctx) is None
+    assert exempt("x_browser_x_signup_start", {}, ctx) is None
+    assert exempt("x_browser_x_post", {}, None) is None

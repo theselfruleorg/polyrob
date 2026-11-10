@@ -19,7 +19,7 @@ OWNER = "0x5555555555555555555555555555555555555555"
 
 
 def _acct(k, chain_id=4663):
-    return erc6551.account_address(chain_id, PINNED, k)
+    return erc6551.account_address(chain_id, PINNED, k, implementation=erc6551.ACCOUNT_V3_IMPL)
 
 
 class OwnerRpc:
@@ -124,6 +124,6 @@ def test_no_pinned_collection_reads_nothing(monkeypatch):
 
 def test_the_inverse_index_is_the_registry_math():
     for k in (0, 1, MINTED, UNMINTED, 6551):
-        assert erc6551.collection_account_token_id(4663, PINNED, 6551, _acct(k)) == k
-    assert erc6551.collection_account_token_id(4663, PINNED, 6551, HOLDER) is None
-    assert erc6551.collection_account_token_id(4663, PINNED, 10, _acct(11)) is None
+        assert erc6551.collection_account_token_id(4663, PINNED, 6551, _acct(k), implementation=erc6551.ACCOUNT_V3_IMPL) == k
+    assert erc6551.collection_account_token_id(4663, PINNED, 6551, HOLDER, implementation=erc6551.ACCOUNT_V3_IMPL) is None
+    assert erc6551.collection_account_token_id(4663, PINNED, 10, _acct(11), implementation=erc6551.ACCOUNT_V3_IMPL) is None

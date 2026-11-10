@@ -12,18 +12,18 @@ To keep a configured surface off, set `FEISHU_SURFACE_ENABLED=false` or
 and it applies when the gateway starts again. See
 [CONFIGURATION.md](../CONFIGURATION.md) for the per-surface flag.
 
-Your owner identity on Feishu and DingTalk comes from a pairing row.
+Your owner identity on Feishu and DingTalk is the id you configure:
+`OWNER_FEISHU_ID` (your `open_id`) and `OWNER_DINGTALK_ID` (your staff id). A
+message or a button tap from that id is you, the owner, with the same memory and
+work as your other chats.
 
-⚠️ Pairing is one switch for every chat app: while it is on, a sender who is
-neither the owner nor paired is refused everywhere.
-
-Turn it on (`POLYROB_REQUIRE_PAIRING=true`) and send the bot a message. Then,
-on the box, run `polyrob owner pair pending` to find your request and
-`polyrob owner pair approve <code>` to approve it. Feishu and DingTalk do not
-send the code back to you, so check that the waiting request is the message
-you just sent. A paired sender is the owner there. A configured owner id alone
-does not make a sender the owner: `OWNER_FEISHU_ID` and `OWNER_DINGTALK_ID`
-only say where owner notices go.
+To let another person command the agent there, use pairing. ⚠️ Pairing is one
+switch for every chat app: while it is on, a sender who is neither the owner nor
+paired is refused everywhere. Turn it on (`POLYROB_REQUIRE_PAIRING=true`); the
+person messages the bot and gets a code. Send `/pair` from your own chat (or run
+`polyrob owner pair list` on the box), then `/pair approve feishu <code>` (or
+`dingtalk`). A paired sender
+commands the agent with their own memory, never with your wallet or approvals.
 
 ## Feishu / Lark
 
@@ -53,7 +53,7 @@ polyrob surfaces probe feishu      # proves them with a tenant_access_token read
 | `FEISHU_TRANSPORT` | `ws` = the long connection (no public URL; needs `pip install "polyrob[feishu]"`). `webhook` = the event request URL (no extra). Default: `ws`. |
 | `FEISHU_ENCRYPT_KEY` / `FEISHU_VERIFICATION_TOKEN` | Webhook mode only: the Event Subscription secrets. The Encrypt Key is required; a token alone needs the opt-in below. |
 | `FEISHU_WEBHOOK_ALLOW_UNSIGNED` | Webhook mode only: accept events with a Verification Token and no Encrypt Key. Such events carry no signature. |
-| `OWNER_FEISHU_ID` | Where owner notices go: an `ou_` open_id, an `oc_` chat id, or an email. |
+| `OWNER_FEISHU_ID` | The owner's `ou_` open_id: the id that makes a message the owner's, and where owner notices go. An `oc_` chat id or an email only receives notices: the owner's messages are then refused. |
 
 ### Long connection or webhook
 
@@ -109,7 +109,7 @@ polyrob surfaces probe dingtalk    # proves them with an accessToken read
 | Setting | Meaning |
 |---|---|
 | `DINGTALK_CLIENT_ID` / `DINGTALK_CLIENT_SECRET` | The app credentials. Both set = the surface starts. |
-| `OWNER_DINGTALK_ID` | Where owner notices go: the owner's staff id, or a `cid…` group conversation id. |
+| `OWNER_DINGTALK_ID` | The owner's staff id: the id that makes a message the owner's, and where owner notices go. A `cid…` group id only receives notices: the owner's messages are then refused. |
 
 ### What works
 

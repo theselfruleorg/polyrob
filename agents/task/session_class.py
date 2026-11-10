@@ -99,10 +99,9 @@ def stamp_owner_seat(orchestrator=None, *, session_id: Optional[str] = None,
         sid = getattr(orchestrator, "session_id", None)
         if session_regime(orchestrator=orchestrator, session_id=sid) != OWNER_CHAT:
             return False
-        from core.instance import resolve_owner_principal
-        owner = resolve_owner_principal()
+        from core.instance import is_owner_uid
         user_id = getattr(orchestrator, "user_id", None)
-        if not (owner and user_id and str(user_id) == str(owner)):
+        if not (user_id and is_owner_uid(str(user_id), allow_local=False)):
             return False
         from core.autonomy_marker import mark_owner_seat
         mark_owner_seat(sid)
@@ -120,12 +119,13 @@ def apply_session_output_budget(session_id: Optional[str]) -> int:
     cap and the ceiling arithmetic, this owns the session-class decision
     (``modules`` may not import ``agents``). Returns the cap in force, 0 = none.
     """
-    from modules.llm.output_budget import apply_output_budget, autonomous_max_output_tokens
+    from modules.llm.call_scope import set_session_output_cap
+    from modules.llm.output_budget import autonomous_max_output_tokens
     cap = autonomous_max_output_tokens()
-    return apply_output_budget(cap if cap > 0 and budget_class_autonomous(session_id) else 0)
+    return set_session_output_cap(cap if cap > 0 and budget_class_autonomous(session_id) else 0)
 
 
-def apply_session_cache_ttl(llm, session_id: Optional[str]) -> Optional[str]:
+def apply_session_cache_ttl(session_id: Optional[str]) -> Optional[str]:
     """Stamp the Anthropic prompt-cache TTL for this session's class — F4.
 
     ``ANTHROPIC_CACHE_TTL=auto`` (the default) buys the **1h** cache window for
@@ -136,12 +136,11 @@ def apply_session_cache_ttl(llm, session_id: Optional[str]) -> Optional[str]:
     the longer window would only pay the 2x cache-WRITE premium for nothing.
 
     The agents-tier half of the seam: ``modules/llm/cache_hints.py`` owns the
-    stamp and the reader (``modules`` may not import ``agents``), this owns the
+    scope and the reader (``modules`` may not import ``agents``), this owns the
     session-class decision. Returns the ttl in force, or None.
     """
     from modules.llm.cache_hints import apply_cache_ttl, resolve_cache_ttl
-    ttl = resolve_cache_ttl(budget_class_autonomous(session_id))
-    return apply_cache_ttl(llm, ttl)
+    return apply_cache_ttl(resolve_cache_ttl(budget_class_autonomous(session_id)))
 
 
 def correspondent_facing(orchestrator) -> bool:

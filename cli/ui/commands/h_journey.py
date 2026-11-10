@@ -107,17 +107,20 @@ def render_journey(*, user_id: str, since_label: str = "24h",
     return "\n".join(lines)
 
 
-def h_journey(ctx) -> None:
+async def h_journey(ctx) -> None:
     """REPL handler: /journey [window]  e.g. /journey 24h, /journey 7d.
 
-    CLI6 (2026-10-03): the default window is 24h — Telegram's `/recap` default, so
-    the one verb answers the same question on each seat — and the data home and
-    owner tenant are the deployed ones (``cli._admin_home``), not the shell's
+    113 W4 item 3 (D-2): the chat seat's own reply
+    (``surfaces.telegram.status_ops.journey_reply``), so one verb gives one
+    text; ``render_journey`` above stays the ``polyrob journey`` renderer.
+    CLI6 (2026-10-03): the default window is 24h and the data home and owner
+    tenant are the deployed ones (``cli._admin_home``), not the shell's
     ``config.data_dir``. Read-only, so root is never refused.
     """
     from cli import _admin_home
+    from surfaces.telegram.status_ops import journey_reply
     since_label = ctx.args[0] if getattr(ctx, "args", None) else "24h"
     uid = _admin_home.admin_owner_tenant(getattr(ctx, "user_id", None))
     data_dir = _admin_home.admin_data_dir(write=False)
-    text = render_journey(user_id=uid, since_label=since_label, data_dir=data_dir)
+    text = await journey_reply(uid, data_dir, getattr(ctx, "task_agent", None), [since_label])
     ctx.emit(text, title="journey")

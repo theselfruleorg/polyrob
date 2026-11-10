@@ -167,3 +167,28 @@ async def test_no_fetcher_names_the_files_it_could_not_store(workspace):
     assert text.startswith("hi")
     assert "shot.png" in text and "could NOT store" in text
     assert agent.delivered[0]["metadata"] == {"typed_text": "hi"}   # 085 W3
+
+
+@pytest.mark.asyncio
+async def test_a_fresh_session_with_no_downloader_names_the_file():
+    from surfaces.telegram.media import queue_attachments_for_new_session
+
+    agent = _FakeAgent()
+    result = _result(RouteKind.STEER, text="", session_id="sess_live",
+                     media=[Media(kind="video", ref="f1", filename="clip.mp4")])
+    assert await queue_attachments_for_new_session(agent, result, "sess_live", None)
+    assert "clip.mp4" in agent.delivered[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_turn_removes_the_file_it_stored(workspace):
+    class _Busy(_FakeAgent):
+        async def ensure_session_and_deliver(self, *args, **kwargs):
+            await super().ensure_session_and_deliver(*args, **kwargs)
+            return "busy"
+
+    result = _result(RouteKind.STEER, text="", session_id="sess_live",
+                     media=[Media(kind="image", ref="f1", filename="shot.png")])
+    reply = await act_on_inbound(_Busy(), result, spawn=lambda c: c.close(), fetch_media=_fetch)
+    assert "send it again" in reply
+    assert list((workspace / "u_abc" / "sess_live" / "inbound").iterdir()) == []

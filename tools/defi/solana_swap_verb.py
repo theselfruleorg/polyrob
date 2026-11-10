@@ -763,7 +763,8 @@ async def _confirm(tool, params, execution_context, s):
     tool._notify_tx(execution_context, tx_notify.TxNotice(
         verb="solana_swap", route="solana", chain="solana", usd=amount_usd, tx_ref=signature,
         state={"confirmed": tx_notify.STATE_CONFIRMED,
-               "reverted": tx_notify.STATE_REVERTED}.get(
+               "reverted": tx_notify.STATE_REVERTED,
+               "expired": tx_notify.STATE_FAILED}.get(
             outcome, tx_notify.STATE_IN_FLIGHT),
         detail=detail, ledger_recorded=True), settled=True)
     if outcome == "confirmed":
@@ -778,6 +779,11 @@ async def _confirm(tool, params, execution_context, s):
         return tool._ar(content=header + (
             f"\n  RESULT: REVERTED ON-CHAIN — it did NOT happen, but the "
             f"fee was spent.\n  sig: {signature}\n  detail: {detail}"))
+    if outcome == "expired":
+        return tool._ar(content=header + (
+            f"\n  RESULT: EXPIRED — the swap never landed and its blockhash has "
+            f"expired, so it can no longer land; nothing moved. It stays counted "
+            f"on the caps.\n  sig: {signature}\n  detail: {detail}"))
     return tool._ar(content=header + (
         f"\n  RESULT: BROADCAST BUT NOT CONFIRMED within the timeout. It "
         f"may still land, or the blockhash may have expired — do NOT retry "

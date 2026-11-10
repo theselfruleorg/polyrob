@@ -50,10 +50,11 @@ def google_search_url(query: str) -> str:
 from tools.base_tool import BaseTool
 from agents.task.loop_types.controller_types import ActionResult
 from tools.browser.actions import (
-	SearchGoogleAction, GoToUrlAction, ClickElementAction, InputTextAction,
-	SwitchTabAction, OpenTabAction, ScrollAction, SendKeysAction,
+	SearchGoogleAction, GoToUrlAction, ElementIndexAction, SelectOptionAction,
+	SwitchTabAction, OpenTabAction,
 	NoParamsAction, ExtractPageContentAction, ScrollToTextAction, ScreenshotAction
 )
+from tools.browser.interaction_actions import BrowserInteractionActions
 from agents.task.loop_types.execution_context import ActionExecutionContext
 
 
@@ -193,7 +194,7 @@ class BrowserConfig:
 
 
 # @dev By default this is a singleton, but you can create multiple instances if you need to.
-class Browser(BaseTool):
+class Browser(BrowserInteractionActions, BaseTool):
 	"""
 	Playwright browser on steroids.
 
@@ -667,84 +668,6 @@ class Browser(BaseTool):
 			return ActionResult(error=f"Go back failed: {str(e)}", include_in_memory=True)
 
 	@BaseTool.action(
-		'Click on an element by its index from the previous observation.',
-		param_model=ClickElementAction
-	)
-	async def click_element(self, params: ClickElementAction, execution_context: Optional[ActionExecutionContext]):
-		"""Click an element by its index."""
-		if not isinstance(params, ClickElementAction):
-			from pydantic import TypeAdapter
-			params = TypeAdapter(ClickElementAction).validate_python(params)
-
-		browser_context = execution_context.browser_context
-		if not browser_context:
-			return ActionResult(error="Browser context not available", include_in_memory=True)
-
-		try:
-			context = browser_context
-			session = await context.get_session()
-			state = session.cached_state
-
-			if params.index not in state.selector_map:
-				return ActionResult(
-					error=f'Element with index {params.index} does not exist - retry or use alternative actions',
-					include_in_memory=True
-				)
-
-			element_node = state.selector_map[params.index]
-			initial_pages = len(session.context.pages)
-
-			download_path = await context._click_element_node(element_node)
-			if download_path:
-				msg = f'💾 Downloaded file to {download_path}'
-			else:
-				msg = f'🖱️ Clicked element with index {params.index}: {element_node.get_all_text_till_next_clickable_element(max_depth=2) if hasattr(element_node, "get_all_text_till_next_clickable_element") else ""}'
-
-			if len(session.context.pages) > initial_pages:
-				new_tab_msg = 'New tab opened - switching to it'
-				msg += f' - {new_tab_msg}'
-				await browser_context.switch_to_tab(-1)
-
-			return ActionResult(extracted_content=msg, include_in_memory=True)
-		except Exception as e:
-			return ActionResult(error=f"Click failed: {str(e)}", include_in_memory=True)
-
-	@BaseTool.action(
-		'Input text into an element by its index.',
-		param_model=InputTextAction
-	)
-	async def input_text(self, params: InputTextAction, execution_context: Optional[ActionExecutionContext]):
-		"""Input text into an element."""
-		if not isinstance(params, InputTextAction):
-			from pydantic import TypeAdapter
-			params = TypeAdapter(InputTextAction).validate_python(params)
-
-		browser_context = execution_context.browser_context
-		if not browser_context:
-			return ActionResult(error="Browser context not available", include_in_memory=True)
-
-		try:
-			context = browser_context
-			session = await context.get_session()
-			state = session.cached_state
-
-			if params.index not in state.selector_map:
-				return ActionResult(
-					error=f'Element index {params.index} does not exist - retry or use alternative actions',
-					include_in_memory=True
-				)
-
-			element_node = state.selector_map[params.index]
-			await context._input_text_element_node(element_node, params.text)
-
-			return ActionResult(
-				extracted_content=f'⌨️ Input {params.text} into index {params.index}',
-				include_in_memory=True
-			)
-		except Exception as e:
-			return ActionResult(error=f"Input text failed: {str(e)}", include_in_memory=True)
-
-	@BaseTool.action(
 		'Open a new browser tab with the specified URL.',
 		param_model=OpenTabAction
 	)
@@ -835,68 +758,6 @@ class Browser(BaseTool):
 		except Exception as e:
 			self.logger.error(f"Switch tab failed: {str(e)}")
 			return ActionResult(error=str(e), include_in_memory=True)
-
-	@BaseTool.action(
-		'Scroll the page in the specified direction (up, down, left, right).',
-		param_model=ScrollAction
-	)
-	async def scroll(self, params: ScrollAction, execution_context: Optional[ActionExecutionContext]):
-		"""Scroll the page."""
-		if not isinstance(params, ScrollAction):
-			from pydantic import TypeAdapter
-			params = TypeAdapter(ScrollAction).validate_python(params)
-
-		browser_context = execution_context.browser_context
-		if not browser_context:
-			return ActionResult(error="Browser context not available", include_in_memory=True)
-
-		try:
-			page = await browser_context.get_current_page()
-			direction = params.direction
-			amount = params.amount or 500  # Default scroll amount
-
-			if direction == "up":
-				await page.evaluate(f"window.scrollBy(0, -{amount})")
-				msg = f'⬆️ Scrolled up {amount}px'
-			elif direction == "down":
-				await page.evaluate(f"window.scrollBy(0, {amount})")
-				msg = f'⬇️ Scrolled down {amount}px'
-			elif direction == "left":
-				await page.evaluate(f"window.scrollBy(-{amount}, 0)")
-				msg = f'⬅️ Scrolled left {amount}px'
-			elif direction == "right":
-				await page.evaluate(f"window.scrollBy({amount}, 0)")
-				msg = f'➡️ Scrolled right {amount}px'
-			else:
-				msg = f'❌ Invalid scroll direction: {direction}'
-
-			return ActionResult(extracted_content=msg, include_in_memory=True)
-		except Exception as e:
-			return ActionResult(error=f"Scroll failed: {str(e)}", include_in_memory=True)
-
-	@BaseTool.action(
-		'Send keyboard keys/shortcuts (e.g., "Enter", "Escape", "Control+A").',
-		param_model=SendKeysAction
-	)
-	async def send_keys(self, params: SendKeysAction, execution_context: Optional[ActionExecutionContext]):
-		"""Send keyboard keys."""
-		if not isinstance(params, SendKeysAction):
-			from pydantic import TypeAdapter
-			params = TypeAdapter(SendKeysAction).validate_python(params)
-
-		browser_context = execution_context.browser_context
-		if not browser_context:
-			return ActionResult(error="Browser context not available", include_in_memory=True)
-
-		try:
-			page = await browser_context.get_current_page()
-			await page.keyboard.press(params.keys)
-			return ActionResult(
-				extracted_content=f'⌨️ Sent keys: {params.keys}',
-				include_in_memory=True
-			)
-		except Exception as e:
-			return ActionResult(error=f"Send keys failed: {str(e)}", include_in_memory=True)
 
 	@BaseTool.action(
 		'Extract the current page content as text.',
@@ -1092,13 +953,13 @@ class Browser(BaseTool):
 
 	@BaseTool.action(
 		'Get available options from a dropdown element by its index.',
-		param_model=ClickElementAction
+		param_model=ElementIndexAction
 	)
-	async def get_dropdown_options(self, params: ClickElementAction, execution_context: Optional[ActionExecutionContext]):
+	async def get_dropdown_options(self, params: ElementIndexAction, execution_context: Optional[ActionExecutionContext]):
 		"""Get dropdown options."""
-		if not isinstance(params, ClickElementAction):
+		if not isinstance(params, ElementIndexAction):
 			from pydantic import TypeAdapter
-			params = TypeAdapter(ClickElementAction).validate_python(params)
+			params = TypeAdapter(ElementIndexAction).validate_python(params)
 
 		browser_context = execution_context.browser_context
 		if not browser_context:
@@ -1139,14 +1000,14 @@ class Browser(BaseTool):
 			return ActionResult(error=f"Get dropdown options failed: {str(e)}", include_in_memory=True)
 
 	@BaseTool.action(
-		'Select a dropdown option by its text value.',
-		param_model=InputTextAction
+		'Select an option of a dropdown (a <select> element) by its text or value. For another kind of menu, click it and then click the option.',
+		param_model=SelectOptionAction
 	)
-	async def select_dropdown_option(self, params: InputTextAction, execution_context: Optional[ActionExecutionContext]):
+	async def select_dropdown_option(self, params: SelectOptionAction, execution_context: Optional[ActionExecutionContext]):
 		"""Select dropdown option."""
-		if not isinstance(params, InputTextAction):
+		if not isinstance(params, SelectOptionAction):
 			from pydantic import TypeAdapter
-			params = TypeAdapter(InputTextAction).validate_python(params)
+			params = TypeAdapter(SelectOptionAction).validate_python(params)
 
 		browser_context = execution_context.browser_context
 		if not browser_context:
@@ -1172,8 +1033,13 @@ class Browser(BaseTool):
 				return ActionResult(error=f'Could not locate dropdown at index {params.index}',
 									 include_in_memory=True)
 
-			# Select by label/text
-			await handle.select_option(label=params.text)
+			if (await handle.evaluate('el => el.tagName')) != 'SELECT':
+				return ActionResult(error=f'Element {params.index} is not a <select> dropdown: click it, then click the option in the list it opens',
+									 include_in_memory=True)
+			try:  # by label, then by value (a short timeout: an absent label waits for it)
+				await handle.select_option(label=params.text, timeout=3000)
+			except Exception:
+				await handle.select_option(value=params.text, timeout=3000)
 			return ActionResult(
 				extracted_content=f'✅ Selected "{params.text}" from dropdown at index {params.index}',
 				include_in_memory=True

@@ -90,7 +90,9 @@ async def usage_rollup(
     caller gets an honest all-zero rollup, never a half-populated one).
 
     Fail-open to zeros on ANY error (missing db service, query fault, schema
-    drift) — a read-only usage query must never crash a caller.
+    drift) — a read-only usage query must never crash a caller. The zeros are
+    NOT a measurement then: the result carries ``unreadable`` (the reason), and
+    a caller that acts on the numbers (a spend cap) must check it.
     """
     result: Dict[str, Any] = {
         "user_id": user_id, "session_id": session_id, "since": _since_str(since),
@@ -101,6 +103,7 @@ async def usage_rollup(
     try:
         database = await _resolve_db(db)
         if database is None:
+            result["unreadable"] = "no usage database"
             return result
         where: List[str] = ["user_id = ?"]
         params: List[Any] = [user_id]
@@ -154,11 +157,23 @@ async def usage_rollup(
         if by_session is not None:
             result["by_session"] = by_session
         return result
-    except Exception:
-        logger.debug("usage_rollup: query failed, returning zeros", exc_info=True)
+    except Exception as e:
+        logger.warning("usage_rollup: query failed, returning unmeasured zeros: %s", e,
+                       exc_info=True)
         result.update(_ZERO_TOTALS)
         result.pop("by_session", None)
+        result["unreadable"] = f"{type(e).__name__}: {e}"[:200]
         return result
+
+
+def unreadable_text(rollup: Dict[str, Any]) -> Optional[str]:
+    """The text a reader shows instead of the figures when the rollup could not be read,
+    else None. Its zeros are not a measurement and must never read as $0."""
+    why = rollup.get("unreadable") if isinstance(rollup, dict) else None
+    if not why:
+        return None
+    return (f"Usage could not be read ({why}); no figures are shown. "
+            "This is not $0 and no invoice draft was made.")
 
 
 def _period_label(session_id: Optional[str], since: Optional[str]) -> str:

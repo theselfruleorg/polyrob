@@ -42,7 +42,9 @@ async def close_quietly(tool: Any) -> None:
 async def deliver_post(task_agent: Any, job: Any, final: str) -> bool:
     from polyrob.sdk import delivery_config_and_container as _config_and_container, \
         delivery_context as _delivery_context, record_delivery_write as _record_delivery_write
-    from polyrob_x.twitter_tool import TwitterPostAction
+    from polyrob.sdk import is_owner_tenant
+    from polyrob_x.twitter_tool import _OWNER_APPROVED_ACTION, TwitterPostAction
+    from tools.controller.approval import operator_denies_approvals
     config, container = _config_and_container(task_agent)
     tool = await build_ready_twitter_tool(config, container)
     text = final.strip()
@@ -50,13 +52,21 @@ async def deliver_post(task_agent: Any, job: Any, final: str) -> bool:
         text = text[:277] + "..."
     # 033 T0.2: route through the ACTION, never TwitterTool.post(). The raw
     # helper skips _check_ready (so TWITTER_ENABLED=false did not stop it), the
-    # hourly rate limit, TWITTER_REQUIRE_APPROVAL, the cross-session repeat-post
+    # hourly rate limit, the approval gate, the cross-session repeat-post
     # cooldown, the 031 pause gate and the social_write record — a cron job with
     # deliver=twitter published with zero governance.
+    # The owner's job says deliver=twitter: that is the decision. Its delivery context is
+    # a leaf so the pause and the cooldown see an autonomous turn, and a leaf never passes
+    # the approval gate, so the job's own decision is carried here. Another tenant's job
+    # and the operator's deny still go to the gate.
+    ctx = _delivery_context(job)
+    token = (_OWNER_APPROVED_ACTION.set("twitter_post")
+             if is_owner_tenant(ctx) and not operator_denies_approvals() else None)
     try:
-        res = await tool.twitter_post(TwitterPostAction(text=text),
-                                      execution_context=_delivery_context(job))
+        res = await tool.twitter_post(TwitterPostAction(text=text), execution_context=ctx)
     finally:
+        if token is not None:
+            _OWNER_APPROVED_ACTION.reset(token)
         await close_quietly(tool)
     _record_delivery_write(job, "twitter", "twitter_post", res,
                            target="open", fingerprint=text)

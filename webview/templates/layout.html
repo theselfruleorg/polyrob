@@ -67,7 +67,7 @@
     <div class="webgate-pause-headline" role="status">{{ pause_headline }}</div>
     {% endif %}
     {% if read_only %}
-    <div class="webgate-readonly-banner" role="status">Read-only console — actions are refused (WEBVIEW_READ_ONLY). You can look, not drive.</div>
+    <div class="webgate-readonly-banner" role="status">{{ t('shell.read_only.lead') }} {{ t('shell.read_only.body') }}</div>
     {% endif %}
 
     <div class="container {% block container_class %}{% endblock %}">

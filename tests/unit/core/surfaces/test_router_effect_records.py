@@ -105,3 +105,34 @@ async def test_a_send_inside_an_action_batch_is_left_to_the_hook(tmp_path, tlog)
     finally:
         reset_exec_identity(tok)
     assert tlog() == []
+
+
+@pytest.mark.asyncio
+async def test_one_send_through_both_paths_writes_one_row(tmp_path, tlog):
+    """108 W2: the action batch owns the row, and ``asyncio.wait_for`` (the way multi_act
+    runs an action) keeps the batch mark for the router call inside the action."""
+    import asyncio
+    import types
+    from tools.controller.effect_hooks import make_effect_record_hook
+
+    class _C:
+        session_id = "sess_1"
+        _is_sub_agent = False
+
+        def get_action_details(self, name):
+            return types.SimpleNamespace(tool=None, function=None)
+
+    r, surf = _router(tmp_path)
+    token = set_exec_identity("u1", "sess_1")
+    try:
+        await asyncio.wait_for(
+            r.publish(OutboundMessage(session_key="k1", text="one send")), timeout=5)
+        await make_effect_record_hook(_C())(
+            "message", {"text": "one send"},
+            types.SimpleNamespace(error=None, extracted_content="OK [message_id 4034]"), None)
+    finally:
+        reset_exec_identity(token)
+    assert len(surf.sent) == 1
+    rows = tlog()
+    assert [x["attrs"]["action"] for x in rows] == ["message"]
+    assert rows[0]["attrs"]["ref"] == "4034"

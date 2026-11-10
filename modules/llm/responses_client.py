@@ -1,4 +1,4 @@
-"""Generic OpenAI **Responses API** client (proposal 024, L2 transport gap).
+"""Generic OpenAI **Responses API** client.
 
 The third wire format, alongside chat-completions and Anthropic messages. It
 exists because subscription seats served through OpenAI's Codex backend
@@ -27,11 +27,15 @@ existing ``OpenRouterAdapter`` drives this unchanged.
 """
 from __future__ import annotations
 from modules.llm.billing_guard import inference_sdk
+from core.stop_reason import normalize_stop
+from modules.llm.call_scope import call_timeout_param
 
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
 from modules.llm.compat_clients import OpenAICompatClient
+from modules.llm.error_rules import ProviderBodyError
+from modules.llm.llm_client import translate_llm_error
 
 #: The Responses API rejects an input item id longer than this with a
 #: non-retryable 400. Server-assigned ids can be far longer, so a replayed one
@@ -251,25 +255,49 @@ class ResponsesCompatClient(OpenAICompatClient):
         converted = to_responses_tools(tools)
         if converted:
             params["tools"] = converted
-        max_tokens = kwargs.get("max_tokens") or getattr(self, "max_tokens", None)
-        if max_tokens:
-            params["max_output_tokens"] = max_tokens
+            if kwargs.get("tool_choice"):
+                params["tool_choice"] = kwargs["tool_choice"]
+        counted = [{"role": "system", "content": system}, *messages] if system else messages
+        params["max_output_tokens"] = self._adjust_max_tokens(
+            counted, kwargs.get("max_tokens"), tools=tools)
 
-        # F20: the Responses API names the system prompt `instructions`; pass it
+        # The Responses API names the system prompt `instructions`; pass it
         # explicitly so this path stamps a real prefix instead of nothing.
-        from modules.llm.prefix_stamp import stamp_client
-        stamp_client(self, params, system=instructions)
+        from modules.llm.prefix_stamp import stamp_request
+        stamp_request(params, system=instructions)
+        params.update(call_timeout_param())
         response = await inference_sdk(self).responses.create(**params)
         self.last_response = response
+        self._check_status(response)
         content, tool_calls = from_responses_output(response)
         return content, tool_calls, _usage_from(response)
 
-    async def generate_response(self, messages: List[Dict[str, Any]], **kwargs) -> str:
+    def _check_status(self, response: Any) -> None:
+        """A failed or filtered response raises typed. ``incomplete`` at the output cap
+        returns the text, and the call's facts carry the cut."""
+        label = self.provider_label
+        if getattr(response, "status", None) == "failed":
+            error = getattr(response, "error", None)
+            body = {"code": getattr(error, "code", None), "message": getattr(error, "message", None)}
+            raise translate_llm_error(ProviderBodyError(body), label, model=self.model_type)
+        if getattr(response, "status", None) == "incomplete":
+            reason = getattr(getattr(response, "incomplete_details", None), "reason", None)
+            if normalize_stop(reason) == "filtered":
+                from modules.llm.error_rules import filtered_error
+                raise filtered_error(label, self.model_type, reason)
+
+    async def generate_response(self, prompt: Any = None, messages: Optional[List[Dict[str, Any]]] = None,
+                                system: Optional[str] = None, **kwargs) -> str:
         """The no-tools path. Returns text only."""
+        formatted, system = self._normalize_prompt(prompt, messages, system)
         content, _calls, _usage = await self.generate_agent_response(
-            messages, tools=[], **kwargs
+            formatted, tools=[], system=system, **kwargs
         )
         return content
+
+    def _extract_usage_data(self) -> Dict[str, Optional[int]]:
+        """The no-tools path reads the same usage as the tool path."""
+        return _usage_from(self.last_response)
 
     async def _ensure_client(self) -> None:
         if self._client is None:

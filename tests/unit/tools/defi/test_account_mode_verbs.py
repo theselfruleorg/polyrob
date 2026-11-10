@@ -28,7 +28,7 @@ TO = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
 PINNED = "0xC011000000000000000000000000000000000001"
 STRANGER = "0x" + "77" * 20
 ID = 3
-ACCOUNT = erc6551.account_address(8453, PINNED, ID)
+ACCOUNT = erc6551.account_address(8453, PINNED, ID, implementation=erc6551.ACCOUNT_V3_IMPL)
 
 SEL_OWNER_OF = abi.selector("ownerOf(uint256)")
 SEL_STATE = abi.selector("state()")

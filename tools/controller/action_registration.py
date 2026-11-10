@@ -2,6 +2,7 @@
 code-motion). Registers send_message/done/load_skill/session_search/memory/delegation
 closures + backward-compat aliases. Methods use ``self`` (the composed Controller)
 exactly as before via the MRO."""
+import asyncio
 import logging
 import os
 from typing import Any, Dict, List, Optional
@@ -12,12 +13,13 @@ from pydantic import BaseModel, Field
 
 from agents.task.loop_types.controller_types import ActionResult
 from tools.controller.views import DoneAction, SendMessageAction
+from tools.controller.delegate_tier import resolve_delegate_tiers  # 112 W2
 from tools.controller.doc_authoring import DocAuthoringMixin
 from tools.controller.preferences_action import PreferencesActionMixin
 from tools.controller._helpers import (
 	append_prerequisites,
 	build_load_skill_result, third_party_seat_refuses,
-	build_session_search_hint,
+	build_session_search_hint, run_record_section,
 	forget_activated_skill,
 	read_skill_resource_confined,
 	self_mod_emitter,
@@ -608,7 +610,7 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 			"past work (facts, decisions); leave `query` empty to BROWSE your most-recent "
 			"sessions. Optional `limit` (1-20) and `sort` ('newest'/'oldest'); each result line is tagged `(id N)` — with sort='newest', pass `before_id=<smallest id>` to page further back (in relevance-ranked mode, refine the query or switch to sort='newest' instead). "
 			"Optional `collection`: set to search a named knowledge-base collection instead "
-			"of past sessions (requires KB to be enabled)."
+			"of past sessions (requires KB to be enabled). A `query` also reads the run records."
 		)
 
 		def _kb_on() -> bool:
@@ -657,26 +659,24 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 			try:  # D2: the reader's regime ranks; D3: a read failure is never "no match"
 				recalled = await memory_search(
 					params.query, session_id=session_id, user_id=user_id,
-					limit=params.limit, sort=params.sort, before_id=params.before_id, with_ids=True,
+					limit=params.limit, sort=params.sort, before_id=params.before_id, with_ids=True, with_age=True,
 					raise_errors=True, **recall_reader(session_id=session_id, is_sub_agent=bool(
 						getattr(execution_context, 'is_sub_agent', False))))
 			except Exception as e:
 				self.logger.warning(f"session_search failed: {e}")
 				return ActionResult(error=memory_read_error(e), include_in_memory=False)
-			if not recalled or not recalled.strip():
-				label = params.query if params.query else "(recent sessions)"
-				return ActionResult(
-					extracted_content=f"No past-session memory matched: {label!r}",
-					include_in_memory=True,
-				)
+			_sub = bool(getattr(execution_context, 'is_sub_agent', False))
+			raw = await asyncio.to_thread(run_record_section, params.query, provider=provider, user_id=user_id, session_id=session_id, limit=params.limit, sort=params.sort, before_id=params.before_id, is_sub_agent=_sub, drop_unverified=bool(recall_reader(session_id=session_id, is_sub_agent=_sub).get("drop_unverified")))
+			recalled = "\n".join(p for p in ((recalled or "").strip(), raw) if p)
+			if not recalled:
+				return ActionResult(extracted_content=f"No past-session memory matched: {params.query or '(recent sessions)'!r}", include_in_memory=True)
 			# W6/UP-06: recall may carry indirect injection — frame it as DATA (not auto-wrapped).
 			try:
 				from core.security.untrusted_wrap import wrap_untrusted
 				recalled = wrap_untrusted("session_search", recalled)
 			except Exception:
 				pass  # fail-open: never block recall on a wrap import error
-			header = ("## Recalled from past sessions" if params.query
-			          else "## Your most-recent sessions")
+			header = "## Recalled from past sessions" if params.query else "## Your most-recent sessions"
 			return ActionResult(  # T2.6: hint from the `(id N)` tags recalled already carries
 				extracted_content=f"{header}\n{recalled}{build_session_search_hint(recalled, params.limit, params.sort)}",
 				include_in_memory=True,
@@ -799,13 +799,6 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 				return ActionResult(extracted_content="Memory tool unavailable.", include_in_memory=False)
 			from core.security.untrusted_wrap import wrap_untrusted
 
-			def _fmt_ts(ts):
-				try:
-					import time as _t
-					return _t.strftime("%Y-%m-%d", _t.localtime(int(ts))) if ts else "?"
-				except Exception:
-					return "?"
-
 			if params.action == "read":
 				try:
 					notes = await prov.curated_read(user_id)
@@ -819,43 +812,9 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 					content = "Your curated memory is empty."
 				return ActionResult(extracted_content=content, include_in_memory=True)
 
-			if params.action == "list":
-				notes = await prov.note_list(user_id)
-				pending = await prov.note_list(user_id, status="pending")
-				if not notes and not pending:
-					return ActionResult(extracted_content="No notes yet.", include_in_memory=True)
-				lines = []
-				for n in notes:
-					tag_s = f" [{', '.join(n['tags'])}]" if n["tags"] else ""
-					title_s = n["title"] or "(untitled)"
-					lines.append(f"#{n['id']} {title_s}{tag_s} ({_fmt_ts(n['updated_ts'])}): "
-					             f"{(n['content'] or '')[:120]}")
-				body = "\n".join(lines)
-				if pending:
-					body += f"\n({len(pending)} pending note(s) awaiting owner review)"
-				return ActionResult(
-					extracted_content=f"## Your notes\n{wrap_untrusted('memory', body)}",
-					include_in_memory=True)
-
-			if params.action == "show":
-				if params.note_id is None:
-					return ActionResult(extracted_content="show requires note_id.", include_in_memory=True)
-				note = await prov.note_get(user_id, params.note_id)
-				if note is None:
-					return ActionResult(extracted_content="Note not found.", include_in_memory=True)
-				backs = []
-				if note.get("title"):
-					backs = await prov.note_backlinks(user_id, note["title"])
-				body = (f"#{note['id']} {note['title'] or '(untitled)'} "
-				        f"[{', '.join(note['tags'])}] status={note['status']} "
-				        f"({_fmt_ts(note['created_ts'])})\n{note['content']}")
-				if note["links"]:
-					body += f"\nlinks: {', '.join('[[' + l + ']]' for l in note['links'])}"
-				if backs:
-					body += f"\nbacklinked from: {', '.join('#' + str(b['id']) + ' ' + (b['title'] or '') for b in backs)}"
-				return ActionResult(
-					extracted_content=f"## Note\n{wrap_untrusted('memory', body)}",
-					include_in_memory=True)
+			if params.action in ("list", "show"):
+				from tools.controller.notes_read import note_read_result
+				return await note_read_result(prov, user_id, params.action, params.note_id)
 
 			# ---- writes below: audited, threat-scanned, forged-turn-disciplined ----
 			# T4-02: curated writes shape the agent's own future recall — emit a
@@ -885,10 +844,10 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 				except Exception:
 					return True
 
-			# SK-F10 discipline: a forged/autonomous turn (self-wake, delegation-result,
-			# sub-agent, goal/cron) may only QUARANTINE new notes (status='pending',
-			# owner reviews later) and may never mutate an active one.
-			forged = _is_forged_or_autonomous_turn(execution_context, self)
+			# SK-F10 discipline: a forged turn (self-wake, delegation-result, sub-agent) may
+			# only QUARANTINE new notes; a standing job's main run keeps its own notes.
+			from core.security.owner_turn import is_owner_standing_run as _standing
+			forged = _is_forged_or_autonomous_turn(execution_context, self) and not _standing(execution_context)
 
 			if params.action in ("add", "create"):
 				if _scan_blocked(params.content, params.title):
@@ -1152,8 +1111,10 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 					),
 					include_in_memory=True,
 				)
-			from modules.credits.usage_rollup import build_invoice_draft, usage_rollup
+			from modules.credits.usage_rollup import build_invoice_draft, unreadable_text, usage_rollup
 			rollup = await usage_rollup(user_id, session_id=params.session_id, since=params.since)
+			if unreadable_text(rollup):
+				return ActionResult(error=unreadable_text(rollup), include_in_memory=True)
 			draft = build_invoice_draft(rollup)
 
 			scope = ""
@@ -1198,21 +1159,16 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 		# UP-10 2.4: the single gated delegation core (role+depth gate,
 		# evaluate_delegation).
 		async def _delegate(*, goal=None, tasks=None, role="leaf", profile="executor",
-		                     background=False, model=None, provider=None,
+		                     background=False, model=None, provider=None, tier=None, why=None,
 		                     execution_context=None, label="delegate_task") -> ActionResult:
 			"""Gated delegation dispatch. Provide goal XOR tasks (list of SubtaskAction).
 
 			UP-12: background=True (goal-only) detaches the child and returns immediately;
 			its result re-enters the session as a new turn when it finishes.
 
-			B4: optional per-sub-agent `model`/`provider` builds an isolated child LLM
-			instead of inheriting the parent's. Goal shape: `model` applies to the one
-			spawned child. Tasks shape: each SubtaskAction's own `model` wins; a task
-			without one falls back to the top-level `model` (else inherits the parent's
-			LLM, unchanged). Not supported together with `background=true` in v1 — the
-			async delegation registry doesn't yet thread a model through, so that
-			combination is rejected before dispatch rather than silently ignored.
-			"""
+			B4: optional per-sub-agent `model`/`provider` (a task's own wins over the top level)
+			builds an isolated child LLM; 112 W2: `tier` + `why` resolve through
+			`tools/controller/delegate_tier.py`. Neither works with `background=true`."""
 			from agents.task.constants import TimeoutConfig
 
 			# B4: `provider` only has meaning paired with a `model`. Reject a
@@ -1326,6 +1282,10 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 					return None, f"Could not build sub-agent model '{m}'"
 				return child_llm, None
 
+			_route = resolve_delegate_tiers(parent_agent=_resolve_parent_agent(), model=model, provider=provider, tier=tier, why=why, tasks=tasks, session_id=str(getattr(getattr(self, 'orchestrator', None), 'session_id', '') or ''), user_id=str(getattr(getattr(self, 'orchestrator', None), 'user_id', '') or ''), defer_record=True)  # 112 W2: recorded once the child models are built
+			if _route.error:
+				return ActionResult(error=_route.error, include_in_memory=True)
+			model, provider, tasks = _route.model, _route.provider, _route.tasks
 			try:
 				if goal:
 					child_llm = None
@@ -1333,6 +1293,7 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 						child_llm, build_err = await _build_child_llm(model, provider)
 						if build_err:
 							return ActionResult(error=build_err, include_in_memory=True)
+					_route.commit_records()
 
 					self.logger.info(f"🚀 {label} (goal): {goal[:100]}... (profile: {profile})")
 					result = await mgr.run_subtask(
@@ -1346,7 +1307,7 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 						_head = ("## Delegated goal STOPPED before it finished ⚠️ (no done — the child "
 							f"{getattr(result, 'stop_description', 'stop reason unknown')}; the result is "
 							"partial; check it before you rely on it)" if getattr(result, 'finished', None) is False
-							else "## Delegated goal completed ✅")
+							else "## Delegated goal completed ✅") + _route.head
 						return ActionResult(
 							extracted_content=(
 								f"{_head}\n\n**Goal:** {goal}\n\n"
@@ -1374,6 +1335,7 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 					subtask_dicts.append({
 						'task': st.task, 'profile': st.profile, 'llm': st_llm,
 					})
+				_route.commit_records()
 				results = await mgr.run_parallel_subtasks(
 					subtasks=subtask_dicts,
 					parent_agent_id=parent_agent_id,
@@ -1384,7 +1346,7 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 				_stopped = f", {stopped} stopped before finishing" if stopped else ""
 				return ActionResult(
 					extracted_content=(
-						f"## Delegated tasks complete\n\n"
+						f"## Delegated tasks complete{_route.head}\n\n"
 						f"**Results:** {successful}/{len(results)} succeeded{_stopped}\n\n{output}"
 					),
 					include_in_memory=True,
@@ -1402,18 +1364,18 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 			'Expensive. Synchronous by default (blocks this turn until done). Set '
 			'background=true (goal only) to run it detached and get the result as a new '
 			'message later — durable across the turn but NOT across restart (use the '
-			'scheduler for durable scheduled work). Set "model" (and optionally '
-			'"provider") to run the sub-agent on a different model than yours — e.g. a '
-			'cheaper/faster model for a simple task; omit to inherit your model. With '
-			'"tasks", each task can set its own "model", falling back to the top-level '
-			'"model" if unset. Not supported together with background=true.',
+			'scheduler for durable scheduled work). Set "tier" + "why" to pick the model: '
+			'"heavy" for judgement that decides money or is hard to undo, "light" for bulk '
+			'reads, "default" = yours (<environment> names each tier\'s model; at most 2 heavy '
+			'per call). "model" = an owner alias. With "tasks", each task may set its own tier '
+			'or model. Neither works with background=true.',
 			param_model=DelegateTaskAction
 		)
 		async def delegate_task(params: DelegateTaskAction, execution_context=None) -> ActionResult:
 			"""Spawn sub-agent(s) for delegated work, gated by role + depth."""
 			return await _delegate(
 				goal=params.goal, tasks=params.tasks, role=params.role,
-				profile=params.profile, background=params.background, model=params.model, provider=params.provider,
+				profile=params.profile, background=params.background, model=params.model, provider=params.provider, tier=params.tier, why=params.why,
 				execution_context=execution_context, label="delegate_task",
 			)
 

@@ -13,7 +13,7 @@ requiring the owner to know which of the four axes to touch. `--mode`
 additionally writes AUTONOMY_MODE, validated against the enum SSOT
 (``core.config_policy.flag_enums``) before anything is written.
 
-`halt`/`resume` are live aliases of `polyrob owner halt`/`resume` — the same
+`pause`/`resume` (and the hidden old name `halt`) share `polyrob owner resume` and the
 ``core.surfaces.owner_admin`` primitive every seat calls (no restart needed),
 with the same verified-state honesty (a halt the runtime cannot see is not a
 halt).
@@ -29,11 +29,12 @@ import json as _json
 import click
 
 from cli._admin_home import as_root_option
+from cli.commands._options import json_option
 
 
 @click.group("autonomy")
 def autonomy():
-    """Autonomy dial: status / on / off / halt / resume."""
+    """Autonomy dial: status / on / off / pause / resume."""
     from cli.commands._bootstrap import ensure_env_loaded
     ensure_env_loaded()
 
@@ -80,8 +81,7 @@ def _validate_mode(mode: str) -> str:
 
 
 @autonomy.command("status")
-@click.option("--json", "as_json", is_flag=True, default=False,
-              help="Machine-readable output")
+@json_option(help="Machine-readable output")
 def status_cmd(as_json):
     """Show the effective posture card (all axes), halt state and loop flags.
 
@@ -214,10 +214,10 @@ def pause_cmd(scopes, duration):
                                    status_hint="`polyrob autonomy status`", chat=False))
 
 
-@autonomy.command("halt")
+@autonomy.command("halt", hidden=True)
 @as_root_option
 def halt_cmd():
-    """Alias of `polyrob autonomy pause` (everything)."""
+    """Old name of `polyrob autonomy pause` (everything) — hidden (113 T-08)."""
     from core.surfaces.owner_admin import pause_autonomy, render_pause_result
     res = pause_autonomy(_data_dir(write=True), scopes=("all",), reason="polyrob autonomy halt", via="cli")
     click.echo(render_pause_result(res, resume_hint="`polyrob autonomy resume`",

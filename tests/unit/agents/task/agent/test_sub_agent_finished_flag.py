@@ -65,7 +65,9 @@ def test_a_stopped_child_carries_its_last_report_once():
 
 def test_a_failed_child_with_a_typed_stop_names_it():
     """083: a child cut by its wall-clock cap says so, not a bare "Failed"."""
-    r = SubAgentResult(agent_id="c1", task="t", output="", success=False,
+    from agents.task.agent.sub_agent_manager import SubAgentOutput
+    r = SubAgentResult(agent_id="c1", task="t", success=False,
+                       output=SubAgentOutput(summary="Task: t"),
                        stop_reason="wall_clock", steps_taken=3)
     assert r.status_label == "Failed (cut by the wall-clock cap (step 3))"
 
@@ -80,3 +82,29 @@ def test_an_unfinished_child_summary_does_not_say_completed():
     done = SimpleNamespace(state=SimpleNamespace(stop_reason="done"), task="t")
     assert mgr._extract_output_structured(stopped, None).summary == "Task: t"
     assert mgr._extract_output_structured(done, None).summary == "Completed task: t"
+
+
+def test_a_child_halted_by_an_error_is_not_a_success():
+    """A refused child (stop reason "error", a terminal halt line) failed: its parent
+    gets the error text, never success=True with no error."""
+    from types import SimpleNamespace
+    from agents.task.agent.sub_agent_manager import _child_error
+    from agents.task.agent.views import ActionResult
+    halt = ("Stopped: the model declined this request (category: cyber). "
+            "Nothing was retried on another model.")
+    history = SimpleNamespace(history=[SimpleNamespace(result=[ActionResult(error=halt)])])
+    refused = SimpleNamespace(state=SimpleNamespace(stop_reason="error"))
+    assert _child_error(refused, history) == halt
+    done = SimpleNamespace(state=SimpleNamespace(stop_reason="done"))
+    assert _child_error(done, history) is None
+    assert _child_error(refused, SimpleNamespace(history=[])) is None
+
+
+def test_the_parallel_rendering_names_a_failed_childs_error():
+    mgr = object.__new__(SubAgentManager)
+    from agents.task.agent.sub_agent_manager import SubAgentOutput
+    r = SubAgentResult(agent_id="c1", task="t", success=False,
+                       output=SubAgentOutput(summary="Task: t"),
+                       error="Stopped: the model declined this request (category: cyber).")
+    text = mgr.format_results_for_prompt([r])
+    assert "declined this request (category: cyber)" in text

@@ -1,0 +1,30 @@
+{
+  "function": {
+    "description": "Attach files from the workspace to a file field (an image, a document). Give the index of the file field, its upload button or its drop area; no index is needed when the page has one file field.",
+    "name": "browser_upload_file",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for attaching workspace files to a file field.",
+      "properties": {
+        "elementIndex": {
+          "default": null,
+          "description": "The file field, or its upload button or drop area. Not needed when the page has one file field",
+          "nullable": true,
+          "type": "integer"
+        },
+        "paths": {
+          "description": "Workspace paths of the files to attach",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "paths"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

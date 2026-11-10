@@ -32,12 +32,7 @@ def _fail(surface, target, error: str, **extra) -> dict:
 
 
 def _owner_turn_refusal(execution_context, controller, *, verb: str) -> Optional[str]:
-    """None only for a genuine owner turn. Fail-CLOSED.
-
-    Two existing statements, both required: ``owner_turn_refusal`` (owner
-    tenant, not sub-agent/leaf, not a self-wake re-entry, context present) and
-    ``_is_forged_or_autonomous_turn`` (adds the room turn and the autonomous
-    goal/cron session)."""
+    """None only for the owner's own turn or standing job. Fail-CLOSED."""
     try:
         from core.security.owner_turn import owner_turn_refusal
         why = owner_turn_refusal(execution_context, verb=verb,
@@ -45,13 +40,13 @@ def _owner_turn_refusal(execution_context, controller, *, verb: str) -> Optional
                                  public="list or delete the agent's posts")
         if why:
             return f"{why} — it needs the owner's instruction in this turn"
-        from tools.controller.turn_origin import _is_forged_or_autonomous_turn
-        if not _is_forged_or_autonomous_turn(execution_context, controller):
+        from core.security.owner_turn import is_owner_driven
+        if is_owner_driven(execution_context, controller):
             return None
     except Exception:
         logger.debug("post owner-turn probe failed (fail-closed)", exc_info=True)
-    return (f"{verb} needs the owner's instruction in this turn — an autonomous, "
-            "delegated or room turn cannot. Tell the owner which post and let them ask.")
+    return (f"{verb} needs the owner's turn or job — a delegated or room turn, or one with "
+            "someone else's message, cannot. Tell the owner which post and let them ask.")
 
 
 def _is_gone(reason: str) -> bool:

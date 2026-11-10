@@ -189,6 +189,8 @@ def rig(monkeypatch, tmp_path):
                         lambda rid: ["0x" + "f" * 64])
     monkeypatch.setattr(bridge_guard, "evm_tx_inflow",
                         lambda h, r, c, n, **k: (OUT_RAW, int(_time.time())))
+    monkeypatch.setattr(bridge_guard, "evm_block_rise",
+                        lambda h, r, c, n, **k: (1, OUT_RAW))
     # The guard itself is exercised in tests/unit/core/wallet; here it answers.
     monkeypatch.setattr(
         "core.wallet.tx_guard.authorize",
@@ -663,3 +665,26 @@ def test_an_approve_naming_another_spender_is_refused(usdc_origin, monkeypatch):
     r = _run(_Tool(), _params(token_in="usdc", amount=93.6))
     assert "RESULT: NOT SENT" in (r.content or "")
     assert not usdc_origin.sent
+
+
+def test_the_evm_origin_is_booked_pending_its_receipt(rig):
+    """Booked at broadcast with no receipt: the receipt resolver settles it, so
+    a reverted origin leaves the caps (chain + tx hash are what it reads)."""
+    tool = _Tool()
+    _run(tool, _params(from_chain=" Base "))
+    rec = tool.wallet.policy.recorded[0]
+    assert rec["receipt_state"] == "pending_receipt"
+    assert rec["chain"] == "base" and rec["result_ref"] == "0xbeef"
+
+
+def test_the_evm_origin_books_the_guards_figure_when_it_is_higher(rig, monkeypatch):
+    """Relay's USD figure is not the spend-grade value; the higher of the two
+    is booked (the SVM origin already does this)."""
+    monkeypatch.setattr(
+        "core.wallet.tx_guard.authorize",
+        lambda intent, tx, **kw: SimpleNamespace(
+            allowed=True, reason="authorized", lane="autonomous",
+            amount_usd=120.0, sim_gas_used=100_000))
+    tool = _Tool()
+    _run(tool, _params())
+    assert tool.wallet.policy.recorded[0]["amount_usd"] == pytest.approx(120.0)

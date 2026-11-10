@@ -82,3 +82,17 @@ async def test_the_same_words_sent_again_earn_a_correction_again(told):
     assert told == [owner_answer.NOT_ANSWERED_LINE]
     assert await owner_answer.check_owner_answered(agent) is True
     assert len(injected) == 2
+
+
+@pytest.mark.asyncio
+async def test_the_same_words_in_a_new_turn_earn_a_correction_again(told):
+    """The nudge marker is per turn: the loop-guard reset of a new run or a new owner
+    batch clears it, so a repeated "status?" is corrected, not answered with the line."""
+    from agents.task.agent.core.loop_detection import LoopDetectionMixin
+    agent, injected = _agent(words="status?")
+    assert await owner_answer.check_owner_answered(agent) is True   # turn 1: nudged
+    mark_reply_published(agent.orchestrator, "all fine")              # the model answered
+    LoopDetectionMixin._reset_loop_guard(agent)                       # turn 2 starts
+    reset_turn(agent.orchestrator)
+    assert await owner_answer.check_owner_answered(agent) is True
+    assert len(injected) == 2 and told == []

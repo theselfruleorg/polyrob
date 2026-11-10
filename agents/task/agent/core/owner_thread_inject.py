@@ -27,6 +27,7 @@ from typing import Any, List, Optional
 _SEEN_ATTR = "_owner_thread_seen_ts"
 _REPLY_ATTR = "_owner_thread_reply_to"
 _LEDGER_SEEN_ATTR = "_action_ledger_seen"
+_TAIL_UNREAD_ATTR = "_owner_thread_tail_unread"
 
 
 class OwnerThreadInjectMixin:
@@ -106,14 +107,21 @@ class OwnerThreadInjectMixin:
                 rows = rail_slice(container, user_id, rail_id=rail_id)
                 self._owner_thread_push(render_block(rows, kind="rail"))
                 return
-            if not bootstrapped:
+            orch = getattr(self, "orchestrator", None)
+            # A tail that could not be read is read again on the next turn's first
+            # step (that turn is bootstrapped and would otherwise take the delta).
+            tail_unread = (orch is not None and getattr(orch, _TAIL_UNREAD_ATTR, False)
+                           and getattr(orch, _SEEN_ATTR, None) is None)
+            if not bootstrapped or tail_unread:
                 rows = thread_tail(container, user_id)
-                self._owner_thread_push(render_block(rows, kind="tail",
-                                                     this_session=self.session_id))
-                self._owner_thread_mark_seen()
+                if orch is not None:
+                    setattr(orch, _TAIL_UNREAD_ATTR, rows is None)
+                if rows is not None:
+                    self._owner_thread_push(render_block(rows, kind="tail",
+                                                         this_session=self.session_id))
+                    self._owner_thread_mark_seen()
             else:
                 self._inject_owner_thread_delta()
-            orch = getattr(self, "orchestrator", None)
             ref = getattr(orch, _REPLY_ATTR, None) if orch is not None else None
             if ref:
                 try:
@@ -144,6 +152,8 @@ class OwnerThreadInjectMixin:
             rows = thread_delta(getattr(self, "container", None),
                                 getattr(self, "user_id", ""),
                                 session_id=self.session_id, since_ts=since)
+            if rows is None:
+                return  # unreadable: the watermark stays, so the rows come next time
             self._owner_thread_mark_seen()
             if rows:
                 self._owner_thread_push(render_block(rows, kind="delta",

@@ -14,7 +14,7 @@ def tool(tmp_path, monkeypatch):
     t = T.GoalTool.__new__(T.GoalTool)
     monkeypatch.setattr(T.GoalTool, "_resolve_board", lambda self: board)
     monkeypatch.setattr(T.GoalTool, "_user", lambda self, ctx: "alice")
-    monkeypatch.setattr(T, "_autonomy_refusal", lambda ctx: None)
+    monkeypatch.setattr(T, "_autonomy_refusal", lambda ctx, goal_id=None: None)
     return t, board
 
 

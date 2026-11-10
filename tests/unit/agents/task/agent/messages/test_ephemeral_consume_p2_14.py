@@ -58,3 +58,27 @@ def test_restore_is_noop_after_commit():
     mm.restore_ephemeral_on_failure()  # must be a no-op (pending already cleared)
     again = mm.get_messages_for_llm(consume_ephemeral=True)
     assert not any("DELIVERED_ONCE" in t for t in _texts(again))
+
+
+def test_second_assembly_in_one_step_keeps_and_resends_pending():
+    """A retry in the same step (provider fallback, timeout retry) assembles again: the
+    first assembly's ephemerals ride that request too and stay pending, and the per-call
+    hint of the first assembly is not sent twice beside the fresh one."""
+    mm = _mm()
+    mm.push_ephemeral_message(HumanMessage(content="CORRESPONDENT_REPLY"))
+    hint = HumanMessage(content="FORMAT_HINT")
+    hint.metadata = {"per_call": True}
+    mm.push_ephemeral_message(hint)
+    mm.get_messages_for_llm(consume_ephemeral=True)
+
+    hint2 = HumanMessage(content="FORMAT_HINT")
+    hint2.metadata = {"per_call": True}
+    mm.push_ephemeral_message(hint2)  # the retry's own hint
+    retry = _texts(mm.get_messages_for_llm(consume_ephemeral=True))
+    assert any("CORRESPONDENT_REPLY" in t for t in retry)
+    assert sum("FORMAT_HINT" in t for t in retry) == 1
+
+    # The retry failed too: the reply is re-queued, not lost.
+    mm.restore_ephemeral_on_failure()
+    again = mm.get_messages_for_llm(consume_ephemeral=True)
+    assert sum("CORRESPONDENT_REPLY" in t for t in _texts(again)) == 1

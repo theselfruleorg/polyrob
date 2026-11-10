@@ -44,8 +44,8 @@ how one is chosen: [configuration.md §4](configuration.md#4-providers-and-model
 
 Key behaviors:
 - **Native tool calling** — uses each provider's structured function-call protocol; no JSON parsing hacks.
-- **Automatic failover** — a rate-limit or connection error on the primary provider automatically retries on a fallback provider. Failover on billing/quota-exhaustion errors is also attempted before a permanent halt (`BILLING_FAILOVER_ENABLED`, on by default); it has no second provider to fall back to unless more than one is configured.
-- **Prompt caching** — on by default wherever the provider supports it: Anthropic `cache_control` breakpoints with a 5-minute or 1-hour window, OpenAI and DeepSeek automatic prefix caching, OpenRouter and Gemini breakpoints. What makes it pay is that the assembled request is a stable *prefix* — see [Prompt caching and the context window](#prompt-caching-and-the-context-window) below.
+- **Automatic failover** — a rate-limit or connection error backs off on the same model, then moves to the same model family on another provider, then to another permitted provider (`LLM_FALLBACK_PROVIDERS`). A move that costs much more does not happen silently, and the session returns to its first model after a cooldown. Failover on billing/quota-exhaustion errors is also attempted before a permanent halt (`BILLING_FAILOVER_ENABLED`, on by default); it has no second provider to fall back to unless more than one is configured.
+- **Prompt caching** — on by default wherever the provider supports it: Anthropic `cache_control` breakpoints with a 5-minute or 1-hour window, OpenAI, DeepSeek, GLM and Gemini automatic prefix caching, OpenRouter breakpoints for the models that need them. What makes it pay is that the assembled request is a stable *prefix* — see [Prompt caching and the context window](#prompt-caching-and-the-context-window) below.
 - **Reasoning tokens** — extended thinking / reasoning effort for Claude, DeepSeek, and OpenAI reasoning models when `THINKING_CONFIG_ENABLED=true` (off by default).
 
 ### Prompt caching and the context window
@@ -153,7 +153,7 @@ Tools are registered with the Controller and exposed to the LLM as callable func
 |----------|-------------|
 | Web fetch / search | `web_fetch` reads a single URL as clean markdown without a browser (the lightweight default reader); Perplexity-backed web search (the `discovery` pack) when `PERPLEXITY_API_KEY` is set |
 | HTTP write | `http_request` sends one POST/PUT/PATCH/DELETE with a JSON body through the same SSRF checks as `web_fetch`; it adds no cookie or stored key. A scheduled job or goal asks the owner once for each new domain |
-| Browser (`tools/browser/`) | Playwright: navigate, click, type, scroll, screenshot, extract DOM — opt-in (`browser` toolset/tool) |
+| Browser (`tools/browser/`) | Playwright: navigate, click, type (fields, pickers, rich-text editors), upload files, select, drag, hover, tabs, dialogs, script, screenshot, extract DOM — opt-in (`browser` toolset/tool) |
 | Filesystem / docs | Create, read, edit files in the session workspace |
 | AnySite (the `discovery` pack, `packs/discovery/`) | Structured data from external sites and platforms via the `anysite` CLI (needs `ANYSITE_API_KEY`) |
 | MCP (`tools/mcp/`) | Model Context Protocol — connect any MCP-compatible server (filesystem, GitHub, Slack, or your own); none are configured out of the box |
@@ -161,6 +161,7 @@ Tools are registered with the Controller and exposed to the LLM as callable func
 | DeFi and on-chain (`tools/defi/`, `tools/launchpad/`, `tools/dapp_browser/`; the venues in the `markets` pack, `packs/markets/`) | Reading a chain, swapping, bridging, deploying a token, launching one, and driving a web dapp with the agent's own wallet — every verb off by default and separately armed; see [onchain.md](onchain.md) |
 | Durable apps (`tools/app_service/`) | Runs an app the agent built as a supervised container behind a public URL — opt-in (`AGENT_BUILDER_MODE=ship`); see [deployment-postures.md](deployment-postures.md) |
 | Code execution (`tools/code_exec/`) | Runs code in a subprocess or a hardened container; opt-in (`CODE_EXEC_ENABLED`), never loaded by default. `run_code(persist=True)` keeps a per-session Python kernel; `run_code(tools=True)` lets a script call an allowlist of agent tools over a per-run RPC that re-enters the Controller, so every gate still applies (`CODE_EXEC_TOOL_CALLS`). `CODE_EXEC_NETWORK=proxy` puts the session sandbox behind one allowlist proxy |
+| Hashes and the fair draw (`tools/controller/compute_action.py`) | `compute` gives sha256, sha3_256 and keccak256 digests and the provably fair draw (sort ids by `sha256(seed + id)`, take N) with no code execution, in every chat |
 | Shell (`tools/shell/`) | A persistent `shell` and background `process` jobs (poll, wait, log, kill, stdin through `process_write`/`process_submit`/`process_close`, PTY, notify on exit or on a pattern). In the session sandbox from `AGENT_COMPUTE_POSTURE=1`; on the host only for the owner's own terminal turn at posture 3. Executors: docker or Podman, `ssh`, and the sandbox packs (`modal`, `daytona`, `vercel_sandbox`, `singularity`). Every line passes the command guard (`core/security/command_guard.py`) |
 | Email (`tools/email_tool.py`, `tools/email_mailbox.py`, `tools/email_providers/`) | The agent's own mailbox: `email_list`, `email_read`, `email_save_attachment`, `email_reply`, `email_forward`, `email_folders`, `email_mark`, `email_move`, `email_delete` (to Trash) and `email_send`, over SMTP/IMAP or AgentMail. Every send verb rides one gated rail that tiers every recipient |
 | X (the `x` pack, `packs/x/`) | Posts, replies and DMs on the agent's own account; `twitter_dm` sends over X Chat and falls back to a plaintext DM for a cold first contact. See [x-twitter.md](x-twitter.md) |
@@ -178,7 +179,7 @@ Optional vector backend (`MEMORY_BACKEND=local_vector`): adds sentence-transform
 The memory flow within a session:
 1. At the start of each step, relevant memories are **prefetched** and injected as context.
 2. After each step, new findings are **synced** to the store.
-3. The agent can also **search** memory explicitly with the `session_search` action.
+3. The agent can also **search** memory explicitly with the `session_search` action. A search with a query also reads the records of past runs.
 
 An optional episodic activity log (`EPISODIC_MEMORY_ENABLED`) records a short summary of each completed run (chat, goal, or cron job), so a new session can pick up with a brief "what happened last time" instead of starting cold. It belongs to the autonomy group: off unless `POLYROB_LOCAL` and `AUTONOMY_ENABLED` are both on, or an `AUTONOMY_POSTURE` moves its default. A scheduled job and a goal keep their own run record (the outcome, what the run sent, did and signed) whatever this flag says: the next run of the same job or goal reads it as `<previous-runs>`. `MEMORY_BACKEND=none` still keeps no record.
 
@@ -284,4 +285,4 @@ ship inside the `polyrob` wheel; their SDKs are pip extras. See [packs.md](packs
 
 ## Agent delegation
 
-The agent can spawn **sub-agents** for parallel or delegated work via the `delegate_task` tool. Sub-agents are leaf nodes (cannot further delegate), run with a least-privilege tool set, and report results back to the parent session. Gated by `SUB_AGENTS_ENABLED` (default on) with conservative depth and concurrency caps.
+The agent can spawn **sub-agents** for parallel or delegated work via the `delegate_task` tool. Sub-agents are leaf nodes (cannot further delegate), run with a least-privilege tool set, and report results back to the parent session. Gated by `SUB_AGENTS_ENABLED` (default on) with conservative depth and concurrency caps. The agent picks a sub-agent's model by tier name — `heavy`, `light` or `default`, with a one-line reason, at most two heavy per call — and the operator's settings decide the model behind each name ([configuration.md §4](configuration.md#4-providers-and-models)).

@@ -24,7 +24,6 @@ BODY = ("# Demo\n\n## Rule 4 - old rule\n\nbody A\n\n"
 
 @pytest.fixture
 def manager(tmp_path, monkeypatch):
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "true")
     return SkillManager(skills_dir=tmp_path)
 
 
@@ -35,11 +34,11 @@ def _draft(manager, uid, sid):
 
 def test_second_patch_of_an_active_skill_is_not_a_revision_conflict(manager):
     manager.create_skill("demo", BODY, user_id="u1", created_by="user", pending=False)
-    first = manager.patch_skill("demo", user_id="u1", created_by="agent",
+    first = manager.patch_skill("demo", user_id="u1", created_by="untrusted_turn",
                                 old_string="## Rule 4 - old rule",
                                 new_string="## Rule 4 - NEW rule")
     assert first.ok and first.pending
-    second = manager.patch_skill("demo", user_id="u1", created_by="agent",
+    second = manager.patch_skill("demo", user_id="u1", created_by="untrusted_turn",
                                  old_string="## Deferred - needs owner sign-off",
                                  new_string="## Owner signed off")
     assert second.ok, second.errors
@@ -48,10 +47,10 @@ def test_second_patch_of_an_active_skill_is_not_a_revision_conflict(manager):
 
 def test_a_chain_of_patches_accumulates_into_one_draft(manager):
     manager.create_skill("demo", BODY, user_id="u1", created_by="user", pending=False)
-    manager.patch_skill("demo", user_id="u1", created_by="agent",
+    manager.patch_skill("demo", user_id="u1", created_by="untrusted_turn",
                         old_string="## Rule 4 - old rule",
                         new_string="## Rule 4 - NEW rule")
-    manager.patch_skill("demo", user_id="u1", created_by="agent",
+    manager.patch_skill("demo", user_id="u1", created_by="untrusted_turn",
                         old_string="## Deferred - needs owner sign-off",
                         new_string="## Owner signed off")
     draft = _draft(manager, "u1", "demo")
@@ -64,9 +63,9 @@ def test_a_chain_of_patches_accumulates_into_one_draft(manager):
     assert [it["skill_id"] for it in manager.list_pending_skills("u1")] == ["demo"]
 
 
-def test_the_active_body_is_never_written_by_an_agent_patch(manager):
+def test_the_active_body_is_never_written_by_an_untrusted_patch(manager):
     manager.create_skill("demo", BODY, user_id="u1", created_by="user", pending=False)
-    manager.patch_skill("demo", user_id="u1", created_by="agent",
+    manager.patch_skill("demo", user_id="u1", created_by="untrusted_turn",
                         old_string="## Rule 4 - old rule",
                         new_string="## Rule 4 - NEW rule")
     active = manager._read_skill_text(
@@ -76,11 +75,27 @@ def test_the_active_body_is_never_written_by_an_agent_patch(manager):
 
 def test_an_explicit_stale_cas_token_still_refuses(manager):
     """The quarantine CAS still protects a draft from a stale writer."""
-    first = manager.create_skill("calib", "# A\n\ngauge\n", user_id="u1")
+    first = manager.create_skill("calib", "# A\n\ngauge\n", user_id="u1", created_by="untrusted_turn")
     assert first.ok and first.pending
     ok = manager.patch_skill("calib", user_id="u1", old_string="gauge",
-                             new_string="sensor", expected_revision=first.revision)
+                             new_string="sensor", expected_revision=first.revision,
+                             created_by="untrusted_turn")
     assert ok.ok
     stale = manager.patch_skill("calib", user_id="u1", old_string="sensor",
-                                new_string="meter", expected_revision=first.revision)
+                                new_string="meter", expected_revision=first.revision,
+                                created_by="untrusted_turn")
     assert not stale.ok and "revision conflict" in stale.errors[0]
+
+
+def test_an_agent_patch_chain_is_active_at_once(manager):
+    manager.create_skill("demo", BODY, user_id="u1", created_by="user")
+    first = manager.patch_skill("demo", user_id="u1", created_by="agent",
+                                old_string="## Rule 4 - old rule",
+                                new_string="## Rule 4 - NEW rule")
+    second = manager.patch_skill("demo", user_id="u1", created_by="agent",
+                                 old_string="## Deferred - needs owner sign-off",
+                                 new_string="## Owner signed off")
+    assert first.ok and not first.pending and second.ok and not second.pending
+    active = manager._read_skill_text(manager.skills_dir / "user_u1" / "demo" / "SKILL.md")
+    assert "## Rule 4 - NEW rule" in active and "## Owner signed off" in active
+    assert manager.list_pending_skills("u1") == []

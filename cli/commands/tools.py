@@ -16,6 +16,7 @@ import json
 
 import click
 
+from cli.commands._options import json_option
 from core.tool_catalog import build_tool_catalog, find_tool, permission_catalog
 
 
@@ -62,7 +63,7 @@ def tools():
 
 
 @tools.command("list")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def tools_list(as_json: bool):
     """List known tools from the catalog."""
     entries = _catalog()
@@ -73,7 +74,7 @@ def tools_list(as_json: bool):
 
 
 @tools.command("status")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def tools_status(as_json: bool):
     """Show each tool's flag status AND whether this CLI can register it."""
     entries = _catalog()
@@ -98,7 +99,7 @@ _TOOL_ID_ALIASES = {"browser": "browser_manager"}
 
 @tools.command("show")
 @click.argument("tool_id")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def tools_show(tool_id: str, as_json: bool):
     """Show details for one tool."""
     entry = find_tool(tool_id) or find_tool(_TOOL_ID_ALIASES.get(tool_id, ""))
@@ -124,7 +125,7 @@ def tools_show(tool_id: str, as_json: bool):
 
 
 @tools.command("permissions")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def tools_permissions(as_json: bool):
     """List permission classes and mapped tools."""
     permissions = permission_catalog()

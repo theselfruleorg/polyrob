@@ -11,18 +11,23 @@ unaffected until cron is explicitly turned on.
 from __future__ import annotations
 
 from core.runtime_paths import cron_db_path
-import os
-from typing import Any, Dict, List, Optional
+import logging
+from datetime import datetime
+from types import SimpleNamespace
+from typing import Any, Dict, List, Literal, Optional
 
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from tools.base_tool import BaseTool
+from tools.model_tier import TIER_FIELD_DESCRIPTION, WHY_FIELD_DESCRIPTION, tier_payload  # 112 W2
 from agents.task.loop_types.controller_types import ActionResult
 from cron.jobs import CronJobStore
 from core.cron_lanes import LaneStopped
 from cron.schedule import ScheduleError
 from cron.service import CronService
+
+logger = logging.getLogger(__name__)
 
 
 # --- the job toolset ---------------------------------------------------------
@@ -56,9 +61,13 @@ def resolve_cron_tools(payload: Optional[dict]) -> list:
     # 085 W8 A4: the job's DECLARED set, re-judged against its stored actor.
     from core.tool_grants import dispatch_recheck
     from tools.goal_tools import _SELF_GOAL_BASELINE_TOOLS, allowed_self_goal_tools
-    kept, refused = dispatch_recheck(
-        tools, data, declared=data.get("tools") or rig_tools(data.get("rig")) or [],
-        agent_ceiling=set(allowed_self_goal_tools()) | set(_SELF_GOAL_BASELINE_TOOLS))
+    ceiling = set(allowed_self_goal_tools()) | set(_SELF_GOAL_BASELINE_TOOLS)
+    declared = data.get("tools") or rig_tools(data.get("rig")) or []
+    kept, refused = dispatch_recheck(tools, data, declared=declared, agent_ceiling=ceiling)
+    if data.get("actor") == "agent" and not declared:
+        # 107 WS-6: a job armed off an owner turn that names nothing holds the default
+        # set inside the safe set. A compute posture widens the default, not this job.
+        kept = [t for t in kept if t in ceiling]
     if refused:
         import logging
         logging.getLogger(__name__).warning(
@@ -69,21 +78,34 @@ def resolve_cron_tools(payload: Optional[dict]) -> list:
 
 # --- param models ------------------------------------------------------------
 
+_EXPECT_HELP = ("What a run of this job must do, checked by code from the run's own act rows: "
+                "{'effect': 'social', 'min': 1}, or {'idle_ok': true} when a run with no act is "
+                "fine. The result is the run's verified field. Unset: no check.")
+
+
 class CronScheduleAction(BaseModel):
     """Schedule a durable task. NOT bound to this turn — it runs later/on a cycle."""
     model_config = ConfigDict(extra="forbid")
     task: str = Field(..., description="The task the scheduled agent should perform.", min_length=10)
     schedule: str = Field(..., description="When to run: '30m'/'2h'/'1d', 'every monday 09:00', "
                                            "5-field cron '*/15 * * * *', an ISO timestamp (one-shot), "
-                                           "or a fixed N-day cycle 'every 3d from 2026-10-26T18:00Z'.")
+                                           "or a fixed N-day cycle 'every 3d from 2026-10-26T18:00Z'. "
+                                           "An ISO time with Z is UTC; every other clock time is "
+                                           "the server clock.")
+    exact_time: bool = Field(default=False,
+                             description="Keep this exact minute. True only when the owner named "
+                                         "the minute or the work must start then (a market open, "
+                                         "a mint). Otherwise a job that overlaps another moves to "
+                                         "the nearest free minute, and the result names the move.")
     max_duration_seconds: int = Field(default=600, ge=60, le=1800,
-                                      description="Hard cap per run (60-1800s; default 600). A money rail "
+                                      description="Hard cap per run (60-1800s; default 600). A money job "
                                                   "that quotes, swaps and reports needs ~15-25 min.")
     deliver: Optional[str] = Field(default=None,
                                    description="Optional out-of-band delivery sink for the result: "
                                                "'telegram' or 'email' (to the owner), or 'twitter' — a "
                                                "PUBLIC post on the agent's X account, when the X pack "
-                                               "is enabled. Omit to keep silent.")
+                                               "is enabled. It copies the run's last send_message; without "
+                                               "one it sends nothing. Omit for no copy.")
     deliver_target: Optional[str] = Field(default=None,
                                           description="Optional explicit recipient; ignored unless the "
                                                       "operator enabled CRON_DELIVERY_ALLOW_EXPLICIT_TARGET.")
@@ -96,6 +118,12 @@ class CronScheduleAction(BaseModel):
                                            "(everything this deploy grants). A narrow rig ships "
                                            "fewer tool schemas per step. A rig is a request, not "
                                            "a grant. Omit for this deploy's default.")
+    tools: Optional[List[str]] = Field(default=None,
+                                       description="Optional exact tool ids for this job's runs, "
+                                                   "when no rig fits. They win over the rig. A money "
+                                                   "tool needs a rig or the owner's /job new.")
+    tier: Optional[Literal["default", "heavy", "light"]] = Field(default=None, description=TIER_FIELD_DESCRIPTION)
+    why: Optional[str] = Field(default=None, max_length=200, description=WHY_FIELD_DESCRIPTION)
     skills: Optional[List[str]] = Field(default=None,
                                         description="Optional skill ids this job's runs must load (its "
                                                     "doctrine, e.g. ['x-engagement']). Pinned skills load "
@@ -128,6 +156,10 @@ class CronScheduleAction(BaseModel):
                     "fires and the field moved less than move_pct since the last model run, "
                     "the tick is skipped at $0. Otherwise the run starts with the read "
                     "attached. Use it on every price/pool watch.")
+    kb_holdout_pct: Optional[int] = Field(
+        default=None, ge=0, le=100, strict=True,
+        description="OWNER TURN ONLY: the percent of this job's runs (0-100) that skip "
+                    "knowledge-base auto-injection, to measure its value. 0 or absent: none.")
     write_verb: Optional[Dict[str, Any]] = Field(
         default=None,
         description="OWNER TURN ONLY: a deterministic WRITE job, no LLM turn per tick: "
@@ -135,10 +167,21 @@ class CronScheduleAction(BaseModel):
                     "'robinhood', 'max_ids': 10, 'dry_run': false}, 'deliver_on': 'alert'}. "
                     "It spends gas (at most AGENT_NFT_REVEAL_MAX_GAS_USD per run) while "
                     "CRON_WRITE_JOBS_ENABLED=true; without dry_run=false it only simulates.")
+    script: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="A SCRIPT job — your own file runs on the schedule, no LLM turn per tick: "
+                    "{'path': 'jobs/collect.py', 'args': ['--x', '1'], 'timeout_s': 120, "
+                    "'deliver_on': 'alert'|'always'|'never'}. The path is a .py or .sh file "
+                    "in the workspace; write and test it with run_code first. It runs in the "
+                    "code sandbox from the workspace root. Exit code 0 = done; any other exit "
+                    "code or a timeout = failed and alerts. A stdout line that starts with "
+                    "ALERT alerts on a clean run. Use it for repeated mechanical work "
+                    "(collect, count, check) that needs no judgment.")
     pause_windows: Optional[List[List[Any]]] = Field(
         default=None,
         description="Per-job pause windows: [[start, end], ...] as epoch seconds or ISO-8601 "
                     "UTC. A tick inside a window is a $0 skip.")
+    expect: Optional[Dict[str, Any]] = Field(default=None, description=_EXPECT_HELP)
 
 
 class CronListAction(BaseModel):
@@ -180,18 +223,30 @@ class CronEditAction(BaseModel):
     schedule: Optional[str] = Field(default=None,
                                     description="New schedule spec (next run recomputed). To run "
                                                 "once now, use cronjob_run_now.")
+    exact_time: Optional[bool] = Field(default=None,
+                                       description="True: this job keeps its exact minute (see "
+                                                   "cronjob_schedule). False: it may move again.")
     max_duration_seconds: Optional[int] = Field(default=None, ge=60, le=1800,
                                                 description="New hard cap per run (60-1800s).")
     rig: Optional[str] = Field(default=None,
                                description="New named tool rig, or 'none' to clear it.")
+    tools: Optional[List[str]] = Field(default=None,
+                                       description="New exact tool ids for this job's runs; [] clears "
+                                                   "them. A money tool needs a rig or the owner.")
     deliver: Optional[str] = Field(default=None,
                                    description="New delivery sink ('telegram'|'email' to the owner, "
                                                "'twitter' = a PUBLIC X post), or 'none' to drop it.")
+    tier: Optional[Literal["default", "heavy", "light"]] = Field(default=None, description=TIER_FIELD_DESCRIPTION)
+    why: Optional[str] = Field(default=None, max_length=200, description=WHY_FIELD_DESCRIPTION)
     skills: Optional[List[str]] = Field(default=None,
                                         description="Replace the pinned skill ids ([] clears them).")
     target_token: Optional[Dict[str, str]] = Field(
         default=None,
         description="Replace the declared buy target {'chain', 'address'}; {} clears it.")
+    kb_holdout_pct: Optional[int] = Field(
+        default=None, ge=0, le=100, strict=True,
+        description="OWNER TURN ONLY: replace the job's KB holdout percent (see cronjob_schedule); "
+                    "0 clears it.")
     read_verb: Optional[Dict[str, Any]] = Field(
         default=None, description="Replace the job's read verb (see cronjob_schedule); {} clears it.")
     precheck: Optional[Dict[str, Any]] = Field(
@@ -200,8 +255,12 @@ class CronEditAction(BaseModel):
     write_verb: Optional[Dict[str, Any]] = Field(
         default=None, description="OWNER TURN ONLY: replace the job's write verb (see "
                                   "cronjob_schedule); {} clears it.")
+    script: Optional[Dict[str, Any]] = Field(
+        default=None, description="Replace the job's script (see cronjob_schedule); {} clears it.")
     pause_windows: Optional[List[List[Any]]] = Field(
         default=None, description="Replace the job's pause windows ([[start, end], ...]); [] clears them.")
+    expect: Optional[Dict[str, Any]] = Field(
+        default=None, description="Replace what a run must do (see cronjob_schedule); {} clears it.")
 
 
 _MANDATE_JOB_OWNER_ONLY = (
@@ -210,12 +269,33 @@ _MANDATE_JOB_OWNER_ONLY = (
     "written; tell the owner what you would change.")
 
 
+_KB_HOLDOUT_OWNER_ONLY = ("kb_holdout_pct refused: only a genuine owner turn may set a job's "
+                          "knowledge-base holdout. Ask the owner.")
 _WRITE_VERB_OWNER_ONLY = (
     "write_verb refused: a scheduled write job spends from the treasury with no model turn, "
     "so only a genuine owner turn may create or change one. Ask the owner.")
 
 
+def _expect_or_refusal(value: Any, payload: dict):
+    """``(stored expect, None)`` or ``(None, reason)``. A read, write or no-wake job has no
+    model run and no act rows, so its ``expect`` could only ever read as failed."""
+    from core.cron_expect import validate_expect
+    try:
+        expect = validate_expect(value)
+    except ValueError as exc:
+        return None, str(exc)
+    if expect and (payload.get("read_verb") or payload.get("write_verb")
+                   or payload.get("script") or payload.get("wake_agent") is False):
+        return None, ("expect needs a model run; a read, write, script or wake_agent=false "
+                      "job has none")
+    return expect, None
+
+
 def _precheck_line(payload: dict) -> str:
+    sc = payload.get("script")
+    if sc:
+        return (f"script (no model run): {sc.get('path')} {' '.join(sc.get('args') or [])}".rstrip()
+                + f"; timeout {sc.get('timeout_s')} s; deliver on {sc.get('deliver_on')}")
     pc = payload.get("precheck")
     if not pc:
         return "precheck: none (every run calls the model)"
@@ -267,13 +347,52 @@ def _job_runs(job, n: int = 3) -> list:
     return [job.next_run_at] + next_runs(sched, job.next_run_at, n - 1)
 
 
+def _server_clock_note() -> str:
+    """Schedule times are the server clock; the model reads UTC. '' on a UTC server."""
+    from core.cron_slots import server_clock
+    clock = server_clock()
+    return "" if clock == "UTC" else f" (server clock {clock})"
+
+
+def _job_tools(tools: List[str]) -> list:
+    from tools.goal_tools import _SELF_GOAL_BASELINE_TOOLS
+    return sorted(set(tools) | set(_SELF_GOAL_BASELINE_TOOLS))
+
+
+def _job_tools_refusal(tools: List[str], owner_turn: bool) -> Optional[str]:
+    """Why these exact tools may not go on a job, or None. The same sets as ``goal_create``.
+    A money tool stays behind the rig's owner card, or the owner's own ``/job new``."""
+    from core.tool_capabilities import ids_with
+    from tools.goal_tools import (_SELF_GOAL_BASELINE_TOOLS, allowed_self_goal_tools,
+                                  owner_turn_goal_tools)
+    money = sorted(ids_with("money").intersection(tools))
+    if money:
+        return (f"Tools {', '.join(money)} NOT granted: a money tool needs rig='money_rail' "
+                "(the owner confirms a card) or the owner's own /job new ... tools=.")
+    usable = set(owner_turn_goal_tools() if owner_turn else allowed_self_goal_tools())
+    usable |= set(_SELF_GOAL_BASELINE_TOOLS)
+    refused = sorted(set(tools) - usable)
+    if refused:
+        return (f"Tools {', '.join(refused)} NOT granted. This turn may name: "
+                f"{', '.join(sorted(usable))}.")
+    return None
+
+
+def _next_with_wait(job) -> str:
+    from cron.service import next_note
+    if not job.next_run_at:
+        return "-"
+    note = next_note(job)
+    return f"{job.next_run_at.isoformat()}, {note}" if note else job.next_run_at.isoformat()
+
+
 def _timing_lines(svc, job, user_id) -> list:
     """What the agent must see to time a job against its siblings (routines §2):
     the next 3 fire times, a day-of-month step note, the jobs that fire the same
     minute, and the next runs of every live job that pins one of its skills."""
     from cron.schedule import dom_step_note
-    out = [f"next runs: {_fmt_runs(_job_runs(job))}"] if job.next_run_at else []
-    out += [dom_step_note(job.schedule_spec), _same_minute_line(svc, job, user_id)]
+    out = [f"next runs: {_fmt_runs(_job_runs(job))}{_server_clock_note()}"] if job.next_run_at else []
+    out += [dom_step_note(job.schedule_spec), _overlap_line(svc, job, user_id)]
     skills = set((job.payload or {}).get("skills") or [])
     if skills:
         try:
@@ -289,21 +408,53 @@ def _timing_lines(svc, job, user_id) -> list:
     return [ln for ln in out if ln]
 
 
-def _same_minute_line(svc, job, user_id) -> str:
-    """Name every other live job whose next run is this job's next run (2026-10-17:
-    a judge "24h after the announce" had the announce's own spec), or ''."""
-    if job.next_run_at is None:
+def _slot_job_words(job) -> str:
+    return f"`{job.id}` ({job.task[:40].strip()})"
+
+
+def _overlap_line(svc, job, user_id) -> str:
+    """The job this job shares a slot with, and the free minute to move it to, or ''.
+    Jobs run one at a time, so the later one waits (2026-10-17: a judge "24h after
+    the announce" had the announce's own spec)."""
+    from core.cron_slots import EXACT_KEY, SlotTable, holds_a_slot
+    if job.next_run_at is None or not holds_a_slot(job.payload):
         return ""
     try:
-        twins = [j for j in svc.list_jobs(user_id=user_id)
-                 if j.id != job.id and j.status == "scheduled" and j.next_run_at == job.next_run_at]
+        table = SlotTable(svc.list_jobs(user_id=user_id), datetime.now())
+        hit = table.overlap(table.job_fires(job), exclude_id=job.id)
     except Exception:
+        logger.warning("cron job %s: slot check failed", job.id, exc_info=True)
         return ""
-    if not twins:
+    if hit is None:
         return ""
-    names = "; ".join(f"`{j.id}` ({j.task[:40].strip()})" for j in twins)
-    return (f"⚠ next run {job.next_run_at.isoformat()} is the SAME minute as {names} — "
-            "they fire together, not one after the other.")
+    line = (f"⚠ overlaps {_slot_job_words(hit.job)} at {hit.at.isoformat()}: jobs run one at "
+            "a time, so the later one starts only after the earlier one ends.")
+    if (job.payload or {}).get(EXACT_KEY):
+        return line + " This job keeps its exact time."
+    free = table.free_spec(job.schedule_spec, exclude_id=job.id)
+    return line + (f" A free slot: cronjob_edit(schedule='{free}')." if free else "")
+
+
+def _placed(svc, spec: str, payload: dict, user_id: str, *, exact: bool, exclude_id=None):
+    """Where the tool writes a job asked for at *spec*. A fault in the slot check
+    never stops the write: the job keeps the time it asked for."""
+    from core.cron_slots import Placement, place
+    if exact:
+        return Placement(spec)
+    try:
+        return place(spec, payload, svc.list_jobs(user_id=user_id), datetime.now(),
+                     exclude_id=exclude_id)
+    except Exception:
+        logger.warning("cron slot check failed for %r", spec, exc_info=True)
+        return Placement(spec)
+
+
+def _moved_line(placed, asked: str) -> str:
+    if not placed.moved:
+        return ""
+    return (f"Moved from '{asked}' to '{placed.spec}': {_slot_job_words(placed.overlap.job)} "
+            "runs in that slot. Tell the owner the new time. If the owner named that exact "
+            f"minute, call cronjob_edit(schedule='{asked}', exact_time=true).")
 
 
 _JOB_ID_RE = __import__("re").compile(r"\b[0-9a-f]{12}\b")
@@ -332,6 +483,47 @@ def _stale_line(svc, job, user_id) -> str:
             f"update the reference with cronjob_edit (old_text -> new_text).")
 
 
+def _x_gates_line(payload: Optional[dict], user_id: Optional[str] = None) -> str:
+    """What will really stop this job's X posts, read from the live gates, so the agent
+    says it when it arms the job and never guesses a hold. '' for a job with no X tool."""
+    p = dict(payload or {})
+    try:
+        ids = set(resolve_cron_tools(p) or [])
+    except Exception:
+        return ""
+    if not {"twitter", "x_browser"} & ids:
+        return ""
+    from core.env import int_env
+    from core.security.owner_turn import is_owner_tenant
+    from tools.controller.approval import operator_denies_approvals
+    parts = []
+    if operator_denies_approvals():
+        parts.append("NOT POSTING: APPROVAL_PROVIDER=deny stops every post")
+    elif not is_owner_tenant(SimpleNamespace(user_id=user_id)):
+        parts.append("each post waits for the owner: this job is not the owner's")
+    else:
+        parts.append("X posts go out with no owner tap, whoever created the job")
+    if "twitter" in ids:
+        spacing = p.get("post_spacing_hours")
+        parts.append(f"a twitter_post within {int_env('TWITTER_POST_COOLDOWN_SEC', 3600)}s of "
+                     f"the last autonomous post by any job is refused and that run posts nothing")
+        parts.append(f"this job posts at most once per {spacing} h" if spacing
+                     else "this job has no post spacing of its own (post_spacing_hours)")
+    if "x_browser" in ids:
+        parts.append("a browser post has only the hourly cap (TWITTER_WRITE_MAX_PER_HOUR): "
+                     "no cooldown and no spacing")
+    parts.append("a limit or stop condition only in the task text is the model's to follow: "
+                 "no code enforces it")
+    try:
+        from core.autonomy_control import allows
+        decision = allows("social_post")
+        if not decision.allowed:
+            parts.insert(0, f"NOT POSTING NOW: {decision.reason}")
+    except Exception:
+        parts.insert(0, "the pause state is unreadable")
+    return "gates: " + "; ".join(parts)
+
+
 def _tools_line(payload: Optional[dict]) -> str:
     """The tools this job's runs actually carry — the runner's own resolver
     (2026-10-14 review C-9: the agent told the owner a job "posts by itself"
@@ -350,8 +542,14 @@ def _early_run_refusal(job) -> Optional[str]:
     """Review 2026-10-29 (L1): off an owner turn, ``cronjob_run_now`` may not run a
     money job early, nor run any job again inside its own schedule's gap (a daily
     job is not a once-a-minute job because a run keeps asking). None = allowed."""
-    from cron.jobs import is_money_job
-    if is_money_job(job):
+    from cron.jobs import money_job_class
+    # An unreadable class is refused like money: running a money job early is the risk.
+    cls = money_job_class(job)
+    if cls is None:
+        return (f"Job `{job.id}`: its class could not be read, so it is treated as a "
+                f"money job: only an owner turn runs it early (/job run {job.id[:8]}). "
+                f"Its schedule is unchanged.")
+    if cls:
         return (f"Job `{job.id}` is a money job: only an owner turn runs it early "
                 f"(/job run {job.id[:8]}). Its schedule is unchanged.")
     last = getattr(job, "last_run_at", None)
@@ -457,6 +655,16 @@ class CronJobTool(BaseTool):
             if refusal:
                 return ActionResult(error=refusal, include_in_memory=True)
             payload["rig"] = params.rig.strip().lower()
+        # 112 W2: a model tier, from the owner's chat only.
+        _tier, _tier_err = tier_payload(params.tier, params.why, owner_turn)
+        if _tier_err:
+            return ActionResult(error=_tier_err, include_in_memory=True)
+        payload.update(_tier)
+        if params.tools:
+            refusal = _job_tools_refusal(params.tools, owner_turn)
+            if refusal:
+                return ActionResult(error=refusal, include_in_memory=True)
+            payload["tools"] = _job_tools(params.tools)
         # 060 WS-5: the job pins its doctrine (seeded every run; no tool granted).
         from core.config_policy.rigs import pinned_skills
         if pinned_skills({"skills": params.skills}):
@@ -479,15 +687,38 @@ class CronJobTool(BaseTool):
         # W9: validated (and normalized) by CronService.schedule.
         if params.read_verb:
             payload["read_verb"] = params.read_verb
+        if params.script:
+            payload["script"] = params.script   # 114 W2: checked by CronService.schedule
         if params.pause_windows:
             payload["pause_windows"] = params.pause_windows
         if params.precheck:
             payload["precheck"] = params.precheck   # validated by CronService.schedule
+        if params.expect is not None:
+            _expect, _refusal = _expect_or_refusal(params.expect, {**payload, "write_verb": params.write_verb})
+            if _refusal:
+                return ActionResult(error=_refusal, include_in_memory=True)
+            if _expect:
+                payload["expect"] = _expect
         # Impl handoff E: a scheduled WRITE (it spends gas unattended) is the owner's act.
         if params.write_verb:
             if not owner_turn:
                 return ActionResult(error=_WRITE_VERB_OWNER_ONLY, include_in_memory=True)
             payload["write_verb"] = params.write_verb
+        if params.kb_holdout_pct is not None:
+            if not owner_turn:
+                return ActionResult(error=_KB_HOLDOUT_OWNER_ONLY, include_in_memory=True)
+            if params.kb_holdout_pct:
+                payload["kb_holdout_pct"] = params.kb_holdout_pct
+        if params.exact_time:
+            from core.cron_slots import EXACT_KEY
+            payload[EXACT_KEY] = True
+        # The tool places the job, so the owner never has to ask for the correction.
+        asked = params.schedule
+        placed = _placed(self._resolve_service(), asked, payload,
+                         self._user(execution_context), exact=params.exact_time)
+        moved = _moved_line(placed, asked)
+        if placed.moved:
+            params = params.model_copy(update={"schedule": placed.spec})
         # 085 W3 (D3): an owner turn's standing MONEY job waits for the owner's tap.
         from tools.goal_tools import money_job_reasons
         _money = money_job_reasons(rig=payload.get("rig"), target=_target) if owner_turn else []
@@ -521,7 +752,9 @@ class CronJobTool(BaseTool):
         return ActionResult(
             extracted_content=(f"Scheduled {kind} cron job `{job.id}` — next run {when}; "
                                f"{_tools_line(job.payload)}.{notes}"
-                               + (f"\n{timing}" if timing else "")),
+                               + (f"\n{moved}" if moved else "")
+                               + (f"\n{timing}" if timing else "")
+                               + (f"\n{gates}" if (gates := _x_gates_line(job.payload, job.user_id)) else "")),
             include_in_memory=True,
         )
 
@@ -547,7 +780,9 @@ class CronJobTool(BaseTool):
             ("max_duration_seconds", params.max_duration_seconds != 600),
             ("deliver_target", params.deliver_target), ("wake_agent", not params.wake_agent),
             ("read_verb", params.read_verb), ("precheck", params.precheck),
-            ("write_verb", params.write_verb), ("pause_windows", params.pause_windows))
+            ("write_verb", params.write_verb), ("script", params.script),
+            ("pause_windows", params.pause_windows),
+            ("tools", params.tools), ("tier", params.tier))
             if value]
         return await raise_job_card(
             self, execution_context, words, what="scheduled job", reasons=reasons,
@@ -562,14 +797,16 @@ class CronJobTool(BaseTool):
             return ActionResult(extracted_content="No scheduled cron jobs.", include_in_memory=True)
         from cron.service import last_outcome
         svc, user = self._resolve_service(), self._user(execution_context)
+        overlaps = _list_overlaps(jobs)
         lines = []
         for j in jobs:
             stale = stale_job_refs(svc, j, user) if j.status != "cancelled" else []
             lines.append(
                 f"- `{j.id}` [{j.status}] {j.schedule_spec} -> "
-                f"{j.next_run_at.isoformat() if j.next_run_at else '-'} · last: {last_outcome(j)} · "
+                f"{_next_with_wait(j)} · last: {last_outcome(j)} · "
                 f"deliver: {(j.payload or {}).get('deliver') or 'none'}: {j.task[:60]}"
-                + (f" · ⚠ names stopped job(s) {', '.join(stale)}" if stale else ""))
+                + (f" · ⚠ names stopped job(s) {', '.join(stale)}" if stale else "")
+                + overlaps.get(j.id, ""))
         return ActionResult(extracted_content="Scheduled cron jobs:\n" + "\n".join(lines),
                             include_in_memory=True)
 
@@ -581,6 +818,7 @@ class CronJobTool(BaseTool):
         if job is None:
             return ActionResult(error=f"No such cron job `{params.job_id}`.", include_in_memory=True)
         p = job.payload or {}
+        from core.cron_expect import expect_line
         from cron.service import last_outcome
         lines = [
             f"Cron job `{job.id}` [{job.status}] — {'one-shot' if job.one_shot else 'recurring'}",
@@ -591,7 +829,9 @@ class CronJobTool(BaseTool):
             f"max duration: {job.max_duration_seconds}s",
             f"rig: {p.get('rig') or '(default)'}",
             _tools_line(p),
+            _x_gates_line(p, job.user_id),
             _precheck_line(p),
+            expect_line(p),
             _provider_line(p),
             f"deliver: {p.get('deliver') or '(silent)'}",
             f"skills: {', '.join(p.get('skills') or []) or '(none pinned: the run picks from the skill index)'}",
@@ -630,7 +870,9 @@ class CronJobTool(BaseTool):
         # agent edit could drop its exit barriers or step outside the mandate gate.
         if (job.payload or {}).get("mandate") and not owner_turn:
             return ActionResult(error=_MANDATE_JOB_OWNER_ONLY, include_in_memory=True)
-        updates: dict = {}
+        updates, _tier_err = tier_payload(params.tier, params.why, owner_turn)  # 112 W2
+        if _tier_err:
+            return ActionResult(error=_tier_err, include_in_memory=True)
         if params.rig is not None:
             from core.config_policy.rigs import is_rig, rig_names
             rig = params.rig.strip().lower()
@@ -646,6 +888,11 @@ class CronJobTool(BaseTool):
                 if refusal:
                     return ActionResult(error=refusal, include_in_memory=True)
                 updates["rig"] = rig
+        if params.tools is not None:
+            refusal = _job_tools_refusal(params.tools, owner_turn) if params.tools else None
+            if refusal:
+                return ActionResult(error=refusal, include_in_memory=True)
+            updates["tools"] = _job_tools(params.tools) if params.tools else None
         if params.deliver is not None:
             # 'none' drops it; normalized + validated by CronService.edit.
             updates["deliver"] = params.deliver
@@ -667,6 +914,8 @@ class CronJobTool(BaseTool):
         # W9: validated (and normalized) by CronService.edit; empty clears.
         if params.read_verb is not None:
             updates["read_verb"] = params.read_verb or None
+        if params.script is not None:
+            updates["script"] = params.script or None
         if params.pause_windows is not None:
             updates["pause_windows"] = params.pause_windows or None
         if params.precheck is not None:
@@ -675,6 +924,26 @@ class CronJobTool(BaseTool):
             if not owner_turn:
                 return ActionResult(error=_WRITE_VERB_OWNER_ONLY, include_in_memory=True)
             updates["write_verb"] = params.write_verb or None
+        if params.expect is not None:
+            _expect, _refusal = _expect_or_refusal(params.expect, {**(job.payload or {}), **updates})
+            if _refusal:
+                return ActionResult(error=_refusal, include_in_memory=True)
+            updates["expect"] = _expect
+        if params.kb_holdout_pct is not None:
+            if not owner_turn:
+                return ActionResult(error=_KB_HOLDOUT_OWNER_ONLY, include_in_memory=True)
+            updates["kb_holdout_pct"] = params.kb_holdout_pct or None
+        from core.cron_slots import EXACT_KEY
+        if params.exact_time is not None:
+            updates[EXACT_KEY] = True if params.exact_time else None
+        exact = (params.exact_time if params.exact_time is not None
+                 else bool((job.payload or {}).get(EXACT_KEY)))
+        schedule_spec, moved = params.schedule, ""
+        if schedule_spec is not None:
+            placed = _placed(svc, schedule_spec, {**(job.payload or {}), **updates}, user,
+                             exact=exact, exclude_id=job.id)
+            moved = _moved_line(placed, schedule_spec)
+            schedule_spec = placed.spec
         # 085 W3 (D3): a NEW money grant (a money rig, a buy target) on an owner turn
         # waits for the owner's tap; clearing one, or any other field, does not.
         new_target = updates.get(PAYLOAD_KEY) if params.target_token else None
@@ -691,6 +960,8 @@ class CronJobTool(BaseTool):
             updates["actor"] = "owner_seat"
         elif "rig" in updates and not owner_turn and not (job.payload or {}).get("tools"):
             updates["actor"] = "agent"
+        if "tools" in updates:  # they win at dispatch, so their writer is the actor; so is a clear
+            updates["actor"] = "owner_seat" if owner_turn else "agent"
         # ``actor`` now names the rig's writer; who OWNS the job (failure notice,
         # digest) stays where it was — a row from before ``armed_by`` keeps its
         # creating actor there before the rig edit moves ``actor``.
@@ -715,7 +986,7 @@ class CronJobTool(BaseTool):
                 job.id, user_id=user, via="agent",
                 old_text=params.old_text, new_text=params.new_text,
                 append_text=params.append_text, prepend_text=params.prepend_text,
-                schedule_spec=params.schedule,
+                schedule_spec=schedule_spec,
                 max_duration_seconds=params.max_duration_seconds,
                 payload_updates=updates or None)
         except ScheduleError as e:
@@ -727,7 +998,7 @@ class CronJobTool(BaseTool):
                                       "append_text (or prepend_text) with only the new text; to "
                                       "change a passage, pass old_text + new_text; other fields: "
                                       "schedule, max_duration_seconds, rig, deliver, skills, "
-                                      "target_token, read_verb, precheck, write_verb or "
+                                      "target_token, read_verb, precheck, write_verb, script or "
                                       "pause_windows.",
                                 include_in_memory=True)
         edited = svc.store.get(job.id, user_id=user) or job
@@ -736,7 +1007,9 @@ class CronJobTool(BaseTool):
         return ActionResult(
             extracted_content=(f"Edited cron job `{job.id}`: {', '.join(changed)}; "
                                f"next run {when}; {_tools_line(edited.payload)}."
-                               + (f"\n{timing}" if timing else "")),
+                               + (f"\n{moved}" if moved else "")
+                               + (f"\n{timing}" if timing else "")
+                               + (f"\n{gates}" if (gates := _x_gates_line(edited.payload, edited.user_id)) else "")),
             include_in_memory=True)
 
     async def _money_edit_card(self, job, updates: dict, target, reasons,
@@ -835,6 +1108,32 @@ class CronJobTool(BaseTool):
         ok = svc.cancel(params.job_id, user_id=user, via=via)
         msg = f"Cancelled cron job `{params.job_id}`." if ok else f"No such cron job `{params.job_id}`."
         return ActionResult(extracted_content=msg, include_in_memory=True)
+
+
+def _list_overlaps(jobs) -> Dict[str, str]:
+    """job id -> the list note for each pair of jobs in one slot. The newer job of a
+    pair takes the note: a job with an exact time never does."""
+    from core.cron_slots import EXACT_KEY, SlotTable, holds_a_slot
+    out: Dict[str, str] = {}
+    try:
+        table = SlotTable(jobs, datetime.now())
+        for job in jobs:
+            payload = job.payload or {}
+            if (job.status != "scheduled" or job.next_run_at is None or payload.get(EXACT_KEY)
+                    or not holds_a_slot(payload)):
+                continue
+            hit = table.overlap(table.job_fires(job), exclude_id=job.id)
+            if hit is None:
+                continue
+            other_exact = (hit.job.payload or {}).get(EXACT_KEY)
+            if not other_exact and (hit.job.created_at, hit.job.id) > (job.created_at, job.id):
+                continue
+            free = table.free_spec(job.schedule_spec, exclude_id=job.id)
+            out[job.id] = (f" · ⚠ overlaps `{hit.job.id}`"
+                           + (f"; free: '{free}'" if free else ""))
+    except Exception:
+        logger.warning("cron list: slot check failed", exc_info=True)
+    return out
 
 
 def _cancel_line(job_id: str) -> str:

@@ -90,6 +90,64 @@ def test_prefetch_no_event_when_nothing_recalled(log, monkeypatch):
     assert log.query(kind="memory_recall") == []
 
 
+def _external_provider(monkeypatch, *, external=True):
+    from types import SimpleNamespace
+    monkeypatch.setattr("modules.memory.registry.get_memory_registry",
+                        lambda: SimpleNamespace(active=lambda: SimpleNamespace(is_external=external)))
+
+
+def _prefetch(monkeypatch, recalled, **kw):
+    async def fake_prefetch(query, *, session_id=None, user_id=None, **_kw):
+        return recalled
+
+    monkeypatch.setattr("modules.memory.registry.memory_prefetch", fake_prefetch)
+    monkeypatch.setenv("KB_AUTO_PREFETCH", "false")
+    from agents.task.agent.core.memory_prefetch import build_prefetch_message
+    return asyncio.new_event_loop().run_until_complete(
+        build_prefetch_message("anything at all", session_id="s9", user_id="u9", **kw))
+
+
+def test_an_empty_recall_is_its_own_kind(log, monkeypatch):
+    _external_provider(monkeypatch)
+    assert _prefetch(monkeypatch, "") is None
+    rows = log.query(kind="memory_recall_empty")
+    assert len(rows) == 1
+    assert rows[0]["attrs"]["query"] == "anything at all"
+    assert rows[0]["attrs"]["seen_only"] is False
+    assert rows[0]["source"] == "prefetch"
+    assert log.query(kind="memory_recall") == [], "a count of memory_recall stays a count of injections"
+
+
+def test_a_recall_this_run_already_showed_is_seen_only(log, monkeypatch):
+    _external_provider(monkeypatch)
+    seen = set()
+    assert _prefetch(monkeypatch, "- a recalled row", seen=seen) is not None
+    assert _prefetch(monkeypatch, "- a recalled row", seen=seen) is None
+    assert log.query(kind="memory_recall_empty")[0]["attrs"]["seen_only"] is True
+    assert len(log.query(kind="memory_recall")) == 1
+
+
+def test_no_store_records_no_empty_recall(log, monkeypatch):
+    _external_provider(monkeypatch, external=False)
+    assert _prefetch(monkeypatch, "") is None
+    assert log.query(kind="memory_recall_empty") == []
+
+
+def test_the_status_snapshot_skips_the_empty_recall_rows(tmp_path):
+    """Like memory_recall: bulk with no health signal, and the read is a capped window."""
+    import time
+    from core.status_snapshot import _read_telemetry, _telemetry_db_path
+    home = str(tmp_path)
+    import os
+    path = _telemetry_db_path(home)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    lg = TelemetryEventLog(path)
+    lg.record("memory_recall_empty", user_id="u", source="prefetch")
+    lg.record("cron_run", user_id="u", source="cron")
+    counts = _read_telemetry("u", home, time.time() - 60).data["counts"]
+    assert "memory_recall_empty" not in counts and counts.get("cron_run") == 1
+
+
 # ------------------------------------------------------------------ curated write
 
 def test_memory_tool_add_emits_memory_write(log, monkeypatch, tmp_path):

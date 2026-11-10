@@ -485,7 +485,8 @@ async def perform_solana_transfer(tool, params, execution_context=None):
         verb="solana_transfer", route="solana", chain="solana", amount_in=label,
         usd=amount_usd, tx_ref=signature,
         state={"confirmed": tx_notify.STATE_CONFIRMED,
-               "reverted": tx_notify.STATE_REVERTED}.get(
+               "reverted": tx_notify.STATE_REVERTED,
+               "expired": tx_notify.STATE_FAILED}.get(
             outcome, tx_notify.STATE_IN_FLIGHT),
         detail=f"to {to}; {detail}", ledger_recorded=True), settled=True)
 
@@ -496,6 +497,11 @@ async def perform_solana_transfer(tool, params, execution_context=None):
         return tool._ar(content=header + (
             f"  RESULT: FAILED ON-CHAIN — the transfer did NOT happen, but the "
             f"fee was spent.\n  sig: {signature}\n  detail: {detail}"))
+    if outcome == "expired":
+        return tool._ar(content=header + (
+            f"  RESULT: EXPIRED — the transfer never landed and its blockhash has "
+            f"expired, so it can no longer land; nothing moved. It stays counted "
+            f"on the caps.\n  sig: {signature}\n  detail: {detail}"))
     return tool._ar(content=header + (
         f"  RESULT: BROADCAST BUT NOT CONFIRMED within the timeout. It may still "
         f"land, or the blockhash may have expired — do NOT retry blindly; check "

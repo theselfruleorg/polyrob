@@ -200,7 +200,7 @@ def build_goal_run_task(goal: Goal, *,
     if acceptance:
         parts.append(f"Definition of done (acceptance): {acceptance}")
     # 2026-10-13 review B1–B3: every owner decision on an ask about THIS goal
-    # (its own `owner_ask`, or a `goal_ask` that held it), stamped by
+    # (its own `owner_ask`, also one that held it), stamped by
     # `decide_ask` whatever the goal's status. Rendered on EVERY run, not only
     # the first retry after the unblock — a later failure must not make the
     # run forget the owner's answer. The unblock banner below already quotes

@@ -60,7 +60,7 @@ def _patch_model(monkeypatch, context_window, max_completion):
 def _calc(monkeypatch, window, completion):
     _patch_model(monkeypatch, window, completion)
     host = _CalcHost()
-    return host._calculate_token_limits(llm=None, max_input_override=None)
+    return host._calculate_token_limits(None)
 
 
 def test_default_cap_restores_glm5_budget(monkeypatch):

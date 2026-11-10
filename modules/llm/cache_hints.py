@@ -1,18 +1,16 @@
-"""Provider-agnostic prompt-cache policy (P1-3).
+"""Provider-agnostic prompt-cache policy.
 
-The review (docs/KIMI_RUNTIME_AND_PROMPT_CONTEXT_REVIEW_2026-06.md) flagged that
-prompt caching lived only inside ``anthropic_client`` (+ an OpenAI ``prompt_cache_key``)
-with **no central seam** — so every other provider (Gemini, OpenRouter, NVIDIA/Kimi,
-DeepSeek) re-paid the full system+tools prefix every step.
+Prompt caching inside ``anthropic_client`` (+ an OpenAI ``prompt_cache_key``) alone
+leaves every other provider (Gemini, OpenRouter, NVIDIA/Kimi, DeepSeek) paying the
+full system+tools prefix every step.
 
-This module is that seam: a single place that decides *whether* and *how* a request's
+This module is the central seam: a single place that decides *whether* and *how* a request's
 stable prefix should be marked cacheable, keyed by provider/model family. Providers
 consult it instead of re-deriving caching ad hoc.
 
 Anthropic and OpenAI keep their existing in-client implementations (already optimal and
-on the primary hot path); this module is the canonical policy for the providers that had
-none, starting with OpenRouter passthrough. Gemini ``cachedContents`` is the next
-implementation behind the same interface.
+on the primary hot path); this module is the canonical policy for the providers without
+an in-client implementation, starting with OpenRouter passthrough. Gemini caches implicitly: no request change.
 """
 from __future__ import annotations
 
@@ -20,6 +18,8 @@ import os
 from typing import Any, Dict, List, Optional
 
 from core.env import bool_env as _bool_env
+from modules.llm.call_scope import scoped_cache_ttl, set_cache_ttl
+from modules.llm.model_types import model_family
 
 
 def prompt_cache_enabled() -> bool:
@@ -29,58 +29,50 @@ def prompt_cache_enabled() -> bool:
     provider-agnostic ``LLM_PROMPT_CACHE``; either set to a falsey value disables.
     """
     # Use the SSOT bool parser (already imported) so the falsey set matches the rest
-    # of the codebase — the old inline check missed "none" (LLM_PROMPT_CACHE=none read
-    # as DISABLED everywhere else but NOT here). P4 finalization.
+    # of the codebase, including "none" (LLM_PROMPT_CACHE=none reads as DISABLED).
     for var in ("LLM_PROMPT_CACHE", "ANTHROPIC_PROMPT_CACHE"):
         if not _bool_env(var, True):
             return False
     return True
 
 
-# Which caching strategy applies when a model is routed through OpenRouter.
+# How a model routed through OpenRouter caches, per OpenRouter's prompt-caching docs:
 #   "breakpoints" -> caller must add Anthropic-style cache_control breakpoints
 #   "automatic"   -> provider caches server-side, no request changes needed
 #   "none"        -> no caching available
+# A slug's vendor decides, else the model's family.
+_OPENROUTER_VENDOR_CACHE = {
+    "anthropic": "breakpoints", "google": "breakpoints", "qwen": "breakpoints",
+    "openai": "automatic", "deepseek": "automatic", "x-ai": "automatic", "z-ai": "automatic",
+    "moonshotai": "automatic",
+}
+_OPENROUTER_FAMILY_CACHE = {
+    "claude": "breakpoints", "gemini": "breakpoints", "qwen": "breakpoints",
+    "gpt": "automatic", "deepseek": "automatic", "grok": "automatic", "glm": "automatic",
+    "kimi": "automatic",
+}
+
+
 def openrouter_cache_strategy(model_type: Optional[str]) -> str:
-    """Classify an OpenRouter model id by its caching mechanism.
-
-    Per OpenRouter's prompt-caching docs: Anthropic (claude) and Google (gemini) models
-    require explicit ``cache_control`` breakpoints; OpenAI, DeepSeek and Grok cache
-    automatically server-side; everything else has no caching.
-    """
+    """Classify an OpenRouter model id by its caching mechanism."""
     m = (model_type or "").lower()
-    if not m:
-        return "none"
-    if m.startswith("anthropic/") or "claude" in m:
-        return "breakpoints"
-    if m.startswith("google/") or "gemini" in m:
-        return "breakpoints"
-    if m.startswith(("openai/", "deepseek/", "x-ai/")) or "grok" in m or "gpt" in m:
-        return "automatic"
-    if m.startswith("qwen/") or "qwen" in m:
-        # OpenRouter lists Qwen (Alibaba Cloud) under automatic prefix caching.
-        return "automatic"
-    return "none"
-
-
-# UP-08: API floor for Gemini 2.5-flash/2.5-pro explicit cachedContents.
-GEMINI_EXPLICIT_CACHE_MIN_TOKENS = 2048
+    vendor = _OPENROUTER_VENDOR_CACHE.get(m.split("/", 1)[0])
+    return vendor or _OPENROUTER_FAMILY_CACHE.get(model_family(m), "none")
 
 
 def provider_cache_strategy(provider: str, model: Optional[str] = None) -> str:
-    """How a provider's prompt caching is achieved (UP-08). One place the factory and
+    """How a provider's prompt caching is achieved. One place the factory and
     clients consult instead of re-deriving caching ad hoc.
 
     - "in_client"  -> handled inside the client already (anthropic, openai)
-    - "automatic"  -> server-side, no request change (deepseek, nvidia/NIM)
-    - "explicit"   -> requires an explicit cache object (gemini cachedContents)
+    - "automatic"  -> server-side, no request change (deepseek, nvidia/NIM, gemini)
     - "breakpoints"-> requires cache_control markers (openrouter for claude/gemini)
     - "none"       -> no caching available
     """
     p = (provider or "").lower()
     if p == "openrouter":
         return openrouter_cache_strategy(model)   # model-dependent routing
-    # S4 (2026-08-29): the per-provider answer is a ProviderSpec field
+    # The per-provider answer is a ProviderSpec field
     # (``cache_strategy``) — one table, no second literal here.
     try:
         from modules.llm.provider_spec import get_spec, Transport
@@ -88,7 +80,7 @@ def provider_cache_strategy(provider: str, model: Optional[str] = None) -> str:
         if spec is not None:
             if spec.cache_strategy:
                 return spec.cache_strategy
-            # P8b (context-usage audit 2026-08-15): a spec-served provider riding
+            # A spec-served provider riding
             # the ANTHROPIC_MESSAGES transport (e.g. zai-coding) INHERITS
             # AnthropicClient's in-client cache_control breakpoints.
             if spec.transport is Transport.ANTHROPIC_MESSAGES:
@@ -96,16 +88,6 @@ def provider_cache_strategy(provider: str, model: Optional[str] = None) -> str:
     except Exception:
         pass
     return "none"
-
-
-def gemini_explicit_cache_enabled() -> bool:
-    """Opt-in for Gemini explicit cachedContents. Default OFF — implicit caching is
-    already free and needs no code; explicit adds a billed, TTL'd managed-object
-    lifecycle, so it ships gated until live cache-hit-verified. Global kill-switch wins.
-    """
-    if not prompt_cache_enabled():
-        return False
-    return _bool_env("GEMINI_PROMPT_CACHE", False)
 
 
 def apply_openrouter_cache_control(
@@ -116,9 +98,8 @@ def apply_openrouter_cache_control(
     For Anthropic/Gemini models routed through OpenRouter, convert the (string) system
     message into a single content block carrying ``cache_control: ephemeral`` so the
     large, stable system+tools prefix is served from cache on repeated calls. A no-op
-    for automatic/none strategies or when caching is disabled (always on for OpenRouter
-    since 2026-09-22 — a billing failover to ``anthropic/*`` or ``google/*`` on
-    OpenRouter used to send no breakpoints at all).
+    for automatic/none strategies or when caching is disabled (always on for OpenRouter,
+    so a billing failover to ``anthropic/*`` or ``google/*`` still sends breakpoints).
 
     Returns the (possibly mutated) message list; never raises.
     """
@@ -147,7 +128,7 @@ def apply_openrouter_cache_control(
 def apply_openrouter_tools_cache_control(
     tools: Optional[List[Dict[str, Any]]], model_type: Optional[str]
 ) -> Optional[List[Dict[str, Any]]]:
-    """Mark the LAST tool cacheable for breakpoint-style OpenRouter models (UP-08).
+    """Mark the LAST tool cacheable for breakpoint-style OpenRouter models.
 
     The system breakpoint (``apply_openrouter_cache_control``) doesn't cover the tools
     array — for OpenRouter, tools are a separate top-level request field placed AFTER
@@ -164,7 +145,7 @@ def apply_openrouter_tools_cache_control(
         return tools
     try:
         if isinstance(tools[-1], dict):
-            # L2: never mutate the caller's list — it's the memoized per-provider schema
+            # Never mutate the caller's list — it's the memoized per-provider schema
             # cache shared across models. Copy the list and the tail dict before stamping.
             tools = list(tools)
             tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
@@ -174,7 +155,7 @@ def apply_openrouter_tools_cache_control(
 
 
 # ---------------------------------------------------------------------------
-# F4 — cache TTL by session class (2026-09-22)
+# Cache TTL by session class
 #
 # Anthropic's ``cache_control`` takes an optional ``ttl``: the default (the bare
 # ``{"type": "ephemeral"}`` marker) is a 5-minute cache, and ``"1h"`` buys a
@@ -195,12 +176,8 @@ def apply_openrouter_tools_cache_control(
 # class of breakage as the 422 in ``modules/llm/usage_extract.py:48-50``.
 # ---------------------------------------------------------------------------
 
-#: attribute stamped on a client/adapter by :func:`apply_cache_ttl`.
-_TTL_ATTR = "_polyrob_cache_ttl"
-
 #: the ttl values Anthropic accepts on ``cache_control``. "5m" is the API
-#: default and is expressed as the BARE ephemeral marker (byte-identical to the
-#: pre-F4 request), never as an explicit ``"ttl": "5m"`` key.
+#: default and is expressed as the BARE ephemeral marker (the API default), never as an explicit ``"ttl": "5m"`` key.
 VALID_CACHE_TTLS = ("5m", "1h")
 
 
@@ -228,47 +205,29 @@ def resolve_cache_ttl(autonomous: bool) -> str:
     return "5m" if autonomous else "1h"
 
 
-def apply_cache_ttl(llm: Any, ttl: Optional[str]) -> Optional[str]:
-    """Stamp the resolved cache ttl onto *llm* (and its wrapped client).
-
-    Idempotent and cheap — re-stamped once a step on purpose, because a provider
-    fallback builds a NEW client mid-run. Fail-open: returns None and changes
-    nothing when the ttl is not one this API knows.
-    """
-    if llm is None or ttl not in VALID_CACHE_TTLS:
+def apply_cache_ttl(ttl: Optional[str]) -> Optional[str]:
+    """Scope the resolved cache ttl to this task. A cron run and a chat on one client keep
+    their own window. Fail-open: returns None and changes nothing when the ttl is not one
+    this API knows."""
+    if ttl not in VALID_CACHE_TTLS:
         return None
-    try:
-        setattr(llm, _TTL_ATTR, ttl)
-        client = getattr(llm, "_client", None)
-        if client is not None:
-            setattr(client, _TTL_ATTR, ttl)
-    except Exception:  # pragma: no cover - defensive
-        return None
+    set_cache_ttl(ttl)
     return ttl
 
 
-def cache_ttl_for(client: Any) -> Optional[str]:
+def cache_ttl_for() -> Optional[str]:
     """The ttl to put on this request's ``cache_control`` markers, or None.
 
-    None means "emit the bare ``{"type": "ephemeral"}`` marker" — which is both
-    the 5-minute default AND the byte-identical pre-F4 request. Only ``"1h"``
-    ever comes back as a value to render.
+    None means "emit the bare ``{"type": "ephemeral"}`` marker", the 5-minute default.
+    Only ``"1h"`` ever comes back as a value to render.
     """
-    if client is None:
-        return None
-    value = getattr(client, _TTL_ATTR, None)
-    if value is None:
-        inner = getattr(client, "_client", None)
-        value = getattr(inner, _TTL_ATTR, None) if inner is not None else None
-    if value == "1h":
-        return "1h"
-    return None
+    return "1h" if scoped_cache_ttl() == "1h" else None
 
 
 def cache_control_marker(ttl: Optional[str] = None) -> Dict[str, Any]:
     """The ONE ``cache_control`` value every Anthropic breakpoint uses.
 
-    ``{"type": "ephemeral"}`` by default (byte-identical to pre-F4), plus
+    ``{"type": "ephemeral"}`` by default (the API default), plus
     ``"ttl": "1h"`` when the resolved ttl asks for the long window.
     """
     if ttl == "1h":
@@ -277,75 +236,27 @@ def cache_control_marker(ttl: Optional[str] = None) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# F12 — where the conversation breakpoints go (2026-09-23)
+# Where the conversation breakpoints go
 #
 # Anthropic allows FOUR ``cache_control`` breakpoints per request. One is spent
 # on the last system block (:func:`_build_cached_system_param`); the other three
-# ride in the ``messages`` array. Until F12 they sat on the newest three rows —
-# the bytes GUARANTEED to change on the next step — so nothing marked the end of
-# the foundation (runtime identity, environment, self/project context, the
-# initial task, skills, the tool catalog: the largest static block that travels
-# inside ``messages``). After any tail rewrite the three moving markers were
-# orphaned and the next request re-wrote the cache from the system marker
-# forward.
-#
-# The placement this module computes:
+# ride in the ``messages`` array:
 #   * marker A — the LAST foundation message, so the static block is cached
 #     behind a breakpoint that never moves while the session lives;
 #   * markers B and C — the last two COMPLETED tool transactions (the
 #     ``user`` row carrying ``tool_result`` blocks that closes an
 #     ``assistant``/``tool_use`` pair), which is where the transcript is stable
-#     once written, with the LAST row always marked so the tail keeps extending
-#     the cache.
+#     once written. With fewer than two, the newest settled rows fill the budget.
 #
-# Every breakpoint in one request carries the SAME marker value (F4 resolves one
-# ttl per request), which also satisfies Anthropic's non-increasing-ttl rule.
+# The tail is never marked for its own sake: the rows after the last assistant turn
+# include the state row and the H-MEM row, which ride one call and leave, so a marker
+# there pays a write premium each step for bytes nothing reads again.
+#
+# Every breakpoint in one request carries the SAME marker value (one
+# ttl is resolved per request), which also satisfies Anthropic's non-increasing-ttl rule. A marker
+# never lands on a thinking block or on an empty text block: the API refuses both, so
+# the mark moves to the previous block of the row, else the previous row.
 # ---------------------------------------------------------------------------
-
-#: attribute stamped on a client/adapter by :func:`apply_foundation_len`.
-_FOUNDATION_LEN_ATTR = "_polyrob_foundation_len"
-
-
-def apply_foundation_len(llm: Any, n: Optional[int]) -> Optional[int]:
-    """Stamp the WIRE foundation length onto *llm* (and its wrapped client).
-
-    *n* is the number of leading messages in the provider's ``messages`` array
-    that are the pinned foundation. Anthropic carries the system prompt in its
-    own ``system`` parameter, so the system rows are NOT counted — the agent
-    tier computes the number it stamps (``retrieval.get_messages_for_llm``).
-
-    Re-stamped once per step on purpose: a billing failover mints a new client
-    mid-run, exactly like :func:`apply_cache_ttl`. Fail-open — returns None and
-    changes nothing when *n* is not a usable count.
-    """
-    if llm is None or not isinstance(n, int) or isinstance(n, bool) or n < 1:
-        return None
-    try:
-        setattr(llm, _FOUNDATION_LEN_ATTR, n)
-        client = getattr(llm, "_client", None)
-        if client is not None:
-            setattr(client, _FOUNDATION_LEN_ATTR, n)
-    except Exception:  # pragma: no cover - defensive
-        return None
-    return n
-
-
-def foundation_len_for(client: Any) -> Optional[int]:
-    """The stamped wire foundation length for this request, or None.
-
-    None means "nobody told us where the foundation ends" and the breakpoint
-    placement falls back to the byte-identical pre-F12 tail markers.
-    """
-    if client is None:
-        return None
-    value = getattr(client, _FOUNDATION_LEN_ATTR, None)
-    if value is None:
-        inner = getattr(client, "_client", None)
-        value = getattr(inner, _FOUNDATION_LEN_ATTR, None) if inner is not None else None
-    if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
-        return value
-    return None
-
 
 def is_tool_result_message(message: Any) -> bool:
     """Does this Anthropic wire message CLOSE a tool transaction?
@@ -368,6 +279,25 @@ def is_tool_result_message(message: Any) -> bool:
     )
 
 
+_UNMARKABLE_BLOCKS = ("thinking", "redacted_thinking", "tool_addition", "tool_removal")
+
+
+def _markable_block(block: Any) -> bool:
+    if not isinstance(block, dict) or block.get("type") in _UNMARKABLE_BLOCKS:
+        return False
+    return block.get("type") != "text" or bool(str(block.get("text") or "").strip())
+
+
+def _can_mark(message: Any) -> bool:
+    """Can this row hold a marker? A system row of ``messages`` never does."""
+    if not isinstance(message, dict) or message.get("role") == "system":
+        return False
+    content = message.get("content")
+    if isinstance(content, str):
+        return bool(content.strip())
+    return isinstance(content, list) and any(_markable_block(b) for b in content)
+
+
 def conversation_breakpoints(
     messages: Optional[List[Dict[str, Any]]],
     foundation_len: Optional[int] = None,
@@ -380,42 +310,46 @@ def conversation_breakpoints(
     Args:
         messages: the provider's ``messages`` array (Anthropic wire shape).
         foundation_len: how many LEADING rows are the pinned foundation. None
-            (or < 1) selects the pre-F12 behaviour — the last ``n`` rows,
-            byte-identically.
+            (or < 1) means a call with no foundation, such as an aux call: the
+            newest ``n`` rows.
         n: the breakpoint budget for the conversation (3: Anthropic's 4 per
             request minus the one spent on the system block).
 
     Returns:
-        A sorted list of at most ``n`` distinct indices. The last row is always
-        included when there is one, so the tail keeps extending the cache.
+        A sorted list of at most ``n`` distinct indices of rows that can hold a marker.
     """
-    total = len(messages or [])
+    rows = messages or []
+    total = len(rows)
     if total <= 0 or n <= 0:
         return []
+    markable = [i for i, m in enumerate(rows) if _can_mark(m)]
 
-    # Pre-F12 fallback: nobody named the foundation, so mark the newest rows.
     if not isinstance(foundation_len, int) or isinstance(foundation_len, bool) or foundation_len < 1:
-        return list(range(max(0, total - n), total))
+        return markable[-n:]
 
-    anchors: List[int] = [min(foundation_len - 1, total - 1)]
+    anchor = [i for i in markable if i < foundation_len][-1:]
+    moving = n - len(anchor)
+    picks = [i for i in markable if i not in anchor and is_tool_result_message(rows[i])][-moving:]
+    if len(picks) < moving:
+        # Fewer completed transactions than markers: the newest settled rows, which end at
+        # the last assistant turn.
+        last_assistant = max((i for i, m in enumerate(rows)
+                              if isinstance(m, dict) and m.get("role") == "assistant"), default=-1)
+        settled = [i for i in markable
+                   if foundation_len <= i <= last_assistant and i not in picks]
+        picks = settled[-(moving - len(picks)):] + picks
+    return sorted(set(anchor) | set(picks))
 
-    moving = n - len(anchors)
-    picks: List[int] = []
-    if moving > 0:
-        endpoints = [i for i, m in enumerate(messages) if is_tool_result_message(m)]
-        picks = endpoints[-moving:]
-        # The tail must always be marked, or the newest turn never enters the cache.
-        if (total - 1) not in picks:
-            picks.append(total - 1)
-        # Fewer completed transactions than markers ⇒ fall back to the last rows.
-        candidate = total - 1
-        while len(picks) < moving and candidate >= 0:
-            if candidate not in picks and candidate not in anchors:
-                picks.append(candidate)
-            candidate -= 1
-        picks = sorted(set(picks))[-moving:]
 
-    return sorted(set(anchors) | set(picks))
+def _marked_content(content: Any, marker: Dict[str, Any]) -> Any:
+    if isinstance(content, str):
+        return [{"type": "text", "text": content, "cache_control": dict(marker)}]
+    blocks = [dict(b) if isinstance(b, dict) else b for b in content]
+    for index in range(len(blocks) - 1, -1, -1):
+        if _markable_block(blocks[index]):
+            blocks[index]["cache_control"] = dict(marker)
+            break
+    return blocks
 
 
 def mark_conversation_cache(
@@ -424,7 +358,7 @@ def mark_conversation_cache(
     ttl: Optional[str] = None,
     foundation_len: Optional[int] = None,
 ) -> Any:
-    """Copy *messages* and stamp ``cache_control`` on the F12 breakpoints.
+    """Copy *messages* and stamp ``cache_control`` on the conversation breakpoints.
 
     Never mutates the caller's list or any block it holds. Returns the input
     unchanged (same object) when caching is off or there is nothing to mark —
@@ -438,16 +372,7 @@ def mark_conversation_cache(
         return messages
 
     marker = cache_control_marker(ttl)
-    out = [dict(m) for m in messages]
+    out = [dict(m) if isinstance(m, dict) else m for m in messages]
     for i in targets:
-        m = out[i]
-        content = m.get("content")
-        if isinstance(content, str):
-            m["content"] = [{"type": "text", "text": content, "cache_control": dict(marker)}]
-        elif isinstance(content, list) and content:
-            # copy the last block so we don't mutate the shared dict, then mark it
-            content = [dict(b) if isinstance(b, dict) else b for b in content]
-            if isinstance(content[-1], dict):
-                content[-1] = {**content[-1], "cache_control": dict(marker)}
-            m["content"] = content
+        out[i]["content"] = _marked_content(out[i].get("content"), marker)
     return out

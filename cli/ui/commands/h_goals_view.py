@@ -1,28 +1,18 @@
-"""h_goals_view.py — the REPL's ``/goals`` view (C15/C16/E17, 2026-09-21).
+"""h_goals_view.py — the REPL's ``/goals`` view.
 
-Its own module because ``handlers.py`` sits at its size ratchet
-(``tests/test_file_size_ratchet.py``: extract new behaviour, never grow the
-god-file).
+113 W4 item 3 (D-1): the REPL renders the board with the ONE renderer every
+seat uses, ``core.goal_board_render.render_board`` — the chat apps' ``/goals``
+(``surfaces.telegram.status_ops._goals_reply``) calls it too, so one verb gives
+one text. It reads ``status_counts`` / ``list_recent`` (never ``board.list``,
+the dispatcher's order) and names an unreadable board UNKNOWN, never empty.
 
-⚠️ ``GoalBoard.list`` is the DISPATCHER's order (``priority DESC, created_at
-ASC LIMIT``). Used as a "what is on my board" VIEW it is wrong: on the 409-row
-prod board it showed the OLDEST rows and zero live legs, so the agent told the
-owner it had no trading goals while ten clean cycles had run. Every view here
-reads :meth:`GoalBoard.list_recent` (newest first, tenant-scoped) and
-:meth:`GoalBoard.status_counts` (every row, never a window).
+Its own module because ``handlers.py`` sits at its size ratchet.
 
-Honest states: an unreadable board renders ``unavailable(<reason>)``, never an
-empty list — and a READ never creates the store.
+A READ never creates the store: a missing ``goals.db`` reads as the empty board.
 """
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional, Tuple
-
-from cli.ui import candy
-
-#: How many rows the compact REPL view prints.
-_VIEW_LIMIT = 10
 
 
 def _board_path() -> str:
@@ -32,86 +22,16 @@ def _board_path() -> str:
     return goals_db_path(admin_data_dir(write=False))
 
 
-def read_board(user_id: str, *, limit: int = _VIEW_LIMIT
-               ) -> Tuple[Optional[List[Any]], Dict[str, int], Optional[str]]:
-    """``(rows, counts, unavailable_reason)`` for *user_id*.
-
-    ``rows is None`` means the board could not be read — the caller must say so
-    rather than print an empty list. A missing file is NOT an error and is NOT
-    created: it reads as "no goals yet".
-    """
+def goals_view(user_id: str) -> str:
+    """The rendered ``/goals`` body for *user_id*."""
+    from core.goal_board_render import NO_GOALS_YET, render_board
     path = _board_path()
     if not os.path.exists(path):
-        return [], {}, None
+        return NO_GOALS_YET
     try:
         from agents.task.goals.board import GoalBoard
         board = GoalBoard(path)
-        rows = list(board.list_recent(user_id=user_id, limit=limit))
-        counts = dict(board.status_counts(user_id=user_id))
-        return rows, counts, None
     except Exception as exc:  # unreadable/locked store — never a confident zero
-        return None, {}, f"{type(exc).__name__}: {exc}"
-
-
-def _counts_line(counts: Dict[str, int]) -> str:
-    total = sum(counts.values())
-    parts = ", ".join(f"{n} {status}" for status, n in sorted(counts.items()))
-    return f"{candy.GUTTER}{total} goal(s) on the board — {parts}"
-
-
-def read_off(user_id: str) -> Tuple[Optional[List[Any]], Optional[str]]:
-    """034 §11.1: what the owner switched OFF — ``(rows, None)`` or
-    ``(None, reason)``. A READ never creates the store or the table."""
-    path = _board_path()
-    if not os.path.exists(path):
-        return [], None
-    try:
-        from core.goal_suppressions import SCOPE_TITLE, active
-        return active(path, user_id=user_id, scope=SCOPE_TITLE), None
-    except Exception as exc:  # unreadable — never a confident "nothing is off"
-        return None, f"{type(exc).__name__}: {exc}"
-
-
-def _off_lines(user_id: str) -> List[str]:
-    off, reason = read_off(user_id)
-    if off is None:
-        return ["", f"{candy.GUTTER}OFF — unavailable ({reason}); I cannot tell "
-                    "what you switched off"]
-    if not off:
-        return []
-    from core.goal_suppressions import describe
-    out = ["", candy.section(f"off ({len(off)})"),
-           f"{candy.GUTTER}you switched these off; `/goal allow <title>` turns one back on"]
-    out += [f"{candy.GUTTER}○ {describe(x)}" for x in off[:_VIEW_LIMIT]]
-    return out
-
-
-def goals_view(user_id: str, *, limit: int = _VIEW_LIMIT) -> str:
-    """The rendered ``/goals`` body."""
-    rows, counts, reason = read_board(user_id, limit=limit)
-    if rows is None:
-        return (f"{candy.GUTTER}unavailable ({reason}) — that is UNKNOWN, not "
-                f"an empty board.")
-    off = _off_lines(user_id)
-    if not rows and off:
-        return "\n".join([candy.empty("goals", "nothing on the board")] + off)
-    if not rows:
-        # E17: one grammar, no flag names — name a verb the owner can RUN.
-        # 080 WS-2: `/goal new <what>` creates a goal on every seat.
-        return candy.empty("goals", "add one with `/goal new <what to do>`")
-    # 034 §3.1: every row says who asked for it (derived, never narrated).
-    from core.goal_legibility import bucket_line, origin_tag
-    lines = [candy.status_line(g.status, f"{g.id[:8]}: {g.title[:40]}  {origin_tag(g)}")
-             for g in rows]
-    if counts:
-        lines.append("")
-        lines.append(_counts_line(counts))
-        # 034 §3.2: the four owner facts over the seven machine statuses.
-        lines.append(f"{candy.GUTTER}{bucket_line(counts)}")
-    if sum(counts.values()) > len(rows):
-        # NOT a promise of every row: `goals list` is itself windowed
-        # (``-n``, max 500), so it cannot show more than its own ceiling.
-        lines.append(f"{candy.GUTTER}(newest {len(rows)} shown — "
-                     f"`polyrob goals list -n 100` widens the window)")
-    lines.extend(off)
-    return "\n".join(lines)
+        return (f"Goal board: unavailable ({type(exc).__name__}: {str(exc)[:120]}) "
+                "— this is UNKNOWN, not an empty board.")
+    return render_board(board, user_id=user_id)

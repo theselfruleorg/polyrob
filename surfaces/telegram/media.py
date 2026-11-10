@@ -12,11 +12,15 @@ must keep producing exactly one ``voice`` Media so ``voice_guard`` and
 ``voice_echo`` behave as before.
 """
 import logging
+import os
+from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 from core.surfaces.inbound_attachments import (
-    TRANSCRIBED_KINDS, owner_typed_text, with_typed_text)
+    TRANSCRIBED_KINDS, inbound_media_max_mb, inbound_video_max_mb, owner_typed_text,
+    with_typed_text)
 from core.surfaces.media import Media
+from core.surfaces.telegram_api import local_bot_api_url
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +37,31 @@ _FIELDS = (
 )
 
 
+_MB = 1024 * 1024
+#: The largest file ``getFile`` serves to a bot on the public Bot API server.
+PUBLIC_BOT_DOWNLOAD_MAX_BYTES = 20 * _MB
+#: The largest file Telegram carries for a bot on a local Bot API server.
+LOCAL_BOT_DOWNLOAD_MAX_BYTES = 2000 * _MB
+
+
+def _refusal(kind: str, size: Any) -> Optional[str]:
+    """Why this declared size cannot arrive, or None. An absent size is not a
+    refusal: the download then decides."""
+    if not isinstance(size, int):
+        return None
+    limit = LOCAL_BOT_DOWNLOAD_MAX_BYTES if local_bot_api_url() else PUBLIC_BOT_DOWNLOAD_MAX_BYTES
+    if size > limit:
+        return (f"is {size / _MB:.1f}MB, and Telegram lets a bot download a file "
+                f"only up to {limit // _MB}MB")
+    cap_mb = inbound_video_max_mb() if kind == "video" else inbound_media_max_mb()
+    if size > cap_mb * _MB:
+        return f"is {size / _MB:.1f}MB, over this agent's {cap_mb:g}MB cap for a {kind} file"
+    return None
+
+
 def _message(update: dict) -> dict:
-    return update.get("message") or update.get("edited_message") or {}
+    return (update.get("message") or update.get("edited_message")
+            or update.get("channel_post") or update.get("edited_channel_post") or {})
 
 
 def _largest_photo(sizes: list) -> Optional[dict]:
@@ -79,13 +106,53 @@ def extract_media(update: dict) -> List[Media]:
         item = msg.get(field)
         if not isinstance(item, dict) or not item.get("file_id"):
             continue
+        mime = item.get("mime_type")
+        # A video sent "as a file" arrives in `document`.
+        if kind == "document" and str(mime or "").lower().startswith("video/"):
+            kind, default_ext = "video", ".mp4"
         filename = item.get("file_name")
         if not filename:
             ext = _sticker_ext(item) if field == "sticker" else (default_ext or "")
             filename = f"{field}_{str(item['file_id'])[:12]}{ext}"
-        out.append(Media(kind=kind, mime=item.get("mime_type"),
-                         ref=str(item["file_id"]), caption=caption, filename=filename))
+        elif kind == "video" and not os.path.splitext(filename)[1]:
+            filename = f"{filename}{default_ext}"
+        size = item.get("file_size")
+        out.append(Media(kind=kind, mime=mime, ref=str(item["file_id"]), caption=caption,
+                         filename=filename, refused=_refusal(kind, size),
+                         size=size if isinstance(size, int) else None))
     return out
+
+
+async def fetch_media_file(bot: Any, media: Any) -> Any:
+    """ONE attachment's content: a ``Path`` when it streamed to its spool file, else
+    bytes. None = not fetched, and the rail names the file."""
+    ref = getattr(media, "ref", None)
+    if not ref:
+        return None
+    from surfaces.telegram.voice import download_file_bytes, download_file_to_path
+    spool = getattr(media, "spool", None)
+    if not spool:
+        return await download_file_bytes(bot, ref)
+    fetched = await download_file_to_path(bot, ref, spool, int(inbound_video_max_mb() * _MB))
+    return Path(spool) if fetched else None
+
+
+def discard_absorbed(result: Any, session_id: str) -> None:
+    """Remove the files of a turn the queue rejected: the sender is told to send it
+    again, and the second copy must not be the second file on the disk."""
+    inbound = getattr(result, "inbound", None)
+    stored = [m for m in (getattr(inbound, "media", None) or []) if getattr(m, "path", None)]
+    if not stored:
+        return
+    try:
+        from agents.task.path import pm
+        from core.security.workspace_io import unlink
+        workspace_dir = str(pm().get_workspace_dir(session_id, inbound.identity.user_id))
+        for m in stored:
+            unlink(os.path.join(workspace_dir, m.path), workspace_dir)
+            m.path = None
+    except OSError as e:
+        logger.warning("telegram media: rejected turn's file not removed: %s", e)
 
 
 # --- the session-facing half of the rail -----------------------------------
@@ -212,7 +279,7 @@ async def queue_attachments_for_new_session(task_agent: Any, result: Any,
     set at creation time right back to None).
     """
     inbound = getattr(result, "inbound", None)
-    if not getattr(inbound, "media", None) or fetch_media is None:
+    if not getattr(inbound, "media", None):
         return False
     text, metadata = await absorb_for_session(task_agent, result, session_id,
                                               fetch_media, base_text="")

@@ -70,3 +70,42 @@ async def test_model_rule_stays_pending_and_its_draft_is_swept(tmp_path):
 	assert "NOT YET IN EFFECT" in res.extracted_content
 	assert "cron dailyx01" in res.extracted_content
 	assert "Advisory only" in res.extracted_content
+
+
+@pytest.mark.asyncio
+async def test_sweep_all_needs_no_content_and_writes_nothing(tmp_path):
+	_cron(tmp_path, "Every day publish a public report of the bugs we fix.")
+	a = _controller(tmp_path)
+	from core.owner_doc_writer import OwnerDocWriter, PROVENANCE_USER
+	writer = OwnerDocWriter(tmp_path)
+	writer.propose("- Never publish public reports about bugs we fix.\n", user_id="alice",
+	               created_by=PROVENANCE_USER, pending=False)
+	before = writer.read_active("alice")
+	res = await a.function(a.param_model(action="sweep_all"), execution_context=_ctx())
+	assert "Never publish public reports about bugs we fix." in res.extracted_content
+	assert "Every day publish a public report of the bugs we fix." in res.extracted_content
+	assert writer.read_active("alice") == before
+	assert writer.list_pending("alice") is None
+
+
+@pytest.mark.asyncio
+async def test_each_tool_path_refuses_job_state_and_names_the_verb(tmp_path):
+	from core.owner_doc_writer import OwnerDocWriter, PROVENANCE_USER
+	writer = OwnerDocWriter(tmp_path)
+	writer.propose("- Never follow anyone.\n", user_id="alice", created_by=PROVENANCE_USER, pending=False)
+	a = _controller(tmp_path)
+	for params in (
+		dict(action="update", content="- Never follow anyone.\n- The promo job is OFF.\n"),
+		dict(action="patch", old_string="Never follow anyone.", new_string="Job a1b2c3d4e5f6 follows."),
+		dict(action="replace_rule", rule_start="Never follow", new_string="The promo job is paused."),
+	):
+		res = await a.function(a.param_model(reason="test reason", **params), execution_context=_ctx())
+		assert res.error and res.error.startswith("Nothing was written.")
+		assert "cronjob_show" in res.error
+		assert "Near the cap" not in res.error and "replace_rule" not in res.error
+	assert writer.list_pending("alice") is None
+
+
+def test_the_description_says_rules_only(tmp_path):
+	a = _controller(tmp_path)
+	assert "never here" in a.description and "cronjob_" in a.description

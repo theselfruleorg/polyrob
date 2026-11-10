@@ -80,3 +80,28 @@ def test_wait_for_uploads_is_not_refused(monkeypatch):
 
 def test_the_module_exposes_the_probe():
     assert task_http_api._no_model is _no_model
+
+
+def test_a_message_to_an_idle_chat_with_no_model_is_503_and_changes_nothing(monkeypatch):
+    """113 W0 (C-02): the message route resumed an idle chat in a process with no
+    model. It now gives the create route's refusal before any state changes."""
+    from api.task_http_api import send_user_message
+    monkeypatch.setattr(task_http_api, "guard_remote", lambda agent, sid: None)
+    touched = []
+
+    class _Agent(SimpleNamespace):
+        async def get_session_by_id(self, sid):
+            return {"status": "completed", "user_id": "u1", "creator": "api"}
+
+        def __getattr__(self, name):
+            touched.append(name)
+            raise AttributeError(name)
+
+    agent = _Agent(container=_Container(None))
+    req = SimpleNamespace(state=SimpleNamespace(user_id="u1"))
+    msg = SimpleNamespace(text="hi", kind="comment", metadata={}, attached_files=None)
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(send_user_message("a" * 8, msg, req, agent=agent))
+    assert caught.value.status_code == 503
+    assert caught.value.detail["code"] == "no_model"
+    assert touched == []

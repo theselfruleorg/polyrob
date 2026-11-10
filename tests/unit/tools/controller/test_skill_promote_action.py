@@ -10,7 +10,7 @@ import agents.task.agent.service  # noqa: F401 — avoid import cycle
 import pytest
 
 from agents.task.agent.skill_manager import SkillManager
-from modules.skills.writer import PROVENANCE_BACKGROUND
+from modules.skills.writer import PROVENANCE_UNTRUSTED
 from tools.controller.registry.service import Registry
 from tools.controller.service import Controller
 
@@ -31,7 +31,7 @@ def _controller(sm, monkeypatch):
 
 def _seed_pending(sm):
     res = sm.create_skill("draft-skill", _BODY, user_id="u1",
-                          created_by=PROVENANCE_BACKGROUND)  # forced .pending
+                          created_by=PROVENANCE_UNTRUSTED)  # forced .pending
     assert res.pending
 
 

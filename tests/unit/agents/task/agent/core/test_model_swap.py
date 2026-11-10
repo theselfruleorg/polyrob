@@ -188,3 +188,44 @@ def test_real_agent_swap_completes_when_reconcile_raises():
     assert r["ok"] is True
     assert a.model_name == "claude-sonnet-4-5"
     assert mm.llm is built
+
+
+# --- the judge slot: one builder ------------------------------------------------
+
+class _Client:
+    def __init__(self):
+        self.closed = False
+
+    async def aclose(self):
+        self.closed = True
+
+
+def _judge_host():
+    built = []
+
+    async def provision(task):
+        await asyncio.sleep(0)            # yield: a second task builds at the same time
+        built.append(_Client())
+        return built[-1]
+    host = SimpleNamespace(_judge_llm=None, container=None, _provision_aux_llm_async=provision)
+    return host, built
+
+
+def test_two_concurrent_judge_builds_keep_one_and_close_the_other():
+    from agents.task.agent.core.model_swap import cached_judge_llm
+    host, built = _judge_host()
+
+    async def go():
+        return await asyncio.gather(cached_judge_llm(host), cached_judge_llm(host))
+    first, second = asyncio.run(go())
+    assert first is second is host._judge_llm
+    assert len(built) == 2 and [c.closed for c in built].count(True) == 1
+
+
+def test_a_judge_built_after_the_session_closed_its_models_is_closed():
+    from agents.task.agent.core.model_swap import cached_judge_llm, close_session_llms
+    host, built = _judge_host()
+    host._is_sub_agent = True
+    asyncio.run(close_session_llms(host))
+    assert asyncio.run(cached_judge_llm(host)) is None
+    assert built[0].closed and host._judge_llm is None

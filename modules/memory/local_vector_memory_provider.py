@@ -32,6 +32,7 @@ import threading
 from typing import List, Optional
 
 from modules.memory import scope as _scope
+from modules.memory.sqlite_kb_store import _dedupe_rows
 from modules.memory.sqlite_memory_provider import SqliteMemoryProvider
 
 logger = logging.getLogger(__name__)
@@ -262,8 +263,8 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
                                            session_id=session_id, user_id=user_id,
                                            scope=scope)
         if inserted is False:
-            # B2 dup collapse: the keyword half refreshed an existing row's ts and
-            # skipped the insert — embedding it again would grow the vector sidecar
+            # B2 dup collapse: the keyword half found an existing row and skipped
+            # the insert — embedding it again would grow the vector sidecar
             # with a duplicate mem_meta/mem_vec pair on every repeated finding.
             return inserted
         if not self._vec_ok or self._anon_blocked(user_id):
@@ -353,7 +354,8 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
     async def search(self, query: str, *, user_id=None, session_id: str = None,
                      limit: int = 5, sort: str = None, before_id: int = None,
                      with_ids: bool = False, scope=None, demote_automation: bool = True,
-                     prefer_job_id: str = None, prefer_goal_id: str = None) -> str:
+                     prefer_job_id: str = None, prefer_goal_id: str = None,
+                     drop_unverified: bool = False, with_age: bool = False) -> str:
         if self._anon_blocked(user_id):
             return ""
         limit = self._clamp_limit(limit, self.top_k)
@@ -364,7 +366,8 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         kw_rows = await self._run_blocking(
             self._keyword_rows, query, norm_user=norm, limit=limit, sort=sort,
             before_id=before_id, scope=scope, demote_automation=demote_automation,
-            prefer_job_id=prefer_job_id, prefer_goal_id=prefer_goal_id)
+            prefer_job_id=prefer_job_id, prefer_goal_id=prefer_goal_id,
+            drop_unverified=drop_unverified)
         kw_list = [r["content"] for r in kw_rows]
         # B2: date-prefix lines whose write-time stamp is known. Vector-only hits
         # aren't in the keyword row set — they render bare (fail-open).
@@ -375,7 +378,7 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         # an `(id N)` suffix (honest: we don't know its id) rather than a guessed one.
         rowid_map = ({r["content"]: r["rowid"] for r in kw_rows} if with_ids else {})
         def _line(c: str) -> str:
-            return self._recall_line(c, ts_map.get(c), rowid_map.get(c))
+            return self._recall_line(c, ts_map.get(c), rowid_map.get(c), with_age=with_age)
         # Vector half only augments *discover* (a real query); never browse, never on
         # explicit sort (caller asked for recency, not relevance), never when degraded,
         # and never when paginating (before_id) — an unfiltered vector KNN pass has no
@@ -394,13 +397,12 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
             kw_list, vec, ts_map, norm, limit, kw_rows=kw_rows,
             demote_automation=demote_automation, prefer_job_id=prefer_job_id,
             prefer_goal_id=prefer_goal_id)
-        return "\n".join(self._recall_line(c, ts_map.get(c), rowid_map.get(c))
-                         for c in merged)
+        return self._render_merged(merged, ts_map, rowid_map=rowid_map,
+                                   drop_unverified=drop_unverified, with_age=with_age)
 
     async def _dated_merge(self, kw_list, vec, ts_map, norm, limit, *, kw_rows=None,
                            demote_automation: bool = True, prefer_job_id: str = None,
-                           prefer_goal_id: str = None, max_age_days: float = None,
-                           drop_unverified: bool = False):
+                           prefer_goal_id: str = None, max_age_days: float = None):
         """RRF-merge, then (D11) look up the vector-only hits in the keyword
         store: a hit renders with its write date, and a hit whose keyword row
         was pruned or purged (a vector twin left behind) is dropped. Last, the
@@ -419,17 +421,18 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
             ts_map = dict(ts_map)
             ts_map.update({c: t for c, t in alive.items() if t})
             merged = [c for c in merged if c in kw_set or c in alive]
-            # F7: a vector-only hit obeys the same owner-reader predicates the
-            # keyword half applied in SQL (age by its stamp; no [unverified] row).
+            # F7: a vector-only hit obeys the same age predicate the keyword half
+            # applied in SQL. ``_render_merged`` applies the unverified rule.
             if max_age_days is not None and float(max_age_days) > 0:
                 import time as _time
                 cutoff = _time.time() - float(max_age_days) * 86400
-                from modules.memory.recall_rank import is_episodic
-                merged = [c for c in merged if c in kw_set or not is_episodic(c)
+                try:
+                    durable = await self._run_blocking(self._durable_contents, norm, extra)
+                except Exception as e:  # fail-closed: an unknown kind is episodic
+                    logger.debug("local-vector: vector-hit kind lookup skipped: %s", e)
+                    durable = set()
+                merged = [c for c in merged if c in kw_set or c in durable
                           or (ts_map.get(c) or 0) >= cutoff]
-            if drop_unverified:
-                from modules.memory.recall_rank import UNVERIFIED_MARK
-                merged = [c for c in merged if not c.startswith(UNVERIFIED_MARK)]
             extra = [c for c in merged if c not in kw_set]
         if not (demote_automation or prefer_job_id or prefer_goal_id):
             return merged, ts_map
@@ -470,7 +473,7 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
                 allow_browse=False, exclude_session_id=session_id, scope=scope,
                 demote_automation=demote_automation, prefer_job_id=prefer_job_id,
                 prefer_goal_id=prefer_goal_id, max_age_days=max_age_days,
-                drop_unverified=drop_unverified)
+                drop_unverified=drop_unverified, weak_floor=True)
             if terms else []
         )
         kw_list = [r["content"] for r in kw_rows]
@@ -491,9 +494,22 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         merged, ts_map = await self._dated_merge(
             kw_list, vec, ts_map, norm, self.top_k, kw_rows=kw_rows,
             demote_automation=demote_automation, prefer_job_id=prefer_job_id,
-            prefer_goal_id=prefer_goal_id, max_age_days=max_age_days,
-            drop_unverified=drop_unverified)
-        return "\n".join(self._recall_line(c, ts_map.get(c)) for c in merged)
+            prefer_goal_id=prefer_goal_id, max_age_days=max_age_days)
+        return self._render_merged(merged, ts_map, drop_unverified=drop_unverified)
+
+    def _render_merged(self, merged, ts_map, *, rowid_map=None,
+                       drop_unverified: bool = False, with_age: bool = False) -> str:
+        """The recall lines of a fused list. A vector hit carries the raw row, so
+        the one unverified rule runs here; a row that the two halves hold in two
+        shapes (raw and stripped) renders once."""
+        from modules.memory.recall_rank import strip_unverified
+        lines: dict = {}
+        for c in merged:
+            shown = strip_unverified(c) if drop_unverified else c
+            if shown:
+                lines.setdefault(shown, self._recall_line(
+                    shown, ts_map.get(c), (rowid_map or {}).get(c), with_age=with_age))
+        return "\n".join(lines.values())
 
     # ---- retention (B3) ------------------------------------------------------
 
@@ -687,26 +703,30 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
                 for r in rows
                 if r[3] is not None and r[3] <= cutoff
             ]
-            return filtered[:limit]
+            return _dedupe_rows(filtered)[:limit]
         finally:
             con.close()
 
     async def kb_search(self, query: str, *, user_id, collection: Optional[str] = None,
-                        limit: int = 8) -> str:
+                        limit: int = 8, stamp: bool = True) -> str:
         """Hybrid KB recall: keyword + vector merged via RRF. Fail-open to keyword-only.
-        ``collection=None`` searches every collection (097)."""
+        ``collection=None`` searches every collection (097). ``stamp=False`` (automatic
+        prefetch) leaves ``last_hit_at`` alone."""
         if self._anon_blocked(user_id):
             return ""
         norm = self._norm_user(user_id)
-        kw_rows = self.kb_keyword_contents(query, user_id=user_id, collection=collection,
-                                           limit=limit)
+        kw_rows = await self._run_blocking(self.kb_keyword_contents, query, user_id=user_id,
+                                           collection=collection, limit=limit,
+                                           weak_floor=not stamp)
         # Only run vector when vec is healthy AND query has real content
         terms = self._query_terms(query)
         if not self._vec_ok or not (query or "").strip():
             # FTS-only (no vec or empty query)
             if not kw_rows:
                 return ""
-            self.kb_mark_hits(user_id=user_id, source_paths=[s for _, s, _ in kw_rows])
+            if stamp:
+                await self._run_blocking(self.kb_mark_hits, user_id=user_id,
+                                         source_paths=[s for _, s, _ in kw_rows])
             return "\n".join(f"[{src} #{idx}] {content}" for content, src, idx in kw_rows)
         try:
             vec_rows = await asyncio.get_event_loop().run_in_executor(
@@ -717,12 +737,14 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         if not vec_rows:
             if not kw_rows:
                 return ""
-            self.kb_mark_hits(user_id=user_id, source_paths=[s for _, s, _ in kw_rows])
+            if stamp:
+                await self._run_blocking(self.kb_mark_hits, user_id=user_id,
+                                         source_paths=[s for _, s, _ in kw_rows])
             return "\n".join(f"[{src} #{idx}] {content}" for content, src, idx in kw_rows)
         # Build content-keyed ranked lists for RRF (content string is the unique key).
         kw_contents = [content for content, _, _ in kw_rows]
         vec_contents = [content for content, _, _ in vec_rows]
-        merged_contents = self._rrf_merge([kw_contents, vec_contents], limit)
+        merged_contents = self._rrf_merge([kw_contents, vec_contents], limit * 2)
         # Re-attach provenance: build a lookup from content → (source_path, chunk_idx).
         # Prefer kw_rows provenance; fall back to vec_rows if only in vec.
         provenance: dict = {}
@@ -730,12 +752,17 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
             provenance[content] = (src, idx)
         for content, src, idx in kw_rows:
             provenance[content] = (src, idx)
+        # One chunk answers once: the two halves can hold different snapshots of it.
+        merged_contents = [row[0] for row in _dedupe_rows(
+            [(c, *provenance.get(c, (c, "?"))) for c in merged_contents])][:limit]
         lines = []
         for content in merged_contents:
             src, idx = provenance.get(content, ("?", "?"))
             lines.append(f"[{src} #{idx}] {content}")
-        self.kb_mark_hits(user_id=user_id,
-                          source_paths=[provenance.get(c, ("", ""))[0] for c in merged_contents])
+        if stamp:
+            await self._run_blocking(
+                self.kb_mark_hits, user_id=user_id,
+                source_paths=[provenance.get(c, ("", ""))[0] for c in merged_contents])
         return "\n".join(lines)
 
     async def kb_remove(self, *, user_id, collection: str, source: str = None) -> int:

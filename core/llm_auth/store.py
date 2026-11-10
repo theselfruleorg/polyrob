@@ -1,6 +1,6 @@
-"""Durable LLM credential store — ``~/.polyrob/auth.json`` (proposal 024, L1).
+"""Durable LLM credential store — ``~/.polyrob/auth.json``.
 
-File discipline follows the reference implementation's auth store because it is correct (§3.1):
+File discipline follows the reference implementation's auth store because it is correct:
 
 - created via ``os.open(O_CREAT|O_EXCL|O_WRONLY, 0o600)`` — never a
   world-readable window;
@@ -36,8 +36,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -70,6 +72,11 @@ class AuthStoreError(RuntimeError):
     pass
 
 
+class AuthStoreUnreadable(AuthStoreError):
+    """The store exists and cannot be read. It is not an empty store: a write would destroy
+    what it holds, and a reader must not report "no credential"."""
+
+
 class AuthStore:
     """File-backed credential store. All mutation goes through ``_mutate`` so
     every writer holds the exclusive flock for its read-modify-write."""
@@ -90,7 +97,7 @@ class AuthStore:
     def _ensure_file(self) -> None:
         if self.path.exists():
             # A store copied in with loose permissions is silently world-readable
-            # forever otherwise (review M3) — tighten and say so.
+            # forever otherwise — tighten and say so.
             try:
                 mode = os.stat(self.path).st_mode & 0o777
                 if mode & 0o077:
@@ -125,17 +132,39 @@ class AuthStore:
                     )
                 time.sleep(_LOCK_POLL_SEC)
 
+    @contextmanager
+    def refresh_lock(self, provider: str, timeout: float = 45.0):
+        """Cross-process lock for ONE provider's token refresh (a re-read, a POST, a write).
+
+        Not the store flock: that one gives up after 15 s and a token POST can take 30 s.
+        Its own file (``<store>.refresh-<provider>.lock``, mode 600) is never replaced, so
+        the flock holds on one inode. Yields True when held, False on a timeout (the
+        caller then does not refresh; it reads the store again later)."""
+        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(provider)) or "_"
+        lock_path = self.path.with_name(f"{self.path.name}.refresh-{safe}.lock")
+        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fh = os.fdopen(os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600), "r+")
+        try:
+            try:
+                self._flock(fh, timeout=timeout)
+            except AuthStoreError:
+                logger.warning("token refresh lock for %s timed out after %.0fs", safe, timeout)
+                yield False
+                return
+            yield True
+        finally:
+            fh.close()
+
     def _read_unlocked(self) -> Dict[str, Any]:
         try:
             with open(self.path, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
         except FileNotFoundError:
             return dict(_EMPTY_STORE)
-        except (json.JSONDecodeError, OSError) as exc:
-            logger.warning("auth store unreadable (%s) — treating as empty", exc)
-            return dict(_EMPTY_STORE)
+        except (ValueError, OSError) as exc:
+            raise AuthStoreUnreadable(f"auth store {self.path} is unreadable: {exc}") from None
         if not isinstance(data, dict):
-            return dict(_EMPTY_STORE)
+            raise AuthStoreUnreadable(f"auth store {self.path} is unreadable: not a JSON object")
         data.setdefault("version", 1)
         data.setdefault("active_provider", None)
         data.setdefault("providers", {})
@@ -157,13 +186,13 @@ class AuthStore:
             os.replace(tmp, str(self.path))
         except BaseException:
             # A failed write must not strand a temp file holding every token
-            # (review I5) — the temp is 0600, but it would sit there unmanaged.
+            # (the temp is 0600, but it would sit there unmanaged).
             try:
                 os.unlink(tmp)
             except OSError:
                 pass
             raise
-        # Best-effort directory fsync so the rename survives power loss (M4).
+        # Best-effort directory fsync so the rename survives power loss.
         try:
             dfd = os.open(str(self.path.parent), os.O_RDONLY)
             try:
@@ -206,7 +235,7 @@ class AuthStore:
     def load(self) -> Dict[str, Any]:
         # No lock needed: writes are atomic (temp + os.replace), so a plain read
         # always sees a complete snapshot. A shared lock here would be decorative
-        # anyway (review M1) — it would guard a different fd than the one read.
+        # anyway — it would guard a different fd than the one read.
         return self._read_unlocked()
 
     def get_provider(self, name: str) -> Optional[Dict[str, Any]]:
@@ -239,6 +268,23 @@ class AuthStore:
 
         self._mutate(_set)
 
+    def update_provider(self, name: str, fn) -> Optional[Dict[str, Any]]:
+        """Read-modify-write ONE provider entry under the exclusive flock.
+
+        ``fn(current_entry_or_None)`` returns the new entry, or None to leave the entry as
+        it is. A caller that read the entry before a slow step (a token POST) decides here,
+        on the CURRENT entry, so it never writes over what another process wrote meanwhile.
+        Returns what was written, or None.
+        """
+        def _update(data):
+            current = data["providers"].get(name)
+            new = fn(dict(current) if isinstance(current, dict) else None)
+            if new is not None:
+                data["providers"][name] = dict(new)
+            return new
+
+        return self._mutate(_update)
+
     def remove_provider(self, name: str) -> bool:
         return bool(self._mutate(lambda d: d["providers"].pop(name, None) is not None))
 
@@ -267,7 +313,7 @@ class AuthStore:
         exists (the race rule: a lost exhaustion marker must not
         resurrect a spent credential — the freshest observation wins).
         """
-        # Review M2: an unknown state string would be written verbatim and then
+        # An unknown state string would be written verbatim and then
         # mapped to "ok" by health.effective_state — a typo silently HEALING an
         # exhausted credential is the exact failure this layer exists to stop.
         if state not in ("ok", "rate_limited", "exhausted"):

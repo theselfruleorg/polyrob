@@ -35,8 +35,10 @@
  * 4. **It decides nothing itself.** A write is a POST/DELETE to an existing
  *    route (`http.js`), and the row says back exactly what the server answered.
  */
-import { postJson } from "./http.js";
-import { settingControl } from "./settings-control.js";
+import { postJson, readJson } from "./http.js";
+import { groupSave, settingControl } from "./settings-control.js";
+import { stateBlock } from "./state.js";
+import { loadEpisodes, renderEpisodes, skillDetail } from "./agent-detail.js";
 
 const DASH = "—"; // — : an unknown value, never a fabricated zero or a blank.
 
@@ -464,6 +466,8 @@ export function capabilityRow(item, copy, nowMs) {
   what.dataset.label = (copy && copy.cap_col_what) || "";
   what.appendChild(document.createTextNode((item && (item.what || item.id)) || ""));
   if (caps.includes("money")) what.appendChild(el("span", "why", (copy && copy.cap_money_note) || ""));
+  // 113 W5 (C-14): a skill opens its own text.
+  if (item && item.kind === "skill" && item.id) what.appendChild(skillDetail(item.id, copy));
   tr.appendChild(what);
 
   const from = el("td");
@@ -762,15 +766,21 @@ export function renderKb(root, data, copy) {
 // The preferences people actually change, grouped by intent, plus the money
 // limits the agent cannot go past. Writes use the existing guarded preference service.
 
-/** Group preference rows by their `applies` field (the intent). */
+//: 113 W5 (CP-1): a setting's `applies` → the group that says WHEN it takes
+//: effect. The next answer is "now" to a person; a new chat is not.
+const _WHEN = { live: "now", "next-step": "now", "next-turn": "now",
+  "next-session": "next_chat", restart: "restart" };
+const _WHEN_ORDER = ["now", "next_chat", "restart", "other"];
+
+/** Group preference rows by when a change takes effect, in that order. */
 export function groupPreferences(items) {
   const groups = new Map();
   (items || []).forEach((p) => {
-    const key = String(p.applies || "");
+    const key = _WHEN[String(p.applies || "")] || "other";
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(p);
   });
-  return groups;
+  return new Map(_WHEN_ORDER.filter((k) => groups.has(k)).map((k) => [k, groups.get(k)]));
 }
 
 /** Draw Settings. `prefs` is /api/webgate/preferences, `ledger` is
@@ -817,23 +827,33 @@ export function renderSettings(root, prefs, ledger, copy) {
     return "empty";
   }
   const groups = groupPreferences(items);
-  groups.forEach((rows, applies) => {
-    const sec = section(applies || (copy && copy.set_prefs_other), "");
+  groups.forEach((rows, when) => {
+    const sec = section((copy && copy[`set_group_${when}`]) || (copy && copy.set_prefs_other), "");
+    sec.dataset.when = when;
     const table = el("table", "table");
     const tbody = el("tbody");
+    const controls = [];
     rows.forEach((p) => {
       const tr = el("tr");
       const what = el("td", "what");
       what.dataset.label = (copy && copy.set_col_what) || "";
-      what.appendChild(document.createTextNode(p.description || p.key));
+      // 113 W5 (CP-1): the owner label and its help line from the copy table —
+      // never the developer note of core/prefs.py, never the raw key unless
+      // the server sent no words at all.
+      what.appendChild(document.createTextNode(p.label || p.key));
+      if (p.help) what.appendChild(el("span", "why", p.help));
       tr.appendChild(what);
       const val = el("td");
       val.dataset.label = (copy && copy.set_col_value) || "";
-      if (p.value != null && p.value !== "") val.appendChild(el("span", "val", String(p.value)));
+      if (Array.isArray(p.value) && !p.value.length) {
+        val.appendChild(el("span", "val", (copy && copy.set_list_none) || ""));   // 113 W6
+      } else if (p.value != null && p.value !== "") val.appendChild(el("span", "val", String(p.value)));
       else val.appendChild(el("span", "unknown", DASH));
       const effective = val.querySelector("span");
       if (effective) effective.dataset.effective = "1";
-      val.appendChild(settingControl(p, copy || {}));
+      const control = settingControl(p, copy || {}, { bare: true });
+      controls.push(control);
+      val.appendChild(control);
       tr.appendChild(val);
       const src = el("td");
       src.dataset.source = "1";
@@ -843,6 +863,7 @@ export function renderSettings(root, prefs, ledger, copy) {
     });
     table.appendChild(tbody);
     sec.appendChild(table);
+    if (controls.some((c) => c.setting)) sec.appendChild(groupSave(controls, copy || {}));
     root.appendChild(sec);
   });
 
@@ -881,10 +902,8 @@ export function fmtUsd(n) {
 export function renderFlags(root, data, copy) {
   root.replaceChildren();
   if (!data || !data.queried) {
-    const state = el("div", "state");
-    state.appendChild(el("h2", "state-title", (copy && copy.adv_idle_title) || ""));
-    state.appendChild(el("p", "state-body", (copy && copy.adv_idle_body) || ""));
-    root.appendChild(state);
+    root.appendChild(stateBlock({ title: copy && copy.adv_idle_title,
+      body: copy && copy.adv_idle_body }));
     return "idle";
   }
   if (data.error) {
@@ -991,24 +1010,19 @@ export function renderDiagnostics(root, doctor, copy) {
 // non-200 is shaped `{error}` here; a reader's own honest body (unavailable /
 // error) is respected by the renderer above.
 
-async function getJson(url, fetcher) {
-  const call = fetcher || fetch;
-  const resp = await call(url, { credentials: "include" });
-  if (!resp.ok) return { error: String(resp.status) };
-  return await resp.json();
-}
+// 113 W5 (C-09): every read goes through http.js::readJson (over getJson).
 
-export const loadDoctor = (f) => getJson("/api/webgate/doctor", f);
-export const loadAvatar = (f) => getJson("/avatar.json", f);
-export const loadIdentity = (f) => getJson("/api/webgate/identity", f);
-export const loadCapabilities = (f) => getJson("/api/webgate/capabilities", f);
+export const loadDoctor = (f) => readJson("/api/webgate/doctor", f);
+export const loadAvatar = (f) => readJson("/avatar.json", f);
+export const loadIdentity = (f) => readJson("/api/webgate/identity", f);
+export const loadCapabilities = (f) => readJson("/api/webgate/capabilities", f);
 export const loadMemory = (q, f) =>
-  getJson(`/api/webgate/memory/search?query=${encodeURIComponent(q || "")}&limit=20`, f);
-export const loadKb = (f) => getJson("/api/webgate/knowledge/kb", f);
-export const loadPreferences = (f) => getJson("/api/webgate/preferences", f);
-export const loadLedger = (f) => getJson("/api/webgate/ledger", f);
+  readJson(`/api/webgate/memory/search?query=${encodeURIComponent(q || "")}&limit=20`, f);
+export const loadKb = (f) => readJson("/api/webgate/knowledge/kb", f);
+export const loadPreferences = (f) => readJson("/api/webgate/preferences", f);
+export const loadLedger = (f) => readJson("/api/webgate/ledger", f);
 export const loadFlags = (q, group, f) =>
-  getJson(`/api/webgate/flags?q=${encodeURIComponent(q || "")}`
+  readJson(`/api/webgate/flags?q=${encodeURIComponent(q || "")}`
     + `&group=${encodeURIComponent(group || "")}`, f);
 
 // --- mutations -------------------------------------------------------------- #
@@ -1230,6 +1244,7 @@ function bind() {
   const memNotes = byId("agent-mem-notes");
   const memRecall = byId("agent-mem-recall");
   const memKb = byId("agent-mem-kb");
+  const memEpisodes = byId("agent-mem-episodes");
   const memSearch = byId("agent-mem-search");
   let memoryRequest = 0;
   function drawMemory(q) {
@@ -1242,6 +1257,9 @@ function bind() {
         if (memRecall) renderRecall(memRecall, mem, copy);
         if (memKb) renderKb(memKb, kb, copy);
       })
+      .then(() => (memEpisodes && !q ? loadEpisodes()
+        .catch((err) => ({ items: null, error: String((err && err.message) || err) }))
+        .then((eps) => { if (request === memoryRequest) renderEpisodes(memEpisodes, eps, copy); }) : null))
       .catch((err) => {
         if (request !== memoryRequest) return;
         const e = { recall_error: (err && String(err.message)) || "error",

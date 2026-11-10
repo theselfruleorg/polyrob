@@ -9,11 +9,50 @@ status snapshot can use it without a cron import.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 #: The outcomes of a run that did not do its job; the owner hears of these.
 FAILED_OUTCOMES = ("failed", "partial")
+#: Failed runs in a row before the scheduler pauses a recurring job (107 D1).
+FAILURE_STREAK_LIMIT = 3
+#: A job this far past its slot reads as late (107 WS-4).
+LATE_AFTER_SECONDS = 1800
+#: A money job this far past its slot does not run (107 D4).
+LATE_MONEY_SKIP_SECONDS = 3600
+#: ``payload.paused.by`` of a job that the failure limit paused.
+FAILURE_STREAK_BY = "failure_streak"
+
+
+def span_text(seconds: float) -> str:
+    """``"40m"``, ``"3h"``, ``"2d"``."""
+    minutes = int(seconds // 60)
+    if minutes < 120:
+        return f"{minutes}m"
+    return f"{minutes // 60}h" if minutes < 48 * 60 else f"{minutes // 1440}d"
+
+
+def waiting_text(next_run_at: Any, now: Optional[datetime] = None) -> str:
+    """``"waiting 40m"`` for a job past its slot by the late limit, else ``""``.
+    *next_run_at* may be the stored ISO text; an unreadable value has no wait."""
+    if isinstance(next_run_at, str):
+        try:
+            next_run_at = datetime.fromisoformat(next_run_at)
+        except ValueError:
+            return ""
+    if not isinstance(next_run_at, datetime):
+        return ""
+    now = now or datetime.now(next_run_at.tzinfo)
+    late = (now - next_run_at).total_seconds()
+    return f"waiting {span_text(late)}" if late >= LATE_AFTER_SECONDS else ""
+
+
+def late_task_line(late_seconds: float, now: datetime) -> str:
+    """The line at the head of a late run's task text."""
+    due = now - timedelta(seconds=late_seconds)
+    return (f"[This run is {span_text(late_seconds)} late: it was due "
+            f"{due.strftime('%m-%d %H:%M')} and the time is now "
+            f"{now.strftime('%m-%d %H:%M')}. Say so if the delay matters.]")
 
 
 def outcome_text(rec: Optional[dict], last_run_at: Any = None) -> str:
@@ -29,6 +68,8 @@ def outcome_text(rec: Optional[dict], last_run_at: Any = None) -> str:
         reason = str(rec.get("reason") or "").strip()
         if reason and outcome != "done":
             text += f" ({reason})"
+        if rec.get("late_by"):
+            text += f", {span_text(rec['late_by'])} late"
         return text
     if isinstance(last_run_at, datetime):
         return f"ran {last_run_at.strftime('%m-%d %H:%M')}"
@@ -47,6 +88,11 @@ def failed_recently(rec: Optional[dict], now: datetime, hours: float = 48.0) -> 
     except (TypeError, ValueError):
         return True  # a failure with no readable time is still a failure
     return (now - at).total_seconds() <= hours * 3600
+
+
+def stopped_by_failures(payload: Optional[dict]) -> bool:
+    """True when the failure limit paused this job, not the owner."""
+    return ((payload or {}).get("paused") or {}).get("by") == FAILURE_STREAK_BY
 
 
 def agent_armed(payload: Optional[dict]) -> bool:

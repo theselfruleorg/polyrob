@@ -50,7 +50,7 @@ SIGNER_PROCESS_ENV = "POLYROB_SIGNER_PROCESS"
 #: clamps each of its own values to these; a leg the signer does not report
 #: (an older signer) is no clamp.
 LEGS = ("per_tx_usd", "daily_usd", "x402_per_payment_usd", "x402_daily_usd",
-        "x402_max_window_sec")
+        "x402_max_window_sec", "approve_above_usd")
 
 _TTL_SEC = 60.0          # a good answer is re-checked once a minute
 _FAIL_TTL_SEC = 5.0      # a failed ping is retried soon

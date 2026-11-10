@@ -108,6 +108,45 @@ def read_skill_resource_confined(skill_dir, rel_path: str, *, max_bytes: int = 2
     return True, wrap_untrusted("skill_resource", content)
 
 
+#: Run records in one explicit search, and the chars of one record.
+RUN_RECORD_ROWS = 5
+RUN_RECORD_MAX_CHARS = 600
+
+
+def run_record_section(query: str, *, provider, user_id, session_id, limit: int, sort=None,
+					   before_id=None, is_sub_agent: bool = False,
+					   drop_unverified: bool = False) -> str:
+	"""The run records for an explicit ``session_search``, tenant-scoped. '' when there is nothing.
+
+	Not for a browse, a page or a time sort. Not for a reader outside the owner's memory (a
+	child, a room, a correspondent), and not for a session held in a memory scope: ``episodes``
+	has no scope column, so it would open the quarantine. An unreadable store says so."""
+	if not (query or "").strip() or sort or before_id is not None:
+		return ""
+	try:
+		from modules.memory import scope as _scope
+		if _scope.scopes_enabled() and _scope.session_scope(session_id) is not None:
+			return ""
+		from agents.task.session_class import CHILD, REGIME_POLICY, session_regime
+		regime = CHILD if is_sub_agent else session_regime(session_id=session_id)
+		db_path = getattr(provider, "db_path", None)
+		if not REGIME_POLICY[regime].owner_memory or not db_path or provider._anon_blocked(user_id):
+			return ""
+		from agents.task.agent.core.memory_prefetch import _clip_entry
+		from modules.memory.fts_terms import informative_terms
+		from modules.memory.run_records import best_rows, episode_docs
+		rows = best_rows(query, episode_docs(db_path, provider._norm_user(user_id),
+											 drop_unverified=drop_unverified), min(limit, RUN_RECORD_ROWS))
+	except Exception as e:  # the memory half of the search still answers
+		return f"## Run records\nThey could not be read ({type(e).__name__}); nothing was searched."
+	if not rows:
+		return ""
+	terms = informative_terms(query)
+	return "## Run records\n" + "\n".join(
+		_clip_entry(provider._recall_line(r["content"], r.get("ts"), with_age=True), RUN_RECORD_MAX_CHARS, terms)
+		for r in rows)
+
+
 def build_session_search_hint(recalled: str, limit: int, sort: str = None) -> str:
     """T2.6 (review fix): pagination hint from the `(id N)` tags a with_ids=True
     provider result embeds (SqliteMemoryProvider/LocalVectorMemoryProvider). ''
@@ -293,7 +332,7 @@ def self_mod_emitter(execution_context, controller, user_id, *, kind, source,
     default_item_id = item_id
     default_created_by = created_by
 
-    def _self_mod_ev(action, item_id=None, *, pending=None, ok=True, created_by=None):
+    def _self_mod_ev(action, item_id=None, *, pending=None, ok=True, created_by=None, note=""):
         try:
             from core.self_events import emit_self_modification
             emit_self_modification(
@@ -304,7 +343,7 @@ def self_mod_emitter(execution_context, controller, user_id, *, kind, source,
                             or getattr(controller, 'session_id', '') or ""),
                 pending=pending,
                 created_by=(created_by if created_by is not None else default_created_by),
-                source=source, ok=ok)
+                source=source, ok=ok, note=note)
         except Exception:
             pass
 

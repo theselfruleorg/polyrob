@@ -41,7 +41,7 @@ class _Host(ErrorRecoveryMixin):
         self.max_failures = 3
         self.model_name = "gpt-5"
         self._fallback_ok = fallback_ok
-    def _get_provider_from_model(self, m): return "openai"
+    def _current_llm_provider(self, m): return "openai"
     async def _recover_from_error(self, e): pass
     async def _attempt_llm_fallback_in_handler(self, et): return self._fallback_ok
 
@@ -112,7 +112,7 @@ def test_billing_fails_over_when_enabled(monkeypatch):
 
 def test_billing_accumulates_failed_provider(monkeypatch):
     # HIGH-2: the exhausted provider must be recorded so a later billing error excludes it
-    # (prevents A↔B ping-pong). _get_provider_from_model returns "openai" in the stub host.
+    # (prevents A↔B ping-pong). _current_llm_provider returns "openai" in the stub host.
     monkeypatch.setenv("BILLING_FAILOVER_ENABLED", "true")
     host = _Host(fallback_ok=True)
     asyncio.run(host._handle_step_error(_billing_error()))

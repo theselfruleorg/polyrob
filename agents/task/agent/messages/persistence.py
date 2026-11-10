@@ -19,6 +19,7 @@ from modules.llm.messages import (
     ToolMessage,
 )
 
+from modules.llm.call_result import replay_fields
 from agents.task.agent.message_manager.views import MessageHistory, MessageMetadata, ManagedMessage
 
 from agents.task.agent.messages.retrieval import drop_usage_anchor
@@ -30,6 +31,35 @@ logger = logging.getLogger(__name__)
 _warned_sqlite_mirror = False
 
 
+class UnreadableHistoryError(Exception):
+	"""A saved message history exists and could not be read.
+
+	Not "no history": the file is moved aside (``kept_at``), never deleted, so the
+	next ``save_to_disk`` cannot replace the only copy."""
+
+	def __init__(self, kept_at: Path, cause: BaseException):
+		self.kept_at = kept_at
+		super().__init__(f"message history unreadable ({cause}); kept at {kept_at}")
+
+
+def _keep_unreadable(path: Path, log: logging.Logger) -> Path:
+	"""Move an unreadable history to ``<name>.corrupt-<epoch>``; never delete it."""
+	import time
+	target = path.with_name(f"{path.name}.corrupt-{int(time.time())}")
+	n = 1
+	while target.exists():
+		target = path.with_name(f"{path.name}.corrupt-{int(time.time())}-{n}")
+		n += 1
+	try:
+		os.replace(path, target)
+	except OSError as e:
+		log.error(f"Unreadable message history {path} could not be moved aside ({e}); "
+		          "the next save will replace it")
+		return path
+	log.warning(f"Unreadable message history moved aside to {target}")
+	return target
+
+
 class PersistenceMixin:
 	# F29: empty slots so the composed MessageManager keeps its own __slots__ and
 	# never grows a __dict__. This is only TRUE while EVERY class in the MRO
@@ -37,69 +67,9 @@ class PersistenceMixin:
 	# this comment was false for as long as it had been written.
 	__slots__ = ()
 
-	def checkpoint_history(self, filepath: Optional[Path] = None) -> None:
-		"""Create a checkpoint of current message history.
-
-		Args:
-			filepath: Path to save checkpoint file
-		"""
+	def checkpoint_history(self) -> None:
+		"""Keep an in-memory copy of the message history for :meth:`restore_from_checkpoint`."""
 		try:
-			from datetime import datetime
-			# Message types imported at module level from modules.llm.messages
-
-			# Create checkpoint data
-			checkpoint_data = {
-				'version': '1.0',
-				'timestamp': datetime.now().isoformat(),
-				'session_id': self.session_id,
-				'total_tokens': self.history.total_tokens,
-				'max_messages': self.history.max_messages,
-				'messages': []
-			}
-
-			# Serialize messages
-			for managed_msg in self.history.messages:
-				msg = managed_msg.message
-
-				# Serialize based on message type
-				msg_data = {
-					'type': msg.__class__.__name__,
-					'metadata': managed_msg.metadata.model_dump(),
-					# CX-M1: mirror save_to_disk — persist the true source so a
-					# checkpoint restore doesn't silently demote every
-					# SELF_WAKE/CORRESPONDENT/COMPACTION_SUMMARY turn to USER.
-					'origin': getattr(msg, 'origin', MessageOrigin.USER),
-					# CX-M1: mirror save_to_disk — the state-message tag dict
-					# stamped by add_state_message (distinct from the typed
-					# ManagedMessage.metadata above).
-					'msg_metadata': getattr(msg, 'metadata', None) or {},
-				}
-
-				# Handle different message types
-				if isinstance(msg, SystemMessage):
-					msg_data['content'] = msg.content
-				elif isinstance(msg, HumanMessage):
-					msg_data['content'] = msg.content if isinstance(msg.content, str) else str(msg.content)
-				elif isinstance(msg, AIMessage):
-					msg_data['content'] = msg.content
-					if hasattr(msg, 'tool_calls') and msg.tool_calls:
-						msg_data['tool_calls'] = [
-							{
-								'id': tc.get('id') if isinstance(tc, dict) else getattr(tc, 'id', None),
-								'name': tc.get('name') if isinstance(tc, dict) else getattr(tc, 'name', None),
-								'args': tc.get('args', {}) if isinstance(tc, dict) else getattr(tc, 'args', {})
-							}
-							for tc in msg.tool_calls
-						]
-				elif isinstance(msg, ToolMessage):
-					msg_data['content'] = msg.content
-					msg_data['tool_call_id'] = getattr(msg, 'tool_call_id', None)
-				else:
-					msg_data['content'] = str(msg.content) if hasattr(msg, 'content') else str(msg)
-
-				checkpoint_data['messages'].append(msg_data)
-
-			# Store checkpoint in memory
 			self._history_checkpoint = [
 				ManagedMessage(
 					message=copy.deepcopy(m.message),
@@ -108,37 +78,7 @@ class PersistenceMixin:
 				for m in self.history.messages
 			]
 			self._checkpoint_token_count = self.history.total_tokens
-
-			# Save to file if path provided
-			if filepath:
-				# Atomic write
-				import tempfile
-
-				filepath = Path(filepath)
-				filepath.parent.mkdir(parents=True, exist_ok=True)
-
-				temp_fd, temp_path = tempfile.mkstemp(
-					dir=filepath.parent,
-					prefix='.message_checkpoint_',
-					suffix='.tmp'
-				)
-
-				try:
-					with os.fdopen(temp_fd, 'w') as f:
-						json.dump(checkpoint_data, f, indent=2)
-						f.flush()
-						os.fsync(f.fileno())
-
-					os.replace(temp_path, str(filepath))
-					self.logger.info(f"Saved message checkpoint to {filepath}")
-
-				except Exception:
-					if os.path.exists(temp_path):
-						os.unlink(temp_path)
-					raise
-			else:
-				self.logger.debug(f"Created history checkpoint with {len(self._history_checkpoint)} messages")
-
+			self.logger.debug(f"Created history checkpoint with {len(self._history_checkpoint)} messages")
 		except Exception as e:
 			self.logger.warning(f"Failed to create checkpoint: {e}")
 
@@ -161,115 +101,6 @@ class PersistenceMixin:
 			except Exception as e:
 				self.logger.warning(f"Failed to restore from checkpoint: {e}")
 		return False
-
-	def restore_from_checkpoint_file(self, filepath: Path) -> bool:
-		"""Restore message history from checkpoint file.
-
-		Args:
-			filepath: Path to checkpoint file
-
-		Returns:
-			True if restoration successful
-		"""
-		try:
-			# Message types imported at module level from modules.llm.messages
-
-			if not filepath.exists():
-				self.logger.debug(f"Checkpoint file not found: {filepath}")
-				return False
-
-			with open(filepath, 'r') as f:
-				checkpoint_data = json.load(f)
-
-			# Validate version
-			if checkpoint_data.get('version') != '1.0':
-				self.logger.warning(f"Checkpoint version mismatch: {checkpoint_data.get('version')}")
-				return False
-
-			# Validate session_id
-			if self.session_id and checkpoint_data.get('session_id') != self.session_id:
-				self.logger.warning(f"Checkpoint session_id mismatch")
-				return False
-
-			# SECURITY FIX: Protect clear + restore operations with lock
-			with self._history_lock:
-				# Clear current history. F6: the provider-usage anchor covered a
-				# prefix this restore replaces.
-				drop_usage_anchor(self, "history restore")
-				self.history.messages.clear()
-				self.history.total_tokens = 0
-
-				# Restore messages
-				message_classes = {
-					'SystemMessage': SystemMessage,
-					'HumanMessage': HumanMessage,
-					'AIMessage': AIMessage,
-					'ToolMessage': ToolMessage
-				}
-
-				for msg_data in checkpoint_data.get('messages', []):
-					msg_type = msg_data.get('type')
-					msg_class = message_classes.get(msg_type)
-
-					if not msg_class:
-						self.logger.warning(f"Unknown message type: {msg_type}")
-						continue
-
-					# Reconstruct message
-					try:
-						if msg_type == 'AIMessage' and 'tool_calls' in msg_data:
-							msg = AIMessage(
-								content=msg_data['content'],
-								tool_calls=msg_data['tool_calls']
-							)
-						elif msg_type == 'ToolMessage':
-							msg = ToolMessage(
-								content=msg_data['content'],
-								tool_call_id=msg_data.get('tool_call_id')
-							)
-						else:
-							msg = msg_class(content=msg_data['content'])
-
-						# CX-M1: mirror load_from_disk — restore the true source
-						# (pre-fix checkpoint files have no key -> USER, the
-						# historical/legacy behaviour).
-						msg.origin = msg_data.get('origin', MessageOrigin.USER)
-						# CX-M1: mirror load_from_disk — restore the state-message
-						# tag dict so a checkpoint-restored session can still
-						# target it by identity.
-						if msg_data.get('msg_metadata'):
-							msg.metadata = msg_data['msg_metadata']
-
-						# Restore metadata
-						metadata_dict = msg_data.get('metadata', {})
-						metadata = MessageMetadata(**metadata_dict)
-
-						# Add to history
-						self.history.messages.append(ManagedMessage(
-							message=msg,
-							metadata=metadata
-						))
-						self.history.total_tokens += metadata.input_tokens
-
-					except Exception as e:
-						self.logger.warning(f"Failed to restore message: {e}")
-						continue
-
-				# Restore totals
-				if 'total_tokens' in checkpoint_data:
-					# Verify token count
-					calculated = sum(m.metadata.input_tokens for m in self.history.messages)
-					saved = checkpoint_data['total_tokens']
-					if abs(calculated - saved) > 100:  # Allow small variance
-						self.logger.warning(f"Token count mismatch: calculated={calculated}, saved={saved}")
-					self.history.total_tokens = saved
-
-				self.logger.info(f"Restored {len(self.history.messages)} messages from checkpoint")
-			return True
-
-		except Exception as e:
-			self.logger.error(f"Failed to restore from checkpoint file: {e}")
-			return False
 
 	def save_to_disk(self, session_id: str, user_id: Optional[str] = None) -> None:
 		"""Save message history to disk for persistence across session eviction/restart.
@@ -329,9 +160,7 @@ class PersistenceMixin:
 					msg_data["tool_calls"] = msg.tool_calls
 				if hasattr(msg, 'tool_call_id') and msg.tool_call_id:
 					msg_data["tool_call_id"] = msg.tool_call_id
-				reasoning = (getattr(msg, 'additional_kwargs', None) or {}).get('reasoning_content')
-				if reasoning:  # DeepSeek replays it on later tool calls
-					msg_data["reasoning_content"] = reasoning
+				msg_data.update(replay_fields(getattr(msg, 'additional_kwargs', None)))
 
 				history_data["messages"].append(msg_data)
 
@@ -344,6 +173,8 @@ class PersistenceMixin:
 				pending_ephemeral = []
 				for eph in (list(getattr(self, '_ephemeral_pending', None) or [])
 							+ list(getattr(self, '_ephemeral_messages', None) or [])):
+					if (getattr(eph, "metadata", None) or {}).get("per_call"):
+						continue  # rebuilt by each call: a restored copy would ride twice
 					pending_ephemeral.append({
 						"type": eph.__class__.__name__,
 						"content": eph.content,
@@ -427,6 +258,10 @@ class PersistenceMixin:
 
 		Returns:
 			True if messages were loaded, False if no saved history exists
+
+		Raises:
+			UnreadableHistoryError: the file exists and could not be read. Whatever
+				the load half-restored is dropped and the file is moved aside.
 		"""
 		from agents.task.path import pm
 
@@ -441,6 +276,10 @@ class PersistenceMixin:
 			self.logger.info(f"No saved message history found for session {session_id}")
 			return False
 
+		from collections import deque
+		kept_messages = list(self.history.messages)
+		kept_tokens = self.history.total_tokens
+		kept_ephemeral = len(self._ephemeral_messages)
 		try:
 			with open(load_path, 'r') as f:
 				history_data = json.load(f)
@@ -477,8 +316,7 @@ class PersistenceMixin:
 					message.tool_calls = msg_data["tool_calls"]
 				if msg_data.get("tool_call_id"):
 					message.tool_call_id = msg_data["tool_call_id"]
-				if msg_data.get("reasoning_content"):
-					message.additional_kwargs["reasoning_content"] = msg_data["reasoning_content"]
+				message.additional_kwargs.update(replay_fields(msg_data))
 
 				# Add to history (this will recalculate tokens). Restoring persisted
 				# AI/Tool messages is a trusted internal path, so bypass the single-writer
@@ -531,4 +369,8 @@ class PersistenceMixin:
 
 		except Exception as e:
 			self.logger.error(f"Failed to load message history: {e}", exc_info=True)
-			return False
+			# A half-restored history is not a history: drop it, then keep the file.
+			self.history.messages = deque(kept_messages, maxlen=self.history.max_messages)
+			self.history.total_tokens = kept_tokens
+			del self._ephemeral_messages[kept_ephemeral:]
+			raise UnreadableHistoryError(_keep_unreadable(load_path, self.logger), e) from e

@@ -51,8 +51,10 @@ async def ensure_sweep_schema(db) -> None:
     sweeper, the owner report and migration v1.15.0. No table = nothing to do."""
     try:
         cols = await db.fetch_all("PRAGMA table_info(crypto_payments)")
-    except Exception:
-        cols = None
+    except Exception as e:
+        logger.warning("could not read crypto_payments (%s) — sweep columns skipped",
+                       type(e).__name__)
+        return
     if not cols:
         return
     have = {c["name"] for c in cols}
@@ -73,6 +75,29 @@ async def ensure_sweep_schema(db) -> None:
     if stale:
         await db.execute("UPDATE crypto_payments SET sweep_state = 'swept' "
                          "WHERE swept_at IS NOT NULL AND sweep_state = 'unswept'")
+    await _backfill_deposit_address(db)
+
+
+async def _backfill_deposit_address(db) -> None:
+    """A credited row once stored an EMPTY ``deposit_address`` (the monitor's
+    reading did not carry it), and the sweeper refuses a row whose address does
+    not match the signer — so the group never swept. Fill it from the user's
+    one deposit address. Read-guarded and idempotent: a row with no known
+    address is left as is."""
+    table = await db.fetch_one("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' "
+                               "AND name = 'user_deposit_addresses'")
+    if not table:
+        return
+    empty = await db.fetch_one(
+        "SELECT 1 AS x FROM crypto_payments cp JOIN user_deposit_addresses uda "
+        "ON uda.user_id = cp.user_id WHERE COALESCE(cp.deposit_address, '') = '' LIMIT 1")
+    if not empty:
+        return
+    await db.execute(
+        "UPDATE crypto_payments SET deposit_address = (SELECT uda.deposit_address "
+        "FROM user_deposit_addresses uda WHERE uda.user_id = crypto_payments.user_id) "
+        "WHERE COALESCE(deposit_address, '') = '' AND user_id IN "
+        "(SELECT user_id FROM user_deposit_addresses)")
 
 
 def _rowcount(res) -> int:
@@ -218,11 +243,12 @@ async def deposit_report(db, *, user_id: Optional[str] = None,
     the block it is as of), and — when ``onchain(user_id, chain, token)`` is
     given — the address balance on chain now (None = unknown). Nothing moves."""
     await ensure_sweep_schema(db)
-    try:
-        cols = await db.fetch_all("PRAGMA table_info(crypto_payments)")
-    except Exception:
-        cols = None
-    if not cols:
+    # An unreadable store is not an empty one: only a MISSING table reads as
+    # "nothing"; any other error propagates (the CLI prints it).
+    tables = {r["name"] for r in await db.fetch_all(
+        "SELECT name FROM sqlite_master WHERE type = 'table' "
+        "AND name IN ('crypto_payments', 'deposit_balance_marks')") or []}
+    if "crypto_payments" not in tables:
         return []
     where, params = ("WHERE user_id = ?", (user_id,)) if user_id else ("", ())
     rows = await db.fetch_all(
@@ -230,12 +256,10 @@ async def deposit_report(db, *, user_id: Optional[str] = None,
         "COALESCE(SUM(amount_usd), 0) AS usd FROM crypto_payments "
         f"{where} GROUP BY user_id, chain, token_symbol, sweep_state", params)
     marks: Dict[tuple, dict] = {}
-    try:
+    if "deposit_balance_marks" in tables:   # absent: the monitor never credited
         for m in await db.fetch_all("SELECT user_id, chain, token_symbol, balance, as_of_block "
                                     "FROM deposit_balance_marks") or []:
             marks[(m["user_id"], m["chain"], m["token_symbol"])] = dict(m)
-    except Exception:
-        pass   # no marks table yet: the monitor never credited
     out: Dict[tuple, Dict[str, Any]] = {}
     for r in rows or []:
         key = (r["user_id"], r["chain"], r["token_symbol"])

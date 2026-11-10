@@ -45,9 +45,10 @@ _DIRECT_ACTION_MODULES = (
     "tools/controller/room_moderate_action.py",  # gated direct action (room_moderate)
     "tools/controller/owner_ask_action.py",  # H04: gated direct action (owner_ask)
     "tools/controller/avatar_action.py",
-    "tools/controller/card_actions.py",  # action cards: present_choice / propose_action
+    "tools/controller/card_actions.py",  # action cards: propose_action
     "tools/controller/trade_mandate_action.py",  # 086 W5: trade_mandate_propose
     "tools/controller/setting_actions.py",  # 093 D1: propose_setting
+    "tools/controller/compute_action.py",  # 112 W4: compute (pure, every seat)
     "tools/controller/offer_actions.py",  # 099: offer_manage / order_deliver
     "tools/controller/worker_manage_action.py",  # 041 phase 2: gated direct action
 )

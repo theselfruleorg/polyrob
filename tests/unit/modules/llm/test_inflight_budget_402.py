@@ -9,7 +9,7 @@ sentinel (autonomy paused, owner pinged "resume in 6h"), skipped the funded
 seat, and failed a goal over to a dead provider.
 """
 from core.credit_sentinel import looks_like_credit_death, looks_like_transient_budget
-from core.error_classifier import FailoverReason, classify_error
+from core.error_classifier import credit_death_in_chain
 from core.exceptions import LLMPermanentError, LLMRateLimitError
 from modules.llm.credit_errors import provider_credit_error
 from modules.llm.llm_client import translate_llm_error
@@ -38,9 +38,9 @@ def test_translate_maps_inflight_402_to_rate_limit():
     assert not isinstance(err, LLMPermanentError)
 
 
-def test_classifier_reads_inflight_402_as_rate_limit():
+def test_inflight_402_is_not_credit_death_in_the_chain():
     err = translate_llm_error(Exception(PROD_TEXT), "from OpenRouter")
-    assert classify_error(err).reason is FailoverReason.RATE_LIMIT
+    assert credit_death_in_chain(err) is None
 
 
 def test_provider_credit_error_ignores_inflight_402():

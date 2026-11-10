@@ -1,8 +1,7 @@
 """THE single 'available models' builder. Joins the provider-key oracle x the model registry.
 
 Every surface (CLI model list/picker, WebView capabilities, /v1/models, pricing) is meant
-to consume this instead of hand-rolling its own provider/model join (there were three
-divergent builders before this module; later tasks repoint them here).
+to consume this instead of hand-rolling its own provider/model join.
 """
 from __future__ import annotations
 
@@ -10,21 +9,11 @@ from dataclasses import dataclass
 from typing import Optional
 
 from modules.llm.profiles import usable_providers_with_credentials
-from modules.llm.model_registry import get_registry, PROVIDER_CANONICAL_NAMES, ModelProvider
+from modules.llm.model_registry import (
+    get_model_config_exact, get_registry, _derive_display_name)
+from modules.llm.model_types import PROVIDER_BY_NAME
+from modules.llm.provider_spec import get_spec
 from modules.llm.llm_client_registry import get_default_model
-
-# canonical string -> enum (handles gemini/google). Build once.
-#
-# NOTE: PROVIDER_CANONICAL_NAMES is keyed by the ModelProvider ENUM MEMBER (e.g.
-# ModelProvider.GOOGLE), not by its .value string ("google") -- so the lookup below
-# must key off `_e` itself, not `_e.value`. Getting this backwards silently drops the
-# "gemini" -> ModelProvider.GOOGLE mapping (only "google" would resolve), which would
-# make `available_models()` return an empty list for every Gemini-keyed env even though
-# `usable_providers_with_keys()` correctly reports "gemini" as usable.
-_STR_TO_ENUM = {}
-for _e in ModelProvider:
-    _STR_TO_ENUM[PROVIDER_CANONICAL_NAMES.get(_e, _e.value)] = _e
-    _STR_TO_ENUM[_e.value] = _e
 
 
 @dataclass(frozen=True)
@@ -74,10 +63,10 @@ def available_models(env=None, *, initialized_only: bool = False,
     out: list[ModelChoice] = []
     for p in providers:                                  # PROFILES order == preference order
         default = get_default_model(p)
-        enum = _STR_TO_ENUM.get(p)
-        if enum is None:
-            continue
-        for m in reg.list_models(provider=enum, include_deprecated=False):
+        enum = PROVIDER_BY_NAME.get(p)
+        rows = reg.list_models(provider=enum, include_deprecated=False) if enum else []
+        listed = {m.name for m in rows}
+        for m in rows:
             out.append(ModelChoice(
                 provider=p, model=m.name, display_name=m.display_name,
                 is_default=(m.name == default),
@@ -86,4 +75,27 @@ def available_models(env=None, *, initialized_only: bool = False,
                 supports_vision=getattr(m.capabilities, "supports_vision", False),
                 supports_tools=getattr(m.capabilities, "supports_tools", True),
             ))
+        spec = get_spec(p)
+        if spec is None:
+            continue
+        for name in dict.fromkeys((*spec.models, *filter(None, [spec.default_model]))):
+            if name not in listed:
+                out.append(_spec_choice(p, name, spec, is_default=(name == default)))
     return out
+
+
+def _spec_choice(provider: str, name: str, spec, *, is_default: bool) -> ModelChoice:
+    """A model a provider spec declares and the catalog does not list for that provider.
+    An alias row gives its limits and capabilities. Its price belongs to the row's own
+    provider, so the hint shows only for that provider."""
+    row = get_model_config_exact(name)
+    own_price = row is not None and row.provider is PROVIDER_BY_NAME.get(provider)
+    return ModelChoice(
+        provider=provider, model=name,
+        display_name=row.display_name if row else _derive_display_name(name),
+        is_default=is_default,
+        context_window=row.context_window if row else 0,
+        pricing_hint=format_price_hint(row.pricing) if own_price else "(pricing n/a)",
+        supports_vision=row.capabilities.supports_vision if row else spec.supports_vision,
+        supports_tools=row.capabilities.supports_tools if row else spec.supports_native_tools,
+    )

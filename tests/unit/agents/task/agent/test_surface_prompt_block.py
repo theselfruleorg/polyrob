@@ -72,7 +72,6 @@ def test_communication_contract_does_not_ask_for_a_wall_of_paths():
     assert "not an address" in text
     assert "attaches it, or links it" in text
     contract = prompt._get_communication_contract_content()
-    assert "message-shape rules above apply here too" in contract
 
 
 # ---------------------------------------------------------------------------

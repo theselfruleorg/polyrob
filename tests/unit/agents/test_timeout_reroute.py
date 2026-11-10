@@ -1,10 +1,12 @@
 """057 WS-B: consecutive timeouts are a routing fact, and three is a stop."""
+import asyncio
 import types
 
 import pytest
 
+from agents.task.agent.core.call_quality import scope_step_call
 from agents.task.agent.core.timeout_reroute import (
-    REROUTE_AFTER, STOP_AFTER, maybe_reroute, note_success, note_timeout,
+    REROUTE_AFTER, SORT_ATTR, STOP_AFTER, maybe_reroute, note_success, note_timeout,
     reroute_enabled, should_stop_retrying,
 )
 from modules.llm.openrouter_routing import (
@@ -12,19 +14,20 @@ from modules.llm.openrouter_routing import (
 )
 
 
-class _Client:
-    pass
-
-
 class _Agent:
+    session_id = "s1"
+
     def __init__(self):
-        self.llm = types.SimpleNamespace(_client=_Client())
+        self.message_manager = types.SimpleNamespace()
 
 
 @pytest.fixture(autouse=True)
 def _clean(monkeypatch):
     monkeypatch.delenv("LLM_TIMEOUT_REROUTE", raising=False)
     monkeypatch.delenv("OPENROUTER_PROVIDER_SORT", raising=False)
+    set_provider_sort(None)
+    yield
+    set_provider_sort(None)
 
 
 def test_off_by_default():
@@ -44,15 +47,24 @@ def test_no_reroute_before_the_threshold(monkeypatch):
     monkeypatch.setenv("LLM_TIMEOUT_REROUTE", "true")
     a = _Agent()
     assert maybe_reroute(a, REROUTE_AFTER - 1) is False
-    assert resolve_provider_sort(a.llm._client) is None
+    assert getattr(a, SORT_ATTR, None) is None
 
 
 def test_reroute_is_per_session_not_process_wide(monkeypatch):
+    """S3: two timeouts in one session moved all sessions on the client to latency."""
     monkeypatch.setenv("LLM_TIMEOUT_REROUTE", "true")
     a, b = _Agent(), _Agent()
     assert maybe_reroute(a, REROUTE_AFTER) is True
-    assert resolve_provider_sort(a.llm._client) == "latency"
-    assert resolve_provider_sort(b.llm._client) is None, "another session is untouched"
+
+    async def _step(agent):
+        scope_step_call(agent)
+        await asyncio.sleep(0)
+        return resolve_provider_sort()
+
+    async def _run():
+        return await asyncio.gather(_step(a), _step(b))
+
+    assert asyncio.run(_run()) == ["latency", None], "another session is untouched"
     import os
     assert "OPENROUTER_PROVIDER_SORT" not in os.environ
 
@@ -62,32 +74,31 @@ def test_reroute_is_idempotent(monkeypatch):
     a = _Agent()
     assert maybe_reroute(a, REROUTE_AFTER) is True
     assert maybe_reroute(a, REROUTE_AFTER + 1) is True
-    assert resolve_provider_sort(a.llm._client) == "latency"
+    assert getattr(a, SORT_ATTR) == "latency"
 
 
 def test_the_sort_reaches_the_request_body(monkeypatch):
     monkeypatch.setenv("LLM_TIMEOUT_REROUTE", "true")
     a = _Agent()
     maybe_reroute(a, REROUTE_AFTER)
+    scope_step_call(a)
     params = {}
-    apply_provider_routing(params, a.llm._client)
+    apply_provider_routing(params)
     assert params["extra_body"]["provider"]["sort"] == "latency"
 
 
-def test_a_per_client_override_beats_the_env(monkeypatch):
+def test_a_scoped_sort_beats_the_env(monkeypatch):
     monkeypatch.setenv("OPENROUTER_PROVIDER_SORT", "price")
-    c = _Client()
-    assert resolve_provider_sort(c) == "price"
-    set_provider_sort(c, "latency")
-    assert resolve_provider_sort(c) == "latency"
-    set_provider_sort(c, None)
-    assert resolve_provider_sort(c) == "price", "clearing falls back to the env"
+    assert resolve_provider_sort() == "price"
+    set_provider_sort("latency")
+    assert resolve_provider_sort() == "latency"
+    set_provider_sort(None)
+    assert resolve_provider_sort() == "price", "clearing falls back to the env"
 
 
 def test_an_unknown_sort_is_refused():
-    c = _Client()
-    assert set_provider_sort(c, "cheapest") is False
-    assert resolve_provider_sort(c) is None
+    assert set_provider_sort("cheapest") is False
+    assert resolve_provider_sort() is None
 
 
 def test_the_third_timeout_stops_the_retry(monkeypatch):

@@ -394,6 +394,31 @@ class SubtaskAction(BaseModel):
 		            "its own 'model' is rejected (the top-level 'model' is used, so a "
 		            "task-level provider without a task-level model is discarded)."
 	)
+	tier: Optional[Literal["default", "heavy", "light"]] = Field(
+		default=None,
+		description=("Model tier for this sub-agent: 'light' = the cheap model, for bulk reads "
+		             "and summaries; 'heavy' = the strongest model, only for judgement that "
+		             "decides money or is hard to undo; 'default' = yours. The operator sets "
+		             "the model behind each tier (see <environment>); an absent tier is "
+		             "refused. Requires 'why'. Not with 'model'.")
+	)
+	why: Optional[str] = Field(
+		default=None, max_length=200,
+		description="One line: why this tier. Required with 'tier'; recorded and shown in /status."
+	)
+
+	@model_validator(mode="after")
+	def _tier_rules(self):
+		_check_tier(self)
+		return self
+
+
+def _check_tier(action) -> None:
+	"""112 W2: a tier names its reason, and a tier and a raw model never meet."""
+	if action.tier and not (action.why or "").strip():
+		raise ValueError("'tier' requires 'why' (one line: why this tier).")
+	if action.tier and action.model:
+		raise ValueError("Use 'tier' or 'model', not both.")
 
 
 class DelegateTaskAction(BaseModel):
@@ -461,6 +486,18 @@ class DelegateTaskAction(BaseModel):
 		            "from the model name. Requires 'model' — a provider without a model "
 		            "is rejected (it would otherwise be silently discarded)."
 	)
+	tier: Optional[Literal["default", "heavy", "light"]] = Field(
+		default=None,
+		description=("Model tier for the sub-agent (with 'tasks': the fallback for a task with no tier or model): 'light' = the cheap model, for bulk reads "
+		             "and summaries; 'heavy' = the strongest model, only for judgement that "
+		             "decides money or is hard to undo; 'default' = yours. The operator sets "
+		             "the model behind each tier (see <environment>); an absent tier is "
+		             "refused. Requires 'why'. Not with 'model'.")
+	)
+	why: Optional[str] = Field(
+		default=None, max_length=200,
+		description="One line: why this tier. Required with 'tier'; recorded and shown in /status."
+	)
 
 	@model_validator(mode="after")
 	def _exactly_one_shape(self):
@@ -469,6 +506,9 @@ class DelegateTaskAction(BaseModel):
 		# UP-12: background mode supports only the single 'goal' shape in v1.
 		if self.background and not self.goal:
 			raise ValueError("background=true is only supported with the 'goal' shape (not 'tasks').")
+		_check_tier(self)
+		if self.tier and self.background:
+			raise ValueError("'tier' is not supported with background=true (use a goal for durable heavy work).")
 		return self
 
 

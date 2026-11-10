@@ -203,6 +203,23 @@ def test_a_hold_event_fires_on_the_edge_and_again_after_an_hour(evlog, low_memor
     assert rows[0]["attrs"]["waiting"] == 2
 
 
+def test_a_new_hold_after_a_clear_is_noted_again(evlog, tmp_path, monkeypatch, plenty_of_disk):
+    """A hold that ends and starts again within the hour is a new hold, not a repeat."""
+    clock = [1000.0]
+    monkeypatch.setattr(mp.time, "monotonic", lambda: clock[0])
+    low, _ = _roots(tmp_path / "low", available_kb=1024)
+    ok, root = _roots(tmp_path / "ok")
+    monkeypatch.setattr(mp, "CGROUP_ROOT", root)
+    monkeypatch.setattr(mp, "PROC_ROOT", low)
+    mp.note_hold("cron", mp.current_hold("."), waiting=1)
+    monkeypatch.setattr(mp, "PROC_ROOT", ok)
+    assert mp.current_hold(".") is None
+    clock[0] += 60
+    monkeypatch.setattr(mp, "PROC_ROOT", low)
+    mp.note_hold("cron", mp.current_hold("."), waiting=1)
+    assert len(evlog.query(kind=RESOURCE_HOLD)) == 2
+
+
 @pytest.mark.asyncio
 async def test_a_held_goal_is_not_claimed(tmp_path, monkeypatch, evlog, low_memory):
     from agents.task.goals.board import GoalBoard

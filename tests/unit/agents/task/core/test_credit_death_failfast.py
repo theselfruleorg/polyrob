@@ -25,46 +25,20 @@ def _source() -> str:
     return inspect.getsource(next_action_internal)
 
 
-# The three handlers that form the billing fallback chain, by their (unique) bound
-# names. Each one CONTINUES the chain (it sets `parsed = None` or falls through to
-# another provider call) instead of re-raising, so each is a place a credit-death
-# raise turns into another paid call. Handlers that re-`raise` are safe by
-# construction and are deliberately not listed.
-_CHAIN_HANDLERS = ("tool_error", "struct_error", "structured_error")
-
-
-def test_each_chain_handler_has_a_preceding_credit_arm():
-    """The three swallowing boundaries of the fallback chain must each be preceded,
-    within their OWN try, by an `except InsufficientCreditsError` arm."""
+def test_no_handler_in_the_call_path_swallows_a_failed_call():
+    """A failed provider call propagates. A handler that catches everything and does not
+    re-raise is a place where credit death turns into another paid call."""
     tree = ast.parse(_source())
     fn = next(
         n for n in ast.walk(tree)
         if isinstance(n, ast.AsyncFunctionDef) and n.name == "_get_next_action_internal"
     )
-
-    found, offenders = set(), []
+    assert "with_structured_output" not in ast.dump(fn)
     for node in ast.walk(fn):
-        if not isinstance(node, ast.Try):
-            continue
-        seen_credit = False
-        for handler in node.handlers:
-            if "InsufficientCreditsError" in _handler_names(handler):
-                seen_credit = True
-                continue
-            if handler.name in _CHAIN_HANDLERS:
-                found.add(handler.name)
-                if not seen_credit:
-                    offenders.append(f"{handler.name}@L{handler.lineno}")
-
-    missing = set(_CHAIN_HANDLERS) - found
-    assert not missing, (
-        f"chain handler(s) {sorted(missing)} not found — next_action_internal.py was "
-        "restructured; re-derive _CHAIN_HANDLERS so this test keeps guarding the chain"
-    )
-    assert not offenders, (
-        f"{offenders} swallow InsufficientCreditsError with no preceding credit arm — "
-        "a dead account buys another billable provider call there"
-    )
+        if isinstance(node, ast.Try):
+            for handler in node.handlers:
+                if handler.name in ("tool_error", "struct_error", "structured_error"):
+                    raise AssertionError(f"fallback chain handler {handler.name} is back")
 
 
 def test_a_handler_that_reraises_is_not_required_to_have_a_credit_arm():
@@ -99,7 +73,7 @@ def _handler_names(handler: ast.ExceptHandler) -> set:
 
 
 def test_insufficient_credits_is_not_in_the_retryable_error_classes():
-    """The outer retry loop only retries parse/rate_limit/parameter_error. A credit
+    """The outer retry loop only retries parse/rate_limit. A credit
     death must never classify into one of those (that would re-bill on a timer)."""
     from agents.task.robust_parse_config import RobustParseConfig
 
@@ -107,29 +81,6 @@ def test_insufficient_credits_is_not_in_the_retryable_error_classes():
     assert not RobustParseConfig.should_retry_parse_error(99), (
         "an unbounded retry budget would re-bill a dead account"
     )
-
-
-def test_timeout_arm_precedes_the_generic_handler_in_the_chain():
-    """A deliberate timeout re-raise from an inner fallback must not be answered by
-    the outer handler starting ANOTHER full-timeout call."""
-    src = _source()
-    # The outer boundary that used to swallow it.
-    idx = src.find("except Exception as structured_error:")
-    assert idx > 0, "outer structured-output handler not found — test needs updating"
-    window = src[max(0, idx - 900):idx]
-    assert "except asyncio.TimeoutError:" in window, (
-        "the outer structured-output boundary must re-raise asyncio.TimeoutError "
-        "before its generic handler, or a timeout costs a second full-timeout call"
-    )
-    # D3: the arm also carries LLMPermanentError (a provider credit refusal).
-    assert "except (InsufficientCreditsError, LLMPermanentError):" in window
-
-
-def test_insufficient_credits_error_is_importable_where_the_arms_reference_it():
-    """The arms are only live if the symbol is actually bound in the module."""
-    from agents.task.agent.core import next_action_internal
-
-    assert next_action_internal.InsufficientCreditsError is InsufficientCreditsError
 
 
 # ---------------------------------------------------------------------------
@@ -147,12 +98,7 @@ from unittest.mock import AsyncMock as _AsyncMock
 
 
 class _FakeLLM:
-    """Deliberately has NO ``with_structured_output`` -- exactly like the real
-    ``OpenAIAdapter``, which doesn't implement it either (see A12's report:
-    this is what actually drives ``_get_next_action_internal`` through the
-    tool-calling -> structured-output -> plain-fallback cascade in prod).
-    Accessing the missing attribute raises ``AttributeError`` naturally,
-    forcing the plain ``ainvoke`` fallback path every time."""
+    """The plain ``ainvoke`` path: the controller below is None, so no native tools."""
 
     def __init__(self, side_effect):
         self.ainvoke = _AsyncMock(side_effect=side_effect)
@@ -207,7 +153,7 @@ def _make_retry_agent(side_effect):
     a.chat_model_library = "OpenAIAdapter"
     a.use_native_tools = False
     a.use_vision = False
-    a.provider_name = "fake-test-provider"  # not in STREAMING_PROVIDER_NAMES
+    a.provider_name = "fake-test-provider"  # no spec row, so no streaming
     a.state = _SimpleNamespace(n_steps=1)
     a.llm = _FakeLLM(side_effect)
     a.max_actions_per_step = 5  # only read for the early JSON format hint
@@ -220,22 +166,16 @@ def test_two_attempt_failure_is_per_attempt_warning_and_one_final_error(caplog):
     auth failure, so the loop stops there) and asserts on LEVELS only:
 
     - every per-attempt log ("LLM request attempt N failed...", plus every
-      per-attempt log deeper in the cascade -- the tool-calling attempt, the
-      structured-output attempt, both plain-fallback legs) is WARNING;
+      per-attempt log deeper in the cascade) is WARNING;
     - exactly ONE record is ERROR: the loop's own final-exhaustion line,
       which names the provider and the error class (043 §4.6's requirement),
       not just a bare attempt count.
     """
     from modules.llm.usage_extract import resolve_serving_provider
 
-    # Two `ainvoke` calls per outer attempt (the structured-output handler's
-    # own plain-fallback leg, then the outer handler's "final fallback" leg,
-    # both of which run before the OUTER retry loop ever sees a failure) x
-    # two outer attempts.
+    # One `ainvoke` call per outer attempt.
     side_effect = [
         Exception("rate limit exceeded"),
-        Exception("rate limit exceeded"),
-        Exception("401 unauthorized"),
         Exception("401 unauthorized"),
     ]
     agent = _make_retry_agent(side_effect)
@@ -264,16 +204,7 @@ def test_two_attempt_failure_is_per_attempt_warning_and_one_final_error(caplog):
     assert len(attempt_records) == 2
     assert all(r.levelno == logging.WARNING for r in attempt_records)
 
-    # The structured-output cascade's own per-attempt log ("Structured
-    # output failed: ...", fired once per agent lifetime -- pre-existing
-    # `_structured_output_warned` throttling, untouched by this fix round)
-    # is present and WARNING, never ERROR.
-    struct_records = [r for r in records if "Structured output failed" in r.getMessage()]
-    assert struct_records, (
-        f"expected the structured-output cascade's own warning, got: "
-        f"{[(r.levelname, r.getMessage()) for r in records]}"
-    )
-    assert all(r.levelno == logging.WARNING for r in struct_records)
+    assert agent.llm.ainvoke.await_count == 2, "each attempt makes one call"
 
     # Every record but the one final exhaustion line is WARNING -- the whole
     # point of this fix round ("a retry attempt is not an error until the

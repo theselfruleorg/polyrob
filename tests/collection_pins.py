@@ -54,6 +54,29 @@ def profile(address, *, chain_id=4663, max_supply=SUPPLY, capabilities=("mint", 
     return raw
 
 
+#: A stand-in PolyrobAccount implementation (the collection's own account, polyrob-desk SPEC §7.1).
+POLYROB_IMPL = "0x" + "a1" * 20
+MARKET = "0x" + "b1" * 20
+ZONE = "0x" + "c1" * 20
+
+
+def transfer_safe(*, account_sha=RUNTIME_SHA256, market=MARKET, zone=ZONE):
+    return {"account_impl_runtime_sha256": account_sha, "market": market,
+            "market_runtime_sha256": RUNTIME_SHA256, "zone": zone,
+            "zone_runtime_sha256": RUNTIME_SHA256}
+
+
+def polyrob_profile(address, *, implementation=POLYROB_IMPL, journal_log=None, account_sha=RUNTIME_SHA256,
+                    **kw):
+    """:func:`profile` whose accounts are PolyrobAccount clones (``transfer_safe`` + accounts[0])."""
+    raw = profile(address, **kw)
+    raw["accounts"] = [{"registry": erc6551.REGISTRY, "implementation": implementation, "salt": 0}]
+    raw["transfer_safe"] = transfer_safe(account_sha=account_sha)
+    if journal_log:
+        raw["journal_log"] = journal_log
+    return raw
+
+
 def pin(monkeypatch, *profiles):
     """Pin *profiles* (dicts from :func:`profile`, or bare addresses on 4663). No argument = none."""
     raws = [p if isinstance(p, dict) else profile(p) for p in profiles]

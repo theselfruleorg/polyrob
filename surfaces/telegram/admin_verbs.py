@@ -77,6 +77,14 @@ async def pre_gate_reply(task_agent: Any, result: Any, cmd: str) -> Optional[str
         from surfaces.telegram import group_ops
         return await group_ops.mute_reply(task_agent, result, _words(result))
     if cmd in ("/unmute", "/ban", "/unban"):
+        # F-07: the executor is the Telegram moderator; a chat surface whose
+        # catalog row has no `moderation` is told where the verb runs.
+        from core.verbs import verb_for
+        from surfaces.telegram.status_ops import _seat_via
+        from surfaces.telegram.unknown_verb import elsewhere_text
+        refusal = elsewhere_text(verb_for(cmd), _seat_via(result))
+        if refusal:
+            return refusal
         # 046 phase 2: the rest of the catalog, same two meanings as `/mute` —
         # in REPLY it names a person (free for the owner and room admins, priced
         # for a member); with no reply it has no room meaning and says so.
@@ -104,27 +112,22 @@ async def _status(c: AdminCall) -> str:
 async def _mode(c: AdminCall) -> str:
     # The four answers, health first. The console runs this table too.
     from core.permission_levels import LEVELS, level_reply
-    from surfaces.telegram.status_ops import _health_header, _mode_reply
+    from surfaces.telegram.status_ops import _health_header, _mode_reply, _seat_via
+    seat = _seat_via(c.result)   # F-10: the seat the line arrived on, never a literal
     if c.args and c.args[0] in LEVELS:
         # 044 I10: an owner write is never run from inside a group a member can talk in.
         from core.surfaces.room_keys import is_group_session_key
         if is_group_session_key(getattr(c.result.decision, "session_key", "")):
             return "Change the level in your private chat with me, not in a group."
-        source = getattr(getattr(c.result.inbound, "identity", None), "source", None)
-        surface = {"webview": "console"}.get(getattr(source, "surface_id", ""), "telegram")
-        return level_reply(c.args[0], surface=surface, user_id=c.user_id)
+        return level_reply(c.args[0], surface=seat, user_id=c.user_id)
     header = await _health_header(c.user_id, c.data_dir, c.task_agent)
-    source = getattr(getattr(c.result.inbound, "identity", None), "source", None)
-    surface = getattr(source, "surface_id", "") or "telegram"
-    seat = {"webview": "console"}.get(surface, surface)
     return "\n".join(header) + "\n" + _mode_reply(seat, full="all" in (c.args or ()))
 
 
 async def _recap(c: AdminCall) -> str:
     # one recap vocabulary across surfaces (/recap = /journey)
-    from surfaces.telegram.status_ops import _health_header, _recap_reply
-    header = await _health_header(c.user_id, c.data_dir, c.task_agent, limit=3)
-    return "\n".join(header) + "\n" + _recap_reply(c.user_id, c.data_dir, c.args)
+    from surfaces.telegram.status_ops import journey_reply
+    return await journey_reply(c.user_id, c.data_dir, c.task_agent, c.args)
 
 
 async def _avatar(c: AdminCall) -> Any:
@@ -202,6 +205,18 @@ async def _usage(c: AdminCall) -> str:
 async def _skills(c: AdminCall) -> str:
     from surfaces.telegram.skills_ops import skills_reply  # 080 D8
     return skills_reply(c.user_id, c.args)
+
+
+async def _self(c: AdminCall) -> str:
+    # 113 W6 G-6: the identity documents, read-only, on every seat.
+    from core.runtime_paths import data_dir_or_home
+    from surfaces.telegram.self_memory_ops import self_reply
+    return self_reply(c.user_id, data_dir_or_home(c.data_dir))
+
+
+async def _memory(c: AdminCall) -> str:
+    from surfaces.telegram.self_memory_ops import memory_reply
+    return await memory_reply(c.user_id, c.args)
 
 
 async def _kb(c: AdminCall) -> str:
@@ -319,8 +334,9 @@ async def _bridge(c: AdminCall) -> str:
 async def _trade(c: AdminCall) -> Any:
     # 086 W5: the trading mandate — start (one card), status, pause, resume, stop, release.
     from surfaces.telegram import trade_ops
+    from surfaces.telegram.status_ops import _seat_via
     return await asyncio.to_thread(trade_ops.trade_reply, c.user_id, c.data_dir, c.args,
-                                   via="telegram")
+                                   via=_seat_via(c.result))
 
 
 async def _offer(c: AdminCall) -> str:
@@ -333,8 +349,9 @@ async def _offer(c: AdminCall) -> str:
 async def _job(c: AdminCall) -> str:
     # 080 WS-2: one handler for `/jobs` (the list) and `/job <sub> …`.
     from surfaces.telegram import job_ops
-    args = ["list"] if c.cmd == "/jobs" else c.args
-    return job_ops.jobs_reply(c.user_id, c.data_dir, args, via="telegram")
+    args = c.args   # bare (or its old name /jobs) = the list
+    from surfaces.telegram.status_ops import _seat_via
+    return job_ops.jobs_reply(c.user_id, c.data_dir, args, via=_seat_via(c.result))
 
 
 async def _goal(c: AdminCall) -> str:
@@ -420,7 +437,6 @@ async def _update(c: AdminCall) -> str:
 ADMIN_VERBS: dict[str, Callable[[AdminCall], Awaitable[Any]]] = {
     "/status": _status,
     "/mode": _mode,
-    "/recap": _recap,
     "/journey": _recap,
     "/avatar": _avatar,
     "/missed": _missed,
@@ -432,10 +448,11 @@ ADMIN_VERBS: dict[str, Callable[[AdminCall], Awaitable[Any]]] = {
     "/model": _model,
     "/usage": _usage,
     "/skills": _skills,
+    "/self": _self,
+    "/memory": _memory,
     "/kb": _kb,
     "/files": _files,
     "/dev": _dev,
-    "/halt": _pause,
     "/resume": _pause,
     "/pause": _pause,
     "/claim": _claim,
@@ -454,7 +471,6 @@ ADMIN_VERBS: dict[str, Callable[[AdminCall], Awaitable[Any]]] = {
     "/bridge": _bridge,
     "/trade": _trade,
     "/offer": _offer,
-    "/jobs": _job,
     "/job": _job,
     "/goal": _goal,
     "/wallet": _wallet,
@@ -472,6 +488,7 @@ ADMIN_VERBS: dict[str, Callable[[AdminCall], Awaitable[Any]]] = {
     "/allow": _approval("allow_verb"),
     "/deny": _approval("deny_verb"),
     "/allowlist": _approval("allowlist_verb"),
+    "/pair": _approval("pair_verb"),
     "/groups": _groups,
     "/restart": _restart,
     "/update": _update,

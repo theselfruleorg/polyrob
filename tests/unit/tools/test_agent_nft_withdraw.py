@@ -20,7 +20,7 @@ STRANGER = "0x" + "77" * 20
 TO = "0x" + "3c" * 20
 SPENDER = "0x" + "5e" * 20
 TOKEN = "0x" + "a0" * 20
-ACCOUNT = erc6551.account_address(4663, PINNED, 3)
+ACCOUNT = erc6551.account_address(4663, PINNED, 3, implementation=erc6551.ACCOUNT_V3_IMPL)
 SEL = {k: abi.selector(k) for k in ("ownerOf(uint256)", "state()", "allowance(address,address)")}
 
 

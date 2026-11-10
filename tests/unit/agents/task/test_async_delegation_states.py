@@ -69,3 +69,28 @@ async def test_cancel_all_cas_does_not_clobber_completed(store):
     reg._durable_cancel("deleg_0009")
     row = store.get("s1", "deleg_0009")
     assert row["status"] == "completed" and row["delivered_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_a_reissued_id_never_replaces_an_undelivered_result(store, monkeypatch):
+    """The counter seed failed (unseeded counter starts at 0): the next dispatch must
+    take a free id, not overwrite the earlier row whose result waits for delivery."""
+    store.record_dispatched(session_id="s1", user_id="u1", delegation_id="deleg_0001",
+                            goal="old", profile="p", parent_agent_id=None, dispatched_at=1.0)
+    store.record_terminal("s1", "deleg_0001", status="completed", completed_at=2.0,
+                          result_text="the earlier answer")
+    calls = []
+
+    def seed_fails(session_id):
+        calls.append(session_id)
+        raise RuntimeError("database is locked")
+    monkeypatch.setattr(store, "max_counter", seed_fails)
+    reg = _reg(store, _Mgr(asyncio.Event()), None)
+    h = await reg.dispatch(goal="new", parent_agent_id="a")
+    assert h["delegation_id"] != "deleg_0001"
+    row = store.get("s1", "deleg_0001")
+    assert row["status"] == "completed" and row["result_text"] == "the earlier answer"
+    assert not reg._counter_seeded                  # the next dispatch reads the seed again
+    await reg.dispatch(goal="newer", parent_agent_id="a")
+    assert len(calls) == 2
+    reg.cancel_all("test end")

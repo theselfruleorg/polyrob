@@ -135,3 +135,67 @@ def test_repr_hides_api_key(tmp_path):
     c = AgentMailClient("am_secret_key", data_home=tmp_path)
     assert "am_secret_key" not in repr(c)
     assert "am_secret_key" not in str(c)
+
+
+# -- an unanswered send is "delivery unknown", never "failed" (a retry sends twice) --
+
+def _provisioned_handler(send_outcome):
+    def handler(request):
+        if request.url.path == "/v0/inboxes":
+            return httpx.Response(200, json={
+                "pod_id": "p", "inbox_id": "in_1", "email": "agent@example.test",
+                "created_at": "x", "updated_at": "x"})
+        return send_outcome(request)
+    return handler
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("make", [
+    lambda r: (_ for _ in ()).throw(httpx.ReadTimeout("read timed out", request=r)),
+    lambda r: (_ for _ in ()).throw(httpx.RemoteProtocolError("peer closed", request=r)),
+    lambda r: httpx.Response(502, text="bad gateway"),
+    lambda r: httpx.Response(500, text="oops"),
+])
+async def test_send_without_an_answer_is_delivery_unknown(tmp_path, monkeypatch, make):
+    from core.exceptions import DeliveryUnknownError
+    emitted = []
+    monkeypatch.setattr("core.event_log.emit",
+                        lambda kind, **kw: emitted.append((kind, kw)))
+    c = _client(tmp_path, _provisioned_handler(make))
+    await c.provision("alice")
+    with pytest.raises(DeliveryUnknownError) as ei:
+        await c.send("bob@example.test", "s", "t")
+    assert "do not send it again" in str(ei.value).lower()
+    assert [k for k, _ in emitted] == ["email_delivery_unknown"]
+    assert emitted[0][1]["attrs"]["message_id"].startswith("<")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("make", [
+    lambda r: (_ for _ in ()).throw(httpx.ConnectError("refused", request=r)),
+    lambda r: (_ for _ in ()).throw(httpx.ConnectTimeout("connect timed out", request=r)),
+    lambda r: (_ for _ in ()).throw(httpx.PoolTimeout("pool", request=r)),
+    lambda r: httpx.Response(422, json={"error": "bad to"}),
+])
+async def test_send_that_cannot_have_gone_out_is_a_plain_failure(tmp_path, make):
+    from core.exceptions import DeliveryUnknownError
+    c = _client(tmp_path, _provisioned_handler(make))
+    await c.provision("alice")
+    with pytest.raises(APIError) as ei:
+        await c.send("bob@example.test", "s", "t")
+    assert not isinstance(ei.value, DeliveryUnknownError)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [{"count": 3}, {"messages": "oops"}, ["not", "a", "dict"]])
+async def test_a_malformed_list_is_an_error_not_an_empty_inbox(tmp_path, body):
+    def handler(request):
+        if request.url.path == "/v0/inboxes":
+            return httpx.Response(200, json={
+                "pod_id": "p", "inbox_id": "in_1", "email": "agent@example.test",
+                "created_at": "x", "updated_at": "x"})
+        return httpx.Response(200, json=body)
+    c = _client(tmp_path, handler)
+    await c.provision("alice")
+    with pytest.raises(APIError):
+        await c.list_messages(limit=5)

@@ -254,6 +254,14 @@ def on_transition(card: Any, st: Any) -> bool:
         return False
     gs = groups(st)
     g = gs.get(gid)
+    if (g is not None and g["state"] in (G_WOKEN, G_CONSUMED)
+            and getattr(card, "state", "") == "done"):
+        # A settled group holds no running card, so a card that reaches ``done`` after
+        # the agent saw the outcomes is a swept ``failed`` card whose real result came
+        # late (``cards.finish``). The agent was told FAILED: settle again and say DONE.
+        if gs.transition(gid, frozenset({G_WOKEN, G_CONSUMED}), G_OPEN):
+            return settle(gid, card.user_id, st)
+        return False
     if g is None or g["state"] != G_OPEN:
         return False
     return settle(gid, card.user_id, st, g=g)

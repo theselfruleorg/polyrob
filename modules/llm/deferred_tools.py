@@ -1,14 +1,14 @@
-"""F9 (063 WS-4, decided 2026-09-23) — the THREE late-tool modes and ONE resolver.
+"""The THREE late-tool modes and ONE resolver.
 
-``load_tool`` (and an MCP connect) registers new actions mid-session. That used
-to grow the emitted ``tools[]``, and every provider cache serves only the
+``load_tool`` (and an MCP connect) registers new actions mid-session. That
+grows the emitted ``tools[]`` in the ``grow`` mode, and every provider cache serves only the
 leading bytes two requests share — on Anthropic the wire order is
 ``tools -> system -> messages``, so a grown tool array colds the ENTIRE request.
 
 Three answers exist and this module names all three:
 
 ``grow``
-    The behaviour that predates 2026-09-23 and is the DEFAULT again: the emitted
+    The DEFAULT: the emitted
     list grows on ``load_tool``. Provider-neutral, costs one cold request.
 
 ``bridge``
@@ -31,12 +31,12 @@ Three answers exist and this module names all three:
 never issued a real request. It is therefore built to FAIL SOFT: a 400 that
 mentions the deferral vocabulary marks the client unavailable, rebuilds the
 request without any deferral and retries once. Any other error propagates
-exactly as before.
+unchanged.
 
-Contract (Anthropic API reference, read 2026-09-23):
+Contract (Anthropic API reference):
 
 * beta header ``anthropic-beta: mid-conversation-tool-changes-2026-07-01``;
-  available on Claude Opus 5 onward (Opus 5, Fable 5, Fable 5.1, Mythos 5/5.1).
+  available on the rows that set ``supports_mid_conversation_tool_changes``.
 * ``"defer_loading": true`` on a tool in ``tools[]``; at least one tool must be
   non-deferred.
 * to surface one, append
@@ -48,6 +48,8 @@ Contract (Anthropic API reference, read 2026-09-23):
 * plain dicts throughout — the SDK typings lag the beta.
 """
 from __future__ import annotations
+from modules.llm.anthropic_wire import (
+    BETA_HEADER_NAME, is_http_400, retry_params_without_thinking_controls, with_beta, without_beta)
 from modules.llm.billing_guard import inference_sdk
 
 import logging
@@ -62,7 +64,6 @@ LATE_TOOL_MODE_DEFERRED = "deferred"
 
 #: The beta this rides. Sent as ``extra_headers`` on the create/stream call.
 DEFERRED_TOOLS_BETA = "mid-conversation-tool-changes-2026-07-01"
-BETA_HEADER_NAME = "anthropic-beta"
 
 #: The per-tool key that tells Anthropic "known to the request, not in context".
 DEFER_KEY = "defer_loading"
@@ -76,6 +77,9 @@ ADDITION_CLOSE = "</tool-addition>"
 #: Stamped on a CLIENT the first time the API refuses the deferral vocabulary.
 #: Same attribute-stamp pattern as ``cache_hints.apply_cache_ttl``.
 _UNAVAILABLE_ATTR = "_polyrob_deferred_tools_unavailable"
+
+#: One rebuild for the deferred tools and one for the thinking controls.
+_MAX_SELF_HEALS = 2
 
 #: Substrings that identify a 400 as "this endpoint does not know the beta".
 _REFUSAL_MARKERS = (DEFER_KEY, "tool_addition", "tool_reference", DEFERRED_TOOLS_BETA)
@@ -91,7 +95,7 @@ def late_tool_mode(provider: str) -> str:
     Precedence is deliberate: an operator who turns ``TOOL_SCHEMAS_FROZEN`` on
     asked for the provider-neutral bridge and gets it everywhere, including on
     Anthropic. Otherwise a capable Anthropic seat defers, and everything else
-    grows — the behaviour that predates 2026-09-23.
+    grows.
     """
     from core.env import bool_env
     if bool_env("TOOL_SCHEMAS_FROZEN", False):
@@ -161,22 +165,9 @@ def deferred_tools_enabled(client: Any) -> bool:
 
 
 def is_deferred_tools_error(exc: Any) -> bool:
-    """Is *exc* a 400 that names the deferral vocabulary?
-
-    Deliberately duck-typed: the SDK's error class is not importable from this
-    module (the ``anthropic`` package is an extra), and a wrapped/translated
-    error must still be recognised. A 400 is required so an unrelated failure
-    that happens to quote a tool name can never disarm the feature.
-    """
-    if exc is None:
-        return False
-    status = getattr(exc, "status_code", None) or getattr(exc, "status", None)
-    if status is None:
-        response = getattr(exc, "response", None)
-        status = getattr(response, "status_code", None) if response is not None else None
-    if status is not None and int(status) != 400:
-        return False
-    if status is None and "BadRequest" not in type(exc).__name__:
+    """Is *exc* a 400 that names the deferral vocabulary? A 400 is required so an unrelated
+    failure that happens to quote a tool name can never disarm the feature."""
+    if not is_http_400(exc):
         return False
     text = str(exc).lower()
     return any(marker.lower() in text for marker in _REFUSAL_MARKERS)
@@ -231,16 +222,6 @@ def _addition_names(message: Any) -> Optional[List[str]]:
     return names or None
 
 
-def _marker_of(message: Any) -> Optional[Dict[str, Any]]:
-    """The ``cache_control`` marker a message carries, if any."""
-    content = message.get("content") if isinstance(message, dict) else None
-    if isinstance(content, list):
-        for block in content:
-            if isinstance(block, dict) and isinstance(block.get("cache_control"), dict):
-                return dict(block["cache_control"])
-    return None
-
-
 def _strip_deferral(tools: Any) -> Tuple[Any, bool]:
     """A copy of *tools* with every ``defer_loading`` key removed.
 
@@ -276,37 +257,6 @@ def _addition_message(names: Sequence[str]) -> Dict[str, Any]:
     }
 
 
-def _with_header(api_params: Dict[str, Any]) -> Dict[str, Any]:
-    """Merge the beta header into ``extra_headers`` without losing an existing one."""
-    headers = dict(api_params.get("extra_headers") or {})
-    existing = headers.get(BETA_HEADER_NAME)
-    if existing and DEFERRED_TOOLS_BETA not in existing:
-        headers[BETA_HEADER_NAME] = f"{existing},{DEFERRED_TOOLS_BETA}"
-    elif not existing:
-        headers[BETA_HEADER_NAME] = DEFERRED_TOOLS_BETA
-    api_params["extra_headers"] = headers
-    return api_params
-
-
-def _without_header(api_params: Dict[str, Any]) -> Dict[str, Any]:
-    """Drop the deferred-tools beta from ``extra_headers`` (and the key if empty)."""
-    headers = api_params.get("extra_headers")
-    if not isinstance(headers, dict) or BETA_HEADER_NAME not in headers:
-        return api_params
-    kept = [v for v in str(headers[BETA_HEADER_NAME]).split(",")
-            if v.strip() and v.strip() != DEFERRED_TOOLS_BETA]
-    headers = dict(headers)
-    if kept:
-        headers[BETA_HEADER_NAME] = ",".join(kept)
-    else:
-        headers.pop(BETA_HEADER_NAME)
-    if headers:
-        api_params["extra_headers"] = headers
-    else:
-        api_params.pop("extra_headers", None)
-    return api_params
-
-
 def _is_addition_system(message: Any) -> bool:
     """A system message this module already built (the self-heal's input)."""
     if not isinstance(message, dict) or message.get("role") != "system":
@@ -321,7 +271,7 @@ def _is_addition_system(message: Any) -> bool:
 def _disable(api_params: Dict[str, Any]) -> Dict[str, Any]:
     """The un-deferred request: no ``defer_loading``, no envelopes, no header.
 
-    This is what a request built before 2026-09-23 looked like, and it is what
+    This is the plain request, and it is what
     the self-heal retries with. It accepts BOTH shapes — the raw
     ``<tool-addition>`` envelope and the system message this module already
     built from it — because the retry rebuilds an ALREADY-transformed request.
@@ -335,7 +285,7 @@ def _disable(api_params: Dict[str, Any]) -> Dict[str, Any]:
             _addition_names(m) or _is_addition_system(m) for m in messages):
         out["messages"] = [m for m in messages
                            if not (_addition_names(m) or _is_addition_system(m))]
-    return _without_header(out)
+    return without_beta(out, DEFERRED_TOOLS_BETA)
 
 
 def prepare_deferred_tools(api_params: Dict[str, Any], *, enabled: bool) -> Dict[str, Any]:
@@ -367,74 +317,47 @@ def prepare_deferred_tools(api_params: Dict[str, Any], *, enabled: bool) -> Dict
     if isinstance(tools, list) and tools and _deferred_count(tools) >= len(tools):
         return _disable(api_params)
 
-    converted: List[Tuple[int, List[str]]] = []
-    for i, message in enumerate(messages):
+    if not any(_addition_names(m) for m in messages):
+        # Nothing to surface yet. A deferred tool still needs the beta header.
+        return with_beta(out, DEFERRED_TOOLS_BETA) if _deferred_count(tools) else out
+
+    kept = _place_additions(messages)
+    if kept is None:
+        return _disable(api_params)
+    out["messages"] = kept
+    return with_beta(out, DEFERRED_TOOLS_BETA)
+
+
+def _place_additions(messages: List[Any]) -> Optional[List[Any]]:
+    """The rows with each envelope replaced by a ``tool_addition`` system message.
+
+    The position is the first valid one after the envelope: after the user rows that follow
+    it and before the next assistant row, or at the end while no assistant row has come. It
+    is a function of the history, so a later step sends the message at the same place: it
+    stays before the first use of its tool and never moves with the tail. Envelopes before
+    one position share one message, because a system message must follow a user message.
+    None when no valid position exists.
+    """
+    kept: List[Any] = []
+    pending: List[str] = []
+
+    def flush() -> bool:
+        if pending:
+            if not kept or not (isinstance(kept[-1], dict) and kept[-1].get("role") == "user"):
+                return False
+            kept.append(_addition_message(pending))
+            pending.clear()
+        return True
+
+    for message in messages:
         names = _addition_names(message)
         if names:
-            converted.append((i, names))
-    if not converted:
-        # Nothing to surface yet. A deferred tool still needs the beta header.
-        return _with_header(out) if _deferred_count(tools) else out
-
-    kept: List[Any] = []
-    moved: List[str] = []
-    lost_marker: Optional[Dict[str, Any]] = None
-    converted_at = {i: names for i, names in converted}
-    for i, message in enumerate(messages):
-        names = converted_at.get(i)
-        if names is None:
-            kept.append(message)
+            pending.extend(n for n in names if n not in pending)
             continue
-        lost_marker = lost_marker or _marker_of(message)
-        if i == 0:
-            continue  # a system message may never be messages[0] — drop it
-        following = messages[i + 1] if i + 1 < len(messages) else None
-        previous = messages[i - 1]
-        in_place = (
-            isinstance(previous, dict) and previous.get("role") == "user"
-            and (following is None
-                 or (isinstance(following, dict) and following.get("role") == "assistant"))
-        )
-        if in_place:
-            kept.append(_addition_message(names))
-        else:
-            moved.extend(n for n in names if n not in moved)
-
-    if moved:
-        # The tail placement: ONE system message after the trailing state
-        # message. Two adjacent system messages would break the "must follow a
-        # user message" rule, so every moved addition merges into one.
-        if not kept or not (isinstance(kept[-1], dict) and kept[-1].get("role") == "user"):
-            return _disable(api_params)
-        kept.append(_addition_message(moved))
-
-    # F12: a breakpoint may not ride the system message we just built. When the
-    # envelope we replaced carried one, hand it back to the last NON-system
-    # message so the request keeps the same number of cache breakpoints.
-    if lost_marker:
-        _remark(kept, lost_marker)
-
-    out["messages"] = kept
-    return _with_header(out)
-
-
-def _remark(messages: List[Any], marker: Dict[str, Any]) -> None:
-    """Re-apply a lost ``cache_control`` marker to the last non-system message."""
-    for i in range(len(messages) - 1, -1, -1):
-        message = messages[i]
-        if not isinstance(message, dict) or message.get("role") == "system":
-            continue
-        if _marker_of(message) is not None:
-            return  # the tail already carries one — do not spend a second
-        content = message.get("content")
-        if isinstance(content, str):
-            messages[i] = {**message, "content": [
-                {"type": "text", "text": content, "cache_control": dict(marker)}]}
-        elif isinstance(content, list) and content and isinstance(content[-1], dict):
-            blocks = [dict(b) if isinstance(b, dict) else b for b in content]
-            blocks[-1] = {**blocks[-1], "cache_control": dict(marker)}
-            messages[i] = {**message, "content": blocks}
-        return
+        if isinstance(message, dict) and message.get("role") == "assistant" and not flush():
+            return None
+        kept.append(message)
+    return kept if flush() else None
 
 
 # ---------------------------------------------------------------------------
@@ -448,7 +371,7 @@ def retry_params_without_deferral(
 
     Returns None unless the error IS a deferral refusal AND this request
     actually carried deferral — so an endpoint that 400s for any other reason
-    keeps behaving exactly as it did before F9.
+    keeps its normal behaviour.
     """
     if not is_deferred_tools_error(exc):
         return None
@@ -466,10 +389,16 @@ def retry_params_without_deferral(
     return prepare_deferred_tools(api_params, enabled=False)
 
 
+def _self_heal(client: Any, exc: Any, api_params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The rebuilt request after a 400 that names a beta shape, or None to re-raise."""
+    return (retry_params_without_deferral(client, exc, api_params)
+            or retry_params_without_thinking_controls(client, exc, api_params))
+
+
 async def call_with_deferral_retry(client: Any, api_params: Dict[str, Any],
                                    use_streaming: bool) -> Any:
-    """Issue the tool-path request, self-healing ONCE on a deferral refusal."""
-    from modules.llm.prefix_stamp import stamp_client
+    """Issue the tool-path request, self-healing once per beta shape a 400 names."""
+    from modules.llm.prefix_stamp import stamp_request
 
     async def _once(params):
         if use_streaming:
@@ -477,28 +406,31 @@ async def call_with_deferral_retry(client: Any, api_params: Dict[str, Any],
                 return await stream.get_final_message()
         return await inference_sdk(client).messages.create(**params)
 
-    try:
-        return await _once(api_params)
-    except Exception as exc:
-        retry = retry_params_without_deferral(client, exc, api_params)
-        if retry is None:
-            raise
-        stamp_client(client, retry)
-        return await _once(retry)
+    for attempt in range(_MAX_SELF_HEALS):
+        try:
+            return await _once(api_params)
+        except Exception as exc:
+            retry = _self_heal(client, exc, api_params)
+            if retry is None:
+                raise
+            api_params = retry
+            stamp_request(api_params)
+    return await _once(api_params)
 
 
 async def stream_with_deferral_retry(client: Any, api_params: Dict[str, Any]):
-    """Yield ``("text", chunk)`` then ``("final", message)``, self-healing ONCE.
+    """Yield ``("text", chunk)`` then ``("final", message)``, self-healing like the batch call.
 
     The retry is only offered before the first token reaches the caller — once
     text has been yielded the turn is underway and a silent re-request would
     duplicate it.
     """
-    from modules.llm.prefix_stamp import stamp_client
+    from modules.llm.prefix_stamp import stamp_request
 
-    stamp_client(client, api_params)
+    stamp_request(api_params)
     emitted = False
-    for attempt in (0, 1):
+    attempt = 0
+    while True:
         try:
             async with inference_sdk(client).messages.stream(**api_params) as stream:
                 async for event in stream:
@@ -512,12 +444,13 @@ async def stream_with_deferral_retry(client: Any, api_params: Dict[str, Any]):
                 yield ("final", await stream.get_final_message())
             return
         except Exception as exc:
-            retry = None if (emitted or attempt) else retry_params_without_deferral(
+            retry = None if (emitted or attempt >= _MAX_SELF_HEALS) else _self_heal(
                 client, exc, api_params)
             if retry is None:
                 raise
+            attempt += 1
             api_params = retry
-            stamp_client(client, api_params)
+            stamp_request(api_params)
 
 
 __all__ = [

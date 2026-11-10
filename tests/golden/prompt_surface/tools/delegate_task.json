@@ -1,6 +1,6 @@
 {
   "function": {
-    "description": "Delegate work to sub-agent(s): one focused \"goal\", or 2-5 parallel \"tasks\". Expensive. Synchronous by default (blocks this turn until done). Set background=true (goal only) to run it detached and get the result as a new message later — durable across the turn but NOT across restart (use the scheduler for durable scheduled work). Set \"model\" (and optionally \"provider\") to run the sub-agent on a different model than yours — e.g. a cheaper/faster model for a simple task; omit to inherit your model. With \"tasks\", each task can set its own \"model\", falling back to the top-level \"model\" if unset. Not supported together with background=true.",
+    "description": "Delegate work to sub-agent(s): one focused \"goal\", or 2-5 parallel \"tasks\". Expensive. Synchronous by default (blocks this turn until done). Set background=true (goal only) to run it detached and get the result as a new message later — durable across the turn but NOT across restart (use the scheduler for durable scheduled work). Set \"tier\" + \"why\" to pick the model: \"heavy\" for judgement that decides money or is hard to undo, \"light\" for bulk reads, \"default\" = yours (<environment> names each tier's model; at most 2 heavy per call). \"model\" = an owner alias. With \"tasks\", each task may set its own tier or model. Neither works with background=true.",
     "name": "delegate_task",
     "parameters": {
       "$defs": {
@@ -32,6 +32,26 @@
               "description": "Detailed subtask description (at least 20 chars). Include all context the sub-agent needs.",
               "minLength": 20,
               "title": "Task",
+              "type": "string"
+            },
+            "tier": {
+              "default": null,
+              "description": "Model tier for this sub-agent: 'light' = the cheap model, for bulk reads and summaries; 'heavy' = the strongest model, only for judgement that decides money or is hard to undo; 'default' = yours. The operator sets the model behind each tier (see <environment>); an absent tier is refused. Requires 'why'. Not with 'model'.",
+              "enum": [
+                "default",
+                "heavy",
+                "light"
+              ],
+              "nullable": true,
+              "title": "Tier",
+              "type": "string"
+            },
+            "why": {
+              "default": null,
+              "description": "One line: why this tier. Required with 'tier'; recorded and shown in /status.",
+              "maxLength": 200,
+              "nullable": true,
+              "title": "Why",
               "type": "string"
             }
           },
@@ -93,6 +113,24 @@
           "minItems": 2,
           "nullable": true,
           "type": "array"
+        },
+        "tier": {
+          "default": null,
+          "description": "Model tier for the sub-agent (with 'tasks': the fallback for a task with no tier or model): 'light' = the cheap model, for bulk reads and summaries; 'heavy' = the strongest model, only for judgement that decides money or is hard to undo; 'default' = yours. The operator sets the model behind each tier (see <environment>); an absent tier is refused. Requires 'why'. Not with 'model'.",
+          "enum": [
+            "default",
+            "heavy",
+            "light"
+          ],
+          "nullable": true,
+          "type": "string"
+        },
+        "why": {
+          "default": null,
+          "description": "One line: why this tier. Required with 'tier'; recorded and shown in /status.",
+          "maxLength": 200,
+          "nullable": true,
+          "type": "string"
         }
       },
       "type": "object"

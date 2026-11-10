@@ -37,7 +37,8 @@ def test_runtime_identity_injected_as_foundation_not_system_prompt():
     assert blocks[0].to_dict()["role"] == "user"
 
 
-def test_runtime_identity_is_first_after_system_prompt():
+def test_runtime_identity_follows_the_documents():
+    """106 C5: a /model swap rewrites this row, so it comes after the cached documents."""
     mm = _mm()
     mm.set_runtime_identity("m", "p")
     mm.set_self_context_message("SOUL")
@@ -45,8 +46,7 @@ def test_runtime_identity_is_first_after_system_prompt():
     joined = [_text(m) for m in msgs]
     ident_idx = next(i for i, t in enumerate(joined) if "runtime-identity" in t)
     soul_idx = next(i for i, t in enumerate(joined) if "SOUL" in t)
-    assert ident_idx == 1  # right after the system message at index 0
-    assert ident_idx < soul_idx
+    assert soul_idx < ident_idx
 
 
 def test_runtime_identity_origin_and_envelope():
@@ -103,13 +103,14 @@ def test_identity_tokens_included_in_totals():
     assert mm.get_token_count() == before_count + mm._runtime_identity_tokens
 
 
-def test_runtime_identity_names_product_version_and_instance(monkeypatch):
-    # 080 WS-5 (D5): POLYROB <version>, instance <name> — on every posture.
+def test_runtime_identity_names_product_and_instance_and_no_version(monkeypatch):
+    # 080 WS-5 (D5): POLYROB, instance <name> — on every posture. 106 C4: a deploy
+    # must not change a cached row, so the version rides the tail.
     monkeypatch.setenv("POLYROB_INSTANCE_ID", "demo-test")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     from core.version import get_version
     mm = _mm()
     mm.set_runtime_identity("m", "p")
     block = next(_text(m) for m in mm.get_messages_for_llm() if "runtime-identity" in _text(m))
-    assert f"POLYROB v{get_version()}" in block
+    assert "POLYROB," in block and get_version() not in block
     assert 'instance "demo-test"' in block

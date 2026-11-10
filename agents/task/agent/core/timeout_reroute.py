@@ -12,8 +12,8 @@ re-route every other session):
 
 1. first timeout  — reduced-context retry, as today.
 2. second timeout — ask OpenRouter to order upstreams by ``latency`` for the rest
-   of this run (the ``OPENROUTER_PROVIDER_SORT`` knob, applied per client
-   instance), then retry.
+   of this run (the ``OPENROUTER_PROVIDER_SORT`` knob, kept on the agent and scoped
+   to each of its steps), then retry.
 3. third timeout  — STOP. End the step honestly with the existing recovery brain
    and no further retry. A third consecutive timeout is a statement about the
    route, not about this prompt.
@@ -31,6 +31,8 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _ATTR = "_consecutive_llm_timeouts"
+#: the agent's routing sort for the rest of its run; each step scopes it to its calls.
+SORT_ATTR = "_session_provider_sort"
 
 #: timeouts in a row before the session asks for latency-ordered routing.
 REROUTE_AFTER = 2
@@ -70,29 +72,24 @@ def maybe_reroute(agent: Any, count: int) -> bool:
     if count < REROUTE_AFTER or not reroute_enabled():
         return False
     try:
-        from modules.llm.openrouter_routing import resolve_provider_sort, set_provider_sort
-        llm = getattr(agent, "llm", None)
-        client = getattr(llm, "_client", None) or llm
-        if client is None:
-            return False
-        if resolve_provider_sort(client) == "latency":
+        if getattr(agent, SORT_ATTR, None) == "latency":
             return True
-        if set_provider_sort(client, "latency"):
-            logger.warning(
-                "%d consecutive LLM timeouts — routing this session by latency "
-                "for the rest of the run (LLM_TIMEOUT_REROUTE)", count)
-            # 095 W2 (HI-15): one model-visible line, so the model knows why.
-            try:
-                from modules.llm.messages import MessageOrigin, make_control_message
-                agent.message_manager.push_ephemeral_message(make_control_message(
-                    f"[routing] {count} model calls in a row timed out; this run now "
-                    "routes by latency. Keep each step small.", MessageOrigin.INTERVENTION))
-            except Exception:
-                logger.debug("reroute note skipped", exc_info=True)
-            return True
+        setattr(agent, SORT_ATTR, "latency")
     except Exception:  # pragma: no cover - defensive
         logger.debug("timeout reroute skipped", exc_info=True)
-    return False
+        return False
+    logger.warning(
+        "%d consecutive LLM timeouts — routing this session by latency "
+        "for the rest of the run (LLM_TIMEOUT_REROUTE)", count)
+    # 095 W2 (HI-15): one model-visible line, so the model knows why.
+    try:
+        from modules.llm.messages import MessageOrigin, make_control_message
+        agent.message_manager.push_ephemeral_message(make_control_message(
+            f"[routing] {count} model calls in a row timed out; this run now "
+            "routes by latency. Keep each step small.", MessageOrigin.INTERVENTION))
+    except Exception:
+        logger.debug("reroute note skipped", exc_info=True)
+    return True
 
 
 def should_stop_retrying(count: int) -> bool:

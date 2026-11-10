@@ -47,7 +47,33 @@ def test_flag_off_touches_nothing(tmp_path, monkeypatch):
                              session_id="s1", user_id="u1") is False
     assert not hasattr(orch, "_message_router")
     assert not hasattr(orch, "_chat_session_key")
-    assert reg.resolve(key) is None
+    # 113: the pointer is not the bus — a person's direct chat keeps its row
+    assert reg.resolve(key)["session_id"] == "s1"
+
+
+def test_no_bus_never_writes_a_room_row_or_a_service_row(tmp_path, monkeypatch):
+    monkeypatch.delenv("SINGULAR_CHAT_ENABLED", raising=False)
+    c, reg = _container_with_bus(tmp_path)
+    room = SessionSource("telegram", "-5", "group")
+    room_key = build_session_key(room, "u1")
+    bind_chat_surface(_FakeOrchestrator(), c, session_source=room,
+                      chat_session_key=room_key, session_id="s1", user_id="u1")
+    dm = SessionSource("cli", "local", "dm")
+    dm_key = build_session_key(dm, "u1")
+    bind_chat_surface(_FakeOrchestrator(), c, session_source=dm, chat_session_key=dm_key,
+                      session_id="s2", user_id="u1", write_row=False)
+    assert reg.chat_row(room_key) is None and reg.chat_row(dm_key) is None
+
+
+def test_chat_store_without_the_bus_is_the_one_the_bus_reuses(tmp_path, monkeypatch):
+    from core.surfaces.bootstrap import ensure_chat_registry, install_surface_bus
+    c = _FakeContainer()
+    reg = ensure_chat_registry(c, str(tmp_path / "surfaces.db"))
+    assert reg is not None and ensure_chat_registry(c) is reg
+    assert c.get_service("message_router") is None
+    monkeypatch.setenv("SINGULAR_CHAT_ENABLED", "true")
+    assert install_surface_bus(c, str(tmp_path / "surfaces.db"))
+    assert c.get_service("session_chat_registry") is reg
 
 
 def test_no_container_returns_false(tmp_path, monkeypatch):

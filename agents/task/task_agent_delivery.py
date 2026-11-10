@@ -216,6 +216,15 @@ class TaskAgentDeliveryMixin:
         except Exception as e:
             logger.debug(f"unbind_chat failed for {session_key}: {e}")
 
+    def close_chat_episode(self, session_key: str) -> None:
+        """113: a chat the person closed keeps its row; write its episode now."""
+        try:
+            registry = self.container.get_service("session_chat_registry") if self.container else None
+            row = (registry.chat_row(session_key) if registry is not None else None) or {}
+            self._spawn_chat_episode(session_key, row.get("session_id") or None, source="close")
+        except Exception as e:
+            logger.debug(f"close_chat_episode failed for {session_key}: {e}")
+
     # --- F5: the outgoing owner chat's episode at every boundary --------------
     #: How long a new session waits for the outgoing session's episode. It waits
     #: for the structured-extract write only (local); the aux-LLM summary that
@@ -834,11 +843,15 @@ class TaskAgentDeliveryMixin:
         set for THIS call is dropped when the call returns without a run taking
         it (M4: "Session is already executing", no input, not found)."""
         scope = self.pending_scope(session_id) if session_id else None
+        result = None
         try:
-            return await self._run_session_locked(user_id, session_id)
+            result = await self._run_session_locked(user_id, session_id)
+            return result
         finally:
             if session_id:
                 self.drop_untaken_scope(session_id, scope)
+                from agents.task.agent.core.owner_verdict import owner_turn_ended
+                owner_turn_ended(session_id, task_agent=self, result=result)  # 108 W5
 
     def _run_max_steps(self, session_id: str, request: Dict[str, Any], agent: Any = None) -> int:
         """The step budget of the run that starts now: the turn scope, else the
@@ -1172,6 +1185,7 @@ class TaskAgentDeliveryMixin:
             # 068 G2: the declared buy target survives an eviction too.
             orchestrator._money_target = (session_info.get('request') or {}).get('money_target')
             orchestrator._mandate = (session_info.get('request') or {}).get('mandate')  # 086
+            orchestrator._money_class = bool((session_info.get('request') or {}).get('money_class'))  # 112 F2
             # 101: the admin stamp survives an eviction, and the restored history may
             # hold outside text, so the session reads as tainted until the next line.
             orchestrator._room_admin = (session_info.get('request') or {}).get('room_admin')
@@ -1249,12 +1263,17 @@ class TaskAgentDeliveryMixin:
             # B-4 (2026-10-14): a session that ran on the operator pin follows the
             # pin when it moved (a model deploy reaches the live owner chat); an
             # explicit per-session model is kept. The new pair is persisted.
-            from agents.task.task_agent_support import refresh_pinned_model
-            _fresh = refresh_pinned_model(session_info)
-            if _fresh:
+            from agents.task.task_agent_support import (_resolve_chat_runtime, refresh_pinned_model,
+                                                         refused_stored_pin)
+            _pin_refusal = refused_stored_pin(session_info)
+            _fresh = _resolve_chat_runtime() if _pin_refusal else refresh_pinned_model(session_info)
+            if _pin_refusal:
+                logger.warning("recreated session %s: %s", session_id, _pin_refusal)
+            elif _fresh:
                 logger.info("recreated session %s: stored model %s/%s was the operator "
                             "pin, which is now %s/%s — following the pin", session_id,
                             llm_request.get('provider'), llm_request.get('model'), *_fresh)
+            if _fresh:
                 llm_request['provider'], llm_request['model'] = _fresh
                 _pair = {'provider': _fresh[0], 'model': _fresh[1]}
                 try:
@@ -1286,9 +1305,12 @@ class TaskAgentDeliveryMixin:
                 max_actions_per_step=10,
                 session_config=request.get('session_config')
             )
+            if _pin_refusal:
+                _name_refused_pin(agent, _pin_refusal)
 
             # RESTORE MESSAGE HISTORY (FIX #4)
             if hasattr(agent, 'message_manager') and agent.message_manager:
+                from agents.task.agent.messages.persistence import UnreadableHistoryError
                 try:
                     loaded = agent.message_manager.load_from_disk(
                         session_id=session_id,
@@ -1299,6 +1321,9 @@ class TaskAgentDeliveryMixin:
                         _relabel_first_chat_message(agent, session_info)
                     else:
                         logger.info(f"No message history to restore for session {session_id}")
+                except UnreadableHistoryError as e:
+                    logger.error(f"Message history for session {session_id} is unreadable; "
+                                 f"the session starts without it. The file is kept at {e.kept_at}")
                 except Exception as e:
                     logger.error(f"Failed to restore message history: {e}")
 
@@ -1351,6 +1376,18 @@ def _owned_by_live_peer(task_agent, session_id: str) -> bool:
         return task_agent.route_session(session_id).status == REMOTE
     except Exception:
         return False
+
+
+def _name_refused_pin(agent, refusal: str) -> None:
+    """The next step reads why this session left its stored model, so the reply can say
+    it. Fail-open: the session still runs on the default."""
+    try:
+        from modules.llm.messages import HumanMessage
+        note = HumanMessage(content=refusal)
+        note.metadata = {"per_call": True}
+        agent.message_manager.push_ephemeral_message(note)
+    except Exception:
+        logger.debug("refused pin note not pushed", exc_info=True)
 
 
 def _relabel_first_chat_message(agent, session_info) -> None:

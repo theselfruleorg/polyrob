@@ -46,3 +46,35 @@ async def test_the_first_step_of_a_run_is_never_inside_an_old_cooldown():
     a.state.n_steps = 1             # turn 2, step 1: same number, a new run
     await a._prepare_step()
     assert mm.llm_compact_history.await_count == 2
+
+
+def _stalled_compaction_agent(last_savings=None):
+    a = _compaction_agent(usage_pct=90.0, last_savings=last_savings)
+    mm = a.message_manager
+
+    async def stalled():
+        mm.last_summary_report = {"timed_out": True}
+        return False
+    mm.llm_compact_history = AsyncMock(side_effect=stalled)
+    return a
+
+
+@pytest.mark.asyncio
+async def test_a_summary_timeout_starts_the_cooldown():
+    a = _stalled_compaction_agent()
+    a.state.n_steps = 5
+    await a._prepare_step()
+    a.state.n_steps = 6
+    await a._prepare_step()
+    assert a.message_manager.llm_compact_history.await_count == 1
+    assert a._last_llm_compaction_step == 5
+
+
+@pytest.mark.asyncio
+async def test_old_progress_does_not_lift_the_cooldown_after_a_summary_timeout():
+    a = _stalled_compaction_agent(last_savings=0.5)
+    a.state.n_steps = 5
+    await a._prepare_step()
+    a.state.n_steps = 6
+    await a._prepare_step()
+    assert a.message_manager.llm_compact_history.await_count == 1

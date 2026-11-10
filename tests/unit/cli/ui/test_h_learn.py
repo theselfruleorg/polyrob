@@ -1,4 +1,4 @@
-"""/learn — distills a described procedure into a quarantined skill."""
+"""/learn — distills a described procedure into a live skill."""
 from types import SimpleNamespace
 
 from cli.ui.commands import h_learn
@@ -36,8 +36,8 @@ def test_slug_derivation():
     assert h_learn._slug("123 go")[0].isalpha()
 
 
-def test_learn_creates_pending_skill(monkeypatch):
-    sm = _FakeSM(ok=True, pending=True)
+def test_learn_creates_a_live_skill(monkeypatch):
+    sm = _FakeSM(ok=True, pending=False)
     monkeypatch.setattr(h_learn, "_skill_manager", lambda ctx: sm)
     ctx, emitted = _ctx(["When", "deploying", "always", "run", "tests"], sm)
     h_learn.h_learn(ctx)
@@ -45,10 +45,9 @@ def test_learn_creates_pending_skill(monkeypatch):
     # 095 W12b: the owner taught it — owner provenance, so the curator never
     # auto-archives it.
     assert sm.created["created_by"] == "user"
-    assert sm.created["pending"] is True  # quarantine FORCED, not flag-dependent
+    assert sm.created["pending"] is None
     assert "deploy" in sm.created["content"].lower()
-    assert "pending" in emitted["text"].lower()
-    assert "/pending promote skill" in emitted["text"]
+    assert "active" in emitted["text"].lower()
 
 
 def test_learn_empty_description_shows_usage(monkeypatch):
@@ -89,10 +88,11 @@ def test_distill_produces_valid_structure():
     assert "## When to use" in content and "## Procedure" in content
 
 
-def test_owner_authored_learn_draft_still_quarantined():
-    """095 W12b: owner provenance must not skip the pending gate /learn forces,
-    even over an active skill of the same id."""
-    from modules.skills.writer import PROVENANCE_USER, SkillWriterMixin
-    resolve = SkillWriterMixin._resolve_pending
-    assert resolve(None, PROVENANCE_USER, True) is True
-    assert resolve(None, PROVENANCE_USER, True, overwriting_active=True) is True
+def test_learn_refuses_an_id_that_has_a_skill(monkeypatch):
+    sm = _FakeSM(ok=True, pending=False)
+    sm.active_skill_text = lambda skill_id, user_id: "a refined body"
+    monkeypatch.setattr(h_learn, "_skill_manager", lambda ctx: sm)
+    ctx, emitted = _ctx(["When", "deploying", "always", "run", "tests"], sm)
+    h_learn.h_learn(ctx)
+    assert not getattr(sm, "created", None)
+    assert "exists" in str(emitted)

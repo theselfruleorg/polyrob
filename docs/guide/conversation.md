@@ -28,20 +28,43 @@ tenant, bounded). A session **reads** that thread; it never owns it.
   told you and what you replied to it.
 
 So a reply to something the agent said three minutes ago lands with its
-context, whichever session answers. The idle reset and `/new` stay what they
-were — a clean workspace and a fresh context window — but they are no longer
-a memory cliff.
+context, whichever session answers. The idle reset stays what it was — a clean
+workspace and a fresh context window — but it is no longer a memory cliff.
+
+## One main chat, and separate chats beside it
+
+A direct chat on a chat app has one **main chat**: it is continuous, and it is where
+you are until you choose another. For a subject you want apart from it, open a
+separate chat:
+
+| You send | What happens |
+|---|---|
+| `/new [name]` | opens a separate chat and puts you in it. The chat you left stays open and keeps its work |
+| `/chats` | lists your chats: the main one first, each with a number and a tap |
+| `/chat <number or name>` | puts you in that chat (`/chat main` goes back) |
+| `/rename <name>` | names the chat you are in |
+| `/close` | closes the separate chat you are in and puts you back in the main chat |
+
+The terminal has the same chats and the same five commands, with one difference: a
+terminal run stays in the chat it started in, so a switch there applies to your next
+start (`polyrob --new` and `polyrob --chat <number or name>` choose it at the start).
+`/chats` also lists the chats you have in the other places you talk to the agent.
+
+Your next line always goes to the chat you are in. A line that arrives from a chat you
+are not in starts with that chat's name in brackets, for example `[main]`. The main chat
+does not close. A group chat has one conversation and no separate chats.
 
 `/thread [n | <hours>h]` shows it on Telegram, in the REPL and in the
 console, every line labelled with the run it came from. A group chat refuses
 it. `/status` reports how many lines were recorded in the last day.
 
-## The four regimes
+## The five regimes
 
 | Regime | Where | Session lifetime | Reads the thread | Writes the thread |
 |---|---|---|---|---|
-| **Thread** (default) | Telegram DM, console landing page, REPL | rolls on idle, `/new`, or a daily reset | tail on the first turn, delta after | every reply |
-| **Task session** | `/task …` in a chat app, console `/c/<id>`, `polyrob run` | one session, explicit lifetime | tail on the first turn, delta after | every reply |
+| **Thread** (default) | a direct chat on Telegram or another chat app | each chat starts fresh after an idle gap (the agent tells you once); `/new` opens a separate chat | tail on the first turn, delta after | every reply |
+| **One chat each** | the console (each new chat), `polyrob run` | until you close it; `polyrob run --continue <id> "message"` continues one | tail on the first turn, delta after | every reply |
+| **Terminal run** | `polyrob` | one run; the next start in the same chat gets its summary | tail on the first turn, delta after | every reply |
 | **Room** | an allowlisted group chat | per room | **never** — the thread is private | never |
 | **Autonomous run** | goals, jobs, approvals and settlements | one run | its own slice | every line that reached you |
 
@@ -60,7 +83,7 @@ from a background run is refused with this remedy.
 ## What the agent did
 
 The agent reads exact counts and recent lines of every decision you made and each act outside from its
-stores. This survives compaction and `/new`, and never reaches a group or another person.
+stores. This survives compaction and a fresh chat, and never reaches a group or another person.
 
 ## Switches
 

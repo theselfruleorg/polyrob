@@ -100,9 +100,9 @@ async def test_new_permitted_for_non_owner_in_own_dm(env):
     ta = _FakeTaskAgent()
     result = _cmd("/new", user_id="u_stranger", chat_id="555", chat_type="dm")
     out = await act_on_inbound(ta, result, spawn=lambda c: None)
-    assert ta.cancelled == ["sess_1"]
-    assert ta.unbound == ["agent:main:telegram:dm:555:u_stranger"]
-    assert out == "Started fresh — send your next message to begin."
+    # 113: permitted (not the refusal), and /new no longer stops the chat it leaves
+    assert out != _UNAUTHORIZED_TEXT and "could not read the chats" in out
+    assert ta.cancelled == [] and ta.unbound == []
 
 
 @pytest.mark.asyncio

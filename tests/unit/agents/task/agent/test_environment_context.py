@@ -78,17 +78,16 @@ def test_budget_line_absent_when_disabled(monkeypatch, tmp_path):
     assert text is not None and "Run budget:" not in text
 
 
-def test_retrieval_injects_environment_between_identity_and_self_context():
+def test_retrieval_injects_environment_right_after_the_system_prompt():
     # Foundation-order contract without constructing a full MessageManager.
     # 060 WS-2: both retrieval paths derive the order from ONE table
-    # (foundation_layers.FOUNDATION_LAYERS); the environment slot sits AFTER
-    # runtime identity and BEFORE self-context there.
+    # (foundation_layers.FOUNDATION_LAYERS).
     from agents.task.agent.messages.foundation_layers import FOUNDATION_LAYERS
     attrs = [layer.attr for layer in FOUNDATION_LAYERS]
-    ident = attrs.index("_runtime_identity_message")
     env = attrs.index("_environment_message")
     self_ctx = attrs.index("_self_context_message")
-    assert ident < env < self_ctx
+    ident = attrs.index("_runtime_identity_message")
+    assert env == 1 and env < self_ctx < ident
 
 
 def test_workspace_path_is_its_own_message_after_the_catalogs(monkeypatch, tmp_path):

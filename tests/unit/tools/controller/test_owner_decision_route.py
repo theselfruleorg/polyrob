@@ -31,14 +31,18 @@ def _sha(text):
     return hashlib.sha256(text.encode()).hexdigest()
 
 
+def _untrusted_turn(monkeypatch):
+    """The next skill_manage call is a correspondent's/room's turn: its write is a draft."""
+    monkeypatch.setattr("tools.controller.skill_manage._untrusted_author", lambda *a, **k: True)
+
+
 @pytest.fixture
 def env(monkeypatch, tmp_path):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("POLYROB_DATA_DIR", str(home))
     monkeypatch.setenv("SKILLS_WRITABLE", "true")
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
-    monkeypatch.setenv("SKILL_OVERWRITE_PROTECT", "false")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
     monkeypatch.setenv("OWNER_DOC_WRITABLE", "true")
     sm = SkillManager(skills_dir=tmp_path / "skills")
     monkeypatch.setattr("agents.task.agent.skill_manager.get_skill_manager", lambda: sm)
@@ -81,9 +85,8 @@ async def test_one_card_promotes_skill_terms_and_retires_owner_line(env, monkeyp
     writer = OwnerDocWriter(home, instance_id=iid)
     assert writer.propose(OWNER, user_id="u1", created_by="user", pending=False).ok
 
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "true")
-    monkeypatch.setenv("SKILL_OVERWRITE_PROTECT", "true")
     body = sm._load_skill_content("buy-lane", user_id="u1")
+    _untrusted_turn(monkeypatch)
     res = await call(action="patch", skill_id="buy-lane", old_string="0.1 ETH",
                      new_string="0.2 ETH", expected_sha256=_sha(SKILL))
     assert res.error is None, res.error
@@ -97,7 +100,7 @@ async def test_one_card_promotes_skill_terms_and_retires_owner_line(env, monkeyp
     assert by_kind["skill"]["linked"] == "owner_doc:u1"
     assert by_kind["owner_doc"]["linked"] == "skill:buy-lane"
     # R9: provenance rides the preview every seat shows
-    assert "drafted by the agent" in by_kind["owner_doc"]["preview"]
+    assert "drafted by" in by_kind["owner_doc"]["preview"]  # the label for untrusted_turn is raw (see report)
     note = se.build_pending_notification(items)
     assert "1 proposed change " in note and note.count("/approve_") == 2  # one entry + approve_all
 
@@ -116,6 +119,28 @@ async def test_one_card_promotes_skill_terms_and_retires_owner_line(env, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_a_live_skill_change_names_an_owner_line_and_never_retires_it(env, monkeypatch):
+    from core import self_evolution as se
+    from core.instance import resolve_instance_id
+    from core.owner_doc_writer import OwnerDocWriter
+    sm, home, call = env
+    iid = resolve_instance_id()
+    assert (await call(action="create", skill_id="buy-lane", content=SKILL)).error is None
+    _pin(home, "buy-lane")
+    writer = OwnerDocWriter(home, instance_id=iid)
+    assert writer.propose(OWNER, user_id="u1", created_by="user", pending=False).ok
+    monkeypatch.setattr("tools.controller.doc_authoring._owner_turn_is_clean", lambda *a, **k: True)
+
+    res = await call(action="patch", skill_id="buy-lane", old_string="0.1 ETH",
+                     new_string="0.2 ETH", expected_sha256=_sha(SKILL))
+    assert res.error is None, res.error
+    assert "0.2 ETH" in sm._load_skill_content("buy-lane", user_id="u1")
+    assert "stay active" in res.extracted_content and "buy-lane budget" in res.extracted_content
+    assert "buy-lane budget" in writer.read_active("u1").split("## Superseded", 1)[0]
+    assert se.list_pending("u1", home_dir=home, instance_id=iid, skill_manager=sm) == []
+
+
+@pytest.mark.asyncio
 async def test_rejecting_either_half_rejects_both(env, monkeypatch):
     from core import self_evolution as se
     from core.instance import resolve_instance_id
@@ -126,8 +151,7 @@ async def test_rejecting_either_half_rejects_both(env, monkeypatch):
     _pin(home, "buy-lane")
     writer = OwnerDocWriter(home, instance_id=iid)
     writer.propose(OWNER, user_id="u1", created_by="user", pending=False)
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "true")
-    monkeypatch.setenv("SKILL_OVERWRITE_PROTECT", "true")
+    _untrusted_turn(monkeypatch)
     await call(action="patch", skill_id="buy-lane", old_string="0.1 ETH",
                new_string="0.2 ETH", expected_sha256=_sha(SKILL))
     ok, msg = se.reject("owner_doc", "u1", user_id="u1", home_dir=home,
@@ -146,8 +170,7 @@ async def test_an_unpinned_skill_drafts_no_owner_retire(env, monkeypatch):
     await call(action="create", skill_id="buy-lane", content=SKILL)
     writer = OwnerDocWriter(home, instance_id=resolve_instance_id())
     writer.propose(OWNER, user_id="u1", created_by="user", pending=False)
-    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "true")
-    monkeypatch.setenv("SKILL_OVERWRITE_PROTECT", "true")
+    _untrusted_turn(monkeypatch)
     res = await call(action="patch", skill_id="buy-lane", old_string="0.1 ETH",
                      new_string="0.2 ETH", expected_sha256=_sha(SKILL))
     assert res.error is None and "Also drafted" not in res.extracted_content

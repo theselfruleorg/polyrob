@@ -1,6 +1,6 @@
 """2026-10-13 review A2: a reload (restart / eviction) must not bring back stale
-owner rules, a stale system prompt, skills or <environment>. A layer whose fresh
-render differs keeps the fresh render; byte-identical layers still replay."""
+owner rules, skills or <environment>. 106 C6: a row whose fresh render differs keeps its
+persisted bytes, and the change rides the tail; byte-identical rows replay."""
 from unittest.mock import MagicMock
 
 import pytest
@@ -53,9 +53,12 @@ def test_a_rule_approved_after_the_save_reaches_the_reloaded_chat(tmp_data_root)
     after.set_tool_catalog_message("- done [ready] (rebuilt)")
     assert after.load_from_disk(SESSION, USER) is True
 
-    assert any("14:00 never post" in c for c in _contents(after, "_self_context_blocks"))
-    assert "skills v2" in _contents(after, "_skill_message")
-    assert "PAUSED" in _contents(after, "_environment_message")
+    assert any("09:00 rules" in c for c in _contents(after, "_self_context_blocks"))
+    assert "skills v1" in _contents(after, "_skill_message")
+    assert "ENABLED" in _contents(after, "_environment_message")
+    assert after.update_state_delta({})
+    tail = "\n".join(str(m.message.content) for m in after.history.messages)
+    assert "14:00 never post" in tail and "skills v2" in tail and "PAUSED" in tail
     # A non-rule layer still replays the saved bytes (the F13 cache rationale).
     assert "(rebuilt)" not in _contents(after, "_tool_catalog_message")
 

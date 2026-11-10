@@ -1,15 +1,7 @@
-"""P1-9 (intelligence-polish plan 2026-07-07): extended thinking must NOT be enabled
-on a tool-calling request.
+"""A budget row (older than 4.6) with THINKING_CONFIG_ENABLED gets its thinking block on a
+tool-calling request too: the client replays the blocks. The real API takes no temperature.
 
-Anthropic requires the assistant's thinking block(s) (with signature) to precede
-tool_use when tool_results are sent back with thinking on. This client discards
-thinking blocks and never replays them, so enabling thinking on a tool loop 400s at
-step 2. Until block-replay lands, thinking is refused when tools are present (the flag
-is default-OFF; this makes turning it on safe). No-tool calls still get thinking.
-
-The SDK mock records EACH call's params and always raises; the method's own error
-handling then falls back to a non-tool path, so we assert on the FIRST capture (the
-primary _generate_with_tools request) rather than the muddied final state.
+The SDK mock records EACH call's params and always raises, so we assert on the FIRST capture.
 """
 import logging
 
@@ -52,14 +44,15 @@ async def _run(client, tools):
 
 
 @pytest.mark.asyncio
-async def test_thinking_disabled_when_tools_present(monkeypatch):
+async def test_a_budget_row_thinks_when_tools_are_present(monkeypatch):
     monkeypatch.setenv("THINKING_CONFIG_ENABLED", "true")
     calls = []
     c = _client(calls)
     tools = [{"name": "do_x", "input_schema": {"type": "object", "properties": {}}}]
     await _run(c, tools)
     assert calls, "the primary request should have been attempted"
-    assert "thinking" not in calls[0], "thinking must be OFF on a tool-calling request"
+    assert calls[0]["thinking"]["type"] == "enabled"
+    assert "temperature" not in calls[0]
 
 
 @pytest.mark.asyncio
@@ -70,7 +63,7 @@ async def test_thinking_enabled_when_no_tools(monkeypatch):
     await _run(c, [])  # no tools → thinking may be enabled
     assert calls
     assert "thinking" in calls[0], "thinking should be enabled on a no-tool call"
-    assert calls[0].get("temperature") == 1  # required by the API when thinking is on
+    assert "temperature" not in calls[0]
 
 
 @pytest.mark.asyncio

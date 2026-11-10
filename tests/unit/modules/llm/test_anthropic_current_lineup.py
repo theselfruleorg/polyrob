@@ -8,8 +8,12 @@ matters for the client: these models use ADAPTIVE thinking, so the registry must
 NOT hand the Anthropic client a `budget_tokens` (rejected with a 400 on
 Fable 5 / Opus 4.7-4.8 / Sonnet 5) — get_thinking_config() must return {}.
 """
+import pytest
+
 from modules.llm.model_registry import (
+    get_all_models,
     get_model_config,
+    get_model_config_exact,
     get_thinking_config,
     ModelProvider,
 )
@@ -23,7 +27,10 @@ CURRENT_ANTHROPIC = {
     "claude-opus-4-8": (5.00, 25.00),
     "claude-opus-4-7": (5.00, 25.00),
     "claude-opus-4-6": (5.00, 25.00),
-    "claude-sonnet-5": (3.00, 15.00),
+    "claude-sonnet-5": (2.00, 10.00),
+    "claude-opus-5-5": (4.00, 20.00),
+    "claude-sonnet-5-5": (2.00, 10.00),
+    "claude-haiku-5-5": (0.10, 0.50),
     "claude-sonnet-4-6": (3.00, 15.00),
 }
 
@@ -40,13 +47,26 @@ def test_current_anthropic_models_registered():
 
 
 def test_current_anthropic_uses_adaptive_thinking_not_budget_tokens():
-    # budget_tokens is rejected (400) on Fable 5 / Opus 4.7-4.8 / Sonnet 5 and
-    # deprecated on Opus 4.6 / Sonnet 4.6 — the registry must not send one, so
-    # get_thinking_config() stays empty (byte-identical to pre-2026-07-14).
+    # budget_tokens is rejected (400) on Fable 5 / Opus 4.7-4.8 / Sonnet 5 and the 5.5 rows,
+    # and deprecated on Opus 4.6 / Sonnet 4.6: the registry must not send one.
     for name in CURRENT_ANTHROPIC:
-        assert get_thinking_config(name) == {}, (
-            f"{name} must not emit thinking params (adaptive-only): "
-            f"{get_thinking_config(name)}")
+        assert "budget_tokens" not in get_thinking_config(name), name
+
+
+def test_a_budget_lives_only_on_a_row_older_than_4_6():
+    from modules.llm.model_registry import get_registry
+    rows = [c for c in get_registry().list_models()
+            if c.provider.value == "anthropic" and c.capabilities.thinking_budget_tokens]
+    assert {c.name for c in rows} <= {"claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4-5"}
+
+
+def test_the_5_5_rows_name_their_effort_and_the_history_check():
+    for name in ("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"):
+        caps = get_model_config(name).capabilities
+        assert caps.reasoning_effort == "medium" and caps.preserves_thinking
+    assert get_model_config("claude-fable-5-1").capabilities.preserves_thinking
+    for name in ("claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"):
+        assert not get_model_config(name).capabilities.preserves_thinking
 
 
 def test_anthropic_aliases_resolve():
@@ -68,12 +88,13 @@ def test_anthropic_aliases_resolve():
 
 #: F9 (2026-09-23): the models that accept mid-conversation tool changes
 #: (`defer_loading` + `tool_addition`, beta mid-conversation-tool-changes-
-#: 2026-07-01). Claude Opus 5 ONWARD — this is the ONE table the deferred
-#: late-tool mode reads, so a name-pattern guess can never creep back in.
-DEFERRED_TOOLS_CAPABLE = ("claude-opus-5", "claude-fable-5", "claude-fable-5-1")
+#: 2026-07-01). This is the ONE table the deferred late-tool mode reads, so a
+#: name-pattern guess can never creep back in.
+DEFERRED_TOOLS_CAPABLE = ("claude-opus-5-5", "claude-opus-5", "claude-opus-4-8",
+                          "claude-fable-5", "claude-fable-5-1", "claude-sonnet-5-5")
 DEFERRED_TOOLS_INCAPABLE = (
-    "claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-5", "claude-sonnet-4-6",
-    "claude-haiku-4-5",
+    "claude-opus-4-7", "claude-sonnet-5", "claude-sonnet-4-6",
+    "claude-haiku-4-5", "claude-haiku-5-5",
 )
 
 
@@ -92,6 +113,38 @@ def test_fable_5_1_cache_read_price_is_explicit():
     assert get_model_config("claude-fable-5-1").max_completion_tokens == 128000
 
 
-def test_anthropic_default_unchanged():
-    # Policy: adding the new models did NOT move the anthropic default.
-    assert DEFAULT_MODELS["anthropic"] == "claude-sonnet-4-5"
+def test_anthropic_default_is_a_model_that_is_not_retiring():
+    assert DEFAULT_MODELS["anthropic"] == "claude-sonnet-5-5"
+    assert get_model_config_exact("claude-sonnet-5-5").deprecated is False
+
+
+def test_anthropic_oauth_seat_serves_the_current_lineup():
+    from modules.llm.provider_spec import get_spec
+    spec = get_spec("anthropic-oauth")
+    assert spec.default_model == "claude-sonnet-5-5"
+    for name in spec.models:
+        assert get_model_config_exact(name).deprecated is False, name
+
+
+def test_every_claude_row_sees_images():
+    rows = get_all_models(ModelProvider.ANTHROPIC, include_deprecated=True)
+    assert rows
+    assert [r.name for r in rows if not r.capabilities.supports_vision] == []
+
+
+def test_docs_prices_of_the_new_lineup():
+    assert get_model_config_exact("claude-opus-5-5").pricing.cached_input_price == 0.20
+    assert get_model_config_exact("claude-opus-5-5").max_completion_tokens == 128000
+    assert get_model_config_exact("claude-sonnet-5-5").pricing.cached_input_price == 0.20
+    assert get_model_config_exact("claude-sonnet-5-5").max_completion_tokens == 128000
+    assert get_model_config_exact("claude-haiku-5-5").pricing.cached_input_price == 0.01
+    assert get_model_config_exact("claude-fable-5").pricing.cached_input_price == 1.00
+
+
+@pytest.mark.parametrize("retired", [
+    "claude-3-5-sonnet-20241022", "claude-3-5-sonnet", "claude-3-sonnet", "claude-sonnet-4",
+    "claude-3-5-haiku", "claude-3-haiku", "claude-3-opus", "claude-opus-4-1", "claude-opus-4",
+])
+def test_retired_ids_have_no_exact_row(retired):
+    """A retired id must not pass the price lookup: it is a 404 on the wire."""
+    assert get_model_config_exact(retired) is None

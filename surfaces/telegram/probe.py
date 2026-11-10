@@ -1,4 +1,5 @@
 """``polyrob surfaces probe telegram``: Bot API ``getMe`` (a read). See ``surfaces/_probe.py``."""
+from core.surfaces.telegram_api import telegram_api_base
 from surfaces._probe import ProbeResult, http_json, missing
 
 
@@ -7,7 +8,7 @@ async def probe(env) -> ProbeResult:
     if gap:
         return gap
     status, payload, err = await http_json(
-        "GET", f"https://api.telegram.org/bot{env['TELEGRAM_BOT_TOKEN'].strip()}/getMe")
+        "GET", f"{telegram_api_base(env)}/bot{env['TELEGRAM_BOT_TOKEN'].strip()}/getMe")
     if err:
         return ProbeResult.unavailable(err)
     if isinstance(payload, dict) and payload.get("ok"):

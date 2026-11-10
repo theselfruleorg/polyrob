@@ -695,7 +695,7 @@ def _update_one(name: str, entry: dict, *, user_id: str) -> UpdateReport:
         rep.status = "approved"
     else:
         rep.status = "quarantined"
-        rep.detail = f"run polyrob skill approve {name} to activate the new version"
+        rep.detail = f"run polyrob skills approve {name} to activate the new version"
     return rep
 
 

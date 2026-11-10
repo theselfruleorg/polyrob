@@ -35,6 +35,14 @@ what is on with `agent_status`. Every owner verb, with its help line, is in
   `/job run <id>` runs it on the next scheduler pass; `/job stop <id>` removes it.
 - A schedule is a duration (`30m`), a weekday time (`every monday 09:00`), a
   five-field cron expression, or an ISO time for a one-time run.
+- A recurring job pauses after 3 failed runs in a row and tells the owner once; a
+  provider outage does not count. `/job resume <id>` starts a new count.
+- A crash can cut a run. A job that runs the model does not repeat by itself: it goes
+  to its next slot and the owner gets `/job run <id>`.
+- `/jobs` says how long a late job has waited. A money job more than 1 hour late
+  does not run, unless it is an exit job.
+- Jobs run one at a time. The owner's typed time stays and the reply names any job
+  it overlaps; a time you set moves to the nearest free minute (`standing-work`).
 - A job runs only while the scheduler is on (`/jobs` says so when it is not,
   and names the fix). Delivery of the result to Telegram/email/Twitter is a
   separate opt-in (`CRON_DELIVERY_ENABLED`). At `AUTONOMY_POSTURE=full` a
@@ -44,6 +52,8 @@ what is on with `agent_status`. Every owner verb, with its help line, is in
   must be in this session's tool_ids). How to shape a job, and the $0 watch:
   the `standing-work` skill. To change a live job, `cronjob_show` it and
   `cronjob_edit` it (patch `old_text` → `new_text`) — never cancel and re-type it.
+  `expect` states what a run must do (`{"effect": "social", "min": 1}` or
+  `{"idle_ok": true}`); code checks it against the run's acts and stores `verified`.
 - A group can run a catch-up job over its own messages:
   `/groups service here every 30m`.
 
@@ -69,10 +79,11 @@ what is on with `agent_status`. Every owner verb, with its help line, is in
 - **Blocked is not dead.** After `GOAL_MAX_RETRIES` failures a goal is
   `blocked`, with its reason on its line. A provider-outage block goes back to
   the queue within `GOAL_BLOCKED_PROVIDER_RETRY_MIN` minutes; any other block
-  waits for `/goal retry` or ages out after `GOAL_BLOCKED_MAX_AGE_DAYS`. Tell
-  the owner the reason — never try to force it through.
+  waits for `/goal retry` or ages out after `GOAL_BLOCKED_MAX_AGE_DAYS`. Every stop
+  and every age-out tells the owner once; a provider-outage block tells only when it
+  stops healing. Give the reason when asked — never try to force it through.
 - Your own tools: `goal_create`, `goal_list` and `goal_show` in every main session (a leaf returns a proposal);
-  `goal_ask` holds your own goal for an owner decision. `goal_update`,
+  `owner_ask(blocks_goal_ids=[…])` holds your own goal for an owner decision. `goal_update`,
   `goal_unblock` and `goal_cancel` work only in the owner's own turn — in a goal
   or scheduled-job run they refuse; name `/goal retry <id>` or `/goal stop <id>` to the
   owner instead. Inside a run: the `goal-run` skill. A goal you write for yourself
@@ -103,8 +114,9 @@ what is on with `agent_status`. Every owner verb, with its help line, is in
 
 ## What standing work may do
 
-Every job and goal runs its tools as written, posts without a per-run tap and
-moderates only the room its text names. A job or goal you create from an
+Every job and goal runs its tools as written, posts, publishes and keeps notes without a
+per-run tap, steers other goals but never the one it runs, and moderates only the room
+its text names. A job or goal you create from an
 autonomous run may ask only for the safe set; only the owner's own turn may ask for any
 rig or put a write verb on a job. Under the `supervised` money regime no job or
 goal moves funds unattended.
@@ -130,8 +142,8 @@ goal moves funds unattended.
 - **Self-wake** — re-enters an idle chat as a forged continuation turn (e.g.
   after a background delegation finishes). Bounded by
   `SELF_WAKE_MAX_REENTRIES` and `SELF_WAKE_IDLE_BACKOFF_SEC`. A self-wake turn
-  is always framed as untrusted content — it can never auto-activate a skill
-  or write active identity docs.
+  is always framed as untrusted content — it can never write active identity
+  docs. A skill it writes is active at once, with a rollback.
 - **Background review** — a cheap auxiliary reviewer every
   `BG_REVIEW_INTERVAL` productive turns; leaf, non-blocking.
 - **Curator** — a no-LLM tick that ages out unused self-authored skills
@@ -149,6 +161,5 @@ billing failure and releases after `CREDIT_SENTINEL_RELEASE_HOURS`.
 - None of these loops run from the web console process alone (`polyrob
   dashboard`) — they need a worker that starts the shared autonomy runtime
   (`polyrob serve` / `polyrob gateway` / the REPL under `POLYROB_LOCAL`).
-- A goal/cron circuit-breaker `blocked` status is a genuine stop, not a
-  silent retry storm — surface it to the owner rather than trying to force
-  it through.
+- A `blocked` goal and a job paused by the failure limit are genuine stops, not a
+  silent retry storm. Do not try to force them through.

@@ -1,15 +1,16 @@
 {
   "function": {
-    "description": "Select a dropdown option by its text value.",
+    "description": "Select an option of a dropdown (a <select> element) by its text or value. For another kind of menu, click it and then click the option.",
     "name": "browser_select_dropdown_option",
     "parameters": {
       "additionalProperties": false,
-      "description": "Model for inputting text into an element.",
+      "description": "Model for selecting one option of a dropdown.",
       "properties": {
         "elementIndex": {
           "type": "integer"
         },
         "inputText": {
+          "description": "The option as the dropdown shows it (or its value)",
           "type": "string"
         },
         "xPath": {

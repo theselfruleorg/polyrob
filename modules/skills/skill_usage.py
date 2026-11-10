@@ -217,6 +217,17 @@ class SkillUsageStore:
         rows = execute_retry(self.db_path, sql, tuple(params), fetch="all") or []
         return [dict(r) for r in rows]
 
+    def live_changes_since(self, user_id: str, since_ts: float, *, actor: str) -> List[Dict]:
+        """The live writes of *actor* since *since_ts*, oldest first: this tenant's rows and
+        the bundled copies (no draft, no rollback, no archive). Raises when unreadable."""
+        rows = execute_retry(
+            self.db_path,
+            "SELECT * FROM skill_provenance_log WHERE actor=? AND pending=0 AND ts>=? AND user_id=? "
+            "AND ((scope='user' AND action IN ('create','patch','edit')) "
+            "OR (scope='bundled' AND action='promote')) ORDER BY id",
+            (actor, since_ts, user_id), fetch="all") or []
+        return [dict(r) for r in rows]
+
     # --- usage ---------------------------------------------------------------
 
     def bump_load(self, skill_id: str, user_id: str) -> None:
@@ -297,6 +308,13 @@ class SkillUsageStore:
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (key, value),
         )
+
+    def list_state(self, prefix: str) -> Dict[str, str]:
+        """``{key: value}`` of every state key under *prefix*. Raises when unreadable."""
+        rows = execute_retry(self.db_path,
+                             "SELECT key, value FROM curator_state WHERE substr(key,1,?)=?",
+                             (len(prefix), prefix), fetch="all") or []
+        return {r["key"]: r["value"] for r in rows}
 
     # --- install audit ---------------------------------------------------------
 

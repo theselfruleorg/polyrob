@@ -457,6 +457,12 @@ async def deny_verb(c) -> str:
     return f"✅ Denied {surface}:{target}."
 
 
+async def pair_verb(c) -> str:
+    """`/pair [list|approve <surface> <code>|revoke <surface> <id>]` — DM pairing."""
+    from core.pairing import pair_verb as _pair, store_for
+    return _pair(list(c.args), store=store_for(c.data_dir))
+
+
 async def allowlist_verb(c) -> str:
     """`/allowlist` — every entry with its state."""
     rows = _allowlist(c).list(c.user_id)

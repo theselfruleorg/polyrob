@@ -334,3 +334,36 @@ def test_a_tool_without_the_blockhash_check_fails_closed(rig):
     r = _run(tool)
     assert "NOT SENT" in _text(r)
     assert not tool.sent
+
+
+# -- an unknown send outcome is booked and keeps its signature ------------------
+
+def test_an_unknown_solana_send_is_booked_and_stamped(rig, tmp_path):
+    from core.wallet.solana_rail import SolanaBroadcastError
+    tool = _Tool()
+
+    def _lost(raw_tx, signer):
+        exc = SolanaBroadcastError("submission outcome unknown for sigX; reconcile "
+                                   "before retrying")
+        exc.signature = "sigX"
+        raise exc
+    tool._solana_send = _lost
+    r = _run(tool)
+    assert "outcome unknown" in _text(r)
+    rec = tool.wallet.policy.recorded
+    assert len(rec) == 1 and rec[0]["result_ref"] == "sigX"
+    assert "receipt_state" not in rec[0]          # never for a Solana origin
+    rows = bridge_guard.open_bridges_all(db_path=bridge_guard.bridges_db_path())
+    assert [(r["state"], r["tx_ref"]) for r in rows] == [(bridge_guard.STATE_IN_FLIGHT, "sigX")]
+
+
+def test_a_rejected_solana_send_books_nothing(rig):
+    from core.wallet.solana_rail import SolanaRejected
+    tool = _Tool()
+
+    def _refused(raw_tx, signer):
+        raise SolanaRejected("the node rejected the transaction (-32002: x) — not sent")
+    tool._solana_send = _refused
+    r = _run(tool)
+    assert "NOT" in _text(r) or "not sent" in _text(r)
+    assert tool.wallet.policy.recorded == []

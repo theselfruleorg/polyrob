@@ -73,46 +73,58 @@ class FoundationLayer:
 	#: environment must reach a resumed chat. A cache miss once beats a stale
 	#: rule. Byte-identical layers still replay (the cache survives).
 	refresh_on_reload: bool = False
+	#: on a reload a layer whose fresh render differs KEEPS its persisted bytes, and
+	#: the changed lines ride the tail as a ``<state-delta>`` part, so a restart of a
+	#: resumed chat stays warm and the change still reaches it.
+	delta_on_reload: bool = False
 
 
 #: THE foundation order, in wire order. Everything else derives from it.
+#: A row the agent or the owner can write comes after every row they cannot, and a
+#: row per session comes last, so one write colds only what follows it.
 FOUNDATION_LAYERS: Tuple[FoundationLayer, ...] = (
 	FoundationLayer("system_prompt", "_system_message", "_system_message_tokens",
 	                None, FROZEN, refresh_on_reload=True),
-	# 095 W1a: the version + model lines must reach a resumed chat after a deploy.
-	FoundationLayer("runtime_identity", "_runtime_identity_message",
-	                "_runtime_identity_tokens", MessageOrigin.RUNTIME_IDENTITY, FROZEN,
-	                refresh_on_reload=True),
 	FoundationLayer("environment", "_environment_message", "_environment_tokens",
-	                MessageOrigin.ENVIRONMENT, FROZEN, refresh_on_reload=True),
+	                MessageOrigin.ENVIRONMENT, FROZEN, delta_on_reload=True),
+	FoundationLayer("tool_catalog", "_tool_catalog_message", "_tool_catalog_tokens",
+	                MessageOrigin.TOOL_CATALOG, FROZEN),
 	FoundationLayer("self_context", "_self_context_message", "_self_context_tokens",
 	                MessageOrigin.SELF_CONTEXT, STANDING, group="self_context",
-	                refresh_on_reload=True),
+	                delta_on_reload=True),
 	# 060 WS-1: the same tier, unwelded — one message per declared block
-	# (SELF_CONTEXT_BLOCKS below). Exactly one of the two self-context layers is
-	# set in a session; set_self_context_blocks always fills this one.
-	FoundationLayer("self_context_blocks", "_self_context_blocks",
-	                "_self_context_blocks_tokens", MessageOrigin.SELF_CONTEXT, STANDING,
-	                group="self_context", optional=True, refresh_on_reload=True),
-	FoundationLayer("project_context", "_project_context_message",
-	                "_project_context_tokens", MessageOrigin.PROJECT_CONTEXT, STANDING),
+	# (SELF_CONTEXT_BLOCKS below). The operator-only blocks sit here, ahead of the
+	# skills; the blocks the owner and the agent write sit after them
+	# (``self_context_blocks``). set_self_context_blocks fills both, and the
+	# ``self_context`` row above is the welded alternative to the two of them.
+	FoundationLayer("self_context_soul", "_self_context_soul",
+	                "_self_context_soul_tokens", MessageOrigin.SELF_CONTEXT, STANDING,
+	                group="self_context", optional=True, delta_on_reload=True),
 	FoundationLayer("skill_catalog", "_skill_message", "_skill_message_tokens",
-	                MessageOrigin.SKILL, STANDING, refresh_on_reload=True),
+	                MessageOrigin.SKILL, STANDING, delta_on_reload=True),
 	# 041 phase 2: the approved named workers (WORKERS_ENABLED). Frozen at
 	# session start and unset when the flag is OFF or no worker is approved, so
 	# the prefix is byte-identical then. STANDING: owner-approved offers, like
 	# the skill catalog beside it.
 	FoundationLayer("worker_catalog", "_worker_catalog_message", "_worker_catalog_tokens",
 	                MessageOrigin.WORKER_CATALOG, STANDING, optional=True),
-	FoundationLayer("tool_catalog", "_tool_catalog_message", "_tool_catalog_tokens",
-	                MessageOrigin.TOOL_CATALOG, FROZEN),
+	FoundationLayer("self_context_blocks", "_self_context_blocks",
+	                "_self_context_blocks_tokens", MessageOrigin.SELF_CONTEXT, STANDING,
+	                group="self_context", optional=True, delta_on_reload=True),
+	FoundationLayer("project_context", "_project_context_message",
+	                "_project_context_tokens", MessageOrigin.PROJECT_CONTEXT, STANDING),
+	# Model and provider only: a live /model swap rewrites one short row, and only
+	# the two per-session rows follow it. The running version rides the tail.
+	FoundationLayer("runtime_identity", "_runtime_identity_message",
+	                "_runtime_identity_tokens", MessageOrigin.RUNTIME_IDENTITY, FROZEN,
+	                refresh_on_reload=True),
 	# 081 WS-3.3: everything above is the same for two runs of one job (or two
 	# chats on one install); the two rows below differ per session — the
 	# workspace path and the task (a cron task carries per-run text). They
 	# come LAST, so a byte-prefix cache serves the catalogs to every run.
 	FoundationLayer("workspace", "_workspace_message", "_workspace_tokens",
 	                MessageOrigin.ENVIRONMENT, FROZEN, optional=True,
-	                refresh_on_reload=True),
+	                delta_on_reload=True),
 	FoundationLayer("initial_task", "_initial_task_message", "_initial_task_tokens",
 	                None, SCOPED),
 )
@@ -155,12 +167,14 @@ ORIGIN_TIERS = {
 
 #: 060 WS-1 — the declared blocks of the SELF_CONTEXT tier, in wire order, each
 #: with the tier that governs it. SELF_CONTEXT is the TIER name (an origin other
-#: code reads); these are the BLOCK names.
+#: code reads); these are the BLOCK names. The FROZEN blocks ride the
+#: ``self_context_soul`` row, the others the ``self_context_blocks`` row. The
+#: agent's own doc is last, so an agent write colds no block the owner wrote.
 SELF_CONTEXT_BLOCKS: Tuple[Tuple[str, str], ...] = (
 	("awareness", FROZEN),     # "You act on behalf of OWNER X" + the correspondent frame
 	("soul", FROZEN),          # identity.md + operating.md (operator-only)
-	("owner_rules", STANDING), # owner.md — the owner's rules and facts
 	("contract", STANDING),    # contract.md + the style line from typed prefs
+	("owner_rules", STANDING), # owner.md — the owner's rules and facts
 	("self_doc", STANDING),    # the agent's evolving SELF doc (quarantined writes)
 )
 
@@ -170,15 +184,19 @@ def tier_of(origin: Optional[str]) -> Optional[str]:
 	return ORIGIN_TIERS.get(origin) if origin else None
 
 
-def layer_visible(manager: Any, layer: FoundationLayer) -> bool:
+def owner_documents_visible(manager: Any) -> bool:
 	"""Owner documents never cross a live correspondent/public-session boundary."""
-	if layer.group != "self_context" and layer.key != "project_context":
-		return True
 	try:
 		guard = getattr(manager, "_owner_context_allowed", None)
 		return guard is None or bool(guard())
 	except Exception:
 		return False
+
+
+def layer_visible(manager: Any, layer: FoundationLayer) -> bool:
+	if layer.group != "self_context" and layer.key != "project_context":
+		return True
+	return owner_documents_visible(manager)
 
 
 def layer_messages(manager: Any, layer: FoundationLayer) -> List[Any]:
@@ -210,5 +228,5 @@ __all__ = [
 	"FROZEN", "STANDING", "SCOPED", "VOLATILE", "TIERS",
 	"FoundationLayer", "FOUNDATION_LAYERS", "HMEM_LAYER", "ORIGIN_TIERS",
 	"SELF_CONTEXT_BLOCKS",
-	"tier_of", "layer_messages", "foundation_messages",
+	"tier_of", "layer_messages", "foundation_messages", "owner_documents_visible",
 ]

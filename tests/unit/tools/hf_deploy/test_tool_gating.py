@@ -11,6 +11,13 @@ from tests.unit.tools.hf_deploy.test_tool_deploy import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _not_owner_driven(monkeypatch, request):
+    """These tests drive the ask of a turn that is not the owner's own."""
+    if "owner_driven" not in request.node.name:
+        monkeypatch.setattr("core.security.owner_turn.is_owner_driven", lambda *a, **k: False)
+
+
 def _ctx(**kw):
     from agents.task.loop_types.execution_context import ActionExecutionContext
     base = dict(session_id="sess-hf", user_id="owner-1", role="orchestrator",
@@ -323,3 +330,24 @@ def test_undeploy_denied_below_posture_2(tmp_path, monkeypatch, deploy_env):
                                     execution_context=_ctx()))
     assert res.error
     assert tool._broker.deleted == []
+
+
+def test_owner_driven_first_publish_asks_nobody(tmp_path, posture2, deploy_env, green_orch):
+    approver = Approver(allow=False)
+    tool = make_tool(tmp_path, approver=approver, orch=green_orch)
+    res = run_deploy(tool, _ctx())
+    assert res.error is None and approver.requests == []
+    assert tool._registry.get("app-x", "owner-1")["approved_at"] is not None
+
+
+def test_operator_deny_stops_an_owner_driven_first_publish(tmp_path, posture2, deploy_env,
+                                                           green_orch, monkeypatch):
+    """APPROVAL_PROVIDER=deny is the operator's standing stop: no owner-turn rule passes it."""
+    monkeypatch.setattr("core.security.owner_turn.is_owner_driven", lambda *a, **k: True)
+    monkeypatch.setenv("APPROVAL_PROVIDER", "deny")
+    approver = Approver(allow=True)
+    tool = make_tool(tmp_path, approver=approver, orch=green_orch)
+    res = run_deploy(tool, _ctx())
+    assert "APPROVAL_PROVIDER=deny" in str(res.error)
+    # Before: a pending row was written before the deny return and stayed behind.
+    assert tool._registry.get("app-x", "owner-1") is None

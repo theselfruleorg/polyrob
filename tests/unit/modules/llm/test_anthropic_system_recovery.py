@@ -44,7 +44,6 @@ def _make_client():
     c.logger = logging.getLogger("test-anthropic")
     # Stub heavy helpers that are irrelevant to system-prompt recovery.
     c._adjust_max_tokens = lambda **kw: 1024
-    c._extract_usage_and_capture_telemetry = lambda *a, **k: None
     c._extract_usage_data = lambda *a, **k: {}
     return c
 

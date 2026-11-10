@@ -404,6 +404,11 @@ class SessionCleanupMixin:
             if (not use_llm and getattr(self, "_chat_episode_mark", None) == _mark
                     and getattr(self, "_chat_episode_llm", False)):
                 return False   # an LLM account of this same mark landed meanwhile
+            _meta = {"source": source, "status": status}
+            from agents.task.runtime.run_outcome import main_compaction_summary
+            _compacted = main_compaction_summary(self)
+            if _compacted:
+                _meta["compaction_summary"] = _compacted   # 108 W7
             await finalize_episode(
                 session_id=_episode_session_id,
                 user_id=getattr(self, "user_id", None),
@@ -416,8 +421,10 @@ class SessionCleanupMixin:
                 artifacts=_prov.get("artifacts", []),
                 skills_loaded=_prov.get("skills_loaded"),
                 skills_activation=_prov.get("skills_activation"),
-                thread_key=getattr(self, "_chat_session_key", None),
-                meta={"source": source, "status": status},
+                # 113: a terminal run has a chat and no outbound bus (cli/ui/chat_seat.py).
+                thread_key=(getattr(self, "_chat_session_key", None)
+                            or getattr(self, "_chat_thread_key", None)),
+                meta=_meta,
             )
             self._chat_episode_mark = _mark
             self._chat_episode_llm = bool(use_llm)
@@ -671,11 +678,11 @@ class SessionCleanupMixin:
 
                 # M2 FIX, 102 M-M: close the per-session ISOLATED clients. They are built
                 # fresh (not cached, not in self.llm_clients), so nothing else closes them.
-                from agents.task.agent.core.model_swap import close_agent_llms, close_own_llm
+                from agents.task.agent.core.model_swap import close_own_llm, close_session_llms
                 _container = getattr(self, "container", None)
                 for agent_id, agent in list(self.agents.items()):
                     try:
-                        await close_agent_llms(agent, _container)
+                        await close_session_llms(agent, _container)
                         _tcm = getattr(agent, "task_context_manager", None)
                         if _tcm is not None and hasattr(_tcm, "clear_reflection_context"):
                             _tcm.clear_reflection_context(self.session_id)

@@ -249,8 +249,9 @@ class CuratedNotesStoreMixin:
                 f"ORDER BY COALESCE(updated_ts, 0) DESC, id DESC LIMIT ?",
                 tuple(args) + (max(1, min(1000, int(limit or 200))),), fetch="all")
         except Exception as e:
+            # "No notes yet" is a claim about the store: a read that failed raises.
             logger.warning("note_list failed: %s", e)
-            return []
+            raise
         return [self._note_row_to_dict(r) for r in (rows or [])]
     async def note_get(self, user_id, note_id, *, bump_access: bool = True):
         """Fetch one note (tenant-scoped). By default bumps access_count — the
@@ -279,8 +280,9 @@ class CuratedNotesStoreMixin:
                 out["access_count"] = (out["access_count"] or 0) + 1
             return out
         except Exception as e:
+            # None means "no such note": a read that failed raises instead.
             logger.warning("note_get failed: %s", e)
-            return None
+            raise
     def consolidate_notes(self, *, stale_before_ts: int) -> dict:
         """Mechanical consolidation (C4), across ALL tenants, curator-tick only:
 
@@ -315,11 +317,15 @@ class CuratedNotesStoreMixin:
                 "AND updated_ts IS NOT NULL AND updated_ts < ?",
                 (int(stale_before_ts),), fetch="all") or []
             for r in stale:
-                execute_retry(
-                    self.db_path,
-                    "UPDATE curated_memory SET status = 'archived', updated_ts = ? "
-                    "WHERE id = ?", (now, r["id"]))
-                out["archived_stale"].append((r["user_id"], r["id"]))
+                # The SELECT's predicates again: a note read or edited since it ran stays.
+                if execute_retry(
+                        self.db_path,
+                        "UPDATE curated_memory SET status = 'archived', updated_ts = ? "
+                        "WHERE id = ? AND COALESCE(status, 'active') = 'active' "
+                        "AND COALESCE(access_count, 0) = 0 "
+                        "AND updated_ts IS NOT NULL AND updated_ts < ?",
+                        (now, r["id"], int(stale_before_ts))):
+                    out["archived_stale"].append((r["user_id"], r["id"]))
         except Exception as e:
             logger.warning("consolidate_notes stale pass failed: %s", e)
         try:
@@ -338,11 +344,19 @@ class CuratedNotesStoreMixin:
                     "AND created_by IS NOT NULL AND created_by NOT IN ('user', 'owner')",
                     (g["user_id"], g["content"], g["keep_id"]), fetch="all") or []
                 for r in dupes:
-                    execute_retry(
-                        self.db_path,
-                        "UPDATE curated_memory SET status = 'archived', updated_ts = ? "
-                        "WHERE id = ?", (now, r["id"]))
-                    out["archived_dupes"].append((r["user_id"], r["id"]))
+                    # Still an active copy of the same text, and the KEPT row still is one
+                    # too: an edit (or an archive) since the SELECT keeps this copy.
+                    if execute_retry(
+                            self.db_path,
+                            "UPDATE curated_memory SET status = 'archived', updated_ts = ? "
+                            "WHERE id = ? AND user_id = ? AND content = ? "
+                            "AND COALESCE(status, 'active') = 'active' "
+                            "AND EXISTS (SELECT 1 FROM curated_memory k WHERE k.id = ? "
+                            "AND k.user_id = ? AND k.content = ? "
+                            "AND COALESCE(k.status, 'active') = 'active')",
+                            (now, r["id"], g["user_id"], g["content"],
+                             g["keep_id"], g["user_id"], g["content"])):
+                        out["archived_dupes"].append((r["user_id"], r["id"]))
         except Exception as e:
             logger.warning("consolidate_notes dupe pass failed: %s", e)
         return out
@@ -360,7 +374,7 @@ class CuratedNotesStoreMixin:
                  f'%{json.dumps(str(title).strip())}%'), fetch="all")
         except Exception as e:
             logger.warning("note_backlinks failed: %s", e)
-            return []
+            raise
         # LIKE over the JSON is a pre-filter; confirm against the parsed list.
         out = [self._note_row_to_dict(r) for r in (rows or [])]
         return [n for n in out if str(title).strip() in n["links"]]

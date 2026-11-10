@@ -10,9 +10,15 @@ enabled, scheduled cron job is due within that window (overdue included), so the
 money rail goes first and the goal runs on the next idle tick. Default 0 = off,
 byte-identical. Unreadable cron store = fail-open (dispatch).
 """
+import pytest
 from datetime import datetime, timedelta
 
 from agents.task.goals import dispatcher as d
+
+@pytest.fixture(autouse=True)
+def _cron_on(monkeypatch):
+    # 107 WS-7: with cron off no tick runs a job, so a job holds no goal.
+    monkeypatch.setenv("CRON_ENABLED", "true")
 
 
 def _store(tmp_path, next_run_at):

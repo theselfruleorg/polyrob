@@ -1,24 +1,24 @@
-"""Model call quality on the agent step — 2026-10-14 review E-2/E-3/E-7/E-8/D-1.
+"""Model call quality on the agent step.
 
 Five different failures (a truly empty completion, a text-only reply, an
-unknown tool name, bad tool arguments, a parse failure) used to collapse into
-one "Empty action response" journal line, so 779 empty actions could not be
-split by cause or by model. This module is the ONE place that:
+unknown tool name, bad tool arguments, a parse failure) look alike as one
+"Empty action response" journal line. This module splits them by cause and by
+model, and is the ONE place that:
 
 - names the cause of a tool-free step (``ISSUES``) and records it on the agent
   (``agent._call_issue``), so ``step_execution`` can put it on the log line;
 - emits one durable ``model_call_quality`` event per bad call
   (``core.event_log.emit``) with ``{provider, model, regime, issue, session_id,
-  step}`` — the per-model call-quality counter the review asked for (E-3);
-- repairs a near-miss tool name before the registry sees it (E-7): prefix /
+  step}`` — the per-model call-quality counter;
+- repairs a near-miss tool name before the registry sees it: prefix /
   case / separator repair, the registry's own ``_<name>`` suffix rule, then a
   ``difflib`` match at cutoff 0.7. The repaired name goes through the SAME
   ``tool_calls_to_actions`` → permission → execution path as any call, so no
   gate is skipped;
 - decides whether a text-only reply in an AUTONOMOUS run is its final report
-  (E-2, owner decision D3) — never on an owner, room, correspondent or child
+  — never on an owner, room, correspondent or child
   seat, where ``send_message`` stays the only reply;
-- adds the session ``regime`` to the usage-record metadata (D-1).
+- adds the session ``regime`` to the usage-record metadata.
 
 Every function is fail-open: telemetry and repair must never break a step.
 """
@@ -28,7 +28,8 @@ import difflib
 import json
 import logging
 import re
-from typing import Any, Dict, Iterable, List, Optional
+from contextlib import contextmanager
+from typing import Any, Dict, Iterable, Iterator, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,7 @@ REPAIRED = "repaired"            # a tool name was repaired (the call then ran)
 NO_ACTION = "no_action"          # a tool-free step with no recorded cause
 ISSUES = (EMPTY, TEXT_ONLY, UNKNOWN_TOOL, BAD_ARGS, PARSE_FAILURE, REPAIRED, NO_ACTION)
 
-#: The fuzzy-match cutoff (cross-agent parity, review E-7).
+#: The fuzzy-match cutoff (cross-agent parity).
 FUZZY_CUTOFF = 0.7
 
 #: Wrappers a model puts around a tool name (OpenAI/Gemini habits).
@@ -53,7 +54,7 @@ _NAME_SUFFIXES = ("_tool", "_action", "_function")
 _MIN_REPORT_CHARS = 20
 
 
-# ── regime (D-1) ────────────────────────────────────────────────────────────
+# ── regime ────────────────────────────────────────────────────────────
 
 def regime_of(agent) -> Optional[str]:
     """``session_class.session_regime`` for *agent*; None on a probe error."""
@@ -66,7 +67,7 @@ def regime_of(agent) -> Optional[str]:
 
 
 def with_regime(metadata: Optional[Dict[str, Any]], agent) -> Dict[str, Any]:
-    """*metadata* plus the session ``regime`` — the usage-record key (D-1)."""
+    """*metadata* plus the session ``regime`` — the usage-record key."""
     out = dict(metadata or {})
     regime = regime_of(agent)
     if regime:
@@ -74,17 +75,45 @@ def with_regime(metadata: Optional[Dict[str, Any]], agent) -> Dict[str, Any]:
     return out
 
 
-def stamp_step_context(agent) -> None:
-    """D-7: stamp the step's context reading on its LLM right before the call;
-    the billing site's ``read_stamps`` copies it into the usage record."""
+def scope_step_call(agent) -> None:
+    """The open scope's calls: the foundation length the assembly measured, the session's
+    routing sort, its digest and its cache window. The values belong to the session and the
+    client serves them all. Fail-open."""
     try:
-        from modules.llm.prefix_stamp import stamp_context
-        stamp_context(agent.llm, agent.message_manager.context_usage())
+        from agents.task.agent.core.timeout_reroute import SORT_ATTR
+        from agents.task.session_class import apply_session_cache_ttl
+        from modules.llm.call_scope import set_foundation_len, set_session_tag
+        from modules.llm.openrouter_routing import set_provider_sort
+        set_foundation_len(getattr(agent.message_manager, "_last_foundation_len", None))
+        set_session_tag(getattr(agent, "session_id", None))
+        set_provider_sort(getattr(agent, SORT_ATTR, None))
+        apply_session_cache_ttl(getattr(agent, "session_id", None))
+    except Exception:
+        logger.debug("call scope skipped", exc_info=True)
+
+
+@contextmanager
+def step_call_scope(agent, timeout: Optional[float] = None,
+                    input_tokens: Optional[int] = None) -> Iterator[None]:
+    """A block of calls that carry this step's bytes. After it the task reads defaults."""
+    from modules.llm.call_scope import call_scope
+    with call_scope(timeout=timeout, input_tokens=input_tokens):
+        scope_step_call(agent)
+        yield
+
+
+def stamp_step_context(agent) -> None:
+    """Scope the step's context reading to the open block right before the call. Each call
+    of the step copies it to its own facts, and an aux record leaves it out."""
+    try:
+        from modules.llm.call_scope import set_step_context
+        from modules.llm.prefix_stamp import context_stamps
+        set_step_context(context_stamps(agent.message_manager.context_usage()))
     except Exception:
         logger.debug("context stamp skipped", exc_info=True)
 
 
-# ── the event (E-3) ─────────────────────────────────────────────────────────
+# ── the event ─────────────────────────────────────────────────────────
 
 def emit_call_quality(agent, issue: str, **extra: Any) -> None:
     """One ``model_call_quality`` row. Fail-open."""
@@ -124,7 +153,7 @@ def take_call_issue(agent) -> str:
     return issue
 
 
-# ── response shape (E-8 / E-2) ──────────────────────────────────────────────
+# ── response shape ──────────────────────────────────────────────
 
 def response_text(response) -> str:
     """The text of a provider response, string or content blocks."""
@@ -147,10 +176,18 @@ def response_text(response) -> str:
 
 
 def is_truly_empty(response) -> bool:
-    """No tool call and no text at all — the E-8 in-call retry case."""
+    """No tool call and no text at all — the in-call retry case."""
     if response is None:
         return False
     return not getattr(response, "tool_calls", None) and not response_text(response).strip()
+
+
+def worth_empty_retry(response) -> bool:
+    """A truly empty completion that the SAME call could fix. A call cut at its output
+    budget is not one: it spent the budget on reasoning and would spend it again (prod
+    2026-11-07: 78 s each). ``output_truncation`` retries that one with the reason named."""
+    from modules.llm.call_result import output_was_truncated
+    return is_truly_empty(response) and not output_was_truncated(getattr(response, "call_facts", None))
 
 
 def _is_brain_only(text: str) -> bool:
@@ -171,7 +208,7 @@ _AUTONOMOUS_REGIMES = frozenset({"cron", "goal", "autonomous"})
 
 
 def prose_final_report(agent, response) -> Optional[Dict[str, Any]]:
-    """E-2 (owner decision D3): in a cron / goal / autonomous run, a text-only
+    """In a cron / goal / autonomous run, a text-only
     reply with real content IS the final report — return a ``done(text=…)``
     tool call for it; None everywhere else.
 
@@ -179,7 +216,7 @@ def prose_final_report(agent, response) -> Optional[Dict[str, Any]]:
     stays the only reply there). Only once the run has ACTED: a prose opening
     before any tool ran is a plan, not a report, and ending the run on it would
     turn every planning turn into a no-op run (38 % of DeepSeek cron runs open
-    with one — review C-1). A brain-state JSON reply is a planning turn too.
+    with one). A brain-state JSON reply is a planning turn too.
     """
     try:
         if getattr(response, "tool_calls", None):
@@ -199,7 +236,7 @@ def prose_final_report(agent, response) -> Optional[Dict[str, Any]]:
         return None
 
 
-# ── tool-name repair (E-7) ──────────────────────────────────────────────────
+# ── tool-name repair ──────────────────────────────────────────────────
 
 def _snake(name: str) -> str:
     name = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name)
@@ -289,7 +326,7 @@ def repair_tool_call_names(agent, tool_calls: List[Dict[str, Any]]) -> int:
 
 
 def note_rejected_calls(agent, tool_calls: List[Dict[str, Any]], actions: list) -> None:
-    """Name the cause of rejected calls (E-3). All rejected → the step's cause
+    """Name the cause of rejected calls. All rejected → the step's cause
     (``step_execution`` logs and emits it); some rejected → the valid ones still
     run, and one event per rejected call is emitted here."""
     try:

@@ -136,3 +136,51 @@ async def test_resolution_column_backfilled(rig):
     row = await db.fetch_one("SELECT status FROM billing_failures WHERE id=3")
     assert row["status"] == "resolved"
     assert not bf.BILLING_FAILURE.validate()
+
+
+class _WrappedUniqueMgr:
+    """The DatabaseManager re-wraps a sqlite error as core DatabaseError (the
+    one-charge index fired: this failure was already charged)."""
+
+    def __init__(self, text="UNIQUE constraint failed: credit_transactions.reason"):
+        self.text = text
+
+    async def deduct_credits(self, **kw):
+        import sqlite3
+        from core.exceptions import DatabaseError
+        try:
+            raise sqlite3.IntegrityError(self.text)
+        except sqlite3.IntegrityError as e:
+            raise DatabaseError(f"Failed to execute query: {e}")
+
+
+@pytest.mark.asyncio
+async def test_a_wrapped_one_charge_violation_reads_as_already_charged(rig):
+    db, _bal = rig
+    out = await bf.resolve(db, lambda: _WrappedUniqueMgr(), 1, "charged", admin_id="a")
+    assert out["success"] and dict(await _status(db))["status"] == "charged"
+
+
+@pytest.mark.asyncio
+async def test_another_wrapped_db_error_is_not_a_charge(rig):
+    from core.exceptions import DatabaseError
+    db, _bal = rig
+    with pytest.raises(DatabaseError):
+        await bf.resolve(db, lambda: _WrappedUniqueMgr("NOT NULL constraint failed: x"),
+                         1, "charged", admin_id="a")
+    assert dict(await _status(db))["status"] == "resolving"
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_billing_failures_table_is_logged(caplog):
+    class _Db:
+        async def fetch_all(self, *a):
+            raise RuntimeError("database is locked")
+
+        async def execute(self, *a):
+            return None
+    import logging
+    log = logging.getLogger("test.billing")
+    with caplog.at_level("WARNING", logger="test.billing"):
+        await bf.ensure_columns(_Db(), log=log)
+    assert "billing_failures" in caplog.text and "RuntimeError" in caplog.text

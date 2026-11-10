@@ -100,6 +100,11 @@ CREATE TABLE IF NOT EXISTS offer_order_spend (
     PRIMARY KEY (order_id, spend_key)
 );
 """
+#: 109: one order per public post (a replayed or re-read reply makes no second order).
+ORDER_INDEXES_AFTER_COLUMNS = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_offer_orders_thread
+    ON offer_orders(channel, thread_ref) WHERE thread_ref IS NOT NULL;
+"""
 
 
 class OrderError(ValueError):
@@ -132,6 +137,15 @@ class Order:
     updated_at: float = 0.0
     paid_at: Optional[float] = None
     delivered_at: Optional[float] = None
+    #: 109: the buyer's public post this order came from; every buyer notice is a
+    #: reply under it (``None`` = a DM or machine buyer).
+    thread_ref: Optional[str] = None
+    #: 109: the latest buyer notice the thread did not take yet (retried by the tick).
+    notice_pending: Optional[str] = None
+    #: When the held notice was first held (its give-up clock), ``None`` = none held.
+    notice_since: Optional[float] = None
+    #: The rail asset the buyer chose (a quoted order is invoiced in it later).
+    asset: Optional[str] = None
 
     @property
     def is_open(self) -> bool:
@@ -162,7 +176,16 @@ def _row(r) -> Order:
                  proof=_j(r["proof"]), receipt=_j(r["receipt"]), error=r["error"],
                  source=r["source"], created_at=float(r["created_at"]),
                  updated_at=float(r["updated_at"]), paid_at=r["paid_at"],
-                 delivered_at=r["delivered_at"])
+                 delivered_at=r["delivered_at"], thread_ref=_col(r, "thread_ref"),
+                 notice_pending=_col(r, "notice_pending"),
+                 notice_since=_col(r, "notice_since"), asset=_col(r, "asset"))
+
+
+def _col(r, name):
+    try:
+        return r[name]
+    except (IndexError, KeyError):
+        return None
 
 
 def _now(now) -> float:
@@ -201,6 +224,65 @@ def list_orders(*, offer_id: Optional[str] = None, user_id: Optional[str] = None
     sql += " ORDER BY created_at DESC LIMIT ?"
     args.append(int(limit))
     return [_row(r) for r in (_read(path, sql, tuple(args), "all") or [])]
+
+
+def by_thread(channel: str, thread_ref: str, *, path: Optional[str] = None) -> Optional[Order]:
+    r = _read(path, "SELECT * FROM offer_orders WHERE channel=? AND thread_ref=?",
+              (str(channel), str(thread_ref)), "one")
+    return _row(r) if r else None
+
+
+def set_notice_pending(order_id: str, text: Optional[str], *,
+                       path: Optional[str] = None, now: Optional[float] = None) -> None:
+    """Hold the latest unsent thread notice (``None`` clears it). The give-up clock
+    (``notice_since``) starts when a notice is first held and restarts for a new one."""
+    from core.sqlite_util import execute_retry
+    body = text[:2000] if text else None
+    execute_retry(_p(path), "UPDATE offer_orders SET notice_since=CASE WHEN ? IS NULL THEN NULL "
+                            "WHEN notice_pending IS ? AND notice_since IS NOT NULL THEN "
+                            "notice_since ELSE ? END, notice_pending=? WHERE id=?",
+                  (body, body, _now(now), body, str(order_id)))
+
+
+def clear_notice(order_id: str, sent: str, *, path: Optional[str] = None) -> bool:
+    """Clear the held notice only when it is still *sent*: a newer notice held while
+    an older one was being sent stays held."""
+    from core.sqlite_util import execute_retry
+    return execute_retry(_p(path), "UPDATE offer_orders SET notice_pending=NULL, "
+                                   "notice_since=NULL WHERE id=? AND notice_pending IS ?",
+                         (str(order_id), str(sent)[:2000])) == 1
+
+
+def clear_notice_held_before(order_id: str, started: float, *,
+                             path: Optional[str] = None) -> bool:
+    """A FRESH notice was sent: clear a held notice that is older than it (held at or
+    before *started*), so it is never posted after the newer one. A notice held while
+    that send ran is newer and stays held."""
+    from core.sqlite_util import execute_retry
+    return execute_retry(_p(path), "UPDATE offer_orders SET notice_pending=NULL, "
+                                   "notice_since=NULL WHERE id=? AND notice_pending IS NOT NULL "
+                                   "AND (notice_since IS NULL OR notice_since <= ?)",
+                         (str(order_id), float(started))) == 1
+
+
+def pending_notices(*, limit: int = 20, path: Optional[str] = None) -> List[Order]:
+    rows = _read(path, "SELECT * FROM offer_orders WHERE notice_pending IS NOT NULL "
+                       "ORDER BY updated_at LIMIT ?", (int(limit),), "all")
+    return [_row(r) for r in rows or []]
+
+
+def proof_used_by(tx_hash: str, *, except_id: str = "",
+                  path: Optional[str] = None) -> Optional[str]:
+    """The id of ANOTHER order whose recorded proof is *tx_hash* (one tx delivers one
+    order), else ``None``."""
+    rows = _read(path, "SELECT id, proof FROM offer_orders WHERE proof IS NOT NULL AND id != ? "
+                       "AND lower(proof) LIKE ?",
+                 (str(except_id), f"%{str(tx_hash).lower()}%"), "all") or []
+    for r in rows:
+        p = _j(r["proof"]) or {}
+        if str(p.get("tx_hash") or "").lower() == str(tx_hash).lower():
+            return r["id"]
+    return None
 
 
 def by_source(source: str, *, path: Optional[str] = None) -> Optional[Order]:
@@ -251,6 +333,19 @@ def open_for_buyer(offer_id: str, channel: str, buyer: str, *,
     return int(r["n"]) if r else 0
 
 
+def count_unpaid(offer_id: str, *, exclude_channels=(), path: Optional[str] = None) -> int:
+    """Unpaid (``quoted`` / ``awaiting_payment``) orders of an offer made on a channel
+    NOT in *exclude_channels* and not in a public thread: the anonymous machine
+    buyers' backlog (on the offer index)."""
+    excl = tuple(str(c) for c in exclude_channels)
+    sql = (f"SELECT COUNT(*) AS n FROM offer_orders WHERE offer_id=? AND status IN "
+           f"{_in((QUOTED, AWAITING))} AND thread_ref IS NULL")
+    if excl:
+        sql += f" AND channel NOT IN {_in(excl)}"
+    r = _read(path, sql, (str(offer_id), QUOTED, AWAITING, *excl), "one")
+    return int(r["n"]) if r else 0
+
+
 def stale_claims(now: Optional[float] = None, *, path: Optional[str] = None) -> List[Order]:
     """``fulfilling`` orders whose goal was never written (claim token only)."""
     rows = _read(path, "SELECT * FROM offer_orders WHERE status=? AND goal_id LIKE 'claim:%' "
@@ -294,8 +389,10 @@ def _cas(order_id: str, to: str, froms, *, path: str, set_cols=None, where_extra
 def create(*, offer_id: str, offer_version: int, user_id: str, channel: str, buyer: str,
            inputs: Mapping[str, Any], amount_usd: Optional[str], spend_budget: float,
            source: Optional[str] = None, path: Optional[str] = None,
-           now: Optional[float] = None) -> Order:
-    """A new order: ``awaiting_payment`` with a price, ``quoted`` without one."""
+           now: Optional[float] = None, thread_ref: Optional[str] = None,
+           asset: Optional[str] = None) -> Order:
+    """A new order: ``awaiting_payment`` with a price, ``quoted`` without one.
+    A second order for the same ``(channel, thread_ref)`` raises :class:`OrderError`."""
     if not str(channel or "").strip() or not str(buyer or "").strip():
         raise OrderError("an order needs a channel and a buyer")
     p = _p(path)
@@ -303,12 +400,18 @@ def create(*, offer_id: str, offer_version: int, user_id: str, channel: str, buy
     ts = _now(now)
     status = AWAITING if amount_usd else QUOTED
     from core.sqlite_util import execute_retry
-    execute_retry(p, "INSERT INTO offer_orders (id, offer_id, offer_version, user_id, status, "
-                     "channel, buyer, inputs, amount_usd, spend_budget, source, created_at, "
-                     "updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                  (oid, str(offer_id), int(offer_version), str(user_id), status,
-                   str(channel)[:40], str(buyer)[:200], json.dumps(dict(inputs or {})),
-                   amount_usd, float(spend_budget), source, ts, ts))
+    import sqlite3
+    try:
+        execute_retry(p, "INSERT INTO offer_orders (id, offer_id, offer_version, user_id, "
+                         "status, channel, buyer, inputs, amount_usd, spend_budget, source, "
+                         "created_at, updated_at, thread_ref, asset) "
+                         "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                      (oid, str(offer_id), int(offer_version), str(user_id), status,
+                       str(channel)[:40], str(buyer)[:200], json.dumps(dict(inputs or {})),
+                       amount_usd, float(spend_budget), source, ts, ts,
+                       str(thread_ref) if thread_ref else None, asset))
+    except sqlite3.IntegrityError:
+        raise OrderError("this post already made an order") from None
     return get(oid, path=p)
 
 
@@ -358,6 +461,36 @@ def mark_expired(request_id: str, *, path: Optional[str] = None,
     o = by_request(request_id, path=p)
     return bool(o) and _cas(o.id, EXPIRED, [QUOTED, AWAITING], path=p,
                             set_cols={"updated_at": _now(now)})
+
+
+def expire(order_id: str, *, path: Optional[str] = None, now: Optional[float] = None) -> bool:
+    """An unpaid order whose payment can no longer arrive (never priced, or its
+    invoice is gone or closed): quoted | awaiting_payment -> expired."""
+    return _cas(order_id, EXPIRED, [QUOTED, AWAITING], path=_p(path),
+                set_cols={"updated_at": _now(now)})
+
+
+def stale_unpaid(quoted_before: float, awaiting_before: float, *, limit: int = 50,
+                 path: Optional[str] = None) -> List[Order]:
+    """``quoted`` orders created before *quoted_before* and ``awaiting_payment``
+    orders created before *awaiting_before* (the tick checks their invoice), least
+    recently looked at first: a row the tick skips is moved to the back with
+    :func:`skip_unpaid`, so rows it can never expire do not hide the others."""
+    rows = _read(path, "SELECT * FROM offer_orders WHERE (status=? AND created_at<?) OR "
+                       "(status=? AND created_at<?) ORDER BY updated_at, id LIMIT ?",
+                 (QUOTED, float(quoted_before), AWAITING, float(awaiting_before), int(limit)),
+                 "all")
+    return [_row(r) for r in rows or []]
+
+
+def skip_unpaid(order_id: str, *, path: Optional[str] = None,
+                now: Optional[float] = None) -> None:
+    """The expiry step looked at this unpaid order and left it: stamp ``updated_at``
+    so :func:`stale_unpaid` reads the others first next time (a fair rotation)."""
+    from core.sqlite_util import execute_retry
+    execute_retry(_p(path), f"UPDATE offer_orders SET updated_at=? WHERE id=? AND status IN "
+                            f"{_in((QUOTED, AWAITING))}",
+                  (_now(now), str(order_id), QUOTED, AWAITING))
 
 
 def cancel(order_id: str, *, path: Optional[str] = None, now: Optional[float] = None) -> bool:
@@ -491,7 +624,8 @@ def dispute(order_id: str, reason: str, *, path: Optional[str] = None,
 __all__ = ["ACCEPTED", "AWAITING", "CANCELLED", "DELIVERED", "DISPUTED", "EXPIRED", "FAILED",
            "FULFILLING", "OPEN", "ORDER_MACHINE", "ORDER_PREFIX", "Order", "OrderError", "PAID",
            "QUOTED", "SOLD", "accept", "attach_invoice", "by_request", "cancel",
-           "claim_fulfillment", "create", "deliver", "dispute", "fail", "get", "is_order_id",
-           "list_orders", "mark_expired", "mark_paid", "open_for_buyer", "overdue", "paid_before",
-           "paid_since", "receipt_for", "reclaim", "release_for_retry", "reserve_spend",
-           "set_goal", "sold", "stale_claims"]
+           "claim_fulfillment", "clear_notice", "clear_notice_held_before", "count_unpaid",
+           "create", "deliver", "dispute", "expire", "fail", "get", "is_order_id", "list_orders",
+           "mark_expired", "mark_paid", "open_for_buyer", "overdue", "paid_before", "paid_since",
+           "receipt_for", "reclaim", "release_for_retry", "reserve_spend", "set_goal",
+           "skip_unpaid", "sold", "stale_claims", "stale_unpaid"]

@@ -6,7 +6,7 @@ You are a sub-agent: a parent agent gave you this task and reads your result.
 - If you are blocked, say exactly what blocks you in done(text).
 <!-- part: owner_moves -->
 
-A choice you need from the owner to continue this turn: present_choice(question, options).
+A choice you need from the owner to continue this turn: owner_ask(question, options).
 <!-- part: main -->
 send_message(text) is how you SPEAK to the user: everything you want them
 to read goes here.{owner_moves}

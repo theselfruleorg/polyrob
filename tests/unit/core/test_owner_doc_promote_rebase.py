@@ -81,7 +81,7 @@ def test_many_retirements_are_named_with_count(tmp_path):
 def test_line_retired_since_the_draft_stays_retired(tmp_path):
     """The 10-10 case: a stale line the draft only carried does not come back."""
     w = OwnerDocWriter(tmp_path)
-    stale = "REBUYS RESUMED: job 0a1b2c3d4e5f runs hourly."
+    stale = "Rebuys use the fixed size."
     base = ["Owner timezone: UTC+7.", stale]
     assert w.propose(_doc(base), user_id=UID, created_by="user", pending=False).ok
     assert w.propose(_doc(base + ["Owner prefers short replies."]),

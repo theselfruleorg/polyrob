@@ -6,6 +6,13 @@ harness (no import cycle).
 """
 
 
+#: The one sentence for a switched-off knowledge base, on every seat. D72: it
+#: names what the owner can DO, not only the flag.
+KB_OFF = ("My knowledge base is switched off, so I have nothing to "
+          "search. Turn it on with `polyrob config set KB_ENABLED true` "
+          "(it applies on my next restart).")
+
+
 async def _kb_reply(user_id: str, args: list) -> str:
     """QW-4 (proposal 021): owner KB read from the phone — the same
     ``modules.memory.registry`` primitives ``polyrob kb`` uses. Before this
@@ -23,9 +30,7 @@ async def _kb_reply(user_id: str, args: list) -> str:
     if not AutonomyConfig.kb_enabled():
         # D72: name what the owner can DO, not the env flag. He is on a phone;
         # a flag name is a thing he can only act on by opening a shell.
-        return ("My knowledge base is switched off, so I have nothing to "
-                "search. Turn it on with `polyrob config set KB_ENABLED true` "
-                "(it applies on my next restart).")
+        return KB_OFF
     import modules.memory.registry as _reg
     if cmd.action == LIST:
         try:

@@ -59,14 +59,14 @@ def register_worker_manage_action(controller) -> None:
 	@controller.registry.action(
 		"See and propose NAMED WORKERS — reusable helpers you dispatch with "
 		"delegate_task(goal=..., profile='<id>'). action='list' shows approved and "
-		"pending ids; 'show' one worker; 'propose' drafts a new one (description + "
-		"instructions + tools). A proposal waits for the owner's approval and "
-		"cannot be dispatched until then.",
+		"pending ids; 'show' one worker; 'propose' adds a new one (description + "
+		"instructions + tools), ready to dispatch; from a session with someone else's "
+		"message it waits for the owner.",
 		param_model=WorkerManageAction,
 	)
 	async def worker_manage(params: WorkerManageAction, execution_context=None) -> ActionResult:
 		from agents.task.agent.profile_store import (
-			PROVENANCE_BACKGROUND, WorkerSpec, build_worker_profile, get_store,
+			PROVENANCE_AGENT, PROVENANCE_BACKGROUND, WorkerSpec, build_worker_profile, get_store,
 			is_valid_profile_id)
 		user_id = (getattr(execution_context, "user_id", None)
 		           or getattr(controller, "user_id", None))
@@ -104,16 +104,22 @@ def register_worker_manage_action(controller) -> None:
 			if spec.instructions:
 				body.append("instructions:\n" + spec.instructions)
 			return ActionResult(extracted_content="\n".join(body), include_in_memory=True)
-		# propose — ALWAYS quarantined: the agent never approves its own helper.
+		# propose: live on the owner's turn or job; any other turn waits for the owner.
 		if not (params.description or "").strip():
 			return ActionResult(error="propose needs a description (when to use it).",
 			                    include_in_memory=True)
 		data = build_worker_profile(
 			wid, description=params.description or "", instructions=params.instructions or "",
 			tools=params.tools)
-		res = store.save_profile(data, user_id=user_id, created_by=PROVENANCE_BACKGROUND)
+		from core.security.owner_turn import is_owner_driven
+		driven = is_owner_driven(execution_context, controller)
+		res = store.save_profile(data, user_id=user_id,
+		                         created_by=PROVENANCE_AGENT if driven else PROVENANCE_BACKGROUND)
 		if not res.ok:
 			return ActionResult(error="propose failed: " + "; ".join(res.errors),
+			                    include_in_memory=True)
+		if driven and not getattr(res, "pending", True):
+			return ActionResult(extracted_content=f"Worker '{wid}' is ready to dispatch.",
 			                    include_in_memory=True)
 		return ActionResult(
 			extracted_content=(f"Worker '{wid}' proposed — it waits for the owner's approval "

@@ -662,8 +662,8 @@ class HierarchicalMemory(BaseModel):
             "updated_at": self.updated_at.isoformat()
         }
 
-        with open(path, 'w') as f:
-            json.dump(data, f, indent=2)
+        from core.state.files import atomic_write_json
+        atomic_write_json(str(path), data, indent=2)
 
         logger.debug(f"Saved hierarchical memory to {path} ({len(self.phase_memories)} phases)")
 

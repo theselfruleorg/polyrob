@@ -98,6 +98,37 @@ class LLMPermanentError(LLMError):
     """
     pass
 
+# The refusal halt line starts with this prefix, so every seat (chat, goal, cron,
+# delegation) can find it in a step result and name it to the owner.
+REFUSAL_HALT_PREFIX = "Stopped: "
+
+
+class LLMRefusalError(LLMPermanentError):
+    """The model declined the request, or a content/safety filter stopped its output.
+
+    Not an account fault: the provider works, and another provider must not be asked the
+    same request in its place. The owner is told what stopped the output.
+    ``category`` is the provider's reason when it gives one; ``kind`` is ``refusal`` or
+    ``filtered``.
+    """
+    def __init__(self, message: str, *, category: str = None, kind: str = "refusal"):
+        super().__init__(message)
+        self.category = category
+        self.kind = kind
+
+    def owner_text(self) -> str:
+        what = ("a safety filter stopped the model's output" if self.kind == "filtered"
+                else "the model declined this request")
+        return f"{what} (category: {self.category or 'not given'})"
+
+class LLMModerationError(LLMRefusalError):
+    """A provider's moderation stopped the request (e.g. a 403 "flagged by moderation").
+
+    A refusal of kind ``filtered``: built with one argument, as ``translate_llm_error``
+    builds every class."""
+    def __init__(self, message: str):
+        super().__init__(message, kind="filtered")
+
 class LLMProviderExhaustedError(LLMError):
     """Raised when all LLM providers have been tried and failed.
     

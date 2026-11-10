@@ -115,6 +115,9 @@ RECALL_READ_ERROR_NOTE = (
     "Memory recall is unavailable this turn ({error_class}) — the store could not "
     "be read. Do not state that something was never recorded or never happened; "
     "say that memory could not be checked.")
+#: S4: outside the data frame, so the frame does not cancel it. A store holds these values.
+RECALL_LEAD_NOTE = ("Recalled text about a payment, a job state or a count is a lead: "
+                    "the store must confirm it.")
 #: D5: owner-saved console notes injected with recall (owner-memory regimes only).
 OWNER_NOTES_MAX = 10
 OWNER_NOTES_MAX_CHARS = 2000
@@ -252,11 +255,48 @@ async def _date_kb_snapshots(text: str, *, user_id: Optional[str], collection: s
     return _KB_HEAD.sub(_tag, text)
 
 
+def _kb_held_out(*, session_id: str, user_id: Optional[str]) -> bool:
+    """True when this cron run is in the KB holdout (``payload.kb_holdout_pct``). The run's
+    first skip records one event, the count of the skipped side of the test. A fault here
+    fails to no holdout: the job keeps the behavior it had."""
+    try:
+        from core.autonomy_marker import cron_job_for_session, kb_holdout_for_session
+        held_out, first = kb_holdout_for_session(session_id)
+        if first:
+            from core.event_kinds import MEMORY_KB_HOLDOUT
+            from agents.task.telemetry.memory_events import emit_memory_event
+            emit_memory_event(MEMORY_KB_HOLDOUT, user_id=user_id or "", session_id=session_id,
+                              source="prefetch", scope="kb_holdout",
+                              job_id=cron_job_for_session(session_id))
+        return held_out
+    except Exception as e:
+        logger.debug("kb holdout check skipped: %s", e)
+        return False
+
+
+def _record_empty_recall(query: str, *, session_id: str, user_id: Optional[str],
+                         seen_only: bool) -> None:
+    """The denominator of ``memory_recall``. A backend with no store has no recall to
+    measure, so it records nothing. Fail-open."""
+    try:
+        from modules.memory.registry import get_memory_registry
+        provider = get_memory_registry().active()
+        if provider is None or not getattr(provider, "is_external", False):
+            return
+        from core.event_kinds import MEMORY_RECALL_EMPTY
+        from agents.task.telemetry.memory_events import emit_memory_event, scrubbed_preview
+        emit_memory_event(MEMORY_RECALL_EMPTY, user_id=user_id or "", session_id=session_id,
+                          source="prefetch", query=scrubbed_preview(query), seen_only=seen_only)
+    except Exception as e:
+        logger.debug("empty recall event skipped: %s", e)
+
+
 async def build_prefetch_message(query: str, *, session_id: str,
                                  user_id: Optional[str] = None,
                                  seen: Optional[set] = None,
                                  reader: Optional[dict] = None,
-                                 owner_notes: bool = False) -> Optional[BaseMessage]:
+                                 owner_notes: bool = False,
+                                 owner_text: Optional[str] = None) -> Optional[BaseMessage]:
     """Prefetch memory for ``query`` and wrap it as a MEMORY control message.
 
     Returns None when there is nothing to inject (Null provider, empty recall, or any
@@ -267,13 +307,16 @@ async def build_prefetch_message(query: str, *, session_id: str,
     collection and appends the result under a distinct section header. The KB branch
     is fully independent and fail-open: a KB error never breaks the memory branch.
     When ``kb_auto_prefetch()`` is False the function is byte-identical to today.
+
+    ``owner_text`` is what the owner wrote. Only it can lift the owner reader's age
+    cap: ``query`` also holds the brain's ``next_goal`` and a carried subject.
     """
     if not query or not query.strip():
         return None
     if reader and reader.get("max_age_days"):
         try:
             from modules.memory.recall_rank import names_older_date
-            if names_older_date(query, max_age_days=reader["max_age_days"]):
+            if names_older_date(owner_text or "", max_age_days=reader["max_age_days"]):
                 # The owner named an older day: that day's rows are the answer.
                 reader = {k: v for k, v in reader.items() if k != "max_age_days"}
         except Exception as e:  # a parse fault keeps the cap
@@ -298,6 +341,7 @@ async def build_prefetch_message(query: str, *, session_id: str,
         terms = informative_terms(query)
     except Exception:
         terms = None
+    had_rows = bool((recalled or "").strip())
     recalled = _budget((recalled or "").strip(), _MEM_ENTRY,
                        RECALL_MEMORY_MAX_CHARS, seen, terms)
 
@@ -318,21 +362,25 @@ async def build_prefetch_message(query: str, *, session_id: str,
                 recalled = wrap_untrusted("cross_session_memory", recalled)
         except Exception as e:  # framing must never break prefetch
             logger.debug("memory recall wrap skipped: %s", e)
+        recalled = f"{recalled}\n{RECALL_LEAD_NOTE}"
 
     # --- T13: KB auto-prefetch (additive, fail-open, fully independent) -------
     kb_recalled = ""
     raw_kb = ""
     try:
         from core.config_policy import AutonomyConfig
-        if AutonomyConfig.kb_auto_prefetch():
+        if AutonomyConfig.kb_auto_prefetch() and not _kb_held_out(session_id=session_id, user_id=user_id):
             try:
                 from modules.memory.registry import kb_search
                 # 097: unset = every collection (the KB has full access). An
                 # operator can still pin one collection via env.
                 import os
                 _kb_collection = os.getenv("KB_PREFETCH_COLLECTION", "").strip() or None
+                # An injection is no read: only an explicit search keeps a
+                # written document from ageing out (stamp=False).
                 kb_result = await kb_search(query, user_id=user_id, collection=_kb_collection,
-                                            limit=RECALL_KB_LIMIT)
+                                            limit=RECALL_KB_LIMIT, stamp=False)
+                had_rows = had_rows or bool((kb_result or "").strip())
                 kb_result = _budget((kb_result or "").strip(), _KB_ENTRY,
                                     RECALL_KB_MAX_CHARS, seen, terms)
                 if kb_result:
@@ -369,6 +417,7 @@ async def build_prefetch_message(query: str, *, session_id: str,
         h, b = sections[0]
         combined = f"## {h}\n\n{b}" if h == "Notes the owner saved" else b
     else:
+        _record_empty_recall(query, session_id=session_id, user_id=user_id, seen_only=had_rows)
         return None
 
     # T4-02: recall was invisible on every surface (ephemeral LLM message only) —
@@ -376,13 +425,14 @@ async def build_prefetch_message(query: str, *, session_id: str,
     # was recalled and acted on. Raw (pre-wrap) content; fail-open.
     _event_attrs = None
     try:
+        from core.event_kinds import MEMORY_RECALL
         from agents.task.telemetry.memory_events import emit_memory_event, scrubbed_preview
         _scope = ("cross_session+kb" if (raw_recalled and raw_kb)
                   else ("kb" if raw_kb else "cross_session"))
         _raw = "\n".join(p for p in (notes, raw_recalled, raw_kb) if p)
         _extra = {"read_error": read_error} if read_error else {}
         _event_attrs = emit_memory_event(
-            "memory_recall", user_id=user_id or "", session_id=session_id,
+            MEMORY_RECALL, user_id=user_id or "", session_id=session_id,
             source="prefetch", scope=_scope, content=_raw,
             query=scrubbed_preview(query), **_extra)
     except Exception as e:
@@ -530,6 +580,7 @@ class MemoryPrefetchMixin:
                 seen=self._recall_seen,
                 reader=recall_reader(self),
                 owner_notes=_owner_memory(self),
+                owner_text=getattr(self, "_recall_turn_text", None) or getattr(self, "task", ""),
             )
             if msg is not None:
                 self.message_manager.push_ephemeral_message(msg)

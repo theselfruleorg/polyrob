@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import re
 import time
-from typing import List, Optional
+from datetime import datetime, timezone
+from typing import Any, List, Optional
 
 from core.status_snapshot import (
     OVERALL_DEGRADED, OVERALL_OK, OVERALL_PARTIAL, SECTION_ORDER, SEVERITY_CRIT,
@@ -319,7 +320,7 @@ def render_agent_health_note(snap: StatusSnapshot, *, max_items: int = 8,
 
 #: Per-list caps of the <operations> block: 1 header + 1 pause line + three
 #: lists of (heading + items + "+N more") stay within 25 lines.
-OPS_MAX_JOBS, OPS_MAX_GOALS, OPS_MAX_STOPS = 6, 6, 5
+OPS_MAX_JOBS, OPS_MAX_GOALS, OPS_MAX_STOPS, OPS_MAX_HOST_JOBS = 6, 6, 5, 3
 
 
 def _utc(ts, fmt: str = "%Y-%m-%d %H:%M") -> str:
@@ -328,6 +329,14 @@ def _utc(ts, fmt: str = "%Y-%m-%d %H:%M") -> str:
         return "?"
     try:
         return time.strftime(fmt, time.gmtime(float(ts)))
+    except (TypeError, ValueError):
+        return _iso_utc(ts, fmt)
+
+
+def _iso_utc(ts: Any, fmt: str) -> str:
+    """An ISO stamp with no zone is the server clock (a job's next run)."""
+    try:
+        return datetime.fromisoformat(str(ts)).astimezone(timezone.utc).strftime(fmt)
     except (TypeError, ValueError):
         return str(ts)[:16].replace("T", " ")
 
@@ -346,25 +355,40 @@ def _ops_list(out: List[str], title: str, items: Optional[list], reason: str,
         out.append(f"- +{len(items) - cap} more, see {more}")
 
 
+_JOB_LAST = "last:"
+_JOB_DELIVER = " · deliver:"
+_JOB_NEXT_TIME = re.compile(r" · next [^·]*? UTC(?:, [^·]*)?(?= ·|$)")
+_JOB_LAST_RUN_AT = re.compile(rf"({_JOB_LAST} \w+) \d\d-\d\d \d\d:\d\d")
+
+
+def job_fact(line: str) -> Optional[str]:
+    """What counts in a rendered job line, with no run time in it: a time moves with no
+    change the agent must act on. None when *line* is not a job line."""
+    if f"{_JOB_LAST} " not in line or f"{_JOB_DELIVER} " not in line:
+        return None
+    return _JOB_LAST_RUN_AT.sub(r"\1", _JOB_NEXT_TIME.sub(" · scheduled", line))
+
+
 def _ops_job(j: dict) -> str:
-    from datetime import datetime
-    from core.cron_outcome import failed_recently, outcome_text
+    from core.cron_outcome import failed_recently, outcome_text, waiting_text
     st = j.get("status")
     when = ("PAUSED" if st == "paused" else "running now" if st == "running"
             else f"next {_utc(j.get('next_run_at'))} UTC")
+    waiting = waiting_text(j.get("next_run_at")) if st == "scheduled" else ""
+    when += f", {waiting}" if waiting else ""
     sched = f" · {j['schedule']}" if j.get("schedule") else ""
     rec = j.get("last_outcome")
     flag = "⚠ " if failed_recently(rec, datetime.now()) else ""
-    last = f" · {flag}last: {outcome_text(rec, j.get('last_run_at'))}"
-    deliver = f" · deliver: {j.get('deliver') or 'none'}"
+    last = f" · {flag}{_JOB_LAST} {outcome_text(rec, j.get('last_run_at'))}"
+    deliver = f"{_JOB_DELIVER} {j.get('deliver') or 'none'}"
     return f"- {j.get('id')} \"{j.get('name')}\"{sched} · {when}{last}{deliver}"
 
 
 def render_operations_block(snap, *, now: Optional[float] = None) -> str:
     """The agent's per-turn ``<operations>`` body: active jobs, open goals, the
     ``/pause`` record and the owner's stops, from the ``work`` and ``loops``
-    sections (``build_operations_sections`` or a full snapshot). At most 25
-    lines; a store that could not be read says so, never "none"."""
+    sections (``build_operations_sections`` or a full snapshot). At most 30
+    lines (25 + the host jobs, 112); a store that could not be read says so, never "none"."""
     sections = getattr(snap, "sections", snap) or {}
     work, loops = sections.get("work"), sections.get("loops")
     out = [f"Live harness state as of {_utc(now or time.time())} UTC (same source as /status):"]
@@ -396,7 +420,20 @@ def render_operations_block(snap, *, now: Optional[float] = None) -> str:
     _ops_list(out, "Owner stops", stops, stops_why, OPS_MAX_STOPS, "/goals and /jobs",
               lambda s: f"- {s.get('scope')}: {s.get('label')} since "
                         f"{_utc(s.get('since'), '%Y-%m-%d')} UTC")
+    # 112 W1: the host jobs (outside the agent) and their outputs — how the agent learns
+    # a deterministic job exists. No line when the install has none.
+    host = loops.data.get("host_jobs", []) if loops is not None and loops.available else []
+    if host is None or host:
+        _ops_list(out, "Host jobs (outside you; read their outputs, never redo them by hand)",
+                  host, (loops.data.get("host_jobs_reason") or "?") if loops else "?",
+                  OPS_MAX_HOST_JOBS, "/status", _ops_host_job)
     return "\n".join(out)
+
+
+def _ops_host_job(j: dict) -> str:
+    outs = ", ".join(j.get("outputs") or []) or "none listed"
+    why = f" ({j['why'][:80]})" if j.get("why") and j.get("state") != "ok" else ""
+    return f"- {j.get('name')}: {j.get('purpose') or '?'} · {j.get('state')}{why} · outputs: {outs}"
 
 
 def _notice_author(row: dict) -> str:

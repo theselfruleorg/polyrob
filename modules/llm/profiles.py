@@ -1,11 +1,10 @@
-"""Declarative provider profiles (roadmap P8, Reference §28; proposal 024 L0).
+"""Declarative provider profiles.
 
 A ``ProviderProfile`` *describes* a provider — identity, auth, base URL, default
 model, capability flags — and owns no client construction, credential rotation, or
-streaming. Since proposal 024 the profile table is a *derivation* of the
+streaming. The profile table is a *derivation* of the
 ``ProviderSpec`` registry (``modules/llm/provider_spec.py``), which also carries
-user-declared providers from ``~/.polyrob/providers.yaml``. The legacy literal
-table was retired with the ``LLM_PROVIDER_REGISTRY`` kill-switch (2026-08-29); a
+user-declared providers from ``~/.polyrob/providers.yaml``. A
 registry fault falls back to ``provider_spec.BUILTIN_SPECS``, never a second copy.
 
 The default model deliberately reads from ``llm_client_registry.DEFAULT_MODELS`` so
@@ -65,12 +64,12 @@ class ProviderProfile:
 
 
 # NOTE: insertion order IS the canonical preference order for "first provider with
-# a key" (see ``providers_with_keys`` / ``core.runtime_config``). OpenRouter is FIRST
-# (2026-06-24): it is the preferred default client whenever its key is present —
+# a key" (see ``providers_with_keys`` / ``core.runtime_config``). OpenRouter is FIRST:
+# it is the preferred default client whenever its key is present —
 # explicit ``-p`` and operator pin (DEFAULT_PROVIDER) still win.
 #
 def _profiles_from_specs(specs=None) -> Dict[str, ProviderProfile]:
-    """Derive the profile view from the ProviderSpec registry (proposal 024)."""
+    """Derive the profile view from the ProviderSpec registry."""
     from modules.llm.provider_spec import get_specs
     out: Dict[str, ProviderProfile] = {}
     for s in (get_specs() if specs is None else specs):
@@ -178,7 +177,7 @@ def _keyless_by_design(p: ProviderProfile) -> bool:
     e.g. a local Ollama declared in providers.yaml). Such providers count as
     usable/initializable with no env key — the client sends a sentinel instead
     (``provider_spec.NO_KEY_SENTINEL``). Without this, a keyless box with a
-    working local endpoint was refused by every no-key gate (B2, 2026-08-07).
+    working local endpoint was refused by every no-key gate.
     """
     return p.initializable and not p.env_key and p.auth_type == "none"
 
@@ -250,12 +249,12 @@ def usable_providers_with_keys(env=None) -> List[str]:
 
 
 # ---------------------------------------------------------------------------
-# Credential-aware oracles (proposal 024, L1.5 — "surface un-blinding")
+# Credential-aware oracles ("surface un-blinding")
 # ---------------------------------------------------------------------------
 # The three `*_with_keys` oracles above can only see ENV KEYS. Once credentials
 # can also come from the auth store (an OAuth subscription seat, a borrowed
 # login), every surface that asks "do we have a provider?" through them is
-# blind to those — L1 was invisible without this.
+# blind to those.
 #
 # These three delegate to the ONE resolution oracle
 # (`core.llm_auth.resolve.resolve_credential`) and add what it does not know:
@@ -294,7 +293,7 @@ class CredentialStatus:
         )
 
 
-#: 024 gates that must be read from the PROCESS env even when the caller passed
+#: Gates that must be read from the PROCESS env even when the caller passed
 #: its own mapping. `resolve_credential(env=)` uses one mapping for both key
 #: VALUES and these deployment FLAGS, but callers pass key-shaped dicts
 #: (`doctor_report(env)`, `resolve_runtime_config(env=…)`, tests) — a caller
@@ -502,8 +501,8 @@ def no_key_message() -> str:
         parts.append(label)
     more = (f" ({extra} more providers — subscription plans, gateways, regional "
             f"endpoints: `polyrob model list`)" if extra else "")
-    # 027 WP4: ONE remedy grammar on every no-key surface — `polyrob auth add`
-    # first, `polyrob init` for the guided path. The old six-file env-ladder
+    # ONE remedy grammar on every no-key surface — `polyrob auth add`
+    # first, `polyrob init` for the guided path. The six-file env-ladder
     # wall belongs in the docs, not a first-run error.
     return (
         "No usable provider credential found.\n"
@@ -526,7 +525,7 @@ def all_profiles() -> List[ProviderProfile]:
 
 
 def extra_llm_config_blocks(env=None) -> Dict[str, Dict[str, object]]:
-    """Per-provider LLM-config additions from the ProviderSpec registry (024 seam 2).
+    """Per-provider LLM-config additions from the ProviderSpec registry.
 
     Consumed by ``core.config.BotConfig.get_llm_config()`` through the existing,
     layering-allowlisted ``core → modules.llm.profiles`` edge. Returns:
@@ -534,7 +533,7 @@ def extra_llm_config_blocks(env=None) -> Dict[str, Dict[str, object]]:
     - a full ``{"api_key", "base_url", "auth_type"}`` block for every provider with
       no hand-written literal block in ``get_llm_config`` — a user-declared
       providers.yaml row, OR a built-in served by the generic transport clients
-      (the 024 T0 subscription rows) — so ``create_llm_client``/``LLMManager`` can
+      (the subscription rows) — so ``create_llm_client``/``LLMManager`` can
       bootstrap it exactly like a legacy built-in; and
     - a ``{"base_url": ...}`` override for a LEGACY built-in provider whose effective
       base URL was redirected via providers.yaml / its ``base_url_env`` — merged into
@@ -573,7 +572,7 @@ def extra_llm_config_blocks(env=None) -> Dict[str, Dict[str, object]]:
                 credential_source = "env"
                 if not key:
                     # No env key — try the CREDENTIAL oracle (an OAuth seat, a
-                    # borrowed login). Without this the whole L1/L2 store is
+                    # borrowed login). Without this the whole auth store is
                     # decorative for inference: `polyrob auth add` succeeds,
                     # doctor reports the provider ready, and every call dies
                     # with "API key not provided" because the client layer only
@@ -586,7 +585,7 @@ def extra_llm_config_blocks(env=None) -> Dict[str, Dict[str, object]]:
                 if not key and s.auth_type.value == "none":
                     # AuthType.NONE (Ollama & friends): the manager's bootstrap
                     # gates skip providers with no api_key — the sentinel makes
-                    # a keyless local endpoint bootstrappable (024 live-path fix).
+                    # a keyless local endpoint bootstrappable.
                     from modules.llm.provider_spec import NO_KEY_SENTINEL
                     key = NO_KEY_SENTINEL
                 out[s.name] = {

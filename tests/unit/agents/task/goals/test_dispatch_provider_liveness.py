@@ -125,3 +125,31 @@ def test_run_goal_still_runs_when_the_default_is_live(two_providers, monkeypatch
     asyncio.run(disp._run_goal(goal))
 
     assert agent.called, "a goal with a live provider must still run"
+
+
+class _RequestCapturingAgent(_SpendTrackingAgent):
+    def __init__(self):
+        super().__init__()
+        self.request = None
+
+    async def create_session(self, *, user_id, request):
+        self.request = request
+        return await super().create_session(user_id=user_id, request=request)
+
+
+def test_a_rerouted_goal_drops_the_dead_providers_model(two_providers, monkeypatch):
+    """112 F4: a goal pinned to a dead provider with that provider's model must not
+    carry the model onto the live provider (cron already drops it)."""
+    monkeypatch.setattr(rc, "_sentinel_active", _dead("zai-coding"), raising=False)
+    monkeypatch.setattr(rc, "resolve_default_provider",
+                        lambda: ("openrouter", None), raising=False)
+    board = _FakeBoard()
+    agent = _RequestCapturingAgent()
+    goal = Goal(id="g-reroute", user_id="u1", title="pinned goal",
+                payload={"provider": "zai-coding", "model": "glm-5"})
+    asyncio.run(GoalDispatcher(board, agent)._run_goal(goal))
+    assert agent.request is not None
+    req = agent.request if isinstance(agent.request, dict) else vars(agent.request)
+    assert req.get("provider") == "openrouter"
+    assert req.get("model") != "glm-5"
+    assert goal.payload["model"] == "glm-5", "the stored row is not mutated"

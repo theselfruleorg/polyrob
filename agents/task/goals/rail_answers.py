@@ -20,7 +20,7 @@ from typing import Any, List, Tuple
 
 import re
 
-from core.goal_vocab import ASK_FULFILLED, ASK_REJECTED, LIVE_STATUSES
+from core.goal_vocab import ASK_FULFILLED, ASK_OPEN, ASK_REJECTED, LIVE_STATUSES
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +162,15 @@ def pending_rail_answers(board: Any, user_id: str, rail_id: str) -> List[Any]:
             if p.get("rail_id") == rail_id and not p.get("consumed_by_run"):
                 out.append(a)
     return sorted(out, key=lambda a: float(a.completed_at or a.created_at or 0))
+
+
+def open_rail_asks(board: Any, user_id: str, rail_id: str) -> List[Any]:
+    """Asks this rail raised that the owner has not decided yet (oldest first). An ask past
+    its ``expires_at`` waits for no one. Raises when the board cannot be read."""
+    if not rail_id:
+        return []
+    return [a for a in board.asks(user_id=user_id, status=ASK_OPEN)
+            if (a.payload or {}).get("rail_id") == rail_id and not board.ask_expired(a)]
 
 
 def render_decisions(records: List[dict], header: str) -> str:

@@ -18,19 +18,19 @@ def _text(**kw):
 
 # --- B1 -----------------------------------------------------------------------
 
-def test_owner_session_is_taught_present_choice():
+def test_owner_session_is_taught_owner_ask_options():
     text = _text(surface=_dm())
     # propose_action teaches itself in its own description
     assert "propose_action(command=...)" not in text
-    assert "present_choice(question, options)" in text
+    assert "owner_ask(question, options)" in text
     # the one-token rule is for approvals only
     assert "An approval you ask them for must be ONE tappable token" in text
     assert "never assemble it yourself" not in text
 
 
-def test_autonomous_session_gets_no_present_choice():
+def test_autonomous_session_gets_no_live_choice_line():
     text = _text(autonomous=True)
-    assert "present_choice" not in text
+    assert "owner_ask(question, options)" not in text
 
 
 def test_room_gets_no_owner_moves():
@@ -227,3 +227,17 @@ def test_standing_goals_and_operations_lines_stay_on_owner_seats(kw):
     other = _text(**kw)
     assert "act on your standing goals" not in other
     assert "<operations>" not in other
+
+
+@pytest.mark.parametrize("kw", [
+    dict(surface=_dm(chat_type="group", chat_name="den")),
+    dict(surface=_dm(correspondent=True)),
+    dict(sub_agent=True),
+    dict(autonomous=True),
+], ids=["room", "correspondent", "leaf", "autonomous"])
+def test_money_work_leaves_the_chat_only_on_a_live_owner_turn(kw):
+    """112 W3: the owner chat hands work that decides money to a heavy goal; a goal run,
+    a leaf or a room is never told to create goals."""
+    rule = "Work that decides money"
+    assert rule in _text(surface=_dm())
+    assert rule not in _text(**kw)

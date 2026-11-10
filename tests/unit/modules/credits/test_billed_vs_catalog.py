@@ -47,6 +47,17 @@ def test_low_ratio_warns(tmp_path):
     assert ut.billed_vs_catalog_line(path).startswith("! ")
 
 
+def test_a_figure_computed_from_the_catalog_is_not_in_the_ratio(tmp_path):
+    """L8: native DeepSeek reports no charge, so its peak-hour figure measures no catalog."""
+    path = _db(tmp_path, [
+        ({"billed_cost_usd": 0.02, "estimated_cost_usd": 0.01, "billed_source": "estimate"}, None),
+        ({"billed_cost_usd": 0.0104, "estimated_cost_usd": 0.01, "billed_source": "provider"}, None),
+        ({"billed_cost_usd": 0.0104, "estimated_cost_usd": 0.01}, None),
+    ])
+    data = ut.billed_vs_catalog(path)
+    assert data["calls"] == 2 and data["ratio"] == pytest.approx(1.04)
+
+
 def test_empty_missing_and_unreadable_are_told_apart(tmp_path):
     assert "no calls with a billed cost" in ut.billed_vs_catalog_line(_db(tmp_path, []))
     assert "no bot.db yet" in ut.billed_vs_catalog_line(str(tmp_path / "nope.db"))
@@ -62,3 +73,28 @@ def test_record_keeps_both_figures_even_when_billed_equals_the_estimate():
                              credits_charged=1, user_cost_usd=0.01)
     assert tracker._apply_billed_cost(costs, 0.01) is not costs
     assert tracker._apply_billed_cost(costs, None) is costs
+
+
+def _tracker():
+    return object.__new__(ut.LLMUsageTracker)
+
+
+def test_a_step_call_gone_cold_records_the_cause_per_session():
+    """C10: the comparison is with the session's own previous step call."""
+    tracker = _tracker()
+    stamps = {"upstream": "UpA", "tools_sha": "t", "foundation_sha": "f"}
+    hit = tracker._with_cold_cause("s1", "agent", "m", 1000, 900, dict(stamps))
+    assert "cold_cause" not in hit
+    other = tracker._with_cold_cause("s2", "agent", "m", 1000, 0, {**stamps, "upstream": "UpB"})
+    assert other.get("cold_cause") is None, "another session's call is not the previous one"
+    cold = tracker._with_cold_cause("s1", "agent", "m", 1000, 10, {**stamps, "upstream": "UpB"})
+    assert cold["cold_cause"] == "upstream_moved"
+
+
+def test_an_aux_call_neither_compares_nor_moves_the_previous_call():
+    tracker = _tracker()
+    tracker._with_cold_cause("s1", "agent", "m", 1000, 900, {"upstream": "UpA"})
+    aux = tracker._with_cold_cause("s1", "compaction", "m", 1000, 0, {"upstream": "UpB"})
+    assert aux == {"upstream": "UpB"}
+    warm = tracker._with_cold_cause("s1", "agent", "m", 1000, 900, {"upstream": "UpA"})
+    assert "cold_cause" not in warm

@@ -43,7 +43,7 @@ def _latest_stamp(text: str) -> str:
 
 def _owner_rules(sec: Section, data_dir: str, uid: str, instance_id: str,
                  pending_kinds: Dict[str, List[dict]]) -> None:
-    from core.doc_claims import active_rule_lines, superseded_entries
+    from core.doc_claims import active_rule_lines, history_text, superseded_entries
     from core.instance import (OWNER_TRUNCATED_PREFIX, is_unreadable_note,
                                load_owner_doc, self_tier_root)
     raw = _read(self_tier_root(data_dir, uid, instance_id) / "owner.md")
@@ -67,6 +67,10 @@ def _owner_rules(sec: Section, data_dir: str, uid: str, instance_id: str,
     bits = [f"{len(active)} active"]
     if superseded:
         bits.append(f"{len(superseded)} superseded")
+    history = [l for l in history_text(raw).splitlines() if l.strip()]
+    if history:
+        info["history"] = len(history)
+        bits.append(f"{len(history)} history line(s)")
     if info["last_change"]:
         bits.append(f"last change {info['last_change']}")
     if pending:

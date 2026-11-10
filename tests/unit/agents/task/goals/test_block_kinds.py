@@ -48,7 +48,7 @@ class _Clock:
 
 class _FakeAgent:
     """Never actually run — only the board-level failure helpers are exercised
-    (GOAL_BLOCKER_ESCALATION defaults off in tests, so `.container` is unused)."""
+    (no `.container`, so the stop sweep has no owner to tell)."""
 
 
 class _RefusalAgent:
@@ -231,6 +231,25 @@ async def test_exception_path_provider_death_stamps_provider_outage(board, monke
     got = board.get(g.id)
     assert got.status == STATUS_BLOCKED
     assert got.payload.get("block_kind") == "provider_outage"
+
+
+@pytest.mark.asyncio
+async def test_exception_path_logs_a_failure_it_could_not_record(board, monkeypatch, caplog):
+    # Before: one try held the record and the escalation with ``except: pass``, so a
+    # failure that was never recorded left no line at all.
+    import logging
+    monkeypatch.setenv("GOALS_ENABLED", "true")
+    monkeypatch.setenv("GOAL_MAX_CONCURRENT", "5")
+    board.create(user_id="u1", title="flaky", max_retries=1)
+    d = GoalDispatcher(board, _ExceptionAgent("boom"))
+
+    def broken(*a, **k):
+        raise RuntimeError("database is locked")
+    monkeypatch.setattr(board, "record_failure", broken)
+    with caplog.at_level(logging.ERROR):
+        await d.dispatch_once()
+        await _wait_for_runs(d)
+    assert "the failure was not recorded" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -494,9 +513,12 @@ def test_provider_outage_requeue_cap_stops_after_16_and_falls_to_legacy_rail(clo
         assert got.status == STATUS_READY
         assert got.payload.get("provider_requeues") == i + 1
         # re-trip the breaker so the row is blocked+provider_outage again for
-        # the next iteration (block_kind persists across a payload merge-write).
+        # the next iteration. 107: the requeue drops the kind and the producer
+        # stamps it again, so a later block of another kind can name itself.
+        assert "block_kind" not in got.payload
         g = board.claim(g.id, "w1", ttl_seconds=900)
         board.record_failure(g.id, error="boom", claim_token=board.get(g.id).claim_token)
+        board.stamp_block_kind(g.id, "provider_outage", only_if_absent=True)
         got2 = board.get(g.id)
         assert got2.status == STATUS_BLOCKED
         assert got2.payload.get("block_kind") == "provider_outage"
@@ -622,6 +644,7 @@ def test_provider_exhausted_event_gated_on_cas_success(clocked_board):
         assert n == 1
         g = board.claim(g.id, "w1", ttl_seconds=900)
         board.record_failure(g.id, error="boom", claim_token=board.get(g.id).claim_token)
+        board.stamp_block_kind(g.id, "provider_outage", only_if_absent=True)
 
     # 17th tick: before age_out_blocked tries to stamp exhausted, cancel the goal
     # This simulates the row being moved off 'blocked' between the SELECT and UPDATE
@@ -681,10 +704,11 @@ def test_unblock_preserves_provider_requeues_ledger_across_the_episode(clocked_b
     assert requeued.status == STATUS_READY
     assert requeued.payload.get("provider_requeues") == 1
 
-    # re-trip the breaker (block_kind + the requeue ledger persist across the
-    # payload merge-write, same as the requeue-cap truth-table test above)
+    # re-trip the breaker (the requeue ledger persists across the payload merge-write,
+    # and the producer stamps the kind again)
     g = board.claim(g.id, "w1", ttl_seconds=900)
     board.record_failure(g.id, error="boom", claim_token=board.get(g.id).claim_token)
+    board.stamp_block_kind(g.id, "provider_outage", only_if_absent=True)
     tripped = board.get(g.id)
     assert tripped.status == STATUS_BLOCKED
     assert tripped.payload.get("block_kind") == "provider_outage"

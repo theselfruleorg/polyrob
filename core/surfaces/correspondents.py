@@ -270,6 +270,19 @@ class CorrespondentRegistry:
             return self._state_of(surface, addr, tid, user_id) or state
         return state
 
+    def binding(self, *, surface: str, address: str, user_id: str,
+                thread_id: Optional[str] = None) -> Optional[dict]:
+        """The stored row of this exact key, or None. Unlike :meth:`resolve`, it also
+        returns a pending or expired row: a seat that reports a binding reads it here."""
+        row = execute_retry(
+            self.db_path,
+            "SELECT * FROM correspondents "
+            "WHERE surface=? AND address=? AND thread_id=? AND user_id=?",
+            (surface, _norm_addr(address), thread_id or "", user_id),
+            fetch="one",
+        )
+        return dict(row) if row is not None else None
+
     def _state_of(self, surface: str, addr: str, tid: str,
                   user_id: str) -> Optional[str]:
         row = execute_retry(

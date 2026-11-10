@@ -84,7 +84,9 @@ SURFACES = ("owner_telegram_dm", "owner_repl", "cron", "goal", "room",
 #: surfaces in :data:`PROD_SURFACES` only, as ``prod_<surface>``.
 PROD_ENV = {
     "DEFI_AGENT_AUTONOMY": "true", "DEFI_TRADE_ENABLED": "true", "DEFI_DATA_ENABLED": "true",
-    "AGENT_COMPUTE_POSTURE": "1", "CODE_EXEC_ENABLED": "true", "SHELL_TOOLS_ENABLED": "true",
+    # 112 K4: prod-faithful — every unit forces CODE_EXEC_ENABLED=false (rootful Docker
+    # is host root, deployment/polyrob.service); shell stays a posture member.
+    "AGENT_COMPUTE_POSTURE": "1", "CODE_EXEC_ENABLED": "false", "SHELL_TOOLS_ENABLED": "true",
     "TWITTER_ENABLED": "true", "TWITTER_OAUTH2_ACCESS_TOKEN": "golden-not-a-token",
     "X_BROWSER_ENABLED": "true", "MCP_ENABLED": "true",
     "EMAIL_PROVIDER": "agentmail", "AGENTMAIL_API_KEY": "golden-not-a-key",
@@ -92,6 +94,10 @@ PROD_ENV = {
     # ``local_vector``: that needs the memory-vector extra) and the wallet ON.
     # The agent unit holds a seed and explicit operator caps (the guard reads
     # neither as a default); seed and figures here are placeholders.
+    # 112 W2: the operator's model tiers, so the prod seat renders its tier line.
+    # Neutral ids: the golden pins the line's shape, not an instance's model choice.
+    "DEFAULT_PROVIDER": "openrouter", "DEFAULT_MODEL": "example/default-model",
+    "HEAVY_MODEL": "example/heavy-model",
     "MEMORY_BACKEND": "sqlite", "AGENT_WALLET_ENABLED": "true",
     "AGENT_WALLET_MASTER_SEED": "golden-not-a-seed-golden-not-a-seed",
     "AGENT_WALLET_MAX_PER_TX_USD": "250", "WALLET_DAILY_CAP_USD": "500",

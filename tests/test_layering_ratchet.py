@@ -382,7 +382,9 @@ def test_upward_string_refs_only_shrink():
 # tools/controller/service.py (a module already inside the component).
 # 081 WS-4.1: -> 143 when the skill catalog moved to core/skills and the writer
 # to modules/skills (tools and core no longer import agents-tier skill modules).
-LARGEST_CROSS_PACKAGE_SCC_CEILING = 143
+# +1: core/wallet/tx_guard_account.py, the rule-5 account pre-flight split out of
+# core/wallet/tx_guard.py (a module already inside the component).
+LARGEST_CROSS_PACKAGE_SCC_CEILING = 144
 _SCC_TIGHTNESS_SLACK = 10
 
 

@@ -630,9 +630,10 @@ async def list_payment_requests(
     # Python after a `ORDER BY created_at DESC LIMIT n` would grab only the newest
     # n rows of ANY status and could return [] while older matching (e.g. still
     # unpaid pending) invoices exist beyond the window.
-    # 098 review: only machine payments reach refund_due — a refund listing
-    # reads them too, or no seat can see the obligation the ledger counts.
-    kinds = [INVOICE_KIND] + ([MACHINE_PAYMENT_KIND] if status in _REFUND_STATUSES else [])
+    # A machine payment or a paid order nothing delivered reaches refund_due: a refund
+    # listing reads both, or no seat can see the obligation the ledger counts.
+    refund_kinds = [MACHINE_PAYMENT_KIND, "offer_order"]
+    kinds = [INVOICE_KIND] + (refund_kinds if status in _REFUND_STATUSES else [])
     where = ["(user_id = ? OR json_extract(metadata, '$.tenant_id') = ?)",
              f"json_extract(metadata, '$.kind') IN ({','.join('?' * len(kinds))})"]
     params: List[Any] = [user_id, user_id, *kinds]
@@ -891,11 +892,11 @@ async def settle_payment_request(
             machine=X402_INVOICE, to="completed", from_states=from_states,
             set_cols={"transaction_hash": transaction_hash, "completed_at": now,
                       "updated_at": now},
-            # 098 review: a HELD machine payment ("no service was started") is a
-            # refund owed (`complete_held`), never income by attestation.
-            where_extra=("NOT (status = 'settling' AND "
-                         "COALESCE(json_extract(metadata, '$.kind'), '') = ?)"),
-            where_params=(MACHINE_PAYMENT_KIND,))
+            # A held machine payment is owed back (`complete_held`) and an order is paid
+            # only with a tx hash: neither becomes income on an owner's word alone.
+            where_extra=("NOT (status = 'settling' AND json_extract(metadata, '$.kind') IS ?) "
+                         "AND NOT (? IS NULL AND json_extract(metadata, '$.kind') IS 'offer_order')"),
+            where_params=(MACHINE_PAYMENT_KIND, transaction_hash))
     except sqlite3.IntegrityError:
         # Lost a genuine concurrent race to the UNIQUE index — two settle
         # attempts for the same tx_hash landed together. Never resurrect or

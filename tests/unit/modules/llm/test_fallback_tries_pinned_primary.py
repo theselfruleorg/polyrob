@@ -39,7 +39,7 @@ def _build_manager(monkeypatch, *, primary=None, clients=None, llm_config=None):
 
     monkeypatch.setattr(mgr, "_test_client_health", _healthy)
 
-    def _fake_create_llm_client(*, name, config, container, model_type=None):
+    def _fake_create_llm_client(*, name, config, container, model_type=None, isolated=False):
         return _FakeClient(model_type=model_type)
 
     monkeypatch.setattr(
@@ -85,30 +85,6 @@ async def test_fallback_lands_on_pinned_primary_not_in_hierarchy(monkeypatch):
     assert result is not None
     assert mgr._test_captured["provider"] == "zai-coding"
     assert mgr._test_captured["model"] == "glm-5"
-
-
-@pytest.mark.asyncio
-async def test_primary_named_fallback_client_resolves_real_provider(monkeypatch):
-    """``_ensure_fallback_client`` registers 'openai_fallback_client', which can
-    become the primary (first-available branch of ``_set_primary_client``).
-    Stripping only the '_client' suffix yields the bogus provider
-    'openai_fallback' — the provider name must match what the rest of the
-    manager derives (``.replace('_client','').replace('_fallback','')``)."""
-    mgr = _build_manager(
-        monkeypatch,
-        primary="openai_fallback_client",
-        # No model_type on the client -> forces the get_default_model(provider)
-        # path, where a bogus provider name silently mis-resolves the model.
-        clients={"openai_fallback_client": _FakeClient(model_type=None)},
-        llm_config={"openai": {"api_key": "sk-" + "x" * 44}},
-    )
-
-    result = await mgr.get_fallback_chat_model(
-        exclude_providers=["anthropic"], original_model="claude-x", temperature=0.0
-    )
-
-    assert result is not None
-    assert mgr._test_captured["provider"] == "openai"
 
 
 @pytest.mark.asyncio

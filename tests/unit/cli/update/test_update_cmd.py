@@ -506,6 +506,8 @@ def test_boot_apply_without_a_target_still_stops_on_an_empty_list(monkeypatch):
     refs = _patch_boot_apply(monkeypatch, release_body="[]")
     res = up.apply_for_boot("stable")
     assert not res["ok"] and res["failed_step"] == "check" and not refs
+    # Nothing moved, so nothing was rolled back (EP-7).
+    assert res["not_applied"] and not res["rolled_back"]
 
 
 def test_boot_apply_ignores_a_target_that_is_not_newer(monkeypatch):

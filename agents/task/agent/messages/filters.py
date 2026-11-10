@@ -455,6 +455,13 @@ class FiltersMixin:
 	# this comment was false for as long as it had been written.
 	__slots__ = ()
 
+	def _images_reach_the_wire(self) -> bool:
+		"""False for a model with no vision: its adapter sends each image turn as
+		``[IMAGE]``, so a retirement frees no bytes and rewrites a row the provider
+		cached. An LLM with no vision probe keeps the batch rule."""
+		probe = getattr(getattr(self, "llm", None), "_get_vision_support", None)
+		return bool(probe()) if callable(probe) else True
+
 	def _retire_stored_media(self) -> int:
 		"""Write the batch retirement back to the store, so the deque stops holding
 		retired bytes and a retired turn stays retired. The turn stays in the deque
@@ -463,6 +470,8 @@ class FiltersMixin:
 		The tail counts: the screenshot rides the ephemeral rail, and a rule that sees it on
 		the wire but not here brings retired images back on the next step without one.
 		"""
+		if not self._images_reach_the_wire():
+			return 0
 		with self._history_lock:
 			stored = list(self.history.messages)
 			tail = list(getattr(self, "_ephemeral_messages", None) or ())

@@ -31,7 +31,7 @@ from core.surfaces.tappable import parse_ask_option as _parse_ask_option
 from core.surfaces.tappable import parse_tappable as _parse_tappable
 from surfaces.telegram.inbound import InboundResult
 from surfaces.telegram.media import (
-    absorb_for_session, queue_attachments_for_new_session,
+    absorb_for_session, discard_absorbed, fetch_media_file, queue_attachments_for_new_session,
 )
 
 logger = logging.getLogger(__name__)
@@ -181,13 +181,14 @@ _USAGE = {
     "/asks": "[<id>]",
     "/skills": "[words | <id>]",
     "/fulfill": "<id> [what you want to tell the run]",
-    "/job": "<new|show|edit|pause|resume|run|stop> …",
+    "/job": "[list|new|show|edit|pause|resume|run|stop] …",
     "/goal": "new <what> · <show|retry|pause|stop [--forever]|allow> <id>",
     "/apps": "[list|show|approve|reject|kill|start|remove|logs <slug>]",
     "/mcp": "[add <id> <url>|remove <id>|test <id>]",
-    "/recap": "[window]",
     "/journey": "[window]",
-    "/wallet": "[balances|tokens]",
+    "/new": "[name]", "/chat": "<number or name>", "/rename": "<name>",
+    "/close": "[number or name]",
+    "/wallet": "[balances|tokens|signed [n]]",
     "/writeoff": "<chain> <address> [go] [reason]",
     "/unquarantine": "<chain> <address> [go]",
     "/invoices": "[status] | refunded <id> [tx]",
@@ -202,7 +203,7 @@ _USAGE = {
     "/send": "<amount> <native|token-address> to <address> on <chain> [max <usd>] [go]",
     "/swap": "<amount> <native|token> to <token> on <chain> [slippage <bps>] [max <usd>] [go]",
     "/cards": "[<id> [ok|no|re|1-6]]",
-    "/nft": "[send <id> <to> [go]]|list|info <contract> <id>|transfer <contract> <id> <to> [go]|"
+    "/nft": "[send <id> <to> [go]]|list|info <contract> <id>|account [<id>]|transfer <contract> <id> <to> [go]|"
             "revoke <contract> <operator> [go]",
     "/dapp": "list|revoke <id>",
     "/contacts": "[<surface> <address>]",
@@ -210,7 +211,7 @@ _USAGE = {
     "/thread": "[n | <hours>h]",
     "/identity": "register|set-uri [go]",
     "/allow": "<surface> <target>",
-    "/deny": "<surface> <target>",
+    "/deny": "<surface> <target>", "/pair": "[list|approve <surface> <code>|revoke <surface> <id>]",
     "/groups": "<allow|deny|list|use|mode|set|role|roles|tools|audit|tail|service|admins> "
                "here|<surface> <chat_id> [...]",
     "/mute": "here|<surface> <chat_id> <duration>",
@@ -220,7 +221,7 @@ _USAGE = {
     "/paid": "<status|enable|disable|price <verb> <usd>|asset <id>|offers|"
              "cancel <id>>",
     "/prefs": "[all]",
-    "/config": "[get|explain <key> | set <key> <value>]",
+    "/config": "[list | get|explain <key> | search <words> | set <key> <value> | check]",
     "/model": "[<name> [default] [reasoning=<level>] | reset | aliases]",
     "/usage": "[days]",
     "/kb": "[list [collection] | search <query> | <words>]",
@@ -235,7 +236,6 @@ _USAGE = {
 _DETAIL = {
     "/pause": ("   everything, or: trading, background, messages, deploying "
                "— or a scope",),
-    "/halt": ("   the same as /pause with no words",),
     "/mute": ("   with a duration IN REPLY to a message it mutes that MEMBER "
               "— free for you and room admins, a paid action for a member",),
     "/unmute": ("   the muted member may COUNTER-PAY their own",),
@@ -243,7 +243,7 @@ _DETAIL = {
     "/config": ("   safe keys write immediately; guarded keys queue for "
                 "/pending review",),
     "/mcp": ("   https only; loads in every new session",),
-    "/recap": ("   default 24h, e.g. 30m/24h/7d",),
+    "/journey": ("   default 24h, e.g. 30m/24h/7d",),
     "/bridge": ("   quote only without `go`; your own `/bridge … go` passes the "
                 "autonomous ceiling and the pause — the per-tx and daily caps "
                 "still bind. A bridge I start above the ceiling asks you first",),
@@ -271,8 +271,7 @@ _SUBVERBS = {
 #: section they belong to.
 _LOCAL_ROWS = {
     "talk": (
-        ("/task", "<goal>", "Start a new task"),
-        ("/new", "", "Start a fresh conversation"),
+        ("/task", "<goal>", "The old form of /new: a separate chat that starts with your goal"),
     ),
 }
 
@@ -356,9 +355,7 @@ def _help_for(verb: str) -> str:
     canonical = verb_for(raw)
     v = canonical.name if canonical is not None else raw
     if canonical is not None and not canonical.runs_on(_SEAT):
-        seats = " or ".join(canonical.seats)
-        return (f"{v} — {canonical.help}.\nIt runs on the {seats}, not here. "
-                f"Send /help for the verbs this chat has.")
+        return _unknown_command_text(v)
     out: list = []
     collecting = False
     for ln in _HELP_BODY.splitlines():
@@ -386,35 +383,27 @@ def _welcome_text() -> str:
 
 
 def _unknown_command_text(cmd: str) -> str:
-    """Cheap teaching reply for a command-shaped token no handler owns (030 L9): the
-    closest real verbs, or what replaced a retired one (103), and /help."""
-    import difflib
-    from core.surfaces.verb_check import verb_note
-    if cmd == "/admin":
-        return room_help.admin_elsewhere(None).text
-    if verb_note(cmd):
-        return f"{cmd} is gone. {verb_note(cmd)} Send /help for the full list."
-    known = [f"/{name}" for name, _ in help_commands()]
-    matches = difflib.get_close_matches(cmd, known, n=2, cutoff=0.6)
-    hint = f" Did you mean {' or '.join(matches)}?" if matches else ""
-    return f"Unknown command {cmd}.{hint} Send /help for the full list."
+    """A slash line no handler here owns: a retired verb, a verb of another seat, or
+    a typo with its closest verbs (``surfaces/telegram/unknown_verb.py``)."""
+    from surfaces.telegram.unknown_verb import unknown_command_text
+    return unknown_command_text(cmd, [f"/{name}" for name, _ in help_commands()], _SEAT)
 
 _OWNER_ADMIN_COMMANDS = ("/inbox", "/book",
                          "/pending", "/approve", "/reject", "/asks", "/fulfill",
-                         "/allow", "/deny", "/allowlist",
+                         "/allow", "/deny", "/allowlist", "/pair",
                          "/groups", "/mute",  # 044 T18: room presence admin
                          "/paid",             # 046: paid room actions
                          "/unmute", "/ban", "/unban",   # 046 phase 2
-                         "/halt", "/resume", "/pause", "/run",
-                         "/jobs", "/job", "/goal", "/wallet", "/invoices", "/settle",
+                         "/resume", "/pause", "/run",
+                         "/job", "/goal", "/wallet", "/invoices", "/settle",
                          "/trade", "/offer", "/bridge", "/launch", "/deploy", "/lp",
                          "/claim", "/pay", "/nft", "/dapp", "/identity", "/contacts", "/thread",
                          "/why",
-                         "/status", "/mode", "/recap", "/journey", "/goals", "/prefs", "/config",
+                         "/status", "/mode", "/journey", "/goals", "/prefs", "/config",
                          "/avatar", "/cwd",
                          "/missed", "/apps", "/mcp",
                          "/more", "/rules",  # 096 W5: reads (the rest of a cut; owner rules)
-                         "/kb", "/files", "/dev",
+                         "/kb", "/files", "/dev", "/self", "/memory",  # 113 G-6
                          "/model", "/skills",  # 080 D8
                          "/usage",  # 2026-10-14 D6: the owner spend view
                          "/restart", "/update",  # 077: drained restart / update
@@ -513,35 +502,11 @@ def help_commands() -> list:
     return menu_entries(_SEAT, _LOCAL_ROWS)
 
 
-#: How many chats the "/" menu is published to at start. An allowlist is a
-#: handful of ids; a pathological one must not turn startup into a Bot API
-#: hammering loop.
-_MENU_MAX_CHATS = 16
-
-
 def _menu_chat_ids() -> list:
-    """Chat ids allowed to SEE the "/" command menu — the owner seats, only.
-
-    Every verb in the menu is owner-admin and gated by
-    :func:`owner_allowed`, so the menu's audience is exactly the
-    ``ALLOWED_TELEGRAM_USER_IDS`` allowlist plus an explicit
-    ``POLYROB_OWNER_TELEGRAM_ID``. This is deliberately WIDER than
-    ``core.instance.resolve_owner_telegram_id`` (which answers None on a
-    two-entry allowlist because it must name ONE human): here a second
-    allowlisted seat can run the verbs, so hiding the menu from it would be
-    wrong. With no allowlist at all the bot is in bootstrap mode and runs
-    nothing, so nobody gets a menu.
-    """
-    out = []
-    explicit = (os.getenv("POLYROB_OWNER_TELEGRAM_ID") or "").strip()
-    if explicit.isdigit():
-        out.append(int(explicit))
-    raw = (os.getenv("ALLOWED_TELEGRAM_USER_IDS") or "").strip()
-    for part in raw.split(","):
-        part = part.strip()
-        if part.isdigit() and int(part) not in out:
-            out.append(int(part))
-    return out[:_MENU_MAX_CHATS]
+    """The chat the "/" menu is published to: the owner's only (113 W7 F-05,
+    ``surfaces.telegram.help_scope.menu_chat_ids``)."""
+    from surfaces.telegram.help_scope import menu_chat_ids
+    return menu_chat_ids()
 
 
 def owner_allowed(tg_user_id) -> Optional[bool]:
@@ -851,7 +816,7 @@ def _room_reply_anchor(result: InboundResult) -> Optional[str]:
 #: module — this harness is already one of the tree's largest and new behaviour
 #: belongs in a new file, not in it. Imported by NAME so the call sites read the
 #: same as before the extraction.
-from surfaces.telegram import room_help  # noqa: E402 — 101: room /help + the admin DM note
+from surfaces.telegram import chat_ops, room_help  # noqa: E402 — 101: room /help + the admin DM note
 from surfaces.telegram.room_help import _is_owner_groups_line  # noqa: E402,F401
 from surfaces.telegram.room_turn import (  # noqa: E402
     attachment_description as _with_attachment,
@@ -867,7 +832,7 @@ from surfaces.telegram.room_turn import (  # noqa: E402
 #: Commands that DECIDE something and so belong in the owner thread. A read-only
 #: verb (`/status`, `/help`, `/recap`) is a display, not a line of conversation.
 _THREAD_COMMANDS = frozenset({
-    "/approve", "/reject", "/fulfill", "/pause", "/resume", "/halt", "/cancel",
+    "/approve", "/reject", "/fulfill", "/pause", "/resume", "/cancel",
     "/new", "/task", "/trade", "/deploy", "/launch", "/claim", "/bridge", "/pay",
     "/send", "/swap",
 })
@@ -1001,6 +966,7 @@ async def _start_task_session(task_agent: Any, result: InboundResult, spawn, del
         # conservative default stands.
         from surfaces.telegram.interactive_tools import owner_interactive_tool_ids
         tool_ids = owner_interactive_tool_ids(inbound.identity.user_id)
+        await chat_ops.tell_refresh(task_agent, result, deliver)  # 113: never a silent reset
     from core.surfaces.inbound_attachments import owner_typed_text
     # 094: an owner DM starts on the chat's pin (a queued /model or the owner's default).
     _pin = None
@@ -1137,9 +1103,8 @@ def _is_admin_owner(user_id: str) -> bool:
     """Owner gate for the admin verbs. Telegram is a NETWORK surface, so the
     single-user local bypass is never honored here — only the bound principal
     (the owner alias maps the owner's telegram id onto it) qualifies."""
-    from core.instance import is_owner_local_safe, resolve_owner_principal
-    return is_owner_local_safe(user_id, owner_principal=resolve_owner_principal(),
-                               local_enabled=False)
+    from core.instance import is_owner_uid
+    return is_owner_uid(user_id, allow_local=False)
 
 
 #: The ONE denial string for "you may not act here" — shared by the DENIED
@@ -1241,7 +1206,7 @@ from surfaces.telegram.prefs_ops import (  # noqa: E402,F401
     _config_reply, _is_configured_source, _prefs_home, _prefs_reply,
 )
 from surfaces.telegram.kb_ops import _files_reply, _kb_reply  # noqa: E402,F401
-from surfaces.telegram.storefront_ops import _storefront  # noqa: E402 — 099 W3 buyer seat
+from surfaces.telegram.storefront_ops import _storefront, _stranger_door  # noqa: E402,F401
 from surfaces.telegram.approval_ops import (  # noqa: E402,F401
     _correspondent_decision, _decide_pending_item, _pending_set,
 )
@@ -1355,6 +1320,9 @@ def _runs_in_background(cmd: str, result: InboundResult) -> bool:
 async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver=None,
                           fetch_media=None) -> Optional[str]:
     cmd = (result.decision.command or "").lower()
+    if cmd:   # an old name (/halt, /recap, /jobs) is its row — also for a caller that did not route
+        from core.surfaces.dispatcher import _command_token
+        cmd = _command_token(cmd)
     if cmd == "/help":
         args = (result.inbound.text or "").split()[1:]
         # A room MEMBER and a room ADMIN each read what THEY can do here, never
@@ -1362,6 +1330,9 @@ async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver
         _room_help = room_help.room_help_reply(task_agent, result)
         if _room_help is not None:
             return _room_help
+        from surfaces.telegram.help_scope import scoped_help   # 113 W7 F-05
+        if (_scoped := scoped_help(result)) is not None:
+            return _scoped
         if args:
             return _help_for(args[0])
         return _help_text()
@@ -1452,29 +1423,14 @@ async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver
                 return f"Nothing was running in this chat to stop. {CANCEL_REACH}"
             return f"Task cancelled. {CANCEL_REACH}"
         return f"No active task to cancel. {CANCEL_REACH}"
-    if cmd == "/new":
+    if chat_ops.is_chat_command(cmd):   # 113: the person's own chats
         if not _lifecycle_permitted(result):
             return _UNAUTHORIZED_TEXT
-        sid = result.decision.session_id
-        if sid:
-            try:
-                await task_agent.cancel_session_by_id(sid, force=True)
-            except Exception as e:
-                logger.debug("telegram /new cancel failed: %s", e)
-        # a4: drop the chat<->session binding so the NEXT message routes cold (a fresh
-        # session) instead of STEERing back into the just-cancelled thread.
-        try:
-            task_agent.unbind_chat(result.decision.session_key)
-        except Exception as e:
-            logger.debug("telegram /new unbind failed: %s", e)
-        return "Started fresh — send your next message to begin."
-    if cmd == "/task":
-        # /task <goal>: strip the verb and start a new task with the remainder.
-        text = result.inbound.text.strip()
-        goal = text[len("/task"):].strip()
-        if not goal:
-            return "Usage: /task <what you want done>"
-        result.inbound.text = goal
+        return await chat_ops.chat_command(task_agent, result, cmd)
+    if cmd == "/task":   # 113: the old form of /new, kept for one release
+        refusal = await chat_ops.task_alias(task_agent, result, deliver)
+        if refusal:
+            return refusal
         await _start_task_session(task_agent, result, spawn, deliver, fetch_media)
         return None
     return _unknown_command_text(cmd)  # unknown command -> suggestion + /help (030 L9)
@@ -1545,11 +1501,9 @@ async def _act_on_inbound_locked(
             # W3 group denials are silent: never spam a channel with auth notices.
             return None
         if decision.pairing_code:
-            return (
-                "🔒 I'm not allowed to talk to you yet.\n"
-                f"Pairing code: {decision.pairing_code}\n"
-                "Ask my owner to approve it."
-            )
+            from core.pairing import code_reply
+            return code_reply(getattr(result.inbound.identity.source, "surface_id", "")
+                              or "telegram", decision.pairing_code)
         return _UNAUTHORIZED_TEXT
 
     if kind == RouteKind.CORRESPONDENT_DATA:
@@ -1714,6 +1668,7 @@ async def _act_on_inbound_locked(
             # The queue is full, so THIS message was rejected (not enqueued) — be honest
             # rather than implying it'll be handled next. Don't double-spawn run_session
             # (one is already draining) and don't mint a fresh amnesiac session.
+            discard_absorbed(result, decision.session_id)
             return ("⏳ I'm still working through your earlier messages and can't take this "
                     "one yet — please send it again in a moment.")
         # status == "gone": truly gone (no on-disk metadata) -> a fresh session.
@@ -1813,14 +1768,7 @@ class TelegramHarness:
         self.surface = TelegramSurface(bot)
 
     async def _fetch_media_bytes(self, media):
-        """Download ONE inbound attachment's bytes (the transport half of the
-        2026-09-13 media rail). Fail-open -> None; the core rail turns a None into
-        an honest "could not be downloaded" line on the turn."""
-        ref = getattr(media, "ref", None)
-        if not ref:
-            return None
-        from surfaces.telegram.voice import download_file_bytes
-        return await download_file_bytes(self.bot, ref)
+        return await fetch_media_file(self.bot, media)
 
     async def _transcribe_voice(self, update: dict):
         """Injected into process_update so the inbound spine stays transport-free (#9):
@@ -2029,6 +1977,11 @@ class TelegramHarness:
             logger.debug("telegram bot session close failed: %s", e)
 
     async def run_polling(self) -> None:
+        from surfaces.telegram.poll_batch import BackgroundLanes
+        async with BackgroundLanes() as lanes:
+            await self._poll_loop(lanes)
+
+    async def _poll_loop(self, lanes) -> None:
         """Long-poll getUpdates and dispatch each update. Exits when stop() is
         called (self._running False) or the task is cancelled. A stop that came
         BEFORE this task's first step is honoured (098 TS-17: it is sticky)."""
@@ -2106,7 +2059,7 @@ class TelegramHarness:
                     offset = uid + 1
                 batch.append(data)
             from surfaces.telegram.poll_batch import dispatch_batch
-            await dispatch_batch(batch, self.handle_update)
+            await dispatch_batch(batch, self.handle_update, lanes)
 
     def _make_progress_reporter(self, chat_id):
         """An EditingProgressReporter bound to this chat over the aiogram Bot, or a
@@ -2430,11 +2383,12 @@ class TelegramHarness:
             return None
         if tg_id is not None and raw_allowlist_applies(update):
             gate = owner_allowed(tg_id)
-            if gate is False:
-                if await _storefront(self, update):  # 099 W3: a stranger may BUY, never steer
+            if gate is False:  # 099 W3 + pairing: a stranger may BUY or ask to pair, never steer
+                door = await _stranger_door(self, update, tg_id)
+                if door == "raw_allowlist":
+                    _record_drop(update, tg_id, door)  # not on the allowlist -> ignore
+                if door not in ("paired", "correspondent"):
                     return None
-                _record_drop(update, tg_id, "raw_allowlist")
-                return None  # not on the allowlist -> silently ignore
             if gate is None:
                 # No allowlist set: reveal the sender's id so the operator can lock
                 # the bot, and do NOT run the agent (bootstrap mode).
@@ -2856,8 +2810,8 @@ def build_telegram_harness(container, task_agent, *, token, webhook_base=None, b
     from tools.user_directory import UserDirectory
 
     if bot is None:
-        from aiogram import Bot  # lazy: only needed when actually starting the surface
-        bot = Bot(token)
+        from surfaces.telegram.bot_api import make_bot
+        bot = make_bot(token)
 
     dedup = UpdateDedup(os.path.join(data_dir, "tg_dedup.db"),
                         window_seconds=_TG_DEDUP_WINDOW_S)

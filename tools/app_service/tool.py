@@ -364,7 +364,10 @@ def _where(r: Dict[str, Any]) -> str:
 
 def _health(r: Dict[str, Any]) -> str:
     if r.get("remove_requested"):
-        return " — removal queued"
+        # A stuck removal names why (the supervisor writes "removal waits: …");
+        # an older, unrelated failure note on the row is not shown here.
+        err = str(r.get("last_failure_error") or "")
+        return " — removal queued" + (f" ({err[:160]})" if err.startswith("removal waits") else "")
     if r.get("last_failure_error") and r["status"] in ("failed", "stopped"):
         return f" — {str(r['last_failure_error'])[:120]}"
     if r.get("last_health"):

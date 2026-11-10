@@ -1,14 +1,11 @@
 """Token-cost math for the model registry (``calculate_cost``).
 
-Split out of ``modules/llm/model_registry.py`` (S4, 2026-08-29); ``model_registry``
+Split out of ``modules/llm/model_registry.py`` ; ``model_registry``
 re-exports ``calculate_cost``. The billing entry point that must be used for anything
 that charges is ``modules.credits.pricing.compute_llm_cost`` (it forwards BOTH cache
 token classes and applies the flat-rate / untrusted-price rules); this is the shared
 per-token arithmetic underneath it.
 """
-import logging
-
-logger = logging.getLogger(__name__)
 
 
 def calculate_cost(model_name: str, input_tokens: int, output_tokens: int,
@@ -22,20 +19,15 @@ def calculate_cost(model_name: str, input_tokens: int, output_tokens: int,
             Anthropic folds cache reads/writes back into input before calling here)
         output_tokens: Number of output tokens
         cached_tokens: Number of cached input tokens (reads, discounted)
-        cache_creation_tokens: Number of cache-WRITE tokens (G3: Anthropic 1.25x)
+        cache_creation_tokens: Number of cache-WRITE tokens (Anthropic 1.25x)
         cache_creation_1h_tokens: The SUBSET of cache_creation_tokens written with a
-            1h window (F4: Anthropic 2.0x). Clamped to cache_creation_tokens.
+            1h window (Anthropic 2.0x). Clamped to cache_creation_tokens.
 
     Returns:
         Total cost in USD
     """
     from modules.llm.model_registry import get_model_config
-    config = get_model_config(model_name)
-    if not config or not config.pricing:
-        logger.warning(f"No pricing info for {model_name}")
-        return 0.0
-
-    pricing = config.pricing
+    pricing = get_model_config(model_name).pricing
 
     # Regular input = everything that is neither a cache read nor a cache write.
     regular_input_tokens = input_tokens - cached_tokens - cache_creation_tokens
@@ -44,15 +36,16 @@ def calculate_cost(model_name: str, input_tokens: int, output_tokens: int,
         regular_input_tokens = 0
     input_cost = (regular_input_tokens / 1_000_000) * pricing.input_price
 
-    # Add cached input cost if applicable
-    if cached_tokens > 0 and pricing.cached_input_price is not None:
-        input_cost += (cached_tokens / 1_000_000) * pricing.cached_input_price
+    # A cached token with no cached price is charged at the input price, never at $0.
+    cached_price = pricing.cached_input_price if pricing.cached_input_price is not None \
+        else pricing.input_price
+    input_cost += (cached_tokens / 1_000_000) * cached_price
 
-    # G3: cache-WRITE (creation) tokens billed at cache_write_price when the provider
+    # Cache-WRITE (creation) tokens billed at cache_write_price when the provider
     # surcharges them (Anthropic 1.25x); otherwise at plain input price (no surcharge).
     if cache_creation_tokens > 0:
         write_price = pricing.cache_write_price if pricing.cache_write_price is not None else pricing.input_price
-        # F4: the 1h-window slice of the write bills at 2.0x (Anthropic); the
+        # The 1h-window slice of the write bills at 2.0x (Anthropic); the
         # response reports it separately, so the split is measured, not guessed.
         write_1h = max(0, min(cache_creation_1h_tokens or 0, cache_creation_tokens))
         write_1h_price = pricing.cache_write_price_1h if pricing.cache_write_price_1h is not None else write_price

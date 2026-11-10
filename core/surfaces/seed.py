@@ -170,8 +170,27 @@ def build_contact_notice(item: dict, *, surface: str, address: str,
     return "\n".join(lines)
 
 
+def record_contact_rebound(user_id: str, surface: str, address: str,
+                           old_session_id: str, new_session_id: str) -> None:
+    """A contact moved to another session: one event and one owner line. An approval named
+    the old session, so a move is never silent. Fail-open: the move already happened."""
+    el = _event_log()
+    if el is not None:
+        try:
+            el.record("correspondent_rebound", user_id=user_id, session_id=new_session_id,
+                      source=surface, attrs={"address": address, "from_session": old_session_id,
+                                             "to_session": new_session_id})
+        except Exception:
+            logger.warning("correspondent_rebound event not recorded", exc_info=True)
+    _push_contact_notice(
+        None, user_id, new_session_id,
+        f"Contact {surface} {address} moved from session {old_session_id} to "
+        f"{new_session_id}. Their replies now reach that session.",
+        source="correspondent_rebound")
+
+
 def _push_contact_notice(container: Any, user_id: str, session_id: str,
-                         text: str) -> None:
+                         text: str, *, source: str = CONTACT_NOTICE_SOURCE) -> None:
     """Send *text* on the owner rail without blocking the outbound path.
 
     The seed runs before the send, inside an async tool or surface; the notice
@@ -181,7 +200,7 @@ def _push_contact_notice(container: Any, user_id: str, session_id: str,
     try:
         from core.surfaces.user_delivery import deliver_user_message
         coro = deliver_user_message(container, str(user_id or ""), text,
-                                    source=CONTACT_NOTICE_SOURCE,
+                                    source=source,
                                     session_id=session_id or None)
     except Exception:
         logger.warning("contact notice: could not be built", exc_info=True)

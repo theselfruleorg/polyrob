@@ -39,7 +39,7 @@ from core.exceptions import (
 )
 
 # Import billing exception for fail-fast handling
-from core.exceptions import InsufficientCreditsError
+from core.exceptions import InsufficientCreditsError, LLMRefusalError
 
 # Import centralized utilities to avoid repeated inline imports
 from agents.task.utils_json import normalize_action_schema
@@ -54,7 +54,6 @@ from modules.llm.messages import (
 	ToolMessage,
 )
 from modules.llm.adapters import BaseChatModel
-from modules.llm.usage_extract import resolve_serving_provider
 from core.exceptions import (
     RateLimitError,
     LLMError,
@@ -64,7 +63,6 @@ from core.exceptions import (
     LLMContextLengthError,
     LLMResponseError,
     LLMPermanentError,
-    LLMProviderExhaustedError
 )
 # PIL Image imported locally in save_screenshot() method where needed
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -298,13 +296,111 @@ class LLMRunnerMixin:
 			action=recovery_actions
 		)
 
+	async def _fail_over_or_raise(self, llm_error: LLMError, input_messages: list[BaseMessage],
+	                              timeout: float) -> AgentOutput:
+		"""The agent's half of the failure policy. A transient error raises: the step handler
+		retries the same model with backoff, then walks the ladder. An error the same model
+		cannot outlast (auth, permanent, credit) walks the ladder now. A refusal or a content
+		filter never walks it: another provider must not answer what this model declined."""
+		from core.exceptions import LLMRefusalError
+		if isinstance(llm_error, LLMRefusalError):
+			raise llm_error
+		error_type = type(llm_error).__name__
+		current_provider = self._current_llm_provider(self.model_name)
+		self.logger.warning(
+			f"🔄 LLM provider error ({error_type}) from {current_provider}/{self.model_name}: "
+			f"{str(llm_error)[:200]}"
+		)
+		self._emit_provider_failure_telemetry(
+			failed_provider=current_provider,
+			failed_model=self.model_name,
+			error_type=error_type,
+			error_message=str(llm_error)[:500],
+			attempt_number=1
+		)
+		from core.error_classifier import credit_death_in_chain
+		credit_death = credit_death_in_chain(llm_error) is not None
+		if not (credit_death or isinstance(llm_error, (LLMPermanentError, LLMAuthenticationError))):
+			raise llm_error
+
+		# A credit-dead provider that recovers through this fallback never reaches the
+		# step handler's trip site, so every later call would try the dead provider first.
+		await self._trip_sentinel_if_credit_death(llm_error)
+
+		fallback_llm = await self._get_fallback_llm(
+			exclude_providers=[current_provider] + list(self.state.llm_providers_failed),
+			original_model=self.model_name
+		)
+		if not fallback_llm:
+			self.logger.warning(f"No fallback provider may serve after {error_type} from {current_provider}")
+			raise llm_error
+
+		original_model = self.model_name
+		fallback_provider = await self.adopt_fallback_llm(fallback_llm, error_type)
+		fallback_model = self.model_name
+		fallback_start = time.time()
+		try:
+			result = await asyncio.wait_for(
+				self._get_next_action_internal(input_messages),
+				timeout=timeout
+			)
+		except Exception as fallback_error:
+			self.logger.error(
+				f"❌ Fallback also failed: {type(fallback_error).__name__}: {str(fallback_error)[:200]}"
+			)
+			await self.restore_first_llm()
+			self.state.track_llm_error(type(fallback_error).__name__, fallback_provider)
+			# The first error decides: the step handler halts on a permanent one.
+			raise llm_error from None
+
+		self.state.reset_llm_errors()
+		self._emit_fallback_success_telemetry(
+			original_provider=current_provider,
+			original_model=original_model,
+			fallback_provider=fallback_provider,
+			fallback_model=fallback_model,
+			original_error_type=error_type,
+			total_attempts=2,
+			total_time=time.time() - fallback_start
+		)
+		self.logger.info(f"🎉 Fallback successful: {original_model} → {fallback_model}")
+		return result
+
+	@staticmethod
+	def _text_only(msg):
+		"""A human row's images as a text marker, for a model that cannot see them."""
+		if not (isinstance(msg, HumanMessage) and isinstance(msg.content, list)):
+			return msg
+		if not any(isinstance(p, dict) and p.get('type') == 'image_url' for p in msg.content):
+			return msg
+		parts = []
+		for part in msg.content:
+			if isinstance(part, dict) and part.get('type') == 'text':
+				parts.append(part.get('text', ''))
+			elif isinstance(part, dict) and part.get('type') == 'image_url':
+				parts.append('[Screenshot available - vision disabled]')
+			elif isinstance(part, str):
+				parts.append(part)
+		return HumanMessage(content='\n'.join(parts))
+
+	def _call_messages(self, messages, extra_messages=None):
+		"""The rows ONE call sends: the manager's rows with a non-vision model's images as
+		text, then this call's own rows (the truncation note), which nothing re-queues."""
+		model = getattr(self.llm, 'model_name', None) or getattr(self, 'model_name', None)
+		try:
+			blind = isinstance(model, str) and bool(model) and not self._check_vision_support(model)
+		except Exception:
+			blind = False
+		rows = [self._text_only(m) for m in messages] if blind else list(messages)
+		return rows + list(extra_messages or [])
+
 	@time_execution_async('--get_next_action')
 	async def get_next_action(self, input_messages: list[BaseMessage]) -> AgentOutput:
 		"""Get the next action, inside the owner's reasoning scope (094): a session
 		pinned with ``/model … reasoning=<level>`` sends that level on its MAIN calls
 		only — compaction, reflection and the judge keep the operator env."""
 		from agents.task.model_pin_state import session_reasoning as _level_for
-		from modules.llm.openrouter_reasoning import session_reasoning
+		from modules.llm.call_scope import session_reasoning
 		with session_reasoning(_level_for(getattr(self, "session_id", None))):
 			return await self._get_next_action_unscoped(input_messages)
 
@@ -321,6 +417,8 @@ class LLMRunnerMixin:
 		if self._cancelled:
 			self.logger.warning(f"❌ LLM call cancelled before execution")
 			raise asyncio.CancelledError("Agent cancelled")
+
+		await self.return_to_first_llm_if_due()
 
 		has_multimodal_content = any(
 			isinstance(msg, HumanMessage) and isinstance(msg.content, list)
@@ -350,28 +448,11 @@ class LLMRunnerMixin:
 			if not supports_vision:
 				# UPDATED (Dec 2025): Strip images from messages instead of halting
 				# This allows non-vision models to continue with text-only content
+				# The strip itself is _call_messages, on the request each call really sends.
 				self.logger.warning(
 					f"⚠️ VISION DISABLED: Model {model_name} does NOT support vision. "
 					f"Stripping {image_count} image(s) from messages."
 				)
-
-				# Strip images from messages - replace multimodal content with text only
-				for idx in multimodal_positions:
-					msg = input_messages[idx]
-					if isinstance(msg.content, list):
-						# Extract text parts only
-						text_parts = []
-						for part in msg.content:
-							if isinstance(part, dict):
-								if part.get('type') == 'text':
-									text_parts.append(part.get('text', ''))
-								elif part.get('type') == 'image_url':
-									text_parts.append('[Screenshot available - vision disabled]')
-							elif isinstance(part, str):
-								text_parts.append(part)
-						# Replace message content with text-only version
-						input_messages[idx] = HumanMessage(content='\n'.join(text_parts))
-						self.logger.debug(f"Stripped images from message at position {idx}")
 
 				# Also disable vision for this session to prevent future screenshots
 				self.use_vision = False
@@ -404,14 +485,8 @@ class LLMRunnerMixin:
 		from agents.task.session_class import apply_session_output_budget
 		apply_session_output_budget(self.session_id)
 
-		# F4: stamp this session's Anthropic prompt-cache TTL on the same client,
-		# for the same reason — a provider fallback mid-run builds a new client.
-		# Interactive turns buy the 1h cache window; autonomous runs keep 5m.
-		from agents.task.session_class import apply_session_cache_ttl
-		apply_session_cache_ttl(self.llm, self.session_id)
-
 		# CRITICAL FIX: Add timeout wrapper to prevent infinite hangs
-		# Also handle LLM-specific errors with automatic provider fallback
+		# Typed LLM errors go through the failure policy (_fail_over_or_raise)
 		try:
 			result = await asyncio.wait_for(
 				self._get_next_action_internal(input_messages),
@@ -427,197 +502,14 @@ class LLMRunnerMixin:
 			from agents.task.agent.core.output_truncation import handle_truncated_output
 			return await handle_truncated_output(self, input_messages, timeout, result)
 		
-		except (LLMRateLimitError, LLMAuthenticationError, LLMConnectionError) as llm_error:
-			error_type = type(llm_error).__name__
-			current_provider = self._current_llm_provider(self.model_name)
-			
-			self.logger.warning(
-				f"🔄 LLM provider error ({error_type}) from {current_provider}/{self.model_name}: "
-				f"{str(llm_error)[:200]}"
-			)
-			
-			# CREDIT-DEATH SENTINEL: a credit-dead provider that recovers via
-			# THIS in-method fallback never raises past this frame, so
-			# error_recovery.py's `_handle_step_error` (the ONLY other trip
-			# site) never runs -- every later call keeps trying the dead
-			# provider first, failing, and silently falling back again,
-			# forever (ops-session finding, 2026-08-27). Trip here, before
-			# the fallback attempt, exactly like error_recovery.py does --
-			# a no-op unless `llm_error` actually looks like credit death.
-			await self._trip_sentinel_if_credit_death(llm_error)
-
-			# Record the failure
-			self._emit_provider_failure_telemetry(
-				failed_provider=current_provider,
-				failed_model=self.model_name,
-				error_type=error_type,
-				error_message=str(llm_error)[:500],
-				attempt_number=1
-			)
-			
-			# Try to get a fallback LLM. P1 finalization: exclude the providers that
-			# already FAILED this run too (not just the current one) — the sibling
-			# generic-LLMError branch below does this, and without it this path could
-			# fall back straight to a provider we already know is dead.
-			self.logger.info(f"Attempting provider fallback after {error_type}...")
-			fallback_llm = await self._get_fallback_llm(
-				exclude_providers=[current_provider] + self.state.llm_providers_failed,
-				original_model=self.model_name
-			)
-			
-			if fallback_llm:
-				# Store original LLM for potential restoration
-				original_llm = self.llm
-				original_model_name = self.model_name
-				original_provider = getattr(self, 'llm_provider', current_provider)
-				
-				try:
-					# Switch across EVERY model/provider SSOT, not just llm/model_name.
-					# Setting only those two left self.llm_provider (read by the billing
-					# path in next_action_internal) and message_manager.llm (read by
-					# compaction) pointing at the provider that just FAILED — so every
-					# post-fallback usage record was attributed to the wrong provider and
-					# compaction ran against the dead client. The switch is permanent for
-					# the rest of the session, so the staleness was too.
-					fallback_model = getattr(fallback_llm, 'model_name', 'fallback')
-					# 095 W1a: the SERVING provider (a spec-built client), not the
-					# vendor the model id names; one shared refresh (identity with
-					# cause=fallback, system prompt, usage anchor).
-					fallback_provider = resolve_serving_provider(fallback_llm, fallback_model)
-					self.adopt_active_llm(fallback_llm, fallback_model, fallback_provider)
-					self._refresh_after_model_change(
-						"fallback", original_model_name, reason=error_type)
-					
-					self.logger.info(f"✅ Switched to fallback provider: {fallback_model}")
-					
-					# Retry with fallback LLM
-					fallback_start = time.time()
-					result = await asyncio.wait_for(
-						self._get_next_action_internal(input_messages),
-						timeout=timeout
-					)
-					
-					fallback_duration = time.time() - fallback_start
-					
-					# Record successful fallback
-					self._emit_fallback_success_telemetry(
-						original_provider=current_provider,
-						original_model=original_model_name,
-						fallback_provider=fallback_provider,
-						fallback_model=fallback_model,
-						original_error_type=error_type,
-						total_attempts=2,
-						total_time=fallback_duration
-					)
-					
-					self.logger.info(
-						f"🎉 Fallback successful: {original_model_name} → {fallback_model} "
-						f"(took {fallback_duration:.1f}s)"
-					)
-					
-					return result
-					
-				except Exception as fallback_error:
-					# Fallback also failed - restore original and raise typed error.
-					# Restore the FULL SSOT, symmetrically with the switch above.
-					self.adopt_active_llm(original_llm, original_model_name, original_provider)
-					self._refresh_after_model_change("restore")
-					
-					self.logger.error(
-						f"❌ Fallback also failed: {type(fallback_error).__name__}: {str(fallback_error)[:200]}"
-					)
-					
-					# Track both failed providers
-					self.state.track_llm_error(type(fallback_error).__name__, fallback_provider)
-					
-					# Raise typed exception for proper handling
-					raise LLMProviderExhaustedError(
-						f"Primary LLM ({original_model_name}) failed with {error_type}: {str(llm_error)[:200]}. "
-						f"Fallback also failed: {str(fallback_error)[:200]}",
-						providers_tried=list(self.state.llm_providers_failed)
-					)
-			else:
-				# No fallback available - raise typed exception
-				self.logger.error(
-					f"❌ No fallback provider available after {error_type} from {current_provider}"
-				)
-				raise LLMProviderExhaustedError(
-					f"No fallback available after {error_type} from {current_provider}: "
-					f"{str(llm_error)[:200]}",
-					providers_tried=[current_provider]
-				) from llm_error
-		
 		except LLMContextLengthError as context_error:
-			# Context too long - this is handled separately (truncation, not provider fallback)
+			# A smaller prompt helps, a different provider does not: _handle_step_error prunes.
 			self.logger.error(f"Context length exceeded: {context_error}")
-			# Let existing timeout/recovery logic handle this if possible
 			raise
 
-		except LLMError as generic_llm_error:
-			# UPGRADED (Dec 2025): Generic LLM error - also try fallback
-			error_type = type(generic_llm_error).__name__
-			current_provider = self._current_llm_provider(self.model_name)
+		except LLMError as llm_error:
+			return await self._fail_over_or_raise(llm_error, input_messages, timeout)
 
-			self.logger.warning(f"🔄 Generic LLM error ({error_type}) - attempting fallback...")
-
-			# CREDIT-DEATH SENTINEL: same reasoning as the sibling except block
-			# above -- the real prod OpenRouter 402 arrives as exactly this
-			# generic LLMError (error_recovery.py's own comment), and a
-			# successful in-method fallback below never raises past this
-			# frame, so error_recovery.py's trip site never runs. Trip here,
-			# before the fallback attempt (ops-session finding, 2026-08-27).
-			await self._trip_sentinel_if_credit_death(generic_llm_error)
-
-			# Track error
-			self.state.track_llm_error(error_type, current_provider)
-
-			# Try fallback
-			fallback_llm = await self._get_fallback_llm(
-				exclude_providers=[current_provider] + self.state.llm_providers_failed,
-				original_model=self.model_name
-			)
-
-			if fallback_llm:
-				original_llm = self.llm
-				original_model = self.model_name
-				original_provider = getattr(self, 'llm_provider', current_provider)
-
-				try:
-					# Full-SSOT switch (see the sibling handler above for why
-					# llm/model_name alone was not enough).
-					_fb_model = getattr(fallback_llm, 'model_name', 'fallback')
-					self.adopt_active_llm(
-						fallback_llm, _fb_model, resolve_serving_provider(fallback_llm, _fb_model))
-					self._refresh_after_model_change("fallback", original_model, reason=error_type)
-					self.logger.info(f"✅ Switched to fallback: {self.model_name}")
-
-					result = await asyncio.wait_for(
-						self._get_next_action_internal(input_messages),
-						timeout=timeout
-					)
-
-					self.state.reset_llm_errors()
-					return result
-
-				except Exception as fallback_error:
-					self.adopt_active_llm(original_llm, original_model, original_provider)
-					self._refresh_after_model_change("restore")
-					self.logger.error(f"❌ Fallback also failed: {fallback_error}")
-					# Track the failed fallback provider
-					fallback_provider = resolve_serving_provider(fallback_llm, _fb_model)
-					self.state.track_llm_error(type(fallback_error).__name__, fallback_provider)
-					raise LLMProviderExhaustedError(
-						f"Primary LLM failed: {generic_llm_error}. Fallback failed: {fallback_error}",
-						providers_tried=list(self.state.llm_providers_failed)
-					)
-			else:
-				self.logger.error(f"❌ No fallback available for {error_type}")
-				raise LLMProviderExhaustedError(
-					f"No fallback available after {error_type}: "
-					f"{str(generic_llm_error)[:200]}",
-					providers_tried=list(self.state.llm_providers_failed)
-				) from generic_llm_error
-		
 		except asyncio.TimeoutError:
 			self.logger.error(f"LLM call timed out after {timeout:.0f} seconds - implementing recovery strategy", exc_info=True)
 
@@ -637,67 +529,34 @@ class LLMRunnerMixin:
 				self.tool_call_tracker.complete_step()
 				self.logger.debug("Cleared tool call tracker after timeout")
 
-			# Try to reduce context size and retry once
+			# One retry with the SAME context: the request is rebuilt from the message
+			# manager, so a "reduced context" here would be a claim, not a request.
 			if should_stop_retrying(_timeout_streak):
 				self.logger.error(
 					"%d consecutive LLM timeouts — ending this step with no further "
 					"retry. A third timeout in a row is a statement about the route, "
 					"not about this prompt.", _timeout_streak)
-			elif hasattr(self, 'message_manager') and len(input_messages) > 5:
-				self.logger.info("Attempting recovery with reduced context")
+			else:
+				# 75% of the budget, capped at 180 s: the worst step is timeout + 180 s,
+				# under the 600 s cron cap.
+				retry_timeout = min(180.0, timeout * 0.75)
+				self.logger.info(f"Retrying the call once with the same context ({retry_timeout:.0f}s)")
 				try:
-					# Keep system message and most recent tool call pairs to maintain context
-					reduced_messages = []
-
-					# Always keep system message
-					for msg in input_messages:
-						if isinstance(msg, SystemMessage):
-							reduced_messages.append(msg)
-							break
-
-					# Keep last 2 complete tool call pairs if they exist
-					tool_pairs = []
-					for i in range(len(input_messages) - 1, -1, -1):
-						if isinstance(input_messages[i], ToolMessage) and i > 0:
-							if isinstance(input_messages[i-1], AIMessage):
-								tool_pairs.insert(0, (input_messages[i-1], input_messages[i]))
-								if len(tool_pairs) >= 2:
-									break
-
-					# Add the tool pairs
-					for ai_msg, tool_msg in tool_pairs:
-						reduced_messages.append(ai_msg)
-						reduced_messages.append(tool_msg)
-
-					# Add last user message if not already included
-					for msg in reversed(input_messages):
-						if hasattr(msg, 'type') and msg.type == 'human':
-							if msg not in reduced_messages:
-								reduced_messages.append(msg)
-							break
-
-					# Ensure we have at least some messages
-					if len(reduced_messages) < 3:
-						reduced_messages = input_messages[-5:]  # Fallback to last 5 messages
-
-					# 75% of the original budget, CAPPED at 180 s (the comment here
-					# said "min 180s" for two years; `min(...)` is a ceiling, and
-					# the behaviour — deliberately — is the ceiling: the worst
-					# step is timeout + 180 s, and a floor would push it past the
-					# 600 s cron cap). Behaviour unchanged; the sentence is not.
-					reduced_timeout = min(180.0, timeout * 0.75)
-					
-					result = await asyncio.wait_for(
-						self._get_next_action_internal(reduced_messages),
-						timeout=reduced_timeout
-					)
-					self.logger.info("Recovery successful with reduced context")
-					return result
+					return await asyncio.wait_for(
+						self._get_next_action_internal(input_messages), timeout=retry_timeout)
 				except asyncio.TimeoutError:
-					self.logger.warning("Recovery attempt also timed out")
+					self.logger.warning("The retry after a timeout also timed out")
+				except LLMRefusalError:
+					raise  # a refusal is not a slow model: it halts and names its category
 				except Exception as e:
-					self.logger.warning(f"Recovery attempt failed: {e}")
+					self.logger.warning(f"The retry after a timeout failed: {e}")
 
+			# No model call answered the one-shot messages of this step (a correspondent
+			# reply, a recall note): queue them again, or the recovery step commits them.
+			try:
+				self.message_manager.restore_ephemeral_on_failure()
+			except Exception:
+				self.logger.debug("could not re-queue the one-shot messages", exc_info=True)
 			# IMPROVED RECOVERY: continue instead of ending the task. The shape
 			# depends on WHO is on the other end — see _timeout_recovery_output.
 			return self._timeout_recovery_output(timeout)

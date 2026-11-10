@@ -22,9 +22,6 @@ from typing import Any, List
 from cli.ui import candy
 from cli.ui.commands.registry import CommandContext
 
-# Description truncation width for the one-line-per-skill listing.
-_DESC_WIDTH = 80
-
 # Subcommand names that route to the install-pipeline dispatch below. Anything
 # else in ctx.args[0] is treated as a catalog filter query (backward compat —
 # `/skills <query>` predates this dispatch layer).
@@ -243,57 +240,10 @@ async def _cmd_approve(ctx: CommandContext, rest: List[str]) -> None:
 
 
 def _cmd_catalog(ctx: CommandContext) -> None:
-    """Original (pre-Task-22) behavior: list/filter the auto-activatable catalog.
-
-    Read-only. Fail-open: any backend error degrades to a friendly one-liner
-    (never raises into the REPL).
-    """
-    # 080 D8: the ONE catalog reader the chat seats' `/skills` renders too.
-    from surfaces.telegram.skills_ops import catalog, unreadable_note
-
-    query = " ".join(str(a) for a in (ctx.args or [])).strip()  # every word, like Telegram
-    try:
-        rows = catalog(ctx.user_id or "local", query, desc_chars=_DESC_WIDTH)
-        if not rows and (not query or not catalog(ctx.user_id or "local")):
-            note = unreadable_note()
-            ctx.emit(note or candy.empty("skills available", yet=False), title="skills")
-            return
-    except Exception as exc:
-        ctx.emit(f"Could not load skills: {exc}", title="skills")
-        return
-    note = unreadable_note()
-    if not rows:
-        ctx.emit("\n".join(filter(None, (candy.empty(f"skills match {query!r}", yet=False), note))),
-                 title="skills")
-        return
-
-    lines: List[str] = [f"{len(rows)} skill(s) available:"]
-    for skill_id, desc in rows:
-        lines.append(candy.bullet(skill_id + (f" — {desc}" if desc else "")))
-    lines.append("Use `load_skill(skill_id=\"<id>\")` (agent) to load a skill's full body.")
-
-    # Task 10 (SK-F2 visibility): the catalog view above only ever shows
-    # active/auto-activatable skills — a quarantined (.pending/) draft
-    # authored by the agent or a background review is otherwise invisible.
-    # Reuse the EXISTING scope/state inventory (`list_all_skills`, the same
-    # helper `/skills list` uses) rather than hand-globbing `.pending/`.
-    pending_count = _pending_count(ctx)
-    if pending_count:
-        lines.append(
-            f"Pending review: {pending_count} — approve with `polyrob skill approve <id>` "
-            "(or `/skills approve <id>`)."
-        )
-    if note:
-        lines.append(note)
-    ctx.emit("\n".join(lines), title="skills")
-
-
-def _pending_count(ctx: CommandContext) -> int:
-    """Count this tenant's quarantined (`.pending/`) skill drafts. Fail-open (0)."""
-    try:
-        from cli.commands.skill_install import list_all_skills
-
-        rows = list_all_skills(ctx.user_id or "local")
-        return sum(1 for row in rows if row.get("status") == "pending")
-    except Exception:
-        return 0
+    """`/skills [query | id]` — the chat seat's own reply
+    (``surfaces.telegram.skills_ops.skills_reply``, 113 W4 item 3): the same
+    list, the same words and the same read taps (``/skill_<id>`` runs here
+    too), and a word that IS a skill id opens that skill's text. Read-only;
+    an unreadable store says so, never "no skills"."""
+    from surfaces.telegram.skills_ops import skills_reply
+    ctx.emit(skills_reply(ctx.user_id or "local", list(ctx.args or [])), title="skills")

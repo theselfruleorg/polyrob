@@ -104,7 +104,7 @@ def env(tmp_path, monkeypatch):
 # --- routing --------------------------------------------------------------
 
 def test_new_verbs_are_routable_commands():
-    for verb in ("/status", "/recap", "/goals", "/prefs"):
+    for verb in ("/status", "/journey", "/goals", "/prefs"):
         assert verb in _COMMANDS
         assert verb in _OWNER_ADMIN_COMMANDS
 
@@ -326,7 +326,7 @@ async def test_prefs_summary_hides_untouched_defaults(env):
 @pytest.mark.asyncio
 async def test_help_mentions_new_verbs(env):
     out = await act_on_inbound(_Agent(str(env)), _cmd("/help", "/help"))
-    assert "/status" in out and "/recap" in out and "/goals" in out and "/prefs" in out
+    assert "/status" in out and "/journey" in out and "/goals" in out and "/prefs" in out
 
 
 # --- /journey alias (2026-07-12 UI-surface review: one recap vocabulary) -------

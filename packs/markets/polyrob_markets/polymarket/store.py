@@ -96,8 +96,9 @@ class PolymarketDBHandler:
         try:
             result = await self.db.fetch_all("PRAGMA table_info(polymarket_credentials)")
             existing_columns = {row['name'] for row in result}
-        except Exception:
-            pass  # Table might not exist yet, columns will be added with CREATE TABLE
+        except Exception as e:
+            # Not "no columns": every ALTER below then meets a duplicate column.
+            self.logger.warning("polymarket_credentials: could not read its columns: %s", e)
 
         migration_columns = [
             ('chain_id', 'INTEGER DEFAULT 137'),
@@ -117,8 +118,10 @@ class PolymarketDBHandler:
                 try:
                     await self.db.execute(f'ALTER TABLE polymarket_credentials ADD COLUMN {col_name} {col_type}')
                     self.logger.debug(f"Added migration column: {col_name}")
-                except Exception:
-                    pass  # Column might have been added concurrently
+                except Exception as e:
+                    if "duplicate column" not in str(e).lower():  # added concurrently
+                        self.logger.warning(
+                            "polymarket_credentials: could not add column %s: %s", col_name, e)
 
         # Create polymarket_audit_log table
         await self.db.execute('''

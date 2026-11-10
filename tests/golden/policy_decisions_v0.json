@@ -80,7 +80,7 @@
    "github_create_issue",
    "aave_supply"
   ],
-  "universe_size": 399
+  "universe_size": 410
  },
  "actions": {
   "": {
@@ -1508,7 +1508,212 @@
     "is_untrusted_tool(name, owner)": false
    }
   },
+  "browser_click_at": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "network",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": null,
+    "write_row": {
+     "browser": "network"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "effects.WRITE_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "browser"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": true,
+    "is_untrusted_tool(name, owner)": true
+   }
+  },
   "browser_click_element": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "network",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": null,
+    "write_row": {
+     "browser": "network"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "effects.WRITE_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "browser"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": true,
+    "is_untrusted_tool(name, owner)": true
+   }
+  },
+  "browser_close_tab": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": null,
+    "non_write_row_in": [
+     "browser"
+    ],
+    "pause_kind_for(owner)": null,
+    "write_row": {}
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "effects.NON_WRITE_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "browser"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": true,
+    "is_untrusted_tool(name, owner)": true
+   }
+  },
+  "browser_drag_and_drop": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "network",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": null,
+    "write_row": {
+     "browser": "network"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "effects.WRITE_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "browser"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": true,
+    "is_untrusted_tool(name, owner)": true
+   }
+  },
+  "browser_evaluate_js": {
    "approval": {
     "autonomous_gating_lanes(env)": "reported"
    },
@@ -1707,7 +1912,157 @@
     "is_untrusted_tool(name, owner)": true
    }
   },
+  "browser_go_forward": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": null,
+    "non_write_row_in": [
+     "browser"
+    ],
+    "pause_kind_for(owner)": null,
+    "write_row": {}
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "effects.NON_WRITE_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "browser"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": true,
+    "is_untrusted_tool(name, owner)": true
+   }
+  },
   "browser_go_to_url": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": null,
+    "non_write_row_in": [
+     "browser"
+    ],
+    "pause_kind_for(owner)": null,
+    "write_row": {}
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "effects.NON_WRITE_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "browser"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": true,
+    "is_untrusted_tool(name, owner)": true
+   }
+  },
+  "browser_handle_dialog": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "network",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": null,
+    "write_row": {
+     "browser": "network"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "effects.WRITE_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "browser"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": true,
+    "is_untrusted_tool(name, owner)": true
+   }
+  },
+  "browser_hover_element": {
    "approval": {
     "autonomous_gating_lanes(env)": "reported"
    },
@@ -1852,6 +2207,55 @@
    }
   },
   "browser_open_tab": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": null,
+    "non_write_row_in": [
+     "browser"
+    ],
+    "pause_kind_for(owner)": null,
+    "write_row": {}
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "effects.NON_WRITE_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "browser"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": true,
+    "is_untrusted_tool(name, owner)": true
+   }
+  },
+  "browser_read_element": {
    "approval": {
     "autonomous_gating_lanes(env)": "reported"
    },
@@ -2347,7 +2751,212 @@
     "is_untrusted_tool(name, owner)": true
    }
   },
+  "browser_set_checked": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "network",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": null,
+    "write_row": {
+     "browser": "network"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "effects.WRITE_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "browser"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": true,
+    "is_untrusted_tool(name, owner)": true
+   }
+  },
   "browser_switch_tab": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": null,
+    "non_write_row_in": [
+     "browser"
+    ],
+    "pause_kind_for(owner)": null,
+    "write_row": {}
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "effects.NON_WRITE_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "browser"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": true,
+    "is_untrusted_tool(name, owner)": true
+   }
+  },
+  "browser_type_text": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "network",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": null,
+    "write_row": {
+     "browser": "network"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "effects.WRITE_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "browser"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": true,
+    "is_untrusted_tool(name, owner)": true
+   }
+  },
+  "browser_upload_file": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "network",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": null,
+    "write_row": {
+     "browser": "network"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "effects.WRITE_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "browser"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": true,
+    "is_untrusted_tool(name, owner)": true
+   }
+  },
+  "browser_wait": {
    "approval": {
     "autonomous_gating_lanes(env)": "reported"
    },
@@ -3066,6 +3675,51 @@
    "room": {
     "is_room_denied_call(name, None)": false,
     "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": false
+   }
+  },
+  "compute": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": false,
+    "is_high_impact_call(name, None)": false,
+    "is_high_impact_call(name, owner)": false,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": null,
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": null,
+    "write_row": {}
+   },
+   "emitted": {
+    "direct_controller_action": true,
+    "live_default_env": false,
+    "live_twitter_enabled": false,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "effects.ACTION_EFFECTS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": null,
+    "metering_gate.MONEY_TOOLS∋owner": null,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [],
+   "room": {
+    "is_room_denied_call(name, None)": false,
+    "is_room_denied_call(name, owner)": false
    },
    "spend_exemption": {},
    "untrusted": {
@@ -7282,7 +7936,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": true
+    "is_untrusted_tool(name, owner)": false
    }
   },
   "filesystem_copy_file": {
@@ -7507,7 +8161,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": true
+    "is_untrusted_tool(name, owner)": false
    }
   },
   "filesystem_jsonl_remove": {
@@ -7732,7 +8386,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": true
+    "is_untrusted_tool(name, owner)": false
    }
   },
   "git": {
@@ -8817,53 +9471,6 @@
     "room_policy._is_money_call(name, owner)": false
    },
    "owner_tools": [],
-   "room": {
-    "is_room_denied_call(name, None)": true,
-    "is_room_denied_call(name, owner)": true
-   },
-   "spend_exemption": {},
-   "untrusted": {
-    "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
-   }
-  },
-  "goal_ask": {
-   "approval": {
-    "autonomous_gating_lanes(env)": "reported"
-   },
-   "correspondent": {
-    "is_high_impact(name)": false,
-    "is_high_impact_call(name, None)": false,
-    "is_high_impact_call(name, owner)": true,
-    "reply_action": false
-   },
-   "effect": {
-    "classify_effect(None)": null,
-    "classify_effect(owner)": null,
-    "non_write_row_in": [],
-    "pause_kind_for(owner)": null,
-    "write_row": {}
-   },
-   "emitted": {
-    "direct_controller_action": false,
-    "live_default_env": true,
-    "live_twitter_enabled": true,
-    "synthetic_mcp": false
-   },
-   "listed_in": [
-    "room_policy.ROOM_DENIED_ACTIONS"
-   ],
-   "money": {
-    "approval_queue._is_money_action(name)": false,
-    "authority.money_action(name)": false,
-    "authority.money_tool(owner)": false,
-    "metering_gate.MONEY_TOOLS∋owner": false,
-    "room_policy._is_money_call(name, None)": false,
-    "room_policy._is_money_call(name, owner)": false
-   },
-   "owner_tools": [
-    "goal"
-   ],
    "room": {
     "is_room_denied_call(name, None)": true,
     "is_room_denied_call(name, owner)": true
@@ -15329,53 +15936,6 @@
     "is_untrusted_tool(name, owner)": false
    }
   },
-  "present_choice": {
-   "approval": {
-    "autonomous_gating_lanes(env)": "reported"
-   },
-   "correspondent": {
-    "is_high_impact(name)": true,
-    "is_high_impact_call(name, None)": true,
-    "is_high_impact_call(name, owner)": true,
-    "reply_action": false
-   },
-   "effect": {
-    "classify_effect(None)": null,
-    "classify_effect(owner)": null,
-    "non_write_row_in": [],
-    "pause_kind_for(owner)": null,
-    "write_row": {}
-   },
-   "emitted": {
-    "direct_controller_action": true,
-    "live_default_env": false,
-    "live_twitter_enabled": false,
-    "synthetic_mcp": false
-   },
-   "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.ACTION_EFFECTS",
-    "room_policy.ROOM_DENIED_ACTIONS"
-   ],
-   "money": {
-    "approval_queue._is_money_action(name)": false,
-    "authority.money_action(name)": false,
-    "authority.money_tool(owner)": null,
-    "metering_gate.MONEY_TOOLS∋owner": null,
-    "room_policy._is_money_call(name, None)": false,
-    "room_policy._is_money_call(name, owner)": false
-   },
-   "owner_tools": [],
-   "room": {
-    "is_room_denied_call(name, None)": true,
-    "is_room_denied_call(name, owner)": true
-   },
-   "spend_exemption": {},
-   "untrusted": {
-    "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
-   }
-  },
   "process": {
    "approval": {
     "autonomous_gating_lanes(env)": "reported"
@@ -18284,7 +18844,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": true
+    "is_untrusted_tool(name, owner)": false
    }
   },
   "twitter_quote": {
@@ -18336,7 +18896,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": true
+    "is_untrusted_tool(name, owner)": false
    }
   },
   "twitter_reply": {
@@ -18388,7 +18948,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": true
+    "is_untrusted_tool(name, owner)": false
    }
   },
   "twitter_retweet": {
@@ -18541,7 +19101,7 @@
    "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": true
+    "is_untrusted_tool(name, owner)": false
    }
   },
   "twitter_unfollow": {
@@ -20119,11 +20679,13 @@
     "classify_effect(None)": null,
     "classify_effect(owner)": [
      "social",
-     "tool"
+     "action"
     ],
     "non_write_row_in": [],
     "pause_kind_for(owner)": "social_post",
-    "write_row": {}
+    "write_row": {
+     "x_browser": "social"
+    }
    },
    "emitted": {
     "direct_controller_action": false,
@@ -20133,7 +20695,8 @@
    },
    "listed_in": [
     "approval.DEFAULT_APPROVAL_REQUIRED_TOOLS",
-    "approval._ALWAYS_GATED_VERBS"
+    "approval._ALWAYS_GATED_VERBS",
+    "effects.WRITE_ACTIONS"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -20370,8 +20933,7 @@
    "filesystem",
    "task",
    "message",
-   "web_fetch",
-   "defi_data"
+   "web_fetch"
   ],
   "room_policy.DEFAULT_ROOM_TOOLS": [
    "task",
@@ -20634,8 +21196,7 @@
     "filesystem",
     "task",
     "message",
-    "web_fetch",
-    "defi_data"
+    "web_fetch"
    ],
    "rigs.rig_tools('unknown-rig')": null,
    "room_policy._forbidden_tool_ids()": [
@@ -21011,8 +21572,7 @@
     "filesystem",
     "task",
     "message",
-    "web_fetch",
-    "defi_data"
+    "web_fetch"
    ],
    "rigs.rig_tools('unknown-rig')": null,
    "room_policy._forbidden_tool_ids()": [
@@ -21385,8 +21945,7 @@
     "filesystem",
     "task",
     "message",
-    "web_fetch",
-    "defi_data"
+    "web_fetch"
    ],
    "rigs.rig_tools('unknown-rig')": null,
    "room_policy._forbidden_tool_ids()": [
@@ -21721,8 +22280,7 @@
     "filesystem",
     "task",
     "message",
-    "web_fetch",
-    "defi_data"
+    "web_fetch"
    ],
    "rigs.rig_tools('unknown-rig')": null,
    "room_policy._forbidden_tool_ids()": [
@@ -22466,7 +23024,6 @@
     "autonomous:goal_tools.owner_turn_goal_tools()": 4,
     "autonomous:rigs.rig_tools('money_rail')": 0,
     "autonomous:rigs.rig_tools('research')": 6,
-    "autonomous:rigs.rig_tools('social')": 6,
     "autonomous:room_policy.room_tool_ids()": 2,
     "autonomous:tool_availability.grantable_autonomous_tools()": 4,
     "autonomous:tool_defaults.cli_default_tools()": 5,
@@ -22480,7 +23037,6 @@
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 5,
     "autonomous_defi_armed:rigs.rig_tools('money_rail')": 0,
     "autonomous_defi_armed:rigs.rig_tools('research')": 6,
-    "autonomous_defi_armed:rigs.rig_tools('social')": 6,
     "autonomous_defi_armed:room_policy.room_tool_ids()": 2,
     "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 5,
     "autonomous_defi_armed:tool_defaults.cli_default_tools()": 5,
@@ -22496,7 +23052,6 @@
     "posture2:goal_tools.owner_turn_goal_tools()": 4,
     "posture2:rigs.rig_tools('money_rail')": 0,
     "posture2:rigs.rig_tools('research')": 6,
-    "posture2:rigs.rig_tools('social')": 6,
     "posture2:room_policy.room_tool_ids()": 2,
     "posture2:tool_availability.grantable_autonomous_tools()": 3,
     "posture2:tool_defaults.cli_default_tools()": 4,
@@ -22506,14 +23061,12 @@
     "posture2:tool_defaults.resolve_toolset('unknown-name')": 4,
     "rigs.RIGS['money_rail']": 0,
     "rigs.RIGS['research']": 6,
-    "rigs.RIGS['social']": 6,
     "room_policy.DEFAULT_ROOM_TOOLS": 2,
     "room_policy.ROOM_ALLOWED_TOOL_IDS": 0,
     "supervised:goal_tools.allowed_self_goal_tools()": 3,
     "supervised:goal_tools.owner_turn_goal_tools()": 4,
     "supervised:rigs.rig_tools('money_rail')": 0,
     "supervised:rigs.rig_tools('research')": 6,
-    "supervised:rigs.rig_tools('social')": 6,
     "supervised:room_policy.room_tool_ids()": 2,
     "supervised:tool_availability.grantable_autonomous_tools()": 3,
     "supervised:tool_defaults.cli_default_tools()": 4,

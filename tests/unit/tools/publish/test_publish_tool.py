@@ -67,7 +67,15 @@ def test_first_publish_of_a_new_slug_returns_a_url(tool):
     assert tool._store.is_live("demo-status") is True
 
 
-def test_a_denied_first_publish_is_not_served(tool):
+def test_owner_driven_first_publish_asks_nobody(tool):
+    tool._approval_provider = _AlwaysDeny()
+    res = _run(tool.publish(PublishParams(slug="owner-status", files=["index.html"]),
+                            execution_context=_ctx()))
+    assert res.error is None and tool._store.is_live("owner-status") is True
+
+
+def test_a_denied_first_publish_is_not_served(tool, monkeypatch):
+    monkeypatch.setattr("core.security.owner_turn.is_owner_driven", lambda *a, **k: False)
     tool._approval_provider = _AlwaysDeny()
 
     res = _run(tool.publish(PublishParams(slug="demo-status", files=["index.html"]),
@@ -149,3 +157,12 @@ def test_a_failed_promotion_is_reported_not_announced(tool, monkeypatch):
                             execution_context=_ctx()))
     assert res.error and "could not be promoted" in res.error
     assert not res.extracted_content
+
+
+def test_operator_deny_stops_an_owner_driven_first_publish(tool, monkeypatch):
+    """APPROVAL_PROVIDER=deny is the operator's standing stop: no owner-turn rule passes it."""
+    monkeypatch.setenv("APPROVAL_PROVIDER", "deny")
+    res = _run(tool.publish(PublishParams(slug="owner-status", files=["index.html"]),
+                            execution_context=_ctx()))
+    assert tool._store.is_live("owner-status") is False
+    assert "APPROVAL_PROVIDER=deny" in str(res.error)

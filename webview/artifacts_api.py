@@ -17,8 +17,12 @@ Three honest-state rules this endpoint keeps:
    the sentence "this session produced nothing"; ``null`` is "I did not look"
    / "I could not look". Work › Apps drew the first over real files for weeks
    (043 A3) because a call with no ``session_id`` answered ``[]``.
-3. A call with no ``session_id`` is REFUSED, not answered: this ledger is
-   session-scoped, so ``{"artifacts": null, "error": "session-scoped"}``.
+3. A call with no ``session_id`` lists the TENANT's newest files across every chat
+   (``ArtifactLedger.list_recent``, at most ``RECENT_LIMIT``; ``truncated`` says when
+   there are more). Each row carries its ``session_id`` and no ``path`` (the path
+   is relative to one chat's folder) and no ``verdict`` (nothing is re-hashed for
+   a list of every chat). It was refused as ``session-scoped`` before 113, so
+   Work › Apps showed "I could not read" on every install.
 
 Tenant scoping is :func:`webview.pages._effective_user_id`, which 403s an
 unbound own_ops console and a multitenant caller with no identity — so this
@@ -35,6 +39,9 @@ from fastapi.responses import JSONResponse
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+#: The most rows the tenant-wide list returns (newest first).
+RECENT_LIMIT = 200
 
 
 def workspace_relative(stored: Optional[str], ws_root: Optional[str]) -> Optional[str]:
@@ -60,10 +67,17 @@ async def api_artifacts(request: Request, session_id: Optional[str] = None) -> J
     user_id = _effective_user_id(request)
 
     if not session_id:
-        # No session named → there is nothing this reader can answer. Saying
-        # "no artifacts" here is the confident zero A3 recorded: Work › Apps
-        # rendered "Nothing built" over a session tree full of files.
-        return JSONResponse({"artifacts": None, "error": "session-scoped"})
+        try:
+            from core.artifacts import get_artifact_ledger
+            recent = get_artifact_ledger().list_recent(str(user_id), RECENT_LIMIT + 1)
+        except Exception:
+            logger.warning("artifact ledger read failed (tenant-wide)", exc_info=True)
+            return JSONResponse({"artifacts": None, "error": "unreadable"})
+        return JSONResponse({
+            "artifacts": [{"id": a.id, "name": os.path.basename(a.path or ""), "path": None,
+                           "kind": a.kind, "url": a.url, "verdict": None,
+                           "session_id": a.session_id} for a in recent[:RECENT_LIMIT]],
+            "truncated": len(recent) > RECENT_LIMIT, "error": None})
 
     from agents.task.path import pm
     from webview.session_access import http_session_id

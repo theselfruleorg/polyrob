@@ -29,7 +29,6 @@ honest one-liner, never a REPL teardown.
 No ``from __future__ import annotations`` (kept consistent with h_finance.py).
 """
 import logging
-from typing import Optional
 
 from cli.ui import candy
 
@@ -250,37 +249,11 @@ def h_fulfill(ctx) -> None:
 def h_missed(ctx) -> None:
     """`/missed [n]` — owner notices the delivery rail could not send live:
     suppressed by the daily cap, held by an owner pause, or undelivered (no
-    live sink / send failed). The SAME durable rows Telegram `/missed` and
-    `polyrob owner missed` read."""
-    args = getattr(ctx, "args", []) or []
-    try:
-        n = max(1, min(20, int(args[0]))) if args else 5
-    except (TypeError, ValueError):
-        ctx.emit("usage: /missed [n]  (1-20, default 5)", title="missed")
-        return
-    tenant = _tenant(ctx)
-    try:
-        from core.surfaces.missed import format_notice_lines, missed_notices
-        rows = missed_notices(tenant, _admin_data_dir(write=False), n)
-    except Exception as e:
-        ctx.emit(f"{candy.GUTTER}(missed unavailable: {e})", title="missed")
-        return
-    if not rows:
-        ctx.emit(candy.empty("missed messages", "nothing suppressed", yet=False),
-                 title="missed")
-        return
-    lines = [f"Last {len(rows)} missed owner message(s) (newest first):"]
-    for r in rows:
-        kind = r.get("kind") or "capped"
-        text = str(r.get("text") or "")
-        # Wrapped, never clipped — /missed exists to recover text the owner
-        # never received live (fix round 1, 2026-09-14).
-        lines.extend(format_notice_lines(r.get("ts") or 0, kind, text,
-                                         gutter=candy.GUTTER))
-    from core.surfaces.missed import cap_caused
-    if cap_caused(rows):
-        lines.append(f"{candy.GUTTER}raise the cap: /config set delivery.daily_cap N")
-    ctx.emit("\n".join(lines), title="missed")
+    live sink / send failed). The chat seat's own reply
+    (``surfaces.telegram.status_ops._missed_reply``): one verb, one text."""
+    from surfaces.telegram.status_ops import _missed_reply
+    ctx.emit(_missed_reply(_tenant(ctx), _admin_data_dir(write=False),
+                           list(getattr(ctx, "args", []) or [])), title="missed")
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +302,19 @@ def h_deny(ctx) -> None:
     ctx.emit(f"✅ denied {surface}:{target} for tenant {tenant}", title="deny")
 
 
+def h_pair(ctx) -> None:
+    """DM pairing: who is paired, who waits; approve or revoke one sender."""
+    try:
+        from core.pairing import pair_verb, store_for
+        sub = (ctx.args[0].lower() if ctx.args else "list")
+        write = sub in ("approve", "revoke")
+        text = pair_verb(list(ctx.args), store=store_for(_admin_data_dir(write=write)))
+    except Exception as e:
+        ctx.emit(f"{candy.GUTTER}(pairing unavailable: {e})", title="pair")
+        return
+    ctx.emit(text, title="pair")
+
+
 def h_allowlist(ctx) -> None:
     """List the outbound-send allowlist for this tenant."""
     tenant = _tenant(ctx)
@@ -339,8 +325,7 @@ def h_allowlist(ctx) -> None:
         ctx.emit(f"{candy.GUTTER}(allowlist unavailable: {e})", title="allowlist")
         return
     if not rows:
-        ctx.emit(candy.empty("allowlist entries", "/allow <surface> <target> adds one",
-                             yet=False), title="allowlist")
+        ctx.emit("No allowlist entries.", title="allowlist")   # the chat seat's words
         return
     lines = [f"{len(rows)} allowlist entr{'y' if len(rows) == 1 else 'ies'} "
              f"for tenant {tenant}:"]
@@ -376,50 +361,28 @@ def _invoice_statuses() -> tuple:
 
 
 def h_invoices(ctx) -> None:
-    """List agent-created x402 payment requests (invoices), tenant-scoped."""
-    status: Optional[str] = None
-    if ctx.args:
-        candidate = ctx.args[0].lower()
-        statuses = _invoice_statuses()
-        if candidate not in statuses:
-            ctx.emit(f"usage: /invoices [{'|'.join(statuses)}]", title="invoices")
-            return
-        status = candidate
+    """`/invoices [<status>] | refunded <id> [tx-hash]` — the agent's
+    receivables, tenant-scoped. The chat seat's own reply
+    (``surfaces.telegram.owner_ops.invoices_reply``) over this seat's bot.db
+    (113 W4 item 3): one verb, one text. A word that is not a status answers
+    the usage line before any database is opened."""
+    from surfaces.telegram.owner_ops import invoices_reply
+    from core.async_bridge import run_coroutine_sync
+    args = list(getattr(ctx, "args", None) or [])
     tenant = _tenant(ctx)
+    if args and args[0].lower() not in _invoice_statuses():
+        ctx.emit(str(run_coroutine_sync(invoices_reply(tenant, args))), title="invoices")
+        return
 
-    async def _list(db):
-        from modules.x402.invoicing import list_payment_requests
-        return await list_payment_requests(user_id=tenant, status=status,
-                                           limit=50, db=db)
+    async def _reply(db):
+        return await invoices_reply(tenant, args, db=db)
 
     try:
-        ok, rows = _run_owner_db(ctx, _list)
+        _ok, text = _run_owner_db(ctx, _reply)
     except Exception as e:
         ctx.emit(f"{candy.GUTTER}(invoices unavailable: {e})", title="invoices")
         return
-    if not ok:
-        ctx.emit(str(rows), title="invoices")
-        return
-    scope = f"tenant {tenant}" + (f" · {status}" if status else "")
-    lines = []
-    if not rows:
-        lines.append(candy.empty(f"invoices ({scope})", yet=False))
-    else:
-        lines.append(f"{len(rows)} invoice(s) — {scope}:")
-        for r in rows[:20]:
-            line = (f"{candy.GUTTER}{str(r['request_id'])[:8]} "
-                    f"[{r['status']}] ${float(r.get('amount_usd') or 0):.2f} — "
-                    f"{r.get('purpose') or '(no purpose)'}")
-            if r.get("payer_contact"):
-                line += f" · billed to {r['payer_contact']}"
-            lines.append(line)
-        if len(rows) > 20:
-            lines.append(f"{candy.GUTTER}… (+{len(rows) - 20} more)")
-        lines.append(f"{candy.GUTTER}mark one paid: /settle <id> [tx-hash]")
-    note = _invoicing_off_note()
-    if note:
-        lines.append(note)
-    ctx.emit("\n".join(lines), title="invoices")
+    ctx.emit(str(text), title="invoices")
 
 
 def h_settle(ctx) -> None:
@@ -446,7 +409,8 @@ def h_settle(ctx) -> None:
         ctx.emit(str(settled), title="settle")
         return
     if not settled:
-        ctx.emit(f"{request_id} not settled (unknown id or not pending) — "
+        ctx.emit(f"{request_id} not settled (unknown id, not pending, "
+                 "or it is an order's invoice: give the transaction hash) — "
                  "see /invoices pending", title="settle")
         return
     lines = [f"✅ settled {request_id}"]

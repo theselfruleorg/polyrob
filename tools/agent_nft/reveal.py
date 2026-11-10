@@ -262,8 +262,10 @@ async def run(tool, params, execution_context):
                                idempotency_key=idem, result_ref=tx_hash, chain=chain)):
             receipt = await asyncio.to_thread(rail.await_receipt, tx_hash)
             paid_usd = await asyncio.to_thread(_paid_usd, rpc, tx_hash, tx, decision.amount_usd)
-        gate.record(venue="defi", action="agent_nft_collection_reveal", amount_usd=paid_usd,
-                    counterparty=collection, idempotency_key=idem, result_ref=tx_hash, chain=chain)
+        from tools.defi.receipt_wait import book_after_receipt
+        book_after_receipt(gate, receipt, venue="defi", action="agent_nft_collection_reveal",
+                           amount_usd=paid_usd, counterparty=collection, idempotency_key=idem,
+                           result_ref=tx_hash, chain=chain)
     if not receipt.succeeded:
         state = "in flight" if receipt.status == "pending" else "REVERTED"
         return tool._ar(content=header + f"ALERT agent_nft_collection_reveal: tx {tx_hash} {state} — reported once; "

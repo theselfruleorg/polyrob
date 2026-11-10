@@ -452,24 +452,6 @@ class StepExecutionMixin:
 						f"Please review the FULL SCHEMA and correct your arguments before retrying.",
 						origin=MessageOrigin.INTERVENTION, source='mcp_validation_loop_prevention')
 
-			# PHASE 2 FIX (Nov 4, 2025): Loop Detection
-			# Detect if agent is repeating same actions without progress
-			if model_output and hasattr(model_output, 'current_state') and model_output.current_state:
-				loop_detected, loop_warning = self.detect_action_loop(
-					model_output.current_state,
-					actions_list
-				)
-
-				if loop_detected and loop_warning:
-					# Log warning
-					self.logger.warning(f"⚠️  Loop detected at step {self.state.n_steps}")
-
-					# Inject warning into agent's next context as ephemeral message
-					# HumanMessage imported at module level from modules.llm.messages
-					self.message_manager.push_ephemeral_message(
-						make_control_message(loop_warning, MessageOrigin.INTERVENTION)
-					)
-
 			# The identical-call escalation: a call that already ran N times with the
 			# same result after a warning does not run again (LoopDetectionMixin).
 			blocked = self._loop_guard_check(model_output)

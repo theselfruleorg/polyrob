@@ -150,4 +150,7 @@ def test_one_block_owns_tool_status_when_the_catalog_is_pinned():
     from agents.task.agent.core.tool_availability import build_tool_availability_note
     note = build_tool_availability_note(set(), catalog_pinned=True)
     assert "\n- " not in note and "Goals you create" in note
-    assert build_tool_availability_note(set(), catalog_pinned=True, can_create_goals=False) == ""
+    # 112 W4: a seat that creates no goal keeps only the capability-gap rule.
+    from agents.task.agent.core.tool_availability import CAPABILITY_GAP_RULE
+    assert build_tool_availability_note(set(), catalog_pinned=True, can_create_goals=False) == (
+        f"<tool-availability>\n{CAPABILITY_GAP_RULE}\n</tool-availability>")

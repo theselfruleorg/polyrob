@@ -1,19 +1,20 @@
-"""Per-provider lazy-init gate and call-result health (098 MO-13).
+"""Per-provider lazy-init gate and call-result health.
 
 A provider is ``ready`` only after its client initialised; a failed attempt
 (an SDK/DNS fault, a key that is not set yet) retries after a backoff
 ``min(base * 2**(n-1), cap)`` instead of latching the provider off until a
 restart. One ``asyncio.Lock`` per provider serialises concurrent first calls.
 
-Health reads real call results: an auth / connection / permanent error from a
-call stamps the client, and the fallback walk skips it for a short window.
+Health reads real call results per provider: an auth / connection / permanent
+error from any client of a provider, isolated or shared, stamps the provider on the
+manager's gate, and the fallback walk skips the provider for a short window.
 """
 from __future__ import annotations
 
 import asyncio
 import time
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict
 
 IDLE, INITIALIZING, READY, FAILED = "idle", "initializing", "ready", "failed"
 
@@ -34,6 +35,7 @@ class ProviderInitGate:
         self.base, self.cap, self._clock = base, cap, clock
         self._entries: Dict[str, _Entry] = {}
         self._locks: Dict[str, asyncio.Lock] = {}
+        self._call_errors: Dict[str, float] = {}
 
     def lock(self, provider: str) -> asyncio.Lock:
         if provider not in self._locks:
@@ -65,6 +67,14 @@ class ProviderInitGate:
 
     def reset(self) -> None:
         self._entries.clear()
+        self._call_errors.clear()
+
+    def note_call_error(self, provider: str) -> None:
+        self._call_errors[provider] = self._clock()
+
+    def recent_call_error(self, provider: str, window: float = CALL_ERROR_WINDOW_SEC) -> bool:
+        at = self._call_errors.get(provider)
+        return at is not None and self._clock() - at < window
 
     async def acquire(self, provider: str, existing: Callable[[], Any],
                       init: Callable[[], Awaitable[Any]]) -> Any:
@@ -86,21 +96,32 @@ class ProviderInitGate:
             return client
 
 
+def provider_of_client_name(client_name: str) -> str:
+    """The provider behind a client name: ``openai_client`` and ``openai`` name ``openai``."""
+    return (client_name or "").replace("_client", "")
+
+
+def _provider_of_client(client: Any) -> str:
+    spec_name = getattr(getattr(client, "_spec", None), "name", None)
+    return spec_name or provider_of_client_name(getattr(client, "name", "") or "")
+
+
 def note_call_error(client: Any, exc: BaseException) -> None:
-    """Stamp ``client`` when a real call failed with an error that says the
-    provider is unusable right now (auth, connection/5xx, permanent/billing)."""
+    """Stamp the provider of ``client`` when a real call failed with an error that says
+    the provider is unusable right now (auth, connection/5xx, permanent/billing). A refusal
+    or a content filter is about one request, not the provider: it stamps nothing."""
     try:
         from core.exceptions import (
-            LLMAuthenticationError, LLMConnectionError, LLMPermanentError,
+            LLMAuthenticationError, LLMConnectionError, LLMPermanentError, LLMRefusalError,
         )
-        if client is not None and isinstance(
+        gate = getattr(client, "_health_gate", None)
+        if gate is not None and not isinstance(exc, LLMRefusalError) and isinstance(
                 exc, (LLMAuthenticationError, LLMConnectionError, LLMPermanentError)):
-            client._last_call_error_at = time.monotonic()
+            gate.note_call_error(_provider_of_client(client))
     except Exception:
         pass
 
 
 def recent_call_error(client: Any, window: float = CALL_ERROR_WINDOW_SEC) -> bool:
-    at: Optional[float] = getattr(client, "_last_call_error_at", None)
-    return at is not None and time.monotonic() - at < window
-
+    gate = getattr(client, "_health_gate", None)
+    return gate is not None and gate.recent_call_error(_provider_of_client(client), window)

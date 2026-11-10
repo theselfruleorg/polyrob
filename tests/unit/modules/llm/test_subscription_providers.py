@@ -467,8 +467,8 @@ class TestParityAuditRegressions:
         assert compute_llm_cost("claude-sonnet-4-5", usage, "anthropic") > 0
         assert compute_llm_cost("gpt-5", usage, "openai") > 0
         assert compute_llm_cost("z-ai/glm-5.2", usage, "openrouter") > 0
-        # and omitting the provider is byte-identical to before
-        assert compute_llm_cost("MiniMax-M2.7", usage) > 0
+        # omitting the provider invents no number either
+        assert compute_llm_cost("MiniMax-M2.7", usage) == 0.0
 
     def test_ambiguous_model_ownership_prefers_a_provider_you_can_use(self, monkeypatch):
         """Several providers now serve the same open-weight id. Routing by

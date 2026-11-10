@@ -588,3 +588,23 @@ async def test_process_deposit_requires_amount_no_price_derived_fallback():
     assert db._crypto_payments == [], (
         "deposit missing 'amount' still produced a crypto_payments row"
     )
+
+
+@pytest.mark.asyncio
+async def test_a_cancel_inside_the_credit_span_rolls_back_and_propagates():
+    """`stop()` cancels the monitor: a cancel inside the credit transaction
+    must close the span (rollback), or every other bot.db reader waits."""
+    import asyncio
+
+    class _Cancelling(_FakeBalanceManager):
+        async def add_credits(self, user_id, amount, reason):
+            raise asyncio.CancelledError()
+
+    db = _FakeDB()
+    monitor = DepositMonitor(db, _Cancelling(), _Config())
+    with pytest.raises(asyncio.CancelledError):
+        await monitor._process_deposit("user_c", {
+            "chain": "ethereum", "token_symbol": "USDC", "amount": "20.0",
+            "amount_usd": 20.0})
+    assert db.connection.began == 1 and db.connection.rolled_back == 1
+    assert db.connection.in_transaction is False

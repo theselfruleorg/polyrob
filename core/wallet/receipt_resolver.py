@@ -2,7 +2,7 @@
 
 A DeFi verb books its broadcast as ``receipt_state = "pending_receipt"`` when
 the receipt wait was interrupted or timed out (``tools/defi/receipt_wait.py``,
-``call_verb``, ``trade_tool``). This pass (run by the bridge watcher tick) reads
+``book_after_receipt``). This pass (its own ticker, started with the wallet) reads
 ``eth_getTransactionReceipt`` on the chain's pinned RPC and appends ONE
 resolution through :meth:`core.money.ledger.SpendLedger.note_receipt`:
 
@@ -12,8 +12,9 @@ resolution through :meth:`core.money.ledger.SpendLedger.note_receipt`:
 
 Reads only; never signs, sends or releases a submission. An RPC error, an
 unknown chain or a chain-id mismatch leaves the entry pending (fail-open).
-Not resolved yet (reported, see the 098 close-out): the position delta of a
-confirmed interrupted swap, and EVM rows only (no Solana).
+A ``confirmed`` swap that stored ``deferred_positions`` gets its position
+written here, once; a revert or an unknown outcome writes none. EVM rows
+only (no Solana).
 """
 from __future__ import annotations
 
@@ -24,6 +25,9 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+#: The resolver's own ticker interval (the autonomy runtime starts it with the wallet).
+INTERVAL_SEC = 120
 
 
 def _default_call(chain: str, method: str, params: list):
@@ -72,7 +76,14 @@ async def resolve_pending_receipts(gate: Any = None, *, call: Optional[Callable]
         if gate is None:
             from core.wallet.factory import get_policy_gate
             gate = get_policy_gate()
-        pending = open_receipts(list(gate.audit_log))
+        # The ledger file is shared: fold in a pending entry ANOTHER process (a
+        # CLI run) booked, or an idle server never sees it. Under the reservation,
+        # so the read never meets another process's half-written row.
+        async with gate.reserve():
+            sync = getattr(gate, "_sync_shared_ledger", None)
+            if sync is not None:
+                sync()
+            pending = open_receipts(list(gate.audit_log))
     except Exception:
         logger.debug("receipt resolver: no spend ledger", exc_info=True)
         return []
@@ -101,11 +112,32 @@ async def resolve_pending_receipts(gate: Any = None, *, call: Optional[Callable]
             continue
         if not moved:
             continue
-        item = {"ref": entry.get("result_ref"), "chain": entry.get("chain"), "state": state,
+        if state == "confirmed":
+            _apply_deferred_positions(entry)
+        item ={"ref": entry.get("result_ref"), "chain": entry.get("chain"), "state": state,
                 "amount_usd": entry.get("amount_usd"), "action": entry.get("action")}
         out.append(item)
         _tell(item)
     return out
+
+
+def _apply_deferred_positions(entry: dict) -> None:
+    """MW-5: the position deltas a swap stored while its receipt was pending,
+    applied ONCE — only the process whose resolution moved the entry to
+    ``confirmed`` (under the ledger's file lock) calls this. Never raises."""
+    rows, uid = entry.get("deferred_positions"), entry.get("position_uid")
+    if not rows or not uid:
+        return
+    try:
+        from core.money import hooks
+        from core.open_positions import PositionDelta
+        apply_deltas = hooks.position_book()
+        if apply_deltas is None:
+            raise RuntimeError("no position book registered")
+        apply_deltas(str(uid), [PositionDelta(**row) for row in rows])
+    except Exception:
+        logger.warning("receipt resolver: confirmed swap %s — its position was NOT "
+                       "written to the book", entry.get("result_ref"), exc_info=True)
 
 
 def _tell(item: Dict[str, Any]) -> None:

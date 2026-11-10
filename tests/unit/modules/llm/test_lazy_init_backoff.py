@@ -65,14 +65,12 @@ def test_key_added_after_first_attempt_is_used(monkeypatch):
     asyncio.run(go())
 
 
-def test_cleanup_resets_fallback_and_attempts(monkeypatch):
+def test_cleanup_resets_attempts(monkeypatch):
     async def go():
         now = [0.0]
         mgr, _ = _mgr(monkeypatch, [True], now)
         await mgr._try_initialize_client("openai")
-        mgr.fallback_client_name = "openai_client"
         await mgr._cleanup()
-        assert mgr.fallback_client_name is None
         assert mgr._init_gate.may_try("openai")
     asyncio.run(go())
 
@@ -99,12 +97,14 @@ def test_health_reads_real_call_errors(monkeypatch):
         mgr = LLMManager(name="llm", config=BotConfig())
         c = _Client(False)
         c._initialized = True
+        c._health_gate = mgr._init_gate
         assert await mgr._test_client_health(c)
+        note_call_error(c, ValueError("not a provider fault"))
+        assert await mgr._test_client_health(c)
+        from core.exceptions import LLMRefusalError
+        note_call_error(c, LLMRefusalError("declined", category="cyber"))
+        assert await mgr._test_client_health(c), "a refusal is about one request"
         note_call_error(c, LLMAuthenticationError("401"))
         assert recent_call_error(c)
         assert not await mgr._test_client_health(c)
-        d = _Client(False)
-        d._initialized = True
-        note_call_error(d, ValueError("not a provider fault"))
-        assert await mgr._test_client_health(d)
     asyncio.run(go())

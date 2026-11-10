@@ -1,4 +1,4 @@
-"""OpenRouter provider routing — `OPENROUTER_PROVIDER_SORT` (2026-09-19).
+"""OpenRouter provider routing — `OPENROUTER_PROVIDER_SORT`.
 
 OpenRouter routes a model to the cheapest upstream by default. On the owner's
 metered seat (deepseek-v4.1-flash) that upstream stalled for 290–410 s often
@@ -7,57 +7,92 @@ to order upstreams for the SAME model by `latency`, `throughput` or `price`
 instead — an ops knob, not a seat change. Unset (or any other value) sends no
 `provider` block at all: byte-identical request. Lives in its own module so
 `openrouter_client.py` stays under its file-size ceiling.
+
+`OPENROUTER_PROVIDER_ORDER` and `OPENROUTER_PROVIDER_IGNORE` name upstreams.
+The same model id behaved differently per upstream: one
+served a placeholder post and repeated owner messages on a replay where others
+did the next step, and a run moved between upstreams from step to step. The
+order is a preference, so a model those upstreams do not serve still answers.
+
+The order takes a plain list for every model, a per-model form, or both:
+``DeepInfra,Together`` or ``deepseek/deepseek-v4-pro=Nebius;z-ai/glm-5.3=Z.AI,DeepInfra;Together``.
+A model with no entry of its own takes the plain list, and with no plain list no order.
 """
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional
+import time
+from typing import Any, Dict, List, Optional
+
+from modules.llm.call_scope import scoped_provider_sort, session_tag, set_scoped_provider_sort
+from modules.llm.catalog_lookup import catalog_wire_id
+from modules.llm.model_types import model_family
+from modules.llm.tool_schemas import schema_tool_names
 
 _PROVIDER_SORT_VALUES = frozenset({"latency", "throughput", "price"})
 
 
-#: attribute holding a PER-CLIENT sort override (057 WS-B, timeout reroute).
-_SORT_ATTR = "_polyrob_provider_sort"
+def _wire_id(name: Optional[str]) -> str:
+    return (catalog_wire_id(name, "openrouter") or "").lower()
 
 
-def set_provider_sort(client: Any, sort: Optional[str]) -> bool:
-    """Override the routing sort for ONE client instance (None clears it).
+def set_provider_sort(sort: Optional[str]) -> bool:
+    """Scope a routing sort to this task's next calls (None clears it).
 
-    057 WS-B: after two consecutive timeouts in a session the runner asks for
-    `latency` for the rest of that run — a per-session decision, so it must not
-    be written into the process-wide env where it would outlive the run and
-    silently re-route every other session.
+    After two timeouts in a row a session asks for ``latency``. That is the
+    decision of one session, and the client serves them all.
     """
     value = (sort or "").strip().lower() or None
     if value is not None and value not in _PROVIDER_SORT_VALUES:
         return False
-    try:
-        setattr(client, _SORT_ATTR, value)
-    except Exception:
-        return False
+    set_scoped_provider_sort(value)
     return True
 
 
-def resolve_provider_sort(client: Any = None) -> Optional[str]:
-    """The sort in force: the per-client override, else `OPENROUTER_PROVIDER_SORT`."""
-    if client is not None:
-        override = getattr(client, _SORT_ATTR, None)
-        if isinstance(override, str) and override in _PROVIDER_SORT_VALUES:
-            return override
+def resolve_provider_sort() -> Optional[str]:
+    """The sort in force: this task's, else `OPENROUTER_PROVIDER_SORT`."""
+    scoped = scoped_provider_sort()
+    if scoped:
+        return scoped
     raw = (os.getenv("OPENROUTER_PROVIDER_SORT") or "").strip().lower()
     return raw if raw in _PROVIDER_SORT_VALUES else None
 
 
-def provider_routing_extra_body(client: Any = None) -> Optional[Dict[str, Any]]:
-    """The `extra_body` OpenRouter routing block, or None when the knob is unset."""
-    sort = resolve_provider_sort(client)
-    return {"provider": {"sort": sort}} if sort else None
+def _names(text: str) -> List[str]:
+    return [n.strip() for n in text.split(",") if n.strip()]
 
 
-def apply_provider_routing(request_params: Dict[str, Any],
-                           client: Any = None) -> Dict[str, Any]:
+def _provider_order(model: Optional[str]) -> List[str]:
+    """`OPENROUTER_PROVIDER_ORDER` for *model* (see the module docstring)."""
+    plain: List[str] = []
+    want = _wire_id(model)
+    for part in (os.getenv("OPENROUTER_PROVIDER_ORDER") or "").split(";"):
+        key, sep, names = part.partition("=")
+        if not sep:
+            plain = _names(key) or plain
+        elif want and _wire_id(key.strip()) == want:
+            return _names(names)
+    return plain
+
+
+def provider_routing_extra_body(model: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """The `extra_body` OpenRouter routing block, or None when every knob is unset."""
+    provider: Dict[str, Any] = {}
+    sort = resolve_provider_sort()
+    if sort:
+        provider["sort"] = sort
+    order = _provider_order(model)
+    if order:
+        provider["order"] = order
+    ignore = _names(os.getenv("OPENROUTER_PROVIDER_IGNORE") or "")
+    if ignore:
+        provider["ignore"] = ignore
+    return {"provider": provider} if provider else None
+
+
+def apply_provider_routing(request_params: Dict[str, Any]) -> Dict[str, Any]:
     """Merge the routing block into a chat.completions request (in place)."""
-    body = provider_routing_extra_body(client)
+    body = provider_routing_extra_body(request_params.get("model"))
     if body:
         extra = dict(request_params.get("extra_body") or {})
         extra.update(body)
@@ -65,11 +100,22 @@ def apply_provider_routing(request_params: Dict[str, Any],
     return request_params
 
 
+def apply_session_id(request_params: Dict[str, Any]) -> Dict[str, Any]:
+    """Send this task's session digest on a GLM model, whose upstream keeps a cache per
+    ``session_id``. In place."""
+    tag = session_tag()
+    if tag and model_family(request_params.get("model")) == "glm":
+        extra = dict(request_params.get("extra_body") or {})
+        extra["session_id"] = tag
+        request_params["extra_body"] = extra
+    return request_params
+
+
 # ---------------------------------------------------------------------------
-# B-3 (review 2026-10-14, owner approved): `tool_choice` on an agent step.
+# `tool_choice` on an agent step.
 #
-# 13.4 % of agent calls came back as a text-only "empty action" while the
-# client always sent `tool_choice:"auto"`. On an agent step every reply IS a
+# With `tool_choice:"auto"` an agent call can come back as a text-only
+# "empty action" (13.4 % of calls measured). On an agent step every reply IS a
 # tool call (`send_message` talks, `done` ends), so the step asks for
 # `required`. Aux, no-tools and other callers keep `auto`. An upstream that
 # rejects `required` gets ONE retry with `auto`, and the model is remembered
@@ -79,18 +125,11 @@ def apply_provider_routing(request_params: Dict[str, Any],
 _TOOL_CHOICES = frozenset({"auto", "required", "none"})
 #: the tool whose presence marks a call as an agent step
 AGENT_STEP_TOOL = "done"
-_REQUIRED_REJECTED: set = set()
-
-
-def _tool_names(tools: Any) -> set:
-    names = set()
-    for t in tools or []:
-        if isinstance(t, dict):
-            fn = t.get("function") if isinstance(t.get("function"), dict) else t
-            name = fn.get("name") if isinstance(fn, dict) else None
-            if isinstance(name, str):
-                names.add(name)
-    return names
+#: model -> when it refused ``required``. The refusal is remembered for LATCH_TTL_SEC, not
+#: for the process: OpenRouter's 404 "no endpoints … tool_choice" can mean only that the
+#: upstreams that support it are down now.
+_REQUIRED_REJECTED: Dict[str, float] = {}
+LATCH_TTL_SEC = 3600.0
 
 
 def resolve_tool_choice(tools: Any, model: Optional[str],
@@ -104,8 +143,8 @@ def resolve_tool_choice(tools: Any, model: Optional[str],
     """
     value = (explicit or "").strip().lower()
     if value not in _TOOL_CHOICES:
-        value = "required" if AGENT_STEP_TOOL in _tool_names(tools) else "auto"
-    if value == "required" and (model or "") in _REQUIRED_REJECTED:
+        value = "required" if AGENT_STEP_TOOL in schema_tool_names(tools) else "auto"
+    if value == "required" and _required_rejected(model):
         return "auto"
     return value
 
@@ -117,18 +156,23 @@ def is_tool_choice_rejection(exc: BaseException) -> bool:
     return "tool_choice" in text or "tool choice" in text
 
 
+def _required_rejected(model: Optional[str]) -> bool:
+    at = _REQUIRED_REJECTED.get(model or "")
+    return at is not None and time.monotonic() - at < LATCH_TTL_SEC
+
+
 def remember_required_rejected(model: Optional[str]) -> None:
-    """Never ask *model* for ``required`` again in this process."""
+    """Do not ask *model* for ``required`` for the next LATCH_TTL_SEC."""
     if model:
-        _REQUIRED_REJECTED.add(model)
+        _REQUIRED_REJECTED[model] = time.monotonic()
 
 
 def tool_choice_for(client: Any, tools: Any, explicit: Optional[str] = None) -> str:
-    """The client's `tool_choice`. ``required`` on an agent step is OpenRouter's
-    own default only: a subclass (NIM, an OpenAI-compatible local server) keeps
-    ``auto`` unless the caller asks explicitly."""
-    if explicit is None and getattr(client, "_PROVIDER_LABEL", "OpenRouter") != "OpenRouter":
-        return "auto"
+    """The client's `tool_choice`. A client's ``DEFAULT_TOOL_CHOICE`` holds unless the
+    caller asks explicitly; with none, an agent step asks for ``required``."""
+    default = getattr(client, "DEFAULT_TOOL_CHOICE", None)
+    if explicit is None and default:
+        return default
     return resolve_tool_choice(tools, getattr(client, "model_type", None), explicit)
 
 

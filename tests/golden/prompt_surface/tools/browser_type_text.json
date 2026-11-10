@@ -1,0 +1,27 @@
+{
+  "function": {
+    "description": "Type text into the element that has the focus (click it first). Use it for an editor or a widget that browser_input_text cannot fill. A line break makes a new line. submit=true presses Enter after.",
+    "name": "browser_type_text",
+    "parameters": {
+      "additionalProperties": false,
+      "description": "Model for typing text into the element that has the focus.",
+      "properties": {
+        "submit": {
+          "default": null,
+          "description": "true = press Enter after the text",
+          "nullable": true,
+          "type": "boolean"
+        },
+        "text": {
+          "description": "The text; a line break becomes a new line, not a submit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

@@ -108,8 +108,8 @@ def test_nothing_is_pushed_on_a_non_anthropic_provider():
 
 
 def test_nothing_is_pushed_on_a_model_without_the_capability():
-    """Opus 4.8 and older do not accept mid-conversation tool changes."""
-    mm = _mm(model="claude-opus-4-8")
+    """Sonnet 5 does not accept mid-conversation tool changes."""
+    mm = _mm(model="claude-sonnet-5")
     refresh_tool_catalog(_agent(mm, late_names=("late_echo",)))
     assert _additions(mm) == []
 
@@ -118,11 +118,12 @@ def test_the_announcement_survives_a_persistence_round_trip(tmp_path: Path):
     """It is an ordinary history message — F13's replay must not drop it."""
     mm = _mm()
     refresh_tool_catalog(_agent(mm, late_names=("late_echo", "late_ping")))
-    checkpoint = tmp_path / "history.json"
-    mm.checkpoint_history(checkpoint)
+    from agents.task.path import get_path_manager, set_path_manager
+    set_path_manager(get_path_manager(data_root=str(tmp_path)))
+    mm.save_to_disk(mm.session_id or "s-tool-addition")
 
     restored = _mm()
-    assert restored.restore_from_checkpoint_file(checkpoint) is True
+    assert restored.load_from_disk(mm.session_id or "s-tool-addition") is True
     pushed = _additions(restored)
     assert len(pushed) == 1
     assert pushed[0].origin == MessageOrigin.TOOL_ADDITION

@@ -3,7 +3,7 @@
 ``difflib.get_close_matches`` alone ranks by character order, so a reordered
 name loses to an unrelated one: prod 2026-10-10, ``preferences explain
 TWITTER_APPROVAL_REQUIRED`` said only "unknown setting", and plain difflib picks
-``APPROVAL_REQUIRED_TOOLS`` over the real ``TWITTER_REQUIRE_APPROVAL``. The score
+``APPROVAL_REQUIRED_TOOLS`` over a real flag with the same words reordered. The score
 here is the better of the character ratio and a WORD-overlap ratio (words split
 on ``_ . -``; ``required`` ~ ``require``), so a name with the right words in the
 wrong order still wins.
@@ -69,7 +69,7 @@ def did_you_mean(query: str, names: Iterable[str], *, n: int = 3) -> str:
 def flag_hint(query: str, err: str, pref_names: Iterable[str],
               flag_names: Iterable[str]) -> str:
     """A preference refusal's tail naming an instance FLAG that matches ``query``
-    better than any preference does (e.g. TWITTER_REQUIRE_APPROVAL), with its
+    better than any preference does (e.g. CORRESPONDENT_REQUIRE_APPROVAL), with its
     seat — flags are not preferences. ``""`` when no flag is the closer match."""
     flag = suggest_keys(query, flag_names, n=1)
     pref = suggest_keys(query, pref_names, n=1)

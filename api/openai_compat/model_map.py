@@ -69,27 +69,37 @@ def _provider_owning(model: str) -> str | None:
     return owners[0]
 
 
+def _slug_provider(model: str) -> str | None:
+    """The canonical provider a `provider/model` slug names, or None."""
+    head, _, tail = model.partition("/")
+    if not tail or head.lower() not in _known_providers():
+        return None
+    from modules.llm.provider_spec import get_spec
+    spec = get_spec(head.lower())
+    return spec.name if spec is not None else head.lower()
+
+
+def _usable(provider: str) -> bool:
+    try:
+        from modules.llm.profiles import usable_providers_with_credentials
+        return provider in usable_providers_with_credentials()
+    except Exception:
+        return False
+
+
 def map_model(openai_model: str) -> tuple[str, str]:
-    """Return (provider, model). A `provider/model` slug wins (split on first '/');
-    else exact registry membership (the SSOT); else a known bare-model prefix; else the
-    env-resolved default provider."""
+    """Return (provider, model). The catalog owner of the whole id wins, because
+    `deepseek/deepseek-v4-pro` is one OpenRouter id and not a route to native DeepSeek;
+    else a `provider/model` slug (split on first '/'); else a known bare-model prefix;
+    else the env-resolved default provider. An owner with no key yields to a slug head
+    that has one."""
     s = (openai_model or "").strip()
-    if "/" in s:
-        head, tail = s.split("/", 1)
-        if head.lower() in _known_providers() and tail:
-            head_low = head.lower()
-            # Resolve an alias to its canonical provider name.
-            try:
-                from modules.llm.provider_spec import get_spec
-                spec = get_spec(head_low)
-                if spec is not None:
-                    head_low = spec.name
-            except Exception:
-                pass
-            return head_low, tail
     owner = _provider_owning(s)
-    if owner:
+    if owner and (_usable(owner) or not _usable(_slug_provider(s) or "")):
         return owner, s
+    head_provider = _slug_provider(s)
+    if head_provider:
+        return head_provider, s.split("/", 1)[1]
     low = s.lower()
     for prefix, provider in _prefix_to_provider():
         if low.startswith(prefix):

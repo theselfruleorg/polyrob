@@ -31,6 +31,10 @@ What a model change rebuilds (identity line, system prompt, usage anchor) is
 swap and every provider fallback, so a fallback refreshes the family note and the
 JSON action list too, and only ``cause == "owner"`` renders "The owner switched you".
 
+A provider fallback is temporary: ``adopt_fallback_llm`` remembers the first model,
+``return_to_first_llm_if_due`` goes back after ``FALLBACK_COOLDOWN_SEC``, and a
+deliberate switch forgets it. The aux models follow each of these moves.
+
 History-repair note: MessageManager's ``_validate_and_repair_tool_sequences`` (the
 FiltersMixin method) is only ever called from ``get_messages_for_llm()`` on the
 OUTBOUND path (see ``agents/task/agent/messages/retrieval.py``) — it repairs a fresh
@@ -43,9 +47,15 @@ from __future__ import annotations
 
 import inspect
 import logging
+import time
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# The client closer and the judge slot live in a module with no heavy imports, so the
+# verdict and review paths can use them without joining this module's import cycle.
+from agents.task.agent.core.llm_slots import cached_judge_llm, close_own_llm  # noqa: E402,F401
 
 
 def _self_facts(agent, cause, previous_model):
@@ -55,6 +65,19 @@ def _self_facts(agent, cause, previous_model):
 
 #: ``reasoning`` not given: keep the session's level.
 _KEEP = object()
+
+#: Seconds on a fallback model before the session tries its first model again.
+FALLBACK_COOLDOWN_SEC = 300.0
+
+
+@dataclass
+class _FirstModel:
+    """The model a session ran on before a provider fallback moved it."""
+    llm: Any
+    model: str
+    provider: str
+    owned: bool  # this session built its client (an earlier swap), so it closes it
+    moved_at: float
 
 
 class ModelSwapMixin:
@@ -156,30 +179,11 @@ class ModelSwapMixin:
             except Exception as e:
                 self.logger.debug(f"{name} refresh after model change failed: {e}")
 
-    def _detect_provider_for(self, model: str) -> Optional[str]:
-        """Best-effort provider auto-detect for `model` via the model registry.
-
-        Returns the canonical agent-facing provider string (e.g. "anthropic"), or
-        None if the model isn't registered / detection fails for any reason. This
-        mirrors the auto-detect branch in ``_create_llm_from_config_async`` so the
-        SSOT provider label matches what that method will actually build.
-        """
-        try:
-            from modules.llm.model_registry import get_registry, canonical_provider_name
-            registry = get_registry()
-            model_config = registry.get_model(model)
-            if model_config:
-                return canonical_provider_name(model_config.provider, default='openai')
-        except Exception:
-            pass
-        return None
-
     async def swap_model(
         self,
         provider: Optional[str],
         model: str,
         *,
-        preserve_history: bool = True,
         reasoning: Any = _KEEP,
         cause: str = "owner",
     ) -> Dict[str, Any]:
@@ -204,15 +208,16 @@ class ModelSwapMixin:
           (``agents/task/model_pin_state.py``, read on each main call).
 
         On failure the agent is left completely unchanged and {"ok": False, ...} is
-        returned. `preserve_history` is accepted for forward-compat; history is
-        always kept (see the History-repair note in the module docstring).
+        returned. History is always kept (see the History-repair note in the module
+        docstring).
         """
         prev = {
             "provider": getattr(self, "llm_provider", None) or getattr(self, "provider_name", None),
             "model": getattr(self, "model_name", None),
         }
 
-        resolved_provider = provider or self._detect_provider_for(model)
+        from modules.llm.usage_extract import detect_llm_provider
+        resolved_provider = provider or detect_llm_provider(model)
         old_llm = getattr(self, "llm", None)
 
         cfg: Dict[str, Any] = {"model": model}
@@ -235,16 +240,6 @@ class ModelSwapMixin:
                 "previous": prev,
             }
 
-        # Build succeeded but detection couldn't resolve a provider label up front
-        # (e.g. falsy `provider` + an unregistered/aliased model that
-        # _create_llm_from_config_async still managed to build via its own
-        # fallback path). Don't leave None in a provider SSOT — label it
-        # "unknown" rather than silently propagating None into billing/
-        # native-tools reconciliation.
-        if not resolved_provider:
-            resolved_provider = "unknown"
-
-        _carry_provider_sort(old_llm, new_llm)
         # 094: a client an EARLIER swap built is this session's own — close it once
         # it is replaced (the shared per-provider client is never closed here).
         _own_old = old_llm is not None and old_llm is getattr(self, "_swap_built_llm", None)
@@ -255,11 +250,14 @@ class ModelSwapMixin:
         self.adopt_active_llm(new_llm, model, resolved_provider)
         self._swap_built_llm = new_llm
         if _own_old:
-            await close_own_llm(old_llm, getattr(self, "container", None))
+            await self._release_owned_llm(old_llm)
+        else:
+            self._retire_llm(old_llm)
+        await self._forget_first_llm()
         if reasoning is not _KEEP:
             _set_level(self, reasoning)
-        for replaced in self._after_swap(model, resolved_provider, prev.get("model"), cause=cause):
-            await close_own_llm(replaced, getattr(self, "container", None))
+        for replaced in self._after_swap(prev.get("model"), cause=cause):
+            await self._release_owned_llm(replaced)
 
         self.logger.info(f"model swapped {prev['provider']}/{prev['model']} -> {resolved_provider}/{model}")
 
@@ -270,18 +268,122 @@ class ModelSwapMixin:
             "previous": prev,
         }
 
-    def _after_swap(self, model: str, provider: str, previous_model: Optional[str],
-                    cause: str = "owner") -> List[Any]:
-        """094: a deliberate swap = the shared model-change refresh + the aux
+    def _after_swap(self, previous_model: Optional[str],
+                    cause: str = "owner", reason: Optional[str] = None) -> List[Any]:
+        """094: every model change = the shared model-change refresh + the aux
         models (compaction, reflection, the lazy judge) on the new main chain.
         Returns the replaced aux models, for the caller to close."""
-        self._refresh_after_model_change(cause, previous_model)
+        self._refresh_after_model_change(cause, previous_model, reason=reason)
         replaced: List[Any] = []
         try:
             self._reprovision_aux_models(replaced)
         except Exception as e:
             self.logger.debug(f"aux re-provision after swap failed: {e}")
         return replaced
+
+    async def _close_after_move(self, *models: Any) -> None:
+        for llm in models:
+            await self._release_owned_llm(llm)
+
+    def _held_by_other_agent(self, llm: Any) -> bool:
+        """A running sub-agent of this session uses *llm*: a child inherits its parent's
+        model by reference (``SubAgentManager``), and the reviewer runs on the judge."""
+        agents = getattr(getattr(self, "orchestrator", None), "agents", None) or {}
+        for other in list(agents.values()):
+            if other is self:
+                continue
+            if llm is getattr(other, "llm", None) or llm is getattr(
+                    getattr(other, "_first_model", None), "llm", None):
+                return True
+        return False
+
+    async def _release_owned_llm(self, llm: Any) -> None:
+        """A replaced client this session built: closed now, unless a running sub-agent
+        still calls it; then it closes at the session end (``_retired_llms``)."""
+        if llm is None:
+            return
+        if self._held_by_other_agent(llm):
+            self._retire_llm(llm)
+            return
+        await close_own_llm(llm, getattr(self, "container", None))
+
+    async def adopt_fallback_llm(self, fallback_llm: Any, reason: str) -> str:
+        """Move this session to a model the fallback ladder built, and return its serving
+        provider. The session owns the new client, the aux models move with it, and the
+        first model is kept for the return. A fallback that replaces a fallback is closed."""
+        from modules.llm.usage_extract import resolve_serving_provider
+        previous_llm = getattr(self, "llm", None)
+        previous_model = getattr(self, "model_name", None)
+        owned_previous = previous_llm is not None and previous_llm is getattr(self, "_swap_built_llm", None)
+        first = getattr(self, "_first_model", None)
+        if first is None:
+            first = _FirstModel(previous_llm, previous_model,
+                                getattr(self, "llm_provider", None) or self._current_llm_provider(previous_model),
+                                owned_previous, 0.0)
+            self._first_model = first
+            to_close = []
+        else:
+            to_close = [previous_llm] if owned_previous else []
+        first.moved_at = time.monotonic()
+
+        model = getattr(fallback_llm, "model_name", "fallback")
+        provider = resolve_serving_provider(fallback_llm, model)
+        self.adopt_active_llm(fallback_llm, model, provider)
+        self._swap_built_llm = fallback_llm
+        replaced = self._after_swap(previous_model, cause="fallback", reason=reason)
+        await self._close_after_move(*to_close, *replaced)
+        self.logger.info(f"✅ Switched LLM: {previous_model} → {model}")
+        return provider
+
+    async def restore_first_llm(self) -> bool:
+        """Back to the first model, closing the fallback client and its aux models."""
+        first = getattr(self, "_first_model", None)
+        if first is None:
+            return False
+        self._first_model = None
+        fallback_llm = getattr(self, "llm", None)
+        owned_fallback = fallback_llm is getattr(self, "_swap_built_llm", None)
+        previous_model = getattr(self, "model_name", None)
+        self.adopt_active_llm(first.llm, first.model, first.provider)
+        self._swap_built_llm = first.llm if first.owned else None
+        replaced = self._after_swap(previous_model, cause="restore")
+        await self._close_after_move(*([fallback_llm] if owned_fallback else []), *replaced)
+        return True
+
+    async def return_to_first_llm_if_due(self) -> None:
+        """After the cooldown the session tries its first model again, unless that provider
+        is credit-dead or a real call on it just failed. Runs before an LLM call."""
+        first = getattr(self, "_first_model", None)
+        if first is None or time.monotonic() - first.moved_at < FALLBACK_COOLDOWN_SEC:
+            return
+        try:
+            if not self.container.get_service("llm").provider_ready(first.provider):
+                return
+        except Exception as e:
+            self.logger.debug(f"provider health read failed: {e}")
+        try:
+            previous_model = getattr(self, "model_name", None)
+            await self.restore_first_llm()
+            # A fresh start: the providers that failed before the cooldown may serve again.
+            self.state.reset_llm_errors(reset_circuit_breaker=True)
+            self.logger.info(f"Cooldown over: {previous_model} → {first.model}")
+        except Exception as e:
+            self.logger.warning(f"Return to the first model failed: {e}")
+
+    async def _forget_first_llm(self) -> None:
+        """A deliberate switch ends the return: the first model is no longer the choice."""
+        first = getattr(self, "_first_model", None)
+        self._first_model = None
+        if first is not None and first.owned:
+            await self._release_owned_llm(first.llm)
+        elif first is not None:
+            self._retire_llm(first.llm)
+
+    def _retire_llm(self, llm: Any) -> None:
+        """A start model that a switch replaced. It can be an isolated client, and a child
+        can still hold it, so it stays open until the session end closes it."""
+        if llm is not None:
+            self._retired_llms = [*getattr(self, "_retired_llms", ()), llm]
 
     def _reprovision_aux_models(self, replaced: List[Any]) -> None:
         """Compaction + reflection on the NEW main model's chain; the judge lazily.
@@ -335,6 +437,7 @@ class ModelSwapMixin:
             # Same model: only the reasoning level changes — no rebuild, no cache loss.
             if reasoning is not _KEEP:
                 _set_level(self, reasoning)
+            await self._forget_first_llm()
             result = {"ok": True, "provider": getattr(self, "llm_provider", None),
                       "model": getattr(self, "model_name", None), "unchanged": True,
                       "previous": {"provider": getattr(self, "llm_provider", None),
@@ -354,59 +457,44 @@ class ModelSwapMixin:
         return result
 
 
-async def close_own_llm(llm: Any, container: Any = None) -> None:
-    """Close a model this session built on an isolated client (aux, judge, swap).
-
-    ⚠️ Never the shared per-provider client: closing it stops every session that
-    uses the provider. Each caller holds only isolated models, and the check against
-    the manager's registered clients is the second lock on that door.
-    """
-    if llm is None:
-        return
-    client = getattr(llm, "_client", llm)
-    try:
-        manager = container.get_service("llm") if container is not None else None
-        shared = (getattr(manager, "clients", None) or {}).values()
-    except Exception:
-        shared = ()
-    if any(client is registered for registered in shared):
-        logger.warning("refused to close the shared LLM client %s", type(client).__name__)
-        return
-    close = getattr(client, "cleanup", None) or getattr(client, "aclose", None)
-    if not callable(close):
-        return
-    try:
-        result = close()
-        if inspect.isawaitable(result):
-            await result
-    except Exception as e:
-        logger.debug("closing an isolated LLM client failed: %s", e)
-
-
-async def close_agent_llms(agent: Any, container: Any = None) -> None:
-    """Close and clear the models one agent owns. The session's reflection model
-    has its own slot on the task context manager, so the session cleanup holds it."""
+async def close_agent_llms(agent: Any, container: Any = None) -> set:
+    """Close and clear the models one agent owns; returns the ids it closed. The session's
+    reflection model has its own slot on the task context manager, so the session cleanup
+    holds it."""
+    closed = set()
+    first = getattr(agent, "_first_model", None)
+    agent._first_model = None
+    if first is not None and first.owned:
+        await close_own_llm(first.llm, container)
+        closed.add(id(first.llm))
     for owner, attr in ((getattr(agent, "message_manager", None), "aux_llm"),
                         (agent, "_judge_llm"), (agent, "_swap_built_llm")):
         llm = getattr(owner, attr, None) if owner is not None else None
         if llm is None:
             continue
         setattr(owner, attr, None)
-        await close_own_llm(llm, container)
+        if id(llm) not in closed:  # one client can fill two of these slots
+            await close_own_llm(llm, container)
+            closed.add(id(llm))
+    return closed
+
+
+async def close_session_llms(agent: Any, container: Any = None) -> None:
+    """Session end: the agent's own models and, on the root agent, its main model and the
+    start models that a switch replaced. A main model that differs from the shared client's
+    is an isolated client, built at session start (``get_chat_model``). A sub-agent can hold
+    its parent's, so only the root closes it, and ``close_own_llm`` refuses a shared client."""
+    main = (getattr(agent, "llm", None), getattr(getattr(agent, "_first_model", None), "llm", None),
+            *getattr(agent, "_retired_llms", ()))
+    agent._llms_closed = True  # a judge built after this point is closed at once
+    closed = await close_agent_llms(agent, container)
+    if not getattr(agent, "_is_sub_agent", False):
+        for llm in main:
+            if id(llm) not in closed:
+                closed.add(id(llm))
+                await close_own_llm(llm, container)
 
 
 def _set_level(agent: Any, level: Optional[str]) -> None:
     from agents.task.model_pin_state import set_session_reasoning
     set_session_reasoning(getattr(agent, "session_id", None), level)
-
-
-def _carry_provider_sort(old_llm: Any, new_llm: Any) -> None:
-    """Keep a per-session OpenRouter sort override (057 WS-B) across the swap."""
-    try:
-        from modules.llm.openrouter_routing import _SORT_ATTR, set_provider_sort
-        old = getattr(old_llm, "_client", None) or old_llm
-        sort = getattr(old, _SORT_ATTR, None)
-        if sort:
-            set_provider_sort(getattr(new_llm, "_client", None) or new_llm, sort)
-    except Exception:
-        pass

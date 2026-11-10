@@ -1,6 +1,6 @@
 {
   "function": {
-    "description": "Record a DURABLE goal pursued across sessions (beyond this turn). Use for ongoing work; use `task` for this-turn TODOs and `cronjob` for time-scheduled runs.",
+    "description": "Record a DURABLE goal: ONE piece of work that outlives this turn and is done once. Use `task` for this-turn TODOs and `cronjob` for repeating or timed work.",
     "name": "goal_create",
     "parameters": {
       "additionalProperties": false,
@@ -46,8 +46,9 @@
           "type": "integer"
         },
         "report_back": {
-          "default": false,
-          "description": "056 WS7: when true the FULL result re-enters the session that created this goal; default false = a one-line 'goal <id> done — <first line>' notice (the artefacts are on disk either way).",
+          "default": null,
+          "description": "056 WS7: when true the FULL result re-enters the session that created this goal; false = a one-line 'goal <id> done — <first line>' notice (the artefacts are on disk either way). Omit: true when the owner's chat creates a heavy or money goal, else false.",
+          "nullable": true,
           "type": "boolean"
         },
         "rig": {
@@ -73,6 +74,17 @@
           "properties": {},
           "type": "object"
         },
+        "tier": {
+          "default": null,
+          "description": "Optional model tier for this work's runs — from the owner's chat only: 'heavy' for work that decides money (who is paid, how much, a winner) or is hard to undo; 'light' for bulk reads; 'default' = the normal model. <environment> names each tier's model. Requires 'why'.",
+          "enum": [
+            "default",
+            "heavy",
+            "light"
+          ],
+          "nullable": true,
+          "type": "string"
+        },
         "title": {
           "description": "Short title for the durable goal.",
           "minLength": 3,
@@ -86,6 +98,13 @@
           },
           "nullable": true,
           "type": "array"
+        },
+        "why": {
+          "default": null,
+          "description": "One line: why this tier. Required with 'tier'; shown in /status.",
+          "maxLength": 200,
+          "nullable": true,
+          "type": "string"
         }
       },
       "required": [

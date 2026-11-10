@@ -1,4 +1,4 @@
-"""Generic, spec-parameterized LLM clients (proposal 024, L0).
+"""Generic, spec-parameterized LLM clients.
 
 Two clients carry every ProviderSpec that names no bespoke class:
 
@@ -17,21 +17,19 @@ the convention ``create_llm_client`` uses) and read their config block from
 ``profiles.extra_llm_config_blocks``).
 
 This module is imported lazily (inside ``create_llm_client``) so the provider
-SDKs it drags in never load at CLI entry-point import time. ⚠️ 058 T7.2:
+SDKs it drags in never load at CLI entry-point import time. ⚠️
 ``AnthropicCompatClient`` lives in ``modules/llm/compat_anthropic.py`` because
-its base class imports the ``anthropic`` SDK at module level — an extra since
-T1.4 — and an OpenAI-compatible deployment must not need it. The name is still
-importable from here (module ``__getattr__``) for back-compat.
+its base class imports the ``anthropic`` SDK at module level, which is an extra, and an
+OpenAI-compatible deployment must not need it.
 """
 from __future__ import annotations
 
-import os
 from typing import Dict, Optional
 
 from modules.llm.llm_client import LLMClient
 from modules.llm.llm_client_registry import get_default_model
 from modules.llm.model_registry import get_model_config
-from modules.llm.openrouter_client import OpenRouterClient
+from modules.llm.openrouter_client import OpenAIWireSeat
 from modules.llm.provider_spec import (
     NO_KEY_SENTINEL as _NO_KEY_SENTINEL,
     AuthType,
@@ -69,7 +67,7 @@ def _resolve_key(spec: ProviderSpec, cfg: Dict) -> Optional[str]:
     return key
 
 
-class OpenAICompatClient(OpenRouterClient):
+class OpenAICompatClient(OpenAIWireSeat):
     """OpenAI-compatible chat-completions client driven by a ProviderSpec."""
 
     def __init__(self, config: BotConfig, name: str):
@@ -78,38 +76,20 @@ class OpenAICompatClient(OpenRouterClient):
         LLMClient.__init__(self, config=config, name=name)
         self._client = None
         self._spec = _spec_for(name)
-        self._PROVIDER_LABEL = self._spec.display_name
 
         cfg = config.get_llm_config().get(self._spec.name, {}) or {}
         self.api_key = _resolve_key(self._spec, cfg)
         self._credential_source = cfg.get("credential_source", "env")
         self.model_type = cfg.get("model") or get_default_model(self._spec.name)
-        self.last_response = None
 
         # OpenRouter attribution headers don't apply; spec headers ride
         # _get_openrouter_headers below.
         self.site_url = ""
         self.site_name = ""
 
-        model_config = get_model_config(self.model_type)
-        if model_config:
-            self.max_tokens = model_config.max_completion_tokens or 32768
-        else:
-            self.max_tokens = 32768
-            self.logger.info(
-                f"Model '{self.model_type}' not in registry — using defaults "
-                f"(declare it under 'models:' in providers.yaml to list it)"
-            )
+        self.max_tokens = get_model_config(self.model_type).max_completion_tokens
         self.supports_vision = self._resolve_supports_vision()
         self.temperature = 0.7
-
-    def _resolve_supports_vision(self, model_type: Optional[str] = None) -> bool:
-        # Registry wins; an unregistered model falls back to the spec's declared
-        # capability (not the base class's blanket True).
-        mc = get_model_config(model_type or self.model_type)
-        if mc:
-            return mc.capabilities.supports_vision
-        return self._spec.supports_vision
 
     def _supports_tools(self) -> bool:
         if not self._spec.supports_native_tools:
@@ -137,16 +117,8 @@ class OpenAICompatClient(OpenRouterClient):
         headers = self._spec.headers()
         if headers:
             kwargs["default_headers"] = headers
-        self._client = AsyncOpenAI(**kwargs)
+        self._client = AsyncOpenAI(**kwargs, **self._sdk_limits())
 
     def _get_openrouter_headers(self) -> Dict[str, str]:
         return self._spec.headers()
 
-
-def __getattr__(name: str):
-    # Back-compat: `from modules.llm.compat_clients import AnthropicCompatClient`
-    # still works, but only resolves (and imports the SDK) when asked for.
-    if name == "AnthropicCompatClient":
-        from modules.llm.compat_anthropic import AnthropicCompatClient
-        return AnthropicCompatClient
-    raise AttributeError(name)

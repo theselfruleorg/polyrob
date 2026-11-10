@@ -304,7 +304,8 @@ def test_a_paired_user_is_still_the_owner_in_a_DM(workdir):
     store = PairingStore(os.path.join(workdir, "pairing.db"))
     store.approve(store.request("u_paired"))
     c = _Container(workdir)
-    env = {"POLYROB_OVERRIDES": "GROUP_CHAT_ENABLED=true", "POLYROB_OWNER_USER_ID": "u_owner"}
+    env = {"POLYROB_OVERRIDES": "GROUP_CHAT_ENABLED=true", "POLYROB_OWNER_USER_ID": "u_owner",
+           "POLYROB_REQUIRE_PAIRING": "1"}
     assert resolve_access_tier(c, _identity("u_paired", chat_type="dm"), env=env) \
         == AccessTier.OWNER
 

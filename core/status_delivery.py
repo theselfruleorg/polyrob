@@ -9,6 +9,7 @@ late-bound, so a test that patches it still reaches this builder.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from core.event_kinds import EMAIL_DELIVERY_UNKNOWN
@@ -20,6 +21,16 @@ from core.status_types import (  # noqa: F401
 )
 
 logger = logging.getLogger("core.status_snapshot")
+
+_DELIVERY_LINE_HEAD = "owner messages 24h:"
+_DELIVERY_FACT = re.compile(rf"{_DELIVERY_LINE_HEAD} \d+/(?P<cap>\d+)(?P<rest>.*)$")
+
+
+def delivery_fact(line: str) -> Optional[str]:
+    """What counts in a rendered delivery line: the cap and the outcomes, not the count that
+    moves with every delivery. None when *line* is not that line."""
+    found = _DELIVERY_FACT.search(line)
+    return f"cap {found['cap']}{found['rest']}" if found else None
 
 
 #: Poll faults in 24h below this are ordinary long-poll turbulence, not news.
@@ -220,7 +231,7 @@ def _delivery_section(user_id: str, data_dir: str, tele: Section, container: Any
                      "reserved_slots": _reserved_slots(),
                      "recent_notices": _recent_notices(rows, session_id=session_id, now=now)})
     sec.lines.append(
-        f"owner messages 24h: {consumed}/{cap} cap used, {capped} suppressed, "
+        f"{_DELIVERY_LINE_HEAD} {consumed}/{cap} cap used, {capped} suppressed, "
         f"{outcomes.get('fallback', 0)} fallback, {outcomes.get('no_sink', 0)} no sink, "
         f"{outcomes.get('paused', 0)} paused, "
         f"{outcomes.get('deduped', 0)} deduped, {outcomes.get('rate_limited', 0)} rate-limited, "
@@ -276,7 +287,7 @@ def _delivery_section(user_id: str, data_dir: str, tele: Section, container: Any
             key="delivery_no_sink", severity=SEVERITY_WARN,
             text=f"{no_sink} owner message(s) in 24h reached nobody — no chat surface "
                  f"could carry them",
-            remedy="connect a chat surface (`polyrob surface list`), then /missed"))
+            remedy="connect a chat surface (`polyrob surfaces list`), then /missed"))
     sec.health.extend(_digest_health(user_id, data_dir))
     sec.health.extend(_surface_poll_health(tele))
     unknown_mail = len(_tele_rows(tele, EMAIL_DELIVERY_UNKNOWN))
@@ -311,7 +322,7 @@ def _delivery_section(user_id: str, data_dir: str, tele: Section, container: Any
                 sec.health.append(HealthItem(
                     key=f"circuit:{r['surface_id']}", severity=SEVERITY_CRIT,
                     text=f"surface {r['surface_id']} circuit is OPEN — sends are being dropped",
-                    remedy=f"`polyrob surface resume {r['surface_id']}` once the platform is back"))
+                    remedy=f"`polyrob surfaces resume {r['surface_id']}` once the platform is back"))
             if r.get("dead_targets"):
                 sec.lines.append(f"{r['surface_id']}: {r['dead_targets']} dead target(s)")
     return sec

@@ -70,6 +70,15 @@ def test_every_surface_renders_its_foundation_and_tools(fresh):
                     or (fresh / "tools" / f"{row['name']}.{surface}.json").exists())
 
 
+def test_no_clock_in_a_row_before_the_initial_task():
+	"""A clock in the cached rows makes each request cold. The renderer writes a
+	time within a day of the render as ``<NOW>``, so the golden shows one."""
+	for surface in GEN.SURFACES:
+		text = (GEN.GOLDEN / f"{surface}.system.txt").read_text(encoding="utf-8")
+		head = text.split("===== initial_task =====")[0]
+		assert "<NOW>" not in head, surface
+
+
 def test_the_render_names_the_regime_it_is_for(fresh):
     """The surfaces are not seven copies of one session: a room and a
     correspondent never carry the owner's self-context, and the leaf is a child."""

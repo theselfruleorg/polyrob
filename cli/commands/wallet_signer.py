@@ -13,10 +13,12 @@ import json
 
 import click
 
+from cli.commands._options import json_option
+
 
 @click.command("signer-reconcile")
 @click.argument("chain")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def signer_reconcile(chain, as_json):
     """Settle the signer's unknown-outcome nonces on CHAIN from the chain (root)."""
     from cli.commands._bootstrap import ensure_env_loaded

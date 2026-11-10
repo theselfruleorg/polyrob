@@ -384,6 +384,9 @@ from typing import Optional
 from core.instance import (DEFAULT_INSTANCE_ID, is_safe_tenant_id, resolve_instance_id,
                            self_tier_root)
 
+from core import prefs_io as _prefs_io
+from core.prefs_io import PrefsUnreadable  # noqa: F401 (re-export)
+
 _PREFS_NAME = "preferences.toml"
 # path -> (mtime_ns, parsed dict); tiny process-local cache
 _CACHE: dict[str, tuple[int, dict]] = {}
@@ -457,8 +460,12 @@ def _flatten(nested: dict, prefix: str = "") -> dict[str, object]:
 
 
 def load_preferences(home_dir: Path | str, user_id: Optional[str],
-                     instance_id: Optional[str] = None) -> dict[str, object]:
-    """Flat {dotted_key: coerced_value}. Missing/broken file fails OPEN to {}.
+                     instance_id: Optional[str] = None, *,
+                     strict: bool = False) -> dict[str, object]:
+    """Flat {dotted_key: coerced_value}. A missing file is {}. An unreadable one is
+    NOT empty: ``strict`` raises :class:`PrefsUnreadable`; otherwise the last good
+    values stay in force (``core.prefs_io``) and status reports the file. A
+    first-ever broken file with no good copy reads {} (env defaults), reported UNREADABLE.
 
     ``instance_id=None`` resolves via :func:`core.instance.resolve_instance_id`
     (owner-UX P2-4 final review, item 1)."""
@@ -472,10 +479,15 @@ def load_preferences(home_dir: Path | str, user_id: Optional[str],
         cached = _CACHE.get(key)
         if cached and cached[0] == mtime:
             return dict(cached[1])
-        raw = tomllib.loads(path.read_text(encoding="utf-8"))
-    except Exception as e:  # malformed TOML / unreadable — never break the agent
-        logger.warning("preferences.toml unreadable (%s) — ignoring prefs: %s", path, e)
-        return {}
+        text = path.read_text(encoding="utf-8")
+        raw = tomllib.loads(text)
+        _prefs_io.remember_good(key, path, text)
+    except Exception as e:  # ST-1: never a looser {} — the last good values stay
+        if strict:
+            raise PrefsUnreadable(path, e) from e
+        cached, raw, mtime = _CACHE.get(key), _prefs_io.last_good_raw(key, path, e), None
+        if cached or raw is None:
+            return dict(cached[1]) if cached else {}
     prefs: dict[str, object] = {}
     for dotted, value in _flatten(raw).items():
         # 044 T17: a `chat.*` key is per-ROOM configuration. It validates through
@@ -611,18 +623,10 @@ def write_preference(home_dir: Path | str, user_id: Optional[str], key: str,
         ok, err = _threat_scan_pref_value(key, coerced)
         if not ok:
             return False, err
-    flat = load_preferences(home_dir, user_id, instance_id)
-    flat[key] = coerced
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".toml.tmp")
-        tmp.write_text(_render_toml(flat), encoding="utf-8")
-        os.replace(str(tmp), str(path))
-        _CACHE.pop(str(path), None)
-        return True, ""
-    except Exception as e:
-        logger.error("preferences write failed (%s): %s", path, e, exc_info=True)
-        return False, f"write failed: {e}"
+    # ST-1: a strict read under the lock — an unreadable file refuses, never overwritten.
+    return _prefs_io.locked_write(
+        path, lambda: load_preferences(home_dir, user_id, instance_id, strict=True),
+        key, coerced, _render_toml, _CACHE)
 
 
 # --- style-line rendering (owner-UX Phase 2, contract/style injection) ------
@@ -931,7 +935,9 @@ def display_effective(key: str, user_id: Optional[str], home_dir: Path | str,
         ok, _err = _threat_scan_pref_value(key, value)
         if not ok:
             return _BLOCKED_PREF_DISPLAY, source
-    return value, source
+    bad = _prefs_io.unreadable(preferences_path(home_dir, user_id, instance_id))
+    return value, (f"{source}; preferences.toml UNREADABLE ({bad}), the last good values "
+                   "stay in force — fix the file" if bad else source)
 
 
 # --- catalog cross-checking (env-flag / preferences.toml sanity, owner-UX P1 T7) --
@@ -1097,17 +1103,10 @@ def check_env_files(paths: list[Path]) -> list[str]:
 def find_invalid_preferences(home_dir: Path | str, user_id: Optional[str],
                              instance_id: Optional[str] = None
                              ) -> list[tuple[str, str]]:
-    """Return ``(key, error)`` pairs for preferences.toml entries that
-    :func:`load_preferences` silently drops (unknown keys, invalid values).
-
-    Unlike :func:`load_preferences` (fail-open — bad entries are logged and
-    skipped so the agent never breaks), this surfaces them for ``/config
-    check`` / ``polyrob config check`` to report to the operator. Missing or
-    unreadable files return ``[]`` (nothing to report); never raises.
-
-    ``instance_id=None`` resolves via :func:`core.instance.resolve_instance_id`
-    (owner-UX P2-4 final review, item 1).
-    """
+    """``(key, error)`` pairs for preferences.toml entries that :func:`load_preferences`
+    drops (unknown keys, invalid values), for ``/config check`` / ``polyrob config
+    check``. A missing file is ``[]``; an unreadable one is the ``("<file>", …)`` row,
+    never "nothing to report". Never raises."""
     instance_id = instance_id or resolve_instance_id()
     path = preferences_path(home_dir, user_id, instance_id)
     if path is None or not path.is_file():

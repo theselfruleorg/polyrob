@@ -79,10 +79,10 @@ describe("the artifact is what the palette expects", () => {
     });
   });
 
-  it("excludes the two session-creating verbs the console has its own UI for", () => {
+  it("excludes /task and lists /new, a chat verb the chat box runs (113 W2)", () => {
     const names = VERBS.verbs.map((v) => v.name);
     expect(names).not.toContain("/task");
-    expect(names).not.toContain("/new");
+    expect(names).toContain("/new");
   });
 });
 
@@ -166,7 +166,7 @@ describe("render", () => {
     expect(buttons.length).toBe(VERBS.verbs.length);
     const names = [...buttons].map((b) => b.dataset.verb);
     expect(names).not.toContain("/task");
-    expect(names).not.toContain("/new");
+    expect(names).toContain("/new");
   });
 
   it("renders section headers in group order", () => {

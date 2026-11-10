@@ -21,13 +21,18 @@ works, and how to run it as a service are in
 
 | Nav | Route | What it answers |
 |---|---|---|
-| Chat | `/` | Talk to it. A thread you already started is `/c/{session_id}` |
+| Chat | `/` | Talk to it. It opens your main chat; any chat is `/c/{session_id}` |
 | Inbox | `/inbox` | What is waiting on you, and what expires soonest |
 | Work | `/work` | What it is doing and what is queued |
 | Money | `/money` | What it earned, what it spent, what it holds |
 | Agent | `/agent` | Who it is, how it is configured, whether it is healthy |
 
-**Chat** opens on one true sentence about the last day — built from the same reader
+**Chat** opens your **main chat**: the first chat you start in the console, and the
+one this button goes back to each time. For a subject you want apart from it, open
+**Chats** (⌘K) and choose **New chat**; that list marks the main chat and shows every
+other chat you have. On a screen 1024 px or wider your chats also stand in a column on the left
+of Chat: the main chat first, then the others by when they last changed; the open one is marked.
+Before your first chat, Chat opens on one true sentence about the last day — built from the same reader
 `polyrob journey` and the chat `/recap` use — four things you could ask, and a place
 to type. It is deliberately not a configuration form. A thread you do not own
 answers 404 rather than an access-denied page.
@@ -61,12 +66,14 @@ kind, who started it, show finished) and the open goal stay in the URL. The goal
 lives here and can name the goals a new one waits for. An unreadable board says so;
 when live updates are off the board says it may be out of date.
 
+**Money › Cash** also shows where the AI cost went over 24 hours, 7 days or 30 days, by kind of work, scheduled job, goal and model: the same lines as `/usage`. A record it could not read says so; it is never shown as $0.
+
 
 ### Live sessions
 
 `/c/{id}` streams a running session's transcript over Socket.IO as the agent works,
-alongside its workspace file tree, file previews and downloads, and any browser
-screenshots it captured. (`/session/{id}` is a permanent redirect to it.)
+alongside its workspace file tree, file previews and downloads, and the last screenshot
+the browser took in that chat. (`/session/{id}` is a permanent redirect to it.)
 
 ⚠️ **A session URL is not a grant.** On both authenticated postures a session page,
 its feed and its workspace reads are owner-only — possessing the link gives you
@@ -106,21 +113,26 @@ least N waiting, one list unreadable" rather than a confident number.
 
 The console is a control plane, not only a monitor. Unless it is read-only, you can:
 
-- pause and resume autonomy, by scope and with a duration;
+- pause and resume autonomy: the header's Pause stops everything until you resume, and
+  `/pause background for 6h` in the chat box pauses one kind of work or for a time;
 - approve or reject anything in the Inbox — and **answer** an ask in writing, not
   only agree to it, because an ask is a question ("which key should I use?") and
   "approved" is not an answer to one;
 - act on goals (Work › Goals) and pause, resume, run or stop scheduled jobs;
-- settle an invoice (an attestation, not a payment);
+- settle an invoice (an attestation, not a payment), and see what the agent sells and its orders
+  (Money › Invoices), with Pause and Resume for one offer — setting up, going live, settling an order
+  and retiring stay on `/offer` and the decisions the agent sends you;
 - approve, reject or kill a durable app, and read its logs;
-- write preferences and cataloged flags;
+- write preferences and cataloged flags, and choose the model a new chat starts on (Agent › Settings,
+  the same as `/model <name> default`; a chat already open keeps its model);
 - type an owner verb into the chat box.
 
 ### Owner verbs in the chat box
 
-A leading `/verb` is routed through the same owner-verb plane every other seat uses,
+**Commands** (⌘⇧P) in the head, or `/` in an empty chat box, opens the list of every
+command with a search. A leading `/verb` is routed through the same owner-verb plane every other seat uses,
 not sent to the model as prose. Every Telegram verb works — every row of the verb table
-but the terminal-only ones (`/gates`, `/memory`, `/doctor`, `/exit` and the rest) — for
+but the terminal-only ones (`/gates`, `/session`, `/doctor`, `/exit` and the rest) — for
 example `/pause`, `/resume`, `/halt`, `/restart`, `/update`, `/status`, `/why`, `/inbox`, `/pending`,
 `/approve`, `/reject`, `/asks`, `/goals`, `/jobs`, `/job`, `/book`, `/wallet`, `/send`,
 `/writeoff`, `/unquarantine`, `/invoices`, `/settle`, `/trade`, `/bridge`,
@@ -136,9 +148,16 @@ This works from an empty chat box too, not only inside a thread you already have
 open: a leading verb typed on the front door is answered inline and starts no
 session.
 
-`/task` and `/new` are the exception: the console has its own controls for starting
-a session, so they are excluded here and `/help task` says so. Prose and an unknown
-slash still reach the agent.
+Inside a chat, the answer to a verb stays in the chat: reload the page and it is
+still there, with its buttons. A long chat shows its newest messages first; **Load
+older messages** at the top brings back the earlier ones.
+
+The chat verbs work here too. `/chats` lists your chats with the page of each one,
+`/chat <number or name>` gives the page of that chat, `/new [name]` names the next
+chat you start, and `/rename <name>` and `/close` act on the chat of the page you
+are on. **Chats** has the same Rename and Close as buttons. `/task` is the one
+exception: the console has its own control for it and `/help task` says so. Prose
+and an unknown slash still reach the agent.
 
 Full owner-control model: [owner-controls.md](owner-controls.md).
 
@@ -199,10 +218,11 @@ the request 404s.
 Inside `multitenant`, a signed-in non-admin following an admin link is redirected
 home.
 
-**A reader with nothing to read refuses rather than answering zero.** The files a
-session produced are a session-scoped question, so asking for them without naming a
-session is refused with that reason instead of an empty list; a store that would
-not open is reported as unreadable with its reason. Anywhere you see a dash and a
+**A reader that could not read says so rather than answering zero.** A store that
+would not open is reported as unreadable with its reason, never as an empty list;
+the files list with no chat named shows your newest files across every chat. A store that was never
+created is empty: a new chat has an empty timeline, and a chat that does not exist says so and offers a
+new chat. Anywhere you see a dash and a
 reason, that is the console declining to state a number it did not measure.
 
 ---

@@ -42,32 +42,32 @@ class MessageOrigin:
     MEMORY = "memory"             # injected hierarchical/session memory (in-session H-MEM)
     RECALL = "recall"             # cross-session recall from past sessions (distinct from in-session MEMORY)
     SKILL = "skill"               # injected skills (kept out of the system prompt)
-    TOOL_CATALOG = "tool_catalog" # S1 dynamic tool rig: honest <tool-catalog> block
+    TOOL_CATALOG = "tool_catalog" # dynamic tool rig: honest <tool-catalog> block
                                   # (loaded/loadable/gated per tool), foundation-pinned
-    WORKER_CATALOG = "worker_catalog"   # 041 phase 2: the approved named workers the
+    WORKER_CATALOG = "worker_catalog"   # the approved named workers the
                                         # orchestrator may dispatch, foundation-pinned
     SELF_CONTEXT = "self_context"       # frozen SOUL/identity doc pinned in the foundation
     PROJECT_CONTEXT = "project_context" # auto-loaded CLAUDE.md/AGENTS.md for CLI mode
     SYSTEM_NOTE = "system_note"         # other system-generated notice
     TOOL_NOTICE = "tool_notice"         # tool deferral / throttling notice
-    CORRESPONDENT = "correspondent"     # WS-A: reply from a third party the agent
+    CORRESPONDENT = "correspondent"     # reply from a third party the agent
                                         # contacted — DATA, never an instruction
-    ACTION_LEDGER = "action_ledger"     # 103: what the agent did, read from the stores
+    ACTION_LEDGER = "action_ledger"     # what the agent did, read from the stores
     COMPACTION_SUMMARY = "compaction_summary"  # lossy LLM summary of compacted history (derived, not a user turn)
     SELF_WAKE = "self_wake"             # forged re-entry turn (self-wake / autonomy rail),
                                         # NOT a genuine human message
     RUNTIME_IDENTITY = "runtime_identity"  # the model/provider the agent is actually
                                         # running on — so it can answer truthfully
     ENVIRONMENT = "environment"         # where the agent lives (host/workspace/
-                                        # posture axes) — 014-C1 foundation block
+                                        # posture axes) — foundation block
     EPISODIC_DIGEST = "episodic_digest"    # session-start recent-activity digest
                                         # (own recent runs), chat/owner sessions only
     SESSION_BRIDGE = "session_bridge"      # cross-session continuity bridge (Task 6)
-    GROUP_CONTEXT = "group_context"        # 044 T14: the room's recent lines shown to
+    GROUP_CONTEXT = "group_context"        # the room's recent lines shown to
                                         # ONE turn (API-only; never stored as user turns)
-    OWNER_THREAD = "owner_thread"          # 061: the owner's ONE conversation across
+    OWNER_THREAD = "owner_thread"          # the owner's ONE conversation across
                                         # sessions/rails (tail, delta, referent, rail slice)
-    TOOL_ADDITION = "tool_addition"        # F9 (063 WS-4): the late actions this step
+    TOOL_ADDITION = "tool_addition"        # the late actions this step
                                         # surfaces. Body is ONE action name per line and
                                         # nothing else — the Anthropic wire layer parses
                                         # it back into `tool_addition` blocks
@@ -95,7 +95,7 @@ _ORIGIN_ENVELOPE = {
     MessageOrigin.RUNTIME_IDENTITY: "runtime-identity",
     MessageOrigin.TOOL_ADDITION: "tool-addition",
     # NOTE: GROUP_CONTEXT is deliberately absent (like ENVIRONMENT /
-    # EPISODIC_DIGEST / SESSION_BRIDGE). 044 T14's content ALREADY arrives framed
+    # EPISODIC_DIGEST / SESSION_BRIDGE). The group-context content ALREADY arrives framed
     # twice — `<untrusted_tool_result source="group-context">` around the
     # rendered `<group-context chat="…" surface="…">` block — so an envelope
     # would make a THIRD fence, two of them named `group-context`. The model

@@ -11,7 +11,8 @@ import os
 import pytest
 
 from core.wallet import account_journal, collection_registry as CR, erc6551
-from tests.collection_pins import pin, profile
+from tests.collection_pins import (MARKET, POLYROB_IMPL, RUNTIME_SHA256, pin, polyrob_profile,
+                                   profile, transfer_safe)
 
 ADDR = "0xC011000000000000000000000000000000000001"
 
@@ -123,3 +124,66 @@ def test_an_untrusted_registry_leaves_only_the_default_prefix(monkeypatch):
         raise CR.CollectionRegistryError("writable")
     monkeypatch.setattr(CR, "profiles", boom)
     assert account_journal.allowed_journal_prefixes() == ("agent",)
+
+
+# ------------------------------------------------------------------ PolyrobAccount (transfer_safe)
+def test_without_transfer_safe_only_account_v3_is_accepted():
+    (p,) = CR.parse(_doc())
+    assert p.transfer_safe is None
+    assert p.accounts[0].kind == CR.KIND_ACCOUNT_V3 and not p.accounts[0].is_polyrob
+    assert p.accounts[0].runtime_sha256 is None
+
+
+def test_with_transfer_safe_accounts0_is_the_pinned_polyrob_account():
+    (p,) = CR.parse({"profiles": [polyrob_profile(ADDR, journal_log="0x" + "ee" * 20)]})
+    v = p.accounts[0]
+    assert (v.implementation, v.kind, v.runtime_sha256) == (POLYROB_IMPL, CR.KIND_POLYROB, RUNTIME_SHA256)
+    assert v.is_polyrob and p.account_version(POLYROB_IMPL.upper().replace("0X", "0x")) == v
+    assert p.transfer_safe.market == MARKET and p.transfer_safe.zone_runtime_sha256 == RUNTIME_SHA256
+    assert p.account_version(erc6551.ACCOUNT_V3_IMPL) is None
+
+
+def test_a_later_account_version_beside_a_polyrob_account_must_be_account_v3():
+    raw = polyrob_profile(ADDR)
+    raw["accounts"].append({"registry": erc6551.REGISTRY, "implementation": erc6551.ACCOUNT_V3_IMPL,
+                            "salt": 0})
+    (p,) = CR.parse({"profiles": [raw]})
+    assert [v.kind for v in p.accounts] == [CR.KIND_POLYROB, CR.KIND_ACCOUNT_V3]
+    raw["accounts"][1]["implementation"] = "0x" + "a2" * 20
+    with pytest.raises(CR.CollectionRegistryError, match="account version"):
+        CR.parse({"profiles": [raw]})
+
+
+@pytest.mark.parametrize("mutate, needle", [
+    (lambda r: r["accounts"][0].update(implementation=erc6551.ACCOUNT_V3_IMPL), "is AccountV3"),
+    (lambda r: r["accounts"][0].update(registry="0x" + "12" * 20), "registry"),
+    (lambda r: r["transfer_safe"].pop("zone"), "exactly"),
+    (lambda r: r["transfer_safe"].update(extra=1), "exactly"),
+    (lambda r: r["transfer_safe"].update(market="0x12"), "market"),
+    (lambda r: r["transfer_safe"].update(account_impl_runtime_sha256="0x" + "11" * 32),
+     "account_impl_runtime_sha256"),
+    (lambda r: r.update(transfer_safe=None), "exactly"),
+])
+def test_an_off_schema_transfer_safe_refuses_the_registry(mutate, needle):
+    raw = polyrob_profile(ADDR)
+    mutate(raw)
+    with pytest.raises(CR.CollectionRegistryError, match=needle):
+        CR.parse({"profiles": [raw]})
+
+
+def test_an_unknown_implementation_without_transfer_safe_is_refused():
+    raw = profile(ADDR)
+    raw["accounts"][0]["implementation"] = POLYROB_IMPL
+    with pytest.raises(CR.CollectionRegistryError, match="AccountV3"):
+        CR.parse({"profiles": [raw]})
+
+
+def test_the_desk_pin_writer_profile_is_accepted():
+    """The exact shape ``polyrob-desk/contracts/script/pin.py::profile_of(..., transfer_safe=…)`` writes."""
+    raw = {"spec": "agent-nft-profile/1", "capabilities": ["reveal"], "chain_id": 4663, "address": ADDR.lower(),
+           "runtime_sha256": "11" * 32, "deploy_block": 123, "max_supply": 6551,
+           "accounts": [{"registry": erc6551.REGISTRY, "implementation": POLYROB_IMPL, "salt": 0}],
+           "journal_prefix": "POLYROB", "call_shapes": {"reveal": "reveal(uint256[])"},
+           "journal_log": "0x" + "ee" * 20, "transfer_safe": transfer_safe()}
+    (p,) = CR.parse({"profiles": [raw]})
+    assert p.accounts[0].is_polyrob and p.journal_log == "0x" + "ee" * 20

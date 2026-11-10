@@ -68,9 +68,9 @@ pause (`/pause …`; the owner lifts it with `/resume`), the daily outbound cap
    `email_forward`. Use `email_send` only for a new conversation.
 3. **Ask the owner only when it matters:** a FIRST contact to someone new, or a
    sensitive mail (money, legal, a commitment in the owner's name) on an owner turn.
-   Ask with `present_choice(question="Send this email to …?", options=["Send",
-   "Edit", "Discard"])` in a live chat, or `owner_ask(question=…, why=…)` in a goal or
-   cron run (save the draft; send on a later run only if the answer is "send"). A
+   Ask with `owner_ask(question="Send this email to …?", options=["Send", "Edit",
+   "Discard"])`. In a goal or cron run, save the draft and send on a later run only if
+   the answer is "send". A
    typed "ok" in chat is not the gate when you asked with a card. Every other mail to
    an allowed address goes through the gate: send it and report it.
 4. **Match the register** to the relationship; keep it short and lead with the ask.

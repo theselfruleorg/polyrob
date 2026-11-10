@@ -20,6 +20,7 @@ INTEGRATION:
 - Adds configurable markup for user billing (via PRICING_MARKUP env var, default 1.0 = 0%)
 """
 
+from collections import OrderedDict
 from dataclasses import dataclass, asdict
 from typing import Optional, Dict, Any
 import math
@@ -102,6 +103,10 @@ class UsageRecord:
             'tokens': asdict(self.tokens),
             'costs': asdict(self.costs)
         }
+
+
+#: Sessions whose previous step call the tracker keeps for the cold-call comparison.
+_LAST_STEP_CALLS_MAX = 1000
 
 
 class LLMUsageTracker:
@@ -204,11 +209,14 @@ class LLMUsageTracker:
         budget = prepaid_budget()
         if budget <= 0:
             return
-        # Bound the accumulator dict before inserting a new session.
-        if session_id not in self._x402_session_tokens and len(self._x402_session_tokens) > 10000:
-            self._x402_session_tokens.clear()
-        total = self._x402_session_tokens.get(session_id, 0) + max(0, int(tokens_this_call or 0))
-        self._x402_session_tokens[session_id] = total
+        # Bound the accumulator before inserting a new session: evict only the
+        # least recently used entry. ⚠️ Never clear it — that reset every
+        # in-flight paid session's budget, a cap that got looser.
+        tokens = self._x402_session_tokens
+        if session_id not in tokens and len(tokens) > 10000:
+            tokens.pop(next(iter(tokens)), None)
+        total = tokens.pop(session_id, 0) + max(0, int(tokens_this_call or 0))
+        tokens[session_id] = total          # re-inserted last: most recently used
         if total > budget:
             raise InsufficientCreditsError(
                 user_id=user_id,
@@ -324,8 +332,12 @@ class LLMUsageTracker:
                 metadata["estimated_cost_usd"] = estimated_cost_usd
                 if billed_used:
                     metadata["billed_cost_usd"] = costs.api_cost_usd
+                if billed_used:
+                    metadata.setdefault("billed_source", "provider")
                 if cache_discount_usd is not None:
                     metadata["cache_discount_usd"] = cache_discount_usd
+            metadata = self._with_cold_cause(session_id, component, model, input_tokens,
+                                             cached_tokens, metadata)
 
             # 4. Use the caller-supplied STABLE idempotency key when given (G-26
             # reachability fix); otherwise fall back to a fresh uuid (legacy --
@@ -415,6 +427,23 @@ class LLMUsageTracker:
         except Exception as e:
             self.logger.error(f"Failed to record LLM usage: {e}", exc_info=True)
             raise
+
+    def _with_cold_cause(self, session_id: str, component: str, model: str, input_tokens: int,
+                         cached_tokens: int, metadata: Optional[Dict]) -> Optional[Dict]:
+        """*metadata*, plus ``cold_cause`` when this step call went cold after the session's
+        previous step call. Only step calls compare: an aux call has another prefix."""
+        if component != "agent" or not session_id:
+            return metadata
+        from modules.llm.call_result import cold_call_cause
+        calls = self.__dict__.setdefault("_last_step_call", OrderedDict())
+        current = {**(metadata or {}), "model": model, "input_tokens": input_tokens,
+                   "cached_tokens": cached_tokens}
+        cause = cold_call_cause(calls.get(session_id), current)
+        calls[session_id] = current
+        calls.move_to_end(session_id)
+        while len(calls) > _LAST_STEP_CALLS_MAX:
+            calls.popitem(last=False)
+        return {**(metadata or {}), "cold_cause": cause} if cause else metadata
 
     def _validate_inputs(self, input_tokens: int, output_tokens: int, cached_tokens: int) -> int:
         """Validate token counts. Returns cached_tokens clamped to input_tokens.
@@ -885,7 +914,8 @@ BILLED_RATIO_LOW = 0.67
 
 def billed_vs_catalog(db_path: str, hours: int = 24) -> Optional[Dict[str, Any]]:
     """``{"calls", "billed_usd", "catalog_usd", "ratio"}`` over the last *hours*
-    of usage rows that carry both figures. ``calls == 0`` when none do; None
+    of usage rows that carry both figures. A figure the client computed from the catalog
+    (``billed_source: estimate``) is no bill, so it stays out. ``calls == 0`` when none do; None
     when the database cannot be read (an unreadable store is not an empty one).
     ``ratio`` is None when the catalog total is 0."""
     import sqlite3
@@ -899,6 +929,7 @@ def billed_vs_catalog(db_path: str, hours: int = 24) -> Optional[Dict[str, Any]]
                 "FROM usage_records WHERE resource_type = 'llm_call' "
                 "AND timestamp >= datetime('now', ?) "
                 "AND json_extract(metadata, '$.billed_cost_usd') IS NOT NULL "
+                "AND COALESCE(json_extract(metadata, '$.billed_source'), 'provider') != 'estimate' "
                 "AND json_extract(metadata, '$.estimated_cost_usd') IS NOT NULL",
                 (f"-{int(hours)} hours",)).fetchone()
         finally:

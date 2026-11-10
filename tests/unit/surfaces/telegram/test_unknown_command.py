@@ -110,7 +110,8 @@ async def test_start_gets_a_welcome_not_the_help_wall(tmp_path):
 # --- 030 WS-C4: grouped /help + /help <verb> --------------------------------
 
 @pytest.mark.asyncio
-async def test_help_is_grouped(tmp_path):
+async def test_help_is_grouped(tmp_path, monkeypatch):
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")   # the owner's /help (F-05)
     agent = _Agent(str(tmp_path))
     reply = await _handle_command(agent, _cmd("/help", "/help"), spawn=None)
     # D34: the sections ARE `core.verbs.GROUP_ORDER`, rendered — not a second
@@ -123,7 +124,8 @@ async def test_help_is_grouped(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_help_verb_returns_only_that_verb(tmp_path):
+async def test_help_verb_returns_only_that_verb(tmp_path, monkeypatch):
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")   # the owner's /help (F-05)
     agent = _Agent(str(tmp_path))
     reply = await _handle_command(agent, _cmd("/help", "/help goal"), spawn=None)
     assert "/goal" in reply
@@ -133,7 +135,8 @@ async def test_help_verb_returns_only_that_verb(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_help_unknown_verb_suggests(tmp_path):
+async def test_help_unknown_verb_suggests(tmp_path, monkeypatch):
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")   # the owner's /help (F-05)
     agent = _Agent(str(tmp_path))
     reply = await _handle_command(agent, _cmd("/help", "/help statsu"), spawn=None)
     assert "Unknown command" in reply and "/status" in reply

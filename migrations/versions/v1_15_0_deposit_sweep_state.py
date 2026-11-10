@@ -43,8 +43,10 @@ async def downgrade(db, db_manager):
 async def verify(db, db_manager):
     try:
         cols = await db.fetch_all("PRAGMA table_info(crypto_payments)")
-    except Exception:
-        cols = None
+    except Exception as exc:
+        # Unreadable is not absent: the gate fails rather than pass a store it never read.
+        logger.error("v1.15.0 verify: could not read crypto_payments: %s", exc)
+        return False
     if not cols:
         return True   # runtime-created by AuthTables on first use
     missing = {"sweep_state", "sweep_started_at", "sweep_escalated_at"} - {c["name"] for c in cols}

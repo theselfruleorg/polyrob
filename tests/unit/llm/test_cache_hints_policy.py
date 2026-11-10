@@ -1,4 +1,4 @@
-"""UP-08 Step 8.1 — per-provider cache-strategy seam + Gemini explicit gate."""
+"""UP-08 Step 8.1 — the per-provider cache-strategy seam."""
 import pytest
 
 from modules.llm import cache_hints
@@ -9,7 +9,7 @@ def test_provider_cache_strategy_table():
     assert cache_hints.provider_cache_strategy("openai") == "in_client"
     assert cache_hints.provider_cache_strategy("deepseek") == "automatic"
     assert cache_hints.provider_cache_strategy("nvidia") == "automatic"
-    assert cache_hints.provider_cache_strategy("gemini") == "explicit"
+    assert cache_hints.provider_cache_strategy("gemini") == "automatic"
     assert cache_hints.provider_cache_strategy("unknown-provider") == "none"
 
 
@@ -18,28 +18,6 @@ def test_provider_cache_strategy_openrouter_delegates(monkeypatch):
     assert cache_hints.provider_cache_strategy("openrouter", "anthropic/claude-3.5") == "breakpoints"
     # gpt via OpenRouter => automatic
     assert cache_hints.provider_cache_strategy("openrouter", "openai/gpt-4o") == "automatic"
-
-
-def test_gemini_explicit_disabled_by_default(monkeypatch):
-    monkeypatch.delenv("GEMINI_PROMPT_CACHE", raising=False)
-    assert cache_hints.gemini_explicit_cache_enabled() is False
-
-
-def test_gemini_explicit_enabled_with_flag(monkeypatch):
-    monkeypatch.setenv("GEMINI_PROMPT_CACHE", "true")
-    monkeypatch.delenv("LLM_PROMPT_CACHE", raising=False)
-    monkeypatch.delenv("ANTHROPIC_PROMPT_CACHE", raising=False)
-    assert cache_hints.gemini_explicit_cache_enabled() is True
-
-
-def test_gemini_explicit_off_when_global_kill(monkeypatch):
-    monkeypatch.setenv("GEMINI_PROMPT_CACHE", "true")
-    monkeypatch.setenv("LLM_PROMPT_CACHE", "0")
-    assert cache_hints.gemini_explicit_cache_enabled() is False
-
-
-def test_min_tokens_constant():
-    assert cache_hints.GEMINI_EXPLICIT_CACHE_MIN_TOKENS == 2048
 
 
 def test_tools_breakpoint_marks_last_when_on(monkeypatch):
@@ -66,3 +44,11 @@ def test_anthropic_transport_spec_rows_report_in_client():
     assert cache_hints.provider_cache_strategy("zai-coding") == "in_client"
     # Unknown providers (no spec row) still report none.
     assert cache_hints.provider_cache_strategy("unknown-provider") == "none"
+
+
+def test_the_gemini_explicit_cache_flags_are_retired():
+    from core.config_policy.retired_flags import RETIRED_FLAGS
+    from core.flags_catalog import CATALOG
+    names = {row[0] for row in CATALOG}
+    for flag in ("GEMINI_PROMPT_CACHE", "GEMINI_CACHE_TTL_MIN"):
+        assert flag in RETIRED_FLAGS and flag not in names

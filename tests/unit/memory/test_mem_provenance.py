@@ -5,7 +5,7 @@
 the local_vector provider's vector sidecar). Every new sync_turn write stamps
 (ts, kind, content_hash); recall renders a `[YYYY-MM-DD]` prefix for stamped
 rows and stays bare for legacy rows. Exact duplicates collapse at write: the
-existing row's ts is refreshed instead of inserting a twin (GEM revision
+existing row keeps its first date instead of inserting a twin (GEM revision
 semantics, cheapest form).
 """
 from __future__ import annotations
@@ -66,11 +66,11 @@ async def test_legacy_rows_render_bare(provider):
 @pytest.mark.asyncio
 async def test_exact_duplicate_collapses(provider):
     await provider.sync_turn("q", "the same finding", session_id="s1", user_id=USER)
-    first_ts = execute_retry(provider.db_path,
-                             "SELECT ts FROM mem_provenance", fetch="all")[0]["ts"]
-    # Force a visible refresh delta.
+    # Age the row, so a refresh would be visible.
     execute_retry(provider.db_path,
                   "UPDATE mem_provenance SET ts = ts - 1000")
+    first_ts = execute_retry(provider.db_path,
+                             "SELECT ts FROM mem_provenance", fetch="all")[0]["ts"]
     await provider.sync_turn("q", "the same finding", session_id="s2", user_id=USER)
     mem_rows = execute_retry(provider.db_path,
                              "SELECT content FROM memories", fetch="all")
@@ -78,7 +78,7 @@ async def test_exact_duplicate_collapses(provider):
                               "SELECT ts FROM mem_provenance", fetch="all")
     assert len(mem_rows) == 1
     assert len(prov_rows) == 1
-    assert abs(prov_rows[0]["ts"] - first_ts) < 60  # refreshed back to ~now
+    assert prov_rows[0]["ts"] == first_ts  # a repeated claim keeps its first date
 
 
 @pytest.mark.asyncio

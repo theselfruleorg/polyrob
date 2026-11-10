@@ -100,18 +100,38 @@ def test_missing_session_is_empty_list_no_error(monkeypatch, tmp_path):
     assert resp.json() == {"artifacts": [], "error": None}
 
 
-def test_no_session_id_is_a_refusal_never_an_empty_list(monkeypatch, tmp_path):
-    """043 A3: this ledger is SESSION-scoped, so a call without one is refused.
-
-    It used to answer ``{"artifacts": [], "error": None}`` — the sentence "this
-    produced nothing" — and Work › Apps, which calls it with no session id,
-    drew "Nothing built" over a tree full of real files.
-    """
+def test_no_session_id_lists_the_tenants_newest_files_across_chats(monkeypatch, tmp_path):
+    """113 W0: Work › Apps names no chat. The reader refused it as ``session-scoped``,
+    so the tab said "I could not read" on every install. It now lists the tenant's
+    newest files; an empty ledger is an honest empty list, and another tenant's
+    files never show."""
     _ledger_on(tmp_path, monkeypatch)
     client = _client(monkeypatch, posture="local")
     resp = client.get("/api/webgate/artifacts")
     assert resp.status_code == 200, resp.text
-    assert resp.json() == {"artifacts": None, "error": "session-scoped"}
+    assert resp.json() == {"artifacts": [], "truncated": False, "error": None}
+
+    from core.artifacts import get_artifact_ledger
+    from webview.webgate import local_owner_id
+    ledger = get_artifact_ledger()
+    mine, other = tmp_path / "report.md", tmp_path / "theirs.md"
+    mine.write_text("x")
+    other.write_text("y")
+    ledger.record(str(local_owner_id()), str(mine), session_id="s1")
+    ledger.record("u_someone_else", str(other), session_id="s9")
+    body = client.get("/api/webgate/artifacts").json()
+    assert [(a["name"], a["session_id"], a["path"]) for a in body["artifacts"]] == [
+        ("report.md", "s1", None)]
+
+
+def test_an_unreadable_ledger_is_named_for_the_tenant_wide_list(monkeypatch, tmp_path):
+    _ledger_on(tmp_path, monkeypatch)
+    client = _client(monkeypatch, posture="local")
+
+    def _boom():
+        raise RuntimeError("db")
+    monkeypatch.setattr("core.artifacts.get_artifact_ledger", _boom)
+    assert client.get("/api/webgate/artifacts").json() == {"artifacts": None, "error": "unreadable"}
 
 
 def test_router_exposes_the_artifacts_path():

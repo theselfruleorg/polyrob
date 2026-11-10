@@ -1,4 +1,4 @@
-"""103 D3: a short rule from the owner's own turn applies at once, and only then."""
+"""103 D3: what the owner says in a clean turn applies at once, and only then."""
 from types import SimpleNamespace
 
 import pytest
@@ -26,14 +26,14 @@ def genuine(monkeypatch):
 
 
 def test_a_clean_owner_turn_applies_at_once(genuine):
-	assert D._owner_rule_applies_now(_controller(HumanMessage(content="stop asking")), _params(), object())
+	assert D._owner_doc_applies_now(_controller(HumanMessage(content="stop asking")), _params(), object())
 
 
 def test_external_tool_output_since_the_owners_message_makes_a_draft(genuine):
 	from modules.llm.messages import ToolMessage
 	tool = ToolMessage(content='<untrusted_tool_result source="web">x</untrusted_tool_result>',
 	                   tool_call_id="c1")
-	assert not D._owner_rule_applies_now(
+	assert not D._owner_doc_applies_now(
 		_controller(HumanMessage(content="stop asking"), tool), _params(), object())
 
 
@@ -41,23 +41,18 @@ def test_external_output_before_the_owners_message_does_not_count(genuine):
 	from modules.llm.messages import ToolMessage
 	tool = ToolMessage(content='<untrusted_tool_result source="web">x</untrusted_tool_result>',
 	                   tool_call_id="c1")
-	assert D._owner_rule_applies_now(
+	assert D._owner_doc_applies_now(
 		_controller(tool, HumanMessage(content="stop asking")), _params(), object())
 
 
 def test_unreadable_history_makes_a_draft(genuine):
-	assert not D._owner_rule_applies_now(SimpleNamespace(orchestrator=None), _params(), object())
+	assert not D._owner_doc_applies_now(SimpleNamespace(orchestrator=None), _params(), object())
 
 
-def test_a_whole_document_rewrite_is_always_a_draft(genuine):
-	assert not D._owner_rule_applies_now(
-		_controller(HumanMessage(content="x")), _params(action="update"), object())
-
-
-def test_a_long_rule_is_a_draft(genuine):
-	assert not D._owner_rule_applies_now(
-		_controller(HumanMessage(content="x")),
-		_params(new="y" * (D.OWNER_RULE_NOW_MAX_CHARS + 1)), object())
+def test_a_whole_document_or_a_long_rule_applies_on_a_clean_turn(genuine):
+	ctl = _controller(HumanMessage(content="x"))
+	assert D._owner_doc_applies_now(ctl, _params(action="update"), object())
+	assert D._owner_doc_applies_now(ctl, _params(new="y" * 5000), object())
 
 
 def test_a_forged_or_tainted_turn_is_a_draft(monkeypatch):
@@ -66,10 +61,10 @@ def test_a_forged_or_tainted_turn_is_a_draft(monkeypatch):
 	ctl = _controller(HumanMessage(content="x"))
 	monkeypatch.setattr(O, "is_genuine_owner_turn", lambda *a, **k: False)
 	monkeypatch.setattr(T, "turn_tainted", lambda *a, **k: False)
-	assert not D._owner_rule_applies_now(ctl, _params(), object())
+	assert not D._owner_doc_applies_now(ctl, _params(), object())
 	monkeypatch.setattr(O, "is_genuine_owner_turn", lambda *a, **k: True)
 	monkeypatch.setattr(T, "turn_tainted", lambda *a, **k: True)
-	assert not D._owner_rule_applies_now(ctl, _params(), object())
+	assert not D._owner_doc_applies_now(ctl, _params(), object())
 
 
 def test_a_runtime_note_is_not_the_owners_message(genuine):
@@ -77,7 +72,7 @@ def test_a_runtime_note_is_not_the_owners_message(genuine):
 	tool = ToolMessage(content='<untrusted_tool_result source="web">x</untrusted_tool_result>',
 	                   tool_call_id="c1")
 	note = make_control_message("a nudge", MessageOrigin.SYSTEM_NOTE)
-	assert not D._owner_rule_applies_now(
+	assert not D._owner_doc_applies_now(
 		_controller(HumanMessage(content="x"), tool, note), _params(), object())
 
 
@@ -127,21 +122,12 @@ def test_a_rule_only_the_draft_holds_is_edited_in_the_draft(writer):
 
 def test_the_owner_undoes_the_rule_with_no_tap_and_its_text_is_kept(genuine, writer):
 	params = _patch("- rule A", "")
-	assert D._owner_rule_applies_now(_controller(HumanMessage(content="undo it")), params, object())
+	assert D._owner_doc_applies_now(_controller(HumanMessage(content="undo it")), params, object())
 	res, _, now = D._write_owner_rule(writer, params, user_id="u1", created_by="agent", now=True)
 	assert res.ok and not res.pending and now
 	active = writer.read_active("u1")
 	editable, superseded = active.split("## Superseded")
 	assert "rule A" not in editable and "rule A" in superseded
-
-
-@pytest.mark.parametrize("params", [
-	SimpleNamespace(action="patch", old_string="x" * (D.OWNER_RULE_NOW_MAX_CHARS + 1), new_string="y"),
-	SimpleNamespace(action="patch", old_string="", new_string="y"),
-	SimpleNamespace(action="patch", old_string="x", new_string="y", replace_all=True),
-])
-def test_a_wide_edit_is_a_draft(genuine, params):
-	assert not D._owner_rule_applies_now(_controller(HumanMessage(content="x")), params, object())
 
 
 def test_an_untrusted_result_in_any_agent_of_the_session_makes_a_draft(genuine):
@@ -151,25 +137,25 @@ def test_an_untrusted_result_in_any_agent_of_the_session_makes_a_draft(genuine):
 	first = _controller(HumanMessage(content="x")).orchestrator.agents["a"]
 	second = _controller(HumanMessage(content="x"), tool).orchestrator.agents["a"]
 	ctl = SimpleNamespace(orchestrator=SimpleNamespace(agents={"a": first, "b": second}))
-	assert not D._owner_rule_applies_now(ctl, _params(), object())
+	assert not D._owner_doc_applies_now(ctl, _params(), object())
 
 
 def test_a_result_that_compaction_removed_still_makes_a_draft(genuine):
 	controller = _controller(HumanMessage(content="stop asking"))
 	controller.orchestrator.agents["a"].message_manager._untrusted_since_owner = True
-	assert not D._owner_rule_applies_now(controller, _params(), object())
+	assert not D._owner_doc_applies_now(controller, _params(), object())
 
 
 def test_a_page_the_session_used_makes_a_draft(genuine):
 	controller = _controller(HumanMessage(content="stop asking"))
 	controller.orchestrator.agents["a"]._browser_page_used = True
-	assert not D._owner_rule_applies_now(controller, _params(), object())
+	assert not D._owner_doc_applies_now(controller, _params(), object())
 
 
 def test_the_first_message_of_a_session_applies_at_once(genuine):
 	controller = _controller()
 	controller.orchestrator.agents["a"].message_manager._initial_task_message = object()
-	assert D._owner_rule_applies_now(controller, _params(), object())
+	assert D._owner_doc_applies_now(controller, _params(), object())
 
 
 def test_the_latch_is_set_on_add_and_cleared_by_the_owner_drain():
@@ -185,3 +171,9 @@ def test_the_latch_is_set_on_add_and_cleared_by_the_owner_drain():
 	                       _clear_correspondent_taint=lambda: None)
 	_update_forged_turn_marker(orch, [{"kind": "comment", "text": "hi", "metadata": {"typed_text": "hi"}}])
 	assert manager._untrusted_since_owner is False
+
+
+def test_the_owner_turn_is_not_clean_on_a_standing_job(monkeypatch):
+	import core.security.owner_turn as O
+	monkeypatch.setattr(O, "is_owner_standing_run", lambda ctx: True)
+	assert not D._owner_turn_is_clean(_controller(HumanMessage(content="x")), object())

@@ -82,6 +82,30 @@ def _sse_data(payload: dict) -> str:
 #: parsers; they stop client/proxy idle timeouts on long agent turns.
 STREAM_KEEPALIVE_SEC = 15.0
 
+#: Seconds between client-disconnect checks while a NON-streamed turn runs.
+DISCONNECT_POLL_SEC = 1.0
+
+
+async def _run_until_disconnect(request: Request, run):
+    """Await ``run()`` unless the client goes away first; then cancel the turn.
+
+    A non-streamed turn used to keep running (and reserving credits) after the
+    caller had closed the connection; the streamed path already cancels."""
+    task = asyncio.create_task(run())
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=DISCONNECT_POLL_SEC)
+            if done:
+                return task.result()
+            if await request.is_disconnected():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                logger.info("openai-compat: client disconnected; the turn was cancelled")
+                raise HTTPException(status_code=499, detail="client closed the request")
+    except asyncio.CancelledError:
+        task.cancel()
+        raise
+
 
 async def _stream_chat_completion(*, chat_id: str, created: int, model: str, reply: str,
                                   usage: dict = None):
@@ -272,7 +296,7 @@ async def chat_completions(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    reply = await _run_chat()
+    reply = await _run_until_disconnect(request, _run_chat)
     # Use actual token counts when available, with fallback to estimation
     prompt_tokens = _estimate_tokens(text, model=body.model)
     completion_tokens = _estimate_tokens(reply, model=body.model)

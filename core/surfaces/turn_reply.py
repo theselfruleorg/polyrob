@@ -38,6 +38,11 @@ _TEXT_ATTR = "_reply_text_this_turn"
 _TEXTS_ATTR = "_reply_texts_this_turn"
 _TEXTS_KEEP = 20
 
+#: Near matches this turn refused once. The same text sent again is deliberate and goes out:
+#: prod 2026-11-07, two versions of one post scored 0.878, the second never reached the
+#: owner, and the model spent four calls on reasoning alone before it replied.
+_NEAR_REFUSED_ATTR = "_near_repeats_refused_this_turn"
+
 
 def mark_reply_published(orchestrator, text: str = "") -> None:
     """Record what this turn said to the user.
@@ -84,11 +89,13 @@ def last_reply_text(orchestrator):
 
 
 def is_repeat_reply(orchestrator, text: str) -> bool:
-    """Did this turn already say exactly ``text`` to the user?
+    """Did this turn already say ``text``, or a text almost the same, to the user?
 
     Prod 2026-10-06: the model re-sent an identical reply one step after the
     first was delivered, and the owner got it twice. ``send_message`` asks this
-    before publishing. Fail-open to False — a fault never swallows a message.
+    before publishing. An identical text is always a repeat. A near match is refused
+    once, and the same text sent again passes (a second version the user asked for).
+    Fail-open to False — a fault never swallows a message.
     """
     try:
         if not isinstance(text, str) or not text.strip():
@@ -102,16 +109,20 @@ def is_repeat_reply(orchestrator, text: str) -> bool:
         if last is not None and last not in priors:
             priors.append(last)
         b = text.strip()
-        for prior in priors:
-            a = prior.strip()
-            if a == b:
+        stripped = [prior.strip() for prior in priors]
+        if b in stripped:
+            return True
+        # 13:32:57 / 13:33:01 the same day: a re-send with a few words reworded
+        # reached the owner twice too. Long, near-identical text is refused once.
+        from difflib import SequenceMatcher
+        for a in stripped:
+            if (min(len(a), len(b)) >= _NEAR_MIN_CHARS
+                    and SequenceMatcher(None, a, b).ratio() >= _NEAR_RATIO):
+                refused = list(getattr(orchestrator, _NEAR_REFUSED_ATTR, None) or [])
+                if b in refused:
+                    return False
+                setattr(orchestrator, _NEAR_REFUSED_ATTR, (refused + [b])[-_TEXTS_KEEP:])
                 return True
-            # 13:32:57 / 13:33:01 the same day: a re-send with a few words reworded
-            # reached the owner twice too. Long, near-identical text is the same message.
-            if min(len(a), len(b)) >= _NEAR_MIN_CHARS:
-                from difflib import SequenceMatcher
-                if SequenceMatcher(None, a, b).ratio() >= _NEAR_RATIO:
-                    return True
         return False
     except Exception:
         return False
@@ -120,9 +131,10 @@ def is_repeat_reply(orchestrator, text: str) -> bool:
 #: What ``send_message`` tells the agent instead of re-sending. It does NOT say
 #: "call done()": a repeat can come mid-task (two identical timeout notices from
 #: ``llm_runner``), and ending the turn there drops the owner's request.
-REPEAT_REPLY_NOTE = ("Not re-sent: the user already has this exact message from this turn. "
-                     "Do not send it again. Continue the task; call done() only if the work "
-                     "is finished.")
+REPEAT_REPLY_NOTE = ("Not sent: this turn already sent this text or a text almost the same. "
+                     "If this is a different version the user asked for, call send_message "
+                     "with the same text once more and it goes out. If not, do not send it "
+                     "again. Continue the task; call done() only if the work is finished.")
 
 #: A reply this long that matches the turn's earlier reply this closely is a re-send.
 _NEAR_MIN_CHARS = 80
@@ -165,7 +177,7 @@ def reset_turn(orchestrator) -> None:
     if orchestrator is None:
         return
     try:
-        for attr in (_TEXT_ATTR, _TEXTS_ATTR):
+        for attr in (_TEXT_ATTR, _TEXTS_ATTR, _NEAR_REFUSED_ATTR):
             if hasattr(orchestrator, attr):
                 delattr(orchestrator, attr)
     except Exception:

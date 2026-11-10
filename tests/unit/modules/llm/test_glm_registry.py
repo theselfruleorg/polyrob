@@ -31,8 +31,8 @@ def test_glm_5_registered():
     assert cfg is not None and cfg.name == "z-ai/glm-5"
     assert cfg.provider == ModelProvider.OPENROUTER
     assert cfg.context_window == 202752
-    assert cfg.pricing.input_price == 0.60
-    assert cfg.pricing.output_price == 1.92
+    assert cfg.pricing.input_price == 1.0
+    assert cfg.pricing.output_price == 3.2
     assert cfg.capabilities.supports_function_calling is True
     assert cfg.capabilities.supports_vision is False
     assert get_model_config("glm-5").name == "z-ai/glm-5"

@@ -1,16 +1,16 @@
-"""What a stored compaction summary must be: complete, bounded, honest about a gap (103).
+"""What a stored compaction summary must be: complete, bounded, honest about a gap.
 
-Prod 2026-11-04: the summariser was told to "drop nothing", the summary grew to the
-output cap, and from then on every summary lost its later sections. Nothing noticed,
-and each compaction built on the damaged one. A payment left the agent's history
-21 minutes after the agent reported it.
+A summary that grows to the output cap loses its later sections, and each compaction builds
+on the damaged one, so an answer that is not complete is never stored as a good summary.
 
-The completeness check reads the answer, not ``finish_reason``: the client is shared,
-so its ``last_response`` can belong to another task's call. A cut answer cannot end
-with the end line. Pure functions: no I/O, no LLM.
+The completeness check reads the call's own facts and the answer's end line: the provider can
+say that it cut the answer, and a model can stop early with no such signal. Pure functions:
+no I/O, no LLM.
 """
 import re
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
+
+from modules.llm.call_result import CallFacts, output_was_truncated
 
 END_LINE = "## End of summary"
 #: The size the prompt asks for. Output is the latency cost of a compaction.
@@ -23,6 +23,16 @@ RETRY_SECTION_MAX_CHARS = 1000
 OLDER_CUT_LINE = "[older items cut to fit the summary size]"
 #: The ``core.credential_verdicts`` kind /status shows while summaries are being salvaged.
 VERDICT_KIND = "compaction_summary"
+#: The anchor block beside the ledger (``compaction_safety``): the values it holds, their
+#: summed size, and what one tool result may add. Each compaction merges the last block
+#: within these caps, so re-extraction cannot grow it.
+ANCHORS_MAX_COUNT = 60
+ANCHORS_MAX_CHARS = 3000
+ANCHORS_PER_RESULT = 12
+#: The part of one tool result the extraction reads, head + tail.
+ANCHORS_SCAN_CHARS = 40_000
+#: The summary an episode keeps, as JSON characters. The run record's meta budget is 3200.
+EPISODE_SUMMARY_MAX_CHARS = 1200
 
 #: Every section but the owner's, which the rebuild lifts out on its own.
 REQUIRED_SECTIONS: Tuple[str, ...] = (
@@ -63,8 +73,10 @@ def _join(preamble: str, sections: List[Tuple[str, str]]) -> str:
 	return "\n\n".join(parts).strip()
 
 
-def is_complete(text: str) -> bool:
-	"""True when the answer reached its end line. A cut answer cannot."""
+def is_complete(text: str, facts: Optional[CallFacts] = None) -> bool:
+	"""True when the answer reached its end line and its call's *facts* do not say cut."""
+	if output_was_truncated(facts):
+		return False
 	lines = [line.strip() for line in (text or "").strip().splitlines()]
 	return bool(lines) and lines[-1] == END_LINE
 

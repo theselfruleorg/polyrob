@@ -3,20 +3,14 @@
 This module provides adapters to convert our custom LLM clients into
 a consistent interface for use with the agents system.
 
-REFACTORED (Nov 25, 2025):
-- Consolidated vision support detection to use model_registry as single source of truth
-- Added provider-specific image format conversion (Anthropic requires different format)
-- Removed redundant keyword-based model detection
-
-REFACTORED (Dec 12, 2025):
-- Removed third-party agent-framework dependency (now fully native)
-- Now uses native message types from modules.llm.messages
+- Vision support detection uses model_registry as the single source of truth.
+- Image format conversion is provider-specific (Anthropic requires a different format).
+- Uses native message types from modules.llm.messages.
 """
 
 import logging
-import asyncio
 import os
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 from abc import ABC, abstractmethod
 
 # Native message types
@@ -26,8 +20,8 @@ from modules.llm.messages import (
 )
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
-# WS revalidation (2026-07-16): the four provider-client imports are TYPE_CHECKING-only.
-# They were the eager chain pulling the anthropic/openai/google.generativeai SDKs into
+# The four provider-client imports are TYPE_CHECKING-only.
+# An eager import would pull the anthropic/openai/google.generativeai SDKs into
 # EVERY entry-point import (cli.polyrob, api.app) via agents.task.agent -> service ->
 # adapters — the client classes are used here only as __init__ annotations; the real
 # instances are constructed by llm_factory, which imports the client modules lazily.
@@ -41,10 +35,28 @@ from modules.llm.llm_client import LLMClient, translate_llm_error
 from modules.llm.model_registry import get_model_config
 from modules.llm.retry_log import log_attempt_classified
 from modules.llm.init_gate import note_call_error
+from core.exceptions import LLMError, LLMInvalidRequestError, LLMPermanentError, LLMRefusalError
+from modules.llm.call_scope import begin_call
+from modules.llm.call_result import NATIVE_DEEPSEEK_SEAT, REASONING_SEAT_KEY, call_facts
+
+
+class _StreamEndedEarly(LLMError):
+    """The provider's stream closed with no final event."""
+
+
+def _is_stream_specific(error: BaseException) -> bool:
+    """Only the stream itself failed, so a batch call can still answer: it closed early,
+    or the provider refused the request FOR streaming. A 429 or a 5xx is not this: a second
+    call at once would pay for the same failure."""
+    if isinstance(error, _StreamEndedEarly):
+        return True
+    return (isinstance(error, (LLMInvalidRequestError, LLMPermanentError))
+            and not isinstance(error, LLMRefusalError)
+            and "stream" in str(error).lower())
 
 
 def think_scrubber_enabled() -> bool:
-    """UP-07 gate for the reasoning-block scrubber. Default ON, fail-open.
+    """Gate for the reasoning-block scrubber. Default ON, fail-open.
 
     Disable with THINK_SCRUBBER_ENABLED in {0, false, no, off}. Mirrors
     cache_hints.prompt_cache_enabled() semantics.
@@ -53,16 +65,16 @@ def think_scrubber_enabled() -> bool:
 
 
 def token_streaming_enabled() -> bool:
-    """019 P5 gate for TRUE per-token streaming.
+    """Gate for TRUE per-token streaming.
 
     When ON and the wrapped client implements ``astream_agent_response``,
-    ``LLMClientAdapter.astream`` yields real deltas instead of the legacy
-    single full-response chunk.
+    ``LLMClientAdapter.astream`` yields real deltas instead of one
+    full-response chunk.
 
-    030 WS-D5 (Q3): default ON under the local interactive profile
+    Default ON under the local interactive profile
     (``POLYROB_LOCAL``) — a 60-second turn showing only a spinner was the
     default experience while the whole streaming pipeline sat unreachable.
-    Server default stays OFF (byte-identical); an explicit env value wins.
+    Server default stays OFF; an explicit env value wins.
     """
     raw = os.getenv("LLM_TOKEN_STREAMING")
     if raw is not None and raw.strip() != "":
@@ -73,22 +85,6 @@ def token_streaming_enabled() -> bool:
         return bool(local_mode_enabled())
     except Exception:
         return False
-
-
-def _client_provider_label(client) -> str:
-    """Human label for the provider behind an LLM client, for error framing.
-
-    Prefers the spec name (a providers.yaml row's own name), then the client's
-    ``_PROVIDER_LABEL``, then the class name — so a z.ai row's failures say
-    "from zai-coding", never "from AnthropicCompatClient" (Q12).
-    """
-    spec_name = getattr(getattr(client, "_spec", None), "name", None)
-    if spec_name:
-        return spec_name
-    label = getattr(client, "_PROVIDER_LABEL", None)
-    if label:
-        return label
-    return type(client).__name__
 
 
 class BaseChatModel(BaseModel, ABC):
@@ -104,11 +100,6 @@ class BaseChatModel(BaseModel, ABC):
     @abstractmethod
     async def _agenerate(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, **kwargs) -> ChatResult:
         """Generate a response asynchronously."""
-        pass
-
-    @abstractmethod
-    def _generate(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, **kwargs) -> ChatResult:
-        """Generate a response synchronously."""
         pass
 
     @property
@@ -131,34 +122,16 @@ class BaseChatModel(BaseModel, ABC):
             return result.generations[0].message
         return AIMessage(content="")
 
-    def invoke(self, input, config=None, *, stop=None, **kwargs) -> AIMessage:
-        """Invoke the model synchronously."""
-        if isinstance(input, list):
-            messages = input
-        elif hasattr(input, 'to_messages'):
-            messages = input.to_messages()
-        else:
-            messages = [HumanMessage(content=str(input))]
-
-        result = self._generate(messages, stop=stop, **kwargs)
-        if result.generations:
-            return result.generations[0].message
-        return AIMessage(content="")
-
 
 class LLMClientAdapter(BaseChatModel):
-    """Base adapter class for converting our LLM clients to a consistent interface.
-
-    Native LLM-client adapter.
-    The old name is preserved as an alias for backward compatibility.
-    """
+    """Base adapter class for converting our LLM clients to a consistent interface."""
 
     # Use Pydantic's PrivateAttr for client to avoid validation issues
     _client: LLMClient = PrivateAttr(default=None)
     _logger: logging.Logger = PrivateAttr(default=None)
     # Cached vision-support flag (lazily filled by _get_vision_support). MUST be a
     # declared PrivateAttr — Pydantic v2 raises AttributeError on an undeclared
-    # private attr, which previously crashed the first multimodal request.
+    # private attr, which crashes the first multimodal request.
     _supports_vision_cached: Optional[bool] = PrivateAttr(default=None)
     # Configured generation defaults from create_chat_model. These MUST be captured
     # here: they arrive as constructor kwargs but BaseChatModel declares no such
@@ -184,7 +157,7 @@ class LLMClientAdapter(BaseChatModel):
         default_max_tokens = kwargs.pop("max_tokens", None)
 
         # Set model_name before calling super().__init__ so Pydantic can validate it
-        # FIXED: Only use client.model_type as fallback if model_name not already provided
+        # Only use client.model_type as fallback if model_name not already provided
         # This allows webview model selection to work - don't overwrite the passed model_name!
         if "model_name" not in kwargs:
             kwargs["model_name"] = getattr(client, "model_type", "unknown")
@@ -197,7 +170,7 @@ class LLMClientAdapter(BaseChatModel):
         self._logger = logging.getLogger(f"{self.__class__.__name__}")
 
     def _scrub_content(self, content):
-        """Strip leaked reasoning blocks from assistant text (UP-07).
+        """Strip leaked reasoning blocks from assistant text.
 
         The single provider-agnostic seam: every provider's content passes through here
         before becoming an AIMessage, so a leaked <think>/<reasoning>/... block never
@@ -245,8 +218,7 @@ class LLMClientAdapter(BaseChatModel):
     def _get_vision_support(self) -> bool:
         """Get vision support from model_registry (single source of truth).
         
-        REFACTORED (Nov 25, 2025): Removed redundant keyword matching.
-        Now uses model_registry.get_model_config() as the canonical source.
+        Uses model_registry.get_model_config() as the canonical source.
         
         Falls back to client.supports_vision attribute if registry lookup fails.
         
@@ -257,17 +229,12 @@ class LLMClientAdapter(BaseChatModel):
         if self._supports_vision_cached is not None:
             return self._supports_vision_cached
         
-        # Try model registry first (canonical source)
         model_type = getattr(self._client, 'model_type', None)
         if model_type:
-            model_config = get_model_config(model_type)
-            if model_config and hasattr(model_config, 'capabilities'):
-                self._supports_vision_cached = model_config.capabilities.supports_vision
-                self._logger.debug(
-                    f"Vision support from registry: {model_type} -> {self._supports_vision_cached}"
-                )
-                return self._supports_vision_cached
-        
+            self._supports_vision_cached = get_model_config(model_type).capabilities.supports_vision
+            self._logger.debug(f"Vision support from registry: {model_type} -> {self._supports_vision_cached}")
+            return self._supports_vision_cached
+
         # Fallback to client attribute (set by individual clients from registry)
         supports_vision = getattr(self._client, 'supports_vision', False)
         self._supports_vision_cached = supports_vision
@@ -312,9 +279,11 @@ class LLMClientAdapter(BaseChatModel):
             # Handle text vs. multimodal content for non-tool messages
             if isinstance(msg.content, str):
                 client_messages.append({"role": role, "content": msg.content})
+                if isinstance(msg, AIMessage):
+                    self._replay_reasoning(msg, client_messages[-1])
             elif isinstance(msg.content, list):
-                # T-05: Preserve multimodal content for vision-capable models
-                # REFACTORED (Nov 25, 2025): Use model_registry as single source of truth
+                # Preserve multimodal content for vision-capable models
+                # Use model_registry as single source of truth
                 # instead of redundant keyword matching
                 supports_vision = self._get_vision_support()
 
@@ -357,26 +326,18 @@ class LLMClientAdapter(BaseChatModel):
                             processed_content.append("[IMAGE]")
 
                     client_messages.append({"role": role, "content": " ".join(processed_content)})
-                
+                if isinstance(msg, AIMessage):
+                    self._replay_reasoning(msg, client_messages[-1])
+
         return client_messages
     
-    def _stamp_reasoning(self, ai_message) -> None:
-        """Keep the call's ``reasoning_content`` on its OWN message (read right after the
-        await, like the response id) for clients that replay it."""
-        if not getattr(self._client, 'ROUND_TRIP_REASONING', False):
-            return
-        try:
-            reasoning = self._client.last_response.choices[0].message.reasoning_content
-        except (AttributeError, IndexError, TypeError):
-            return
-        if isinstance(reasoning, str) and reasoning:
-            ai_message.additional_kwargs['reasoning_content'] = reasoning
+    def _stamp_reasoning(self, ai_message, raw_response) -> None:
+        """Keep what the seat's API needs back on the call's OWN message. Default: nothing.
+        A seat that needs it overrides this (``AnthropicAdapter``, ``DeepSeekAdapter``)."""
 
     def _replay_reasoning(self, msg, client_msg: Dict[str, Any]) -> None:
-        """DeepSeek: every assistant turn replays ``reasoning_content`` (empty if none: else 400)."""
-        reasoning = (getattr(msg, 'additional_kwargs', None) or {}).get('reasoning_content')
-        if getattr(self._client, 'ROUND_TRIP_REASONING', False):
-            client_msg['reasoning_content'] = reasoning if isinstance(reasoning, str) else ""
+        """Put the stored reasoning on an outgoing assistant message. Default: nothing.
+        Prod 2026-11-07: an OpenRouter replay fed a loop of one repeated word up to the cap."""
 
     def _build_generation_params(self, stop: Optional[List[str]], kwargs: dict) -> dict:
         """Assemble per-call generation params (shared by _agenerate + _astream_true).
@@ -414,10 +375,19 @@ class LLMClientAdapter(BaseChatModel):
         if stop:
             generation_params["stop_sequences"] = stop
 
+        # A choice needs a tools[] on the wire, and an empty one is a 400 on OpenAI.
+        if kwargs.get("tool_choice") is not None and kwargs.get("tools"):
+            generation_params["tool_choice"] = self._wire_tool_choice(kwargs["tool_choice"])
+
         if metadata:
             generation_params["metadata"] = metadata
         from modules.llm.billing_guard import billed_generation_params
         return billed_generation_params(self, generation_params)
+
+    @staticmethod
+    def _wire_tool_choice(choice: Any) -> Any:
+        """``auto``/``required``/``none`` in this provider's wire shape."""
+        return choice
 
     @staticmethod
     def _usage_metadata_from(usage_data: Optional[dict]) -> Optional[dict]:
@@ -433,21 +403,21 @@ class LLMClientAdapter(BaseChatModel):
         # Add cached tokens if present
         if usage_data.get('cached_tokens'):
             usage_metadata['cache_read_input_tokens'] = usage_data.get('cached_tokens')
-        # G3: cache-WRITE (creation) tokens, billed at a surcharge downstream
+        # Cache-WRITE (creation) tokens, billed at a surcharge downstream
         if usage_data.get('cache_creation_tokens'):
             usage_metadata['cache_creation_input_tokens'] = usage_data.get('cache_creation_tokens')
-        # F4: the 1h-window slice of that write (Anthropic 2.0x)
+        # The 1h-window slice of that write (Anthropic 2.0x)
         if usage_data.get('cache_creation_1h_tokens'):
             usage_metadata['cache_creation_1h_tokens'] = usage_data.get('cache_creation_1h_tokens')
-        # F23: what the provider actually billed. None means "not reported" (keep
+        # What the provider actually billed. None means "not reported" (keep
         # the estimate); 0.0 is a real free call, so test against None, not falsy.
-        for key in ('billed_cost_usd', 'cache_discount_usd'):
+        for key in ('billed_cost_usd', 'billed_source', 'cache_discount_usd'):
             if usage_data.get(key) is not None:
                 usage_metadata[key] = usage_data[key]
         return usage_metadata
 
     def _plain_call_usage(self) -> Optional[dict]:
-        """No-tools path usage from the client's last response (A-4); None if unknown."""
+        """No-tools path usage from the client's last response; None if unknown."""
         extract = getattr(self._client, '_extract_usage_data', None)
         if not callable(extract):
             return None
@@ -459,284 +429,106 @@ class LLMClientAdapter(BaseChatModel):
             return None
         return usage
 
-    async def _agenerate(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, **kwargs) -> ChatResult:
-        """Generate a response asynchronously.
-
-        Args:
-            messages: List of messages
-            stop: Optional stop sequences
-            kwargs: Additional parameters for generation
-
-        Returns:
-            ChatResult with generations
-        """
-        from modules.llm.billing_guard import check_adapter
-        check_adapter(self)
-        import time
-        start_time = time.time()
-
-        self._logger.debug(f"_agenerate called:")
-        self._logger.debug(f"  Model type: {self._client.model_type}")
-        self._logger.debug(f"  Messages count: {len(messages)}")
-        self._logger.debug(f"  Message types: {[type(m).__name__ for m in messages]}")
-        self._logger.debug(f"  Has stop sequences: {bool(stop)}")
-        self._logger.debug(f"  Has tools: {'tools' in kwargs}")
+    def _resolve_tools(self, kwargs: dict) -> Any:
+        """The call's tools. An EXPLICIT ``tools`` key is authoritative: ``tools=None`` /
+        ``tools=[]`` means "no tools" and must NOT inherit the last step's set. The stored
+        set serves only a retry path that re-calls with no key; the next tool-less aux call
+        (compaction, reflection, the judge) must never go out with the step's toolset."""
         if 'tools' in kwargs:
-            tools = kwargs.get('tools', [])
-            self._logger.debug(f"  Tool count: {len(tools) if tools else 0}")
-            if tools:
-                # Log first few tool names - ensure tools is a list for safe slicing
-                tool_names = []
-                tools_list = list(tools) if not isinstance(tools, list) else tools
-                for t in tools_list[:5]:
-                    if isinstance(t, dict) and 'function' in t:
-                        tool_names.append(t['function'].get('name', 'unknown'))
-                    else:
-                        tool_names.append(str(t)[:20])
-                self._logger.debug(f"  Tool names (first 5): {tool_names}")
-
-        self._logger.debug(f"Generating response with base model {self._client.model_type}")
-
-        # Convert to client-compatible format
-        self._logger.debug(f"Converting {len(messages)} messages to client format")
-        client_messages = self._convert_to_client_messages(messages)
-        self._logger.debug(f"Converted to {len(client_messages)} client messages")
-
-        generation_params = self._build_generation_params(stop, kwargs)
-
-        # Check if tools are provided - with fallback to _pending_tools
-        # CRITICAL FIX (Dec 2025): the adapter's internal routing may bypass our
-        # ainvoke override and call _agenerate directly without kwargs.
-        # The _pending_tools fallback ensures tools are available in all cases.
-        #
-        # An EXPLICIT `tools` key is authoritative (2026-09-20): `tools=None` /
-        # `tools=[]` means "no tools" and must NOT inherit the last step's set.
-        # The fallback fires only when the key is ABSENT (the retry paths that
-        # re-call without kwargs). Before this, the main path never consumed the
-        # fallback, so it stayed armed and the next tool-less aux call on the
-        # same adapter — compaction, reflection, the judge — went out with the
-        # whole step toolset attached (176 schemas, 225 s, prod 19:55Z).
-        tools = kwargs.get('tools')
-        if 'tools' not in kwargs and hasattr(self, '_pending_tools') and self._pending_tools:
-            tools = self._pending_tools
-            self._logger.info(f"[TOOLS_FIX] Retrieved {len(tools)} tools from _pending_tools fallback")
-            # Clear after use to prevent stale data
+            return kwargs['tools']
+        tools = getattr(self, '_pending_tools', None)
+        if tools:
             self._pending_tools = None
-        
-        self._logger.info(f"[DEBUG_TOOLS] Adapter extracted tools from kwargs: {len(tools) if tools else 0}")
-        self._logger.info(f"[DEBUG_TOOLS] Client has generate_agent_response: {hasattr(self._client, 'generate_agent_response')}")
+        return tools
 
+    async def _reserve_call(self) -> Optional[str]:
         from core.billing_context import reserve_billed_call
         from modules.llm.aux_metering import _llm_identity
-        reservation_id = await reserve_billed_call(*_llm_identity(self))
-        # Generate response. An exception/cancellation retains the reservation:
-        # an absent response is not evidence that the provider did no work.
+        return await reserve_billed_call(*_llm_identity(self))
+
+    def _finish_call(self, content: str, tool_calls: Optional[list], usage_metadata: Optional[dict],
+                     raw_response: Any, response_id: Optional[str], request: Any,
+                     reservation_id: Optional[str], kwargs: dict) -> AIMessage:
+        """The ONE post-call path of batch and stream: the call's own message and facts.
+
+        Runs in the tick the client returned or yielded its final event, with no await
+        since. Every consumer reads this message, because the client serves other tasks.
+        """
+        message = AIMessage(content=content, usage_metadata=usage_metadata)
+        if tool_calls:
+            message.tool_calls = tool_calls
+        self._stamp_reasoning(message, raw_response)
+        message.call_facts = call_facts(raw_response, usage_metadata, request)
+        if response_id is None and raw_response is not None:
+            response_id = (raw_response.get('id') if isinstance(raw_response, dict)
+                           else getattr(raw_response, 'id', None))
+        if isinstance(response_id, str) and response_id:
+            message._polyrob_provider_response_id = response_id
+        if reservation_id:
+            message._polyrob_billing_reservation_id = reservation_id
+        # The call SUCCEEDED, so no retry path needs the stored set. A failure raises
+        # before this line and leaves it armed for the retry.
+        if kwargs.get('tools') and getattr(self, '_pending_tools', None) is kwargs['tools']:
+            self._pending_tools = None
+        return message
+
+    def _raise_translated(self, error: Exception) -> None:
+        """A typed client error passes unchanged, so the agent can run its recovery."""
+        label = getattr(self._client, 'provider_label', type(self._client).__name__)
+        translated = translate_llm_error(error, f"from {label}",
+                                         model=getattr(self._client, 'model_type', None))
+        # Per-attempt WARNING; the outer retry loop owns the ERROR.
+        log_attempt_classified(self._logger, error, translated)
+        note_call_error(self._client, translated)  # health from real calls
+        if translated is error:
+            raise error
+        raise translated from error
+
+    async def _agenerate(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, *,
+                         reservation_id: Optional[str] = None, **kwargs) -> ChatResult:
+        """One batch call. *reservation_id* is the hold of a stream that this call replaces."""
+        from modules.llm.billing_guard import check_adapter, fresh_credential
+        await fresh_credential(self._client)
+        check_adapter(self)
+        client_messages = self._convert_to_client_messages(messages)
+        generation_params = self._build_generation_params(stop, kwargs)
+        tools = self._resolve_tools(kwargs)
+        reservation_id = reservation_id or await self._reserve_call()
+        request = begin_call()
+        # An exception/cancellation retains the reservation: an absent response is not
+        # evidence that the provider did no work.
         try:
-            # Check if native tool path is available and should be used
-            native_tool_path_available = tools and hasattr(self._client, 'generate_agent_response')
-            self._logger.info(f"[DEBUG_TOOLS] Native tool path available: {native_tool_path_available}")
-
-            if native_tool_path_available:
-                # Use agent response method for tool calling
-                self._logger.debug(f"[NATIVE_TOOLS] Using native tool-calling path")
-                self._logger.debug(f"Calling client.generate_agent_response with tools")
-                self._logger.debug(f"  Client class: {self._client.__class__.__name__}")
-                self._logger.debug(f"  Messages: {len(client_messages)}")
-                self._logger.debug(f"  Tools: {len(tools)}")
-
-                client_start = time.time()
+            if tools and hasattr(self._client, 'generate_agent_response'):
                 response = await self._client.generate_agent_response(
-                    messages=client_messages,
-                    tools=tools,
-                    **generation_params
-                )
-                client_duration = time.time() - client_start
-
-                self._logger.debug(f"Client.generate_agent_response completed in {client_duration:.1f}s")
-                self._logger.debug(f"Response type: {type(response).__name__}")
-
-                # Unpack the canonical 3-tuple: (content, tool_calls, usage_data).
-                # Contract: all providers MUST return this shape from generate_agent_response().
-                # _unpack_tool_gen_result() enforces the contract and raises on any other shape.
+                    messages=client_messages, tools=tools, **generation_params)
                 content, tool_calls, usage_data = self._unpack_tool_gen_result(response)
-                self._logger.debug(f"[NATIVE_TOOLS] Received 3-tuple with usage data: {usage_data}")
-
-                # Clients may return tool calls without content in native tool mode
-                if tool_calls and (not content or not content.strip()):
-                    self._logger.debug(
-                        f"[NATIVE_TOOLS] Client returned {len(tool_calls)} tool calls without content "
-                        f"(expected in native tool mode)"
-                    )
-
-                # Create AIMessage with tool calls and usage data
-                # CRITICAL: Populate usage_metadata in standard format
-                # so extract_token_usage() can find it
                 usage_metadata = self._usage_metadata_from(usage_data)
-                if usage_metadata:
-                    self._logger.debug(f"[NATIVE_TOOLS] Populating usage_metadata for token extraction: {usage_metadata}")
-
-                ai_message = AIMessage(content=self._scrub_content(content or ""), usage_metadata=usage_metadata)
-                self._stamp_reasoning(ai_message)
-                if tool_calls:
-                    ai_message.tool_calls = tool_calls
-                    self._logger.debug(f"[NATIVE_TOOLS] Response contains {len(tool_calls)} tool calls, content_length={len(content) if content else 0}")
-                else:
-                    self._logger.debug(f"[NATIVE_TOOLS] Response contains no tool calls (content only)")
-                generation = ChatGeneration(message=ai_message)
             else:
-                # Log why native tools path is NOT being used
-                if tools and not hasattr(self._client, 'generate_agent_response'):
-                    self._logger.warning(f"[NATIVE_TOOLS] Tools provided but client {self._client.__class__.__name__} lacks generate_agent_response method")
-                elif not tools:
-                    self._logger.info(f"[NATIVE_TOOLS] No tools provided, using standard generation")
-
-                # Standard generation without tools
-                self._logger.info(f"[DEBUG] Calling client.generate_response (no tools)")
-                self._logger.info(f"[DEBUG]   Client class: {self._client.__class__.__name__}")
-                self._logger.info(f"[DEBUG]   Messages: {len(client_messages)}")
-
-                client_start = time.time()
-                response = await self._client.generate_response(
-                    messages=client_messages,
-                    **generation_params
-                )
-                client_duration = time.time() - client_start
-
-                self._logger.info(f"[DEBUG] Client.generate_response completed in {client_duration:.1f}s")
-                self._logger.info(f"[DEBUG] Response type: {type(response).__name__}")
-
-                # A-4 (2026-10-14): usage was missing here, so every aux call recorded
-                # 0 tokens / $0. Read synchronously: no await since the call returned.
-                ai_message = AIMessage(content=self._scrub_content(response),
-                                       usage_metadata=self._plain_call_usage())
-                generation = ChatGeneration(message=ai_message)
-
-            # Get the raw response with token usage if available
+                if tools:
+                    self._logger.warning(f"Tools provided but client {self._client.__class__.__name__} "
+                                         "lacks generate_agent_response")
+                content = await self._client.generate_response(
+                    messages=client_messages, **generation_params)
+                tool_calls = None
+                usage_metadata = self._plain_call_usage()
             raw_response = getattr(self._client, 'last_response', None)
-
-            # Add raw response data for token extraction
+            message = self._finish_call(self._scrub_content(content or ""), tool_calls, usage_metadata,
+                                        raw_response, None, request, reservation_id, kwargs)
+            generation = ChatGeneration(message=message)
             if raw_response:
                 generation.generation_info = {"raw": raw_response}
-
-                # Money-correctness fix (Task 5c fix pass 2, reviewer rec (a)):
-                # stamp the provider's own response id onto THIS per-call
-                # `ai_message` object (never the shared `self._client`) right
-                # here, synchronously, with no intervening await since the
-                # client call above returned. Under default-on parallel
-                # sub-agent delegation, multiple concurrent Agent.run() loops
-                # can share the SAME LLM client object (SubAgentManager.
-                # run_subtask inherits `parent_agent.llm` verbatim when a
-                # subtask has no own model), so `self._client.last_response`
-                # is a single mutable slot two concurrent completions race to
-                # overwrite -- reading it later (e.g. in billing) can pick up
-                # ANOTHER call's id. Stamping it onto the per-call response
-                # object closes that window: each concurrent caller gets its
-                # own AIMessage with its own id, immune to the shared slot
-                # being overwritten afterwards. Covers BOTH branches above
-                # (native tool-calling and the plain path) since they
-                # converge here before either `ai_message`/`generation` is
-                # returned. Absent on providers whose raw response carries no
-                # id (e.g. Gemini) -- `extract_stable_request_id` then falls
-                # back to the old shared-client read and finally to a fresh
-                # uuid, never a false dedup.
-                provider_response_id = (
-                    raw_response.get('id') if isinstance(raw_response, dict)
-                    else getattr(raw_response, 'id', None)
-                )
-                if isinstance(provider_response_id, str) and provider_response_id:
-                    ai_message._polyrob_provider_response_id = provider_response_id
-
-            total_duration = time.time() - start_time
-            if reservation_id:
-                ai_message._polyrob_billing_reservation_id = reservation_id
-            self._logger.debug(f"_agenerate completed in {total_duration:.1f}s")
-            self._logger.debug(f"Returning ChatResult with 1 generation")
-
-            # The call SUCCEEDED, so no retry path will need the stored fallback;
-            # disarm it so a later key-less aux call cannot inherit this step's
-            # toolset. A failure raises above this line and leaves it armed for
-            # the retry (the 16:50Z / 18:21Z Connection-error recoveries).
-            if 'tools' in kwargs and getattr(self, '_pending_tools', None) is kwargs['tools']:
-                self._pending_tools = None
-
             return ChatResult(generations=[generation])
-
         except Exception as e:
-            from core.exceptions import (
-                LLMError, LLMRateLimitError, LLMAuthenticationError,
-                LLMConnectionError, LLMContextLengthError, LLMResponseError,
-                LLMPermanentError
-            )
+            self._raise_translated(e)
 
-            # CRITICAL FIX: Propagate LLM-specific exceptions instead of swallowing them.
-            # This allows the task agent to catch these and try fallback providers.
-            if isinstance(e, (LLMRateLimitError, LLMAuthenticationError,
-                              LLMConnectionError, LLMContextLengthError,
-                              LLMResponseError, LLMPermanentError, LLMError)):
-                self._logger.warning(f"LLM error (propagating for fallback): {type(e).__name__}: {str(e)[:200]}")
-                note_call_error(self._client, e)  # 098 MO-13: health from real calls
-                raise
-
-            # Route through the single unified classifier (translate_llm_error).
-            # Preserves all previous categories including billing→LLMPermanentError.
-            provider_name = _client_provider_label(self._client)
-            translated = translate_llm_error(e, f"from {provider_name}")
-            # A12 (043 §4.6): per-attempt WARNING; the outer retry loop owns the ERROR.
-            log_attempt_classified(self._logger, e, translated)
-            note_call_error(self._client, translated)
-            raise translated
-    
-    def _generate(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, **kwargs) -> ChatResult:
-        """Generate a response synchronously.
-        
-        Args:
-            messages: List of messages
-            stop: Optional stop sequences
-            kwargs: Additional parameters for generation
-            
-        Returns:
-            ChatResult with generations
-        """
-        # T-06: Better asyncio handling with nest_asyncio
-        try:
-            import nest_asyncio
-            nest_asyncio.apply()
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # We're already in an async context, schedule the coroutine
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, self._agenerate(messages, stop, **kwargs))
-                    return future.result()
-            else:
-                return loop.run_until_complete(self._agenerate(messages, stop, **kwargs))
-        except ImportError:
-            # Fallback if nest_asyncio not available
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # Create task in current loop
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, self._agenerate(messages, stop, **kwargs))
-                    return future.result()
-            else:
-                return loop.run_until_complete(self._agenerate(messages, stop, **kwargs))
-    
     @property
     def _llm_type(self) -> str:
         """Return the type of LLM."""
         return "llm-client-adapter"
 
     async def ainvoke(self, input, config=None, *, stop=None, **kwargs) -> AIMessage:
-        """Override ainvoke to pass tools through kwargs to _agenerate.
-
-        The base ainvoke doesn't pass arbitrary kwargs to _agenerate.
-        This override ensures tools are passed through for native function calling.
-        
-        CRITICAL FIX (Dec 2025): Also store tools in instance variable as fallback
-        since internal routing may bypass this method in some cases.
-        """
-        # Convert input to messages if needed
+        """Pass the tools through kwargs to _agenerate, and keep them for a retry path that
+        re-calls with no key."""
         if isinstance(input, list):
             messages = input
         elif hasattr(input, 'to_messages'):
@@ -744,17 +536,10 @@ class LLMClientAdapter(BaseChatModel):
         else:
             messages = [HumanMessage(content=str(input))]
 
-        # CRITICAL FIX: Store tools in instance variable as fallback mechanism
-        # This ensures _agenerate can access tools even if the adapter's routing
-        # bypasses this method and calls _agenerate directly
         if 'tools' in kwargs and kwargs['tools']:
             self._pending_tools = kwargs['tools']
-            self._logger.debug(f"[TOOLS_FIX] Stored {len(kwargs['tools'])} tools in _pending_tools")
-        
-        # Call _agenerate with all kwargs (including tools)
-        result = await self._agenerate(messages, stop=stop, **kwargs)
 
-        # Extract the AIMessage from ChatResult
+        result = await self._agenerate(messages, stop=stop, **kwargs)
         if result.generations:
             return result.generations[0].message
         return AIMessage(content="")
@@ -762,44 +547,43 @@ class LLMClientAdapter(BaseChatModel):
     async def astream(self, input, config=None, *, stop=None, **kwargs):
         """Stream a response, passing tools through kwargs.
 
-        Default (legacy, byte-identical): the full ainvoke() result wrapped as
-        a 1-item async iterator — "streaming" of one chunk.
-
-        019 P5 (`LLM_TOKEN_STREAMING`, default OFF): when the flag is ON and
-        the wrapped client implements ``astream_agent_response``, yields TRUE
-        per-token deltas via ``_astream_true``. A failure BEFORE the first
-        yielded chunk falls back to the legacy single-chunk form; after the
-        first chunk it propagates (the agent loop's retry machinery owns it —
-        a silent fallback would double the streamed text).
-
-        CRITICAL FIX (Dec 2025): Also store tools in instance variable as fallback.
+        Default: the full ainvoke() result as one chunk. With `LLM_TOKEN_STREAMING`:
+        when the flag is ON and the client implements ``astream_agent_response``, TRUE
+        per-token deltas via ``_astream_true``. A stream-specific failure BEFORE the first
+        chunk falls back to the single chunk on the same billing reservation. Any other
+        failure propagates: the agent loop's retry machinery owns it, and a second call
+        at once would pay twice (after a chunk it would also double the text).
         """
-        # CRITICAL FIX: Store tools in instance variable before calling ainvoke
         if 'tools' in kwargs and kwargs['tools']:
             self._pending_tools = kwargs['tools']
-            self._logger.debug(f"[TOOLS_FIX] astream: Stored {len(kwargs['tools'])} tools in _pending_tools")
 
+        reservation_id = None
         if token_streaming_enabled() and hasattr(self._client, 'astream_agent_response'):
+            from modules.llm.billing_guard import check_adapter, fresh_credential
+            await fresh_credential(self._client)
+            check_adapter(self)
+            reservation_id = await self._reserve_call()
             yielded_any = False
             try:
-                async for chunk in self._astream_true(input, stop=stop, **kwargs):
+                async for chunk in self._astream_true(input, stop=stop, reservation_id=reservation_id,
+                                                      **kwargs):
                     yielded_any = True
                     yield chunk
                 return
             except Exception as e:
-                if yielded_any:
+                if yielded_any or not _is_stream_specific(e):
                     raise
                 self._logger.warning(
                     f"true token streaming failed before first chunk; "
                     f"falling back to single-chunk: {type(e).__name__}: {e}"
                 )
 
-        # Legacy: yield the full response as a single chunk
-        response = await self.ainvoke(input, config=config, stop=stop, **kwargs)
+        response = await self.ainvoke(input, config=config, stop=stop,
+                                      reservation_id=reservation_id, **kwargs)
         yield response
 
-    async def _astream_true(self, input, *, stop=None, **kwargs):
-        """TRUE token streaming (019 P5): scrubbed text deltas, then ONE final
+    async def _astream_true(self, input, *, stop=None, reservation_id=None, **kwargs):
+        """TRUE token streaming: scrubbed text deltas, then ONE final
         AIMessage carrying tool_calls / usage_metadata / provider-response-id.
 
         Contract with the client's ``astream_agent_response``: it yields
@@ -819,14 +603,15 @@ class LLMClientAdapter(BaseChatModel):
         fragments to the user. (1) The stream is held until the first
         non-whitespace character: ``{`` OR a backtick (fenced ```json payloads)
         suppresses live deltas for the whole call — the final chunk then
-        carries the full content, exact legacy single-chunk behavior. (2) Once
+        carries the full content, single-chunk behavior. (2) Once
         live, a rolling window watches for the brain-state marker
         (``"current_state"`` — e.g. prose followed by a TRAILING brain block);
         on sight the stream MUTES: no further live deltas, the remainder rides
         the final chunk as one piece, where the downstream whole-chunk brain
         scrub works. (3) hitl_manager's per-chunk scrub stays as backstop.
         """
-        from modules.llm.billing_guard import check_adapter
+        from modules.llm.billing_guard import check_adapter, fresh_credential
+        await fresh_credential(self._client)
         check_adapter(self)
         # Convert input to messages (mirrors ainvoke)
         if isinstance(input, list):
@@ -838,10 +623,8 @@ class LLMClientAdapter(BaseChatModel):
 
         client_messages = self._convert_to_client_messages(messages)
         generation_params = self._build_generation_params(stop, kwargs)
-        tools = kwargs.get('tools')
-        if not tools and getattr(self, '_pending_tools', None):
-            tools = self._pending_tools
-            self._pending_tools = None
+        tools = self._resolve_tools(kwargs)
+        reservation_id = reservation_id or await self._reserve_call()
 
         scrubber = None
         if think_scrubber_enabled():
@@ -856,14 +639,19 @@ class LLMClientAdapter(BaseChatModel):
         window = ""  # rolling tail of LIVE-emitted text for cross-delta marker detection
         muted_parts: List[str] = []  # scrubbed text withheld after a live->muted flip
         final_event = None
+        final_raw = None
         _BRAIN_MARKER = '"current_state"'
 
-        from core.billing_context import reserve_billed_call
-        from modules.llm.aux_metering import _llm_identity
-        reservation_id = await reserve_billed_call(*_llm_identity(self))
-        async for event in self._client.astream_agent_response(
-            messages=client_messages, tools=tools, **generation_params
-        ):
+        request = begin_call()
+        events = self._client.astream_agent_response(
+            messages=client_messages, tools=tools, **generation_params)
+        while True:
+            try:
+                event = await events.__anext__()
+            except StopAsyncIteration:
+                break
+            except Exception as e:
+                self._raise_translated(e)
             if not isinstance(event, dict):
                 continue
             if event.get("type") == "text":
@@ -907,9 +695,10 @@ class LLMClientAdapter(BaseChatModel):
                 # suppressed: swallow — the final chunk carries everything
             elif event.get("type") == "final":
                 final_event = event
+                final_raw = getattr(self._client, 'last_response', None)
 
         if final_event is None:
-            raise RuntimeError(
+            raise _StreamEndedEarly(
                 "streaming client ended without a final event "
                 f"({self._client.__class__.__name__}.astream_agent_response)"
             )
@@ -930,22 +719,13 @@ class LLMClientAdapter(BaseChatModel):
             final_content = "".join(muted_parts) + tail
         else:
             # holding (empty/whitespace-only stream) or suppressed: the final
-            # chunk carries the WHOLE scrubbed completion, legacy-equivalent.
+            # chunk carries the WHOLE scrubbed completion.
             final_content = self._scrub_content(final_event.get("content") or "")
 
-        final_message = AIMessage(
-            content=final_content,
-            usage_metadata=self._usage_metadata_from(final_event.get("usage_data")),
-        )
-        tool_calls = final_event.get("tool_calls")
-        if tool_calls:
-            final_message.tool_calls = tool_calls
-        response_id = final_event.get("response_id")
-        if isinstance(response_id, str) and response_id:
-            final_message._polyrob_provider_response_id = response_id
-        if reservation_id:
-            final_message._polyrob_billing_reservation_id = reservation_id
-        yield final_message
+        yield self._finish_call(final_content, final_event.get("tool_calls"),
+                                self._usage_metadata_from(final_event.get("usage_data")),
+                                final_raw, final_event.get("response_id"), request,
+                                reservation_id, kwargs)
 
 
 class GeminiAdapter(LLMClientAdapter):
@@ -1010,63 +790,42 @@ class AnthropicAdapter(LLMClientAdapter):
         """
         super().__init__(client, **kwargs)
         
-    def _convert_image_to_anthropic_format(self, image_item: Dict[str, Any]) -> Dict[str, Any]:
-        """Convert OpenAI image_url format to Anthropic image format.
+    @staticmethod
+    def _wire_tool_choice(choice: Any) -> Any:
+        return {"auto": {"type": "auto"}, "required": {"type": "any"},
+                "none": {"type": "none"}}.get(choice, choice)
 
-        Thin delegator over ``modules/llm/anthropic_images.py`` — the tests
-        and the subclass hook both address this name.
-        """
+    def _convert_image_to_anthropic_format(self, image_item: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert OpenAI image_url format to Anthropic image format."""
         from modules.llm.anthropic_images import convert_image_to_anthropic_format
         return convert_image_to_anthropic_format(image_item, self._logger)
 
+    def _stamp_reasoning(self, ai_message, raw_response) -> None:
+        """Keep the call's thinking blocks on its OWN message (anthropic_wire)."""
+        if getattr(self._client, '_SUPPORTS_THINKING_CONTROLS', False):
+            from modules.llm.anthropic_wire import thinking_record
+            record = thinking_record(raw_response)
+            if record:
+                ai_message.additional_kwargs['anthropic_thinking'] = record
+
+    def _replay_reasoning(self, msg, client_msg: Dict[str, Any]) -> None:
+        blocks = (getattr(msg, 'additional_kwargs', None) or {}).get('anthropic_thinking')
+        if blocks:
+            client_msg['thinking_blocks'] = blocks
+
     def _convert_to_client_messages(self, messages: List[BaseMessage]) -> List[Dict[str, Any]]:
-        """Convert messages to Anthropic-compatible format.
-        
-        CRITICAL: This override converts OpenAI image_url format to Anthropic's native format.
-        
-        Args:
-            messages: List of messages
-            
-        Returns:
-            List of messages in Anthropic-compatible format
-        """
-        # First, use the base class conversion to get standard format
-        base_messages = super()._convert_to_client_messages(messages)
-        
-        # Then convert any image_url items to Anthropic format
-        converted_messages = []
-        for msg in base_messages:
+        """The base conversion, with OpenAI ``image_url`` items in Anthropic's image format."""
+        converted = []
+        for msg in super()._convert_to_client_messages(messages):
             content = msg.get("content")
-            
-            # If content is a list (multimodal), check for image_url items
             if isinstance(content, list):
-                converted_content = []
-                for item in content:
-                    if isinstance(item, dict):
-                        if item.get("type") == "image_url":
-                            # Convert OpenAI image_url to Anthropic image format
-                            converted_item = self._convert_image_to_anthropic_format(item)
-                            converted_content.append(converted_item)
-                            self._logger.debug(f"🔄 Converted image_url to Anthropic format")
-                        elif item.get("type") == "image":
-                            # Already in Anthropic format, keep as-is
-                            converted_content.append(item)
-                        else:
-                            # Keep other items (text, etc.) as-is
-                            converted_content.append(item)
-                    else:
-                        converted_content.append(item)
-                
-                converted_messages.append({
-                    **msg,
-                    "content": converted_content
-                })
-            else:
-                # Non-multimodal content, keep as-is
-                converted_messages.append(msg)
-        
-        return converted_messages
-        
+                msg = {**msg, "content": [
+                    self._convert_image_to_anthropic_format(item)
+                    if isinstance(item, dict) and item.get("type") == "image_url" else item
+                    for item in content]}
+            converted.append(msg)
+        return converted
+
     @property
     def _llm_type(self) -> str:
         """Return the type of LLM."""
@@ -1088,14 +847,41 @@ class OpenRouterAdapter(LLMClientAdapter):
         Args:
             client: An initialized OpenRouter client
         """
-        # Avoid circular import by importing here
-        from modules.llm.openrouter_client import OpenRouterClient
         super().__init__(client, **kwargs)
 
     @property
     def _llm_type(self) -> str:
         """Return the type of LLM."""
         return f"openrouter-{self._client.model_type}-adapter"
+
+
+# The native DeepSeek seat is the ONE seat that sends stored reasoning back: its API, in
+# thinking mode with tools, wants each earlier assistant message's ``reasoning_content``.
+# Only text this seat wrote (tag ``call_result.NATIVE_DEEPSEEK_SEAT``) goes back; other text
+# goes back as "" (prod 2026-11-07: an OpenRouter replay looped, llm-integration.md). It lives
+# in this module, not its own, so it adds no module to the import cycle (layering ratchet).
+class DeepSeekAdapter(OpenRouterAdapter):
+    """The OpenAI-compatible adapter plus DeepSeek's reasoning round trip."""
+
+    def _stamp_reasoning(self, ai_message, raw_response) -> None:
+        try:
+            message = raw_response.choices[0].message
+        except (AttributeError, IndexError, TypeError):
+            return
+        reasoning = getattr(message, 'reasoning_content', None)
+        if isinstance(reasoning, str) and reasoning:
+            ai_message.additional_kwargs['reasoning_content'] = reasoning
+            ai_message.additional_kwargs[REASONING_SEAT_KEY] = NATIVE_DEEPSEEK_SEAT
+
+    def _replay_reasoning(self, msg, client_msg: Dict[str, Any]) -> None:
+        stored = getattr(msg, 'additional_kwargs', None) or {}
+        reasoning = stored.get('reasoning_content')
+        own = stored.get(REASONING_SEAT_KEY) == NATIVE_DEEPSEEK_SEAT
+        client_msg['reasoning_content'] = reasoning if own and isinstance(reasoning, str) else ""
+
+    @property
+    def _llm_type(self) -> str:
+        return f"deepseek-{self._client.model_type}-adapter"
 
 
 __all__ = [
@@ -1108,4 +894,5 @@ __all__ = [
     "AnthropicAdapter",
     "GeminiAdapter",
     "OpenRouterAdapter",
+    "DeepSeekAdapter",
 ]

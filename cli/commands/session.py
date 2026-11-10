@@ -9,7 +9,8 @@ from typing import List, Optional
 
 import click
 
-from cli.commands._bootstrap import cli_container
+from cli.commands._bootstrap import ensure_env_loaded
+from cli.commands._options import json_option, yes_option
 from cli.commands._grouped import GroupedGroup
 from cli.ui.events import normalize as _normalize_event
 from cli.ui.plain_renderer import PlainRenderer
@@ -24,33 +25,46 @@ _SESSION_HELP_SECTIONS = [
 ]
 
 
-def _data_root():
-    """The session ARTIFACT tree these verbs read.
+def _admin_home(write: "bool | None" = False) -> Path:
+    """The data home every `session` verb acts on (the 031 seam; T-04)."""
+    from cli._admin_home import admin_data_dir
+    return Path(admin_data_dir(write=write))
+
+
+def _data_root(write: "bool | None" = False):
+    """The session ARTIFACT tree EVERY verb here reads (113 W2 item 5, T-04).
 
     C25: every verb here called ``pm().data_root``, which resolves from the
     SHELL — ``DATA_ROOT``, else ``POLYROB_DATA_DIR/sessions``, else the legacy
     ``./data/task``. On a deployed box, where systemd exports the data home and
     an owner's SSH shell carries none, that is a directory the service has
     never written, so `polyrob session list|history|costs|tools` answered a
-    confident "not found" over a live tree. When the ADMIN home (the 031 seam)
-    holds a ``sessions`` tree, that one wins; otherwise the shell resolution is
-    unchanged, so a dev checkout is byte-identical.
+    confident "not found" over a live tree. The ADMIN home's ``sessions`` tree
+    wins — on a dev checkout that is the tree `polyrob run` and the REPL write.
+    An explicit ``DATA_ROOT`` is kept when the admin home holds no tree. A home
+    the seam refuses (ambiguous, or root writing a deployed home) is an error,
+    never a silent fallback to another tree.
     """
-    from pathlib import Path as _P
+    import os
 
-    from agents.task.path import pm
     try:
-        from cli._admin_home import admin_data_dir
-        deployed = _P(admin_data_dir(write=False)) / "sessions"
-        if deployed.is_dir():
+        deployed = _admin_home(write) / "sessions"
+        if deployed.is_dir() or not (os.getenv("DATA_ROOT") or "").strip():
             return deployed
+    except click.ClickException:
+        raise
     except Exception:
         pass
+    from agents.task.path import pm
     return pm().data_root
 
 
+def _sid(info: dict) -> str:
+    return str(info.get("id") or info.get("session_id") or "?")
+
+
 @click.group("session", cls=GroupedGroup, help_sections=_SESSION_HELP_SECTIONS,
-             epilog="Continue a session's execution with: polyrob run --resume <id>")
+             epilog='Continue a session with: polyrob run --continue <id> "your message"')
 def session():
     """Manage task sessions."""
     pass
@@ -116,56 +130,70 @@ def session_history(session_id: str, dump):
 
 
 @session.command("list")
-@click.option("--all", "show_all", is_flag=True, help="Show all sessions including completed")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@click.option("--all", "show_all", is_flag=True, help="Also show finished, paused and failed ones.")
+@json_option
 def session_list(show_all: bool, as_json: bool):
-    """List recent sessions."""
-    asyncio.run(_session_list(show_all, as_json))
+    """List recent sessions, newest first, with a title and the chat each is in."""
+    _session_list(show_all, as_json)
 
 
-async def _session_list(show_all: bool, as_json: bool):
-    # L11 (proposal 030): read-only — listing local session metadata must never
-    # require a provider key, so skip the LLM key preflight.
-    container = await cli_container(require_llm=False)
+def _session_list(show_all: bool, as_json: bool):
+    # L11 (proposal 030): read-only — never a provider key, never a container
+    # (T-04: the container read the CLI home; its SessionManager load also
+    # rewrote a live run as suspended).
+    ensure_env_loaded()
+    from cli.commands import _session_store as store
 
-    task_agent = container.get_agent("task_agent")
-    if not task_agent:
-        click.echo("TaskAgent not available")
-        sys.exit(1)
-
-    sessions = task_agent.session_manager.get_all_sessions()
-
+    sessions, errors = store.read_sessions(_data_root())
+    hidden = 0
     if not show_all:
-        # F9: match the "active" semantics used by the session-limit check and
-        # SessionManager.get_active_sessions (session.py:503) — 'suspended' is
-        # NOT active there, so excluding it here keeps the CLI's default list in
-        # lockstep with what counts against the per-user cap.  Use --all to see
-        # suspended/completed/failed/cancelled sessions.
-        active_statuses = {"created", "running", "resumed"}
-        sessions = [s for s in sessions if s.get("status") in active_statuses]
+        # F9: the "active" semantics of SessionManager.get_active_sessions —
+        # 'suspended' is NOT active, so --all shows suspended/completed/failed/
+        # cancelled sessions.
+        live = [s for s in sessions if s.get("status") in store.ACTIVE_STATUSES]
+        hidden, sessions = len(sessions) - len(live), live
+    chats, chat_error = store.chat_rows(_admin_home(), [_sid(s) for s in sessions])
+    rows = []
+    for s in sessions:
+        row = dict(s)
+        row["chat"] = chats.get(_sid(s))
+        row["title"] = store.title(s, row["chat"])
+        if chat_error:
+            row["chat_error"] = chat_error
+        rows.append(row)
+    for err in errors:
+        click.echo(click.style(f"warning: could not read {err}", fg="yellow"), err=True)
+    if chat_error:
+        click.echo(click.style(f"warning: could not read the chat store ({chat_error}); "
+                               "chat names are not shown.", fg="yellow"), err=True)
 
     if as_json:
-        click.echo(json.dumps(sessions, indent=2, default=str))
+        click.echo(json.dumps(rows, indent=2, default=str))
         return
-    if not sessions:
-        click.echo("No sessions found.")
+    if not rows:
+        if hidden:
+            click.echo(f"No live sessions. {hidden} finished, paused or failed — "
+                       "add --all to show them.")
+        else:
+            click.echo("No sessions found.")
         return
 
-    click.echo(f"{'ID':<12} {'Status':<12} {'Task':<40} {'Created'}")
-    click.echo("-" * 80)
-
-    for s in sessions:
+    click.echo(f"{'ID':<36} {'Status':<12} {'Chat':<16} {'Title':<36} {'Created'}")
+    click.echo("-" * 124)
+    for row in rows:
         # NB: `.get(k, default)` returns None when the key is PRESENT with a null
-        # value (default only applies to absent keys), so `(x or default)` is
-        # required before slicing — a null task/created_at/id crashed session list.
-        sid = (s.get("id") or s.get("session_id") or "?")
-        status = s.get("status") or "?"
-        task_str = (s.get("task") or "")[:38]
-        created = (s.get("created_at") or "")[:19]
-
+        # value, so `(x or default)` is required before slicing — a null
+        # task/created_at/id crashed session list.
+        status = row.get("status") or "?"
+        chat = (row["chat"] or {}).get("name") or ("?" if chat_error else "-")
+        created = (row.get("created_at") or "")[:19]
         color = {"running": "green", "created": "cyan", "suspended": "yellow",
                  "completed": "white", "failed": "red", "cancelled": "red"}.get(status, "white")
-        click.echo(f"{sid:<12} {click.style(status, fg=color):<21} {task_str:<40} {created}")
+        click.echo(f"{_sid(row):<36} {click.style(status, fg=color):<21} {chat[:16]:<16} "
+                   f"{row['title'][:36]:<36} {created}")
+    if hidden:
+        click.echo(click.style(f"{hidden} finished, paused or failed not shown (--all).",
+                               dim=True))
 
 
 @session.command("tail")
@@ -251,52 +279,64 @@ def session_cancel(session_id: str):
 
 
 async def _session_cancel(session_id: str):
-    container = await cli_container(require_llm=False)
+    await _session_control_verb(session_id, "cancel")
 
-    task_agent = container.get_agent("task_agent")
-    if not task_agent:
-        click.echo("TaskAgent not available")
-        sys.exit(1)
 
-    user_id = container.get_service("identity").resolve()
+async def _session_control_verb(session_id: str, command: str):
+    """cancel / pause / resume: the session in the admin home (T-04), for the owner
+    tenant the admin seam names. Writes the control mailbox, so the root guard
+    applies (``write=True``)."""
+    ensure_env_loaded()
+    from cli._admin_home import admin_owner_tenant
+    from cli.commands import _session_store as store
+    from core.identity import resolve_identity
+
+    info, directory = store.read_session(_data_root(write=True), session_id, exact=True)
+    user_id = admin_owner_tenant(resolve_identity())
     from cli.commands._session_control import control_live_session
-    await control_live_session(task_agent, user_id, session_id, "cancel")
+    await control_live_session(info, directory, user_id, session_id, command)
 
 
 @session.command("show")
 @click.argument("session_id")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def session_show(session_id: str, as_json: bool):
     """Show detailed information about a session."""
     asyncio.run(_session_show(session_id, as_json))
 
 
 async def _session_show(session_id: str, as_json: bool):
-    container = await cli_container(require_llm=False)  # read-only (L11)
+    ensure_env_loaded()  # read-only (L11): no key, no container (T-04)
+    from cli.commands import _session_store as store
+    from core.session_control import SessionControl
 
-    task_agent = container.get_agent("task_agent")
-    if not task_agent:
-        click.echo("TaskAgent not available")
-        sys.exit(1)
-
-    session_info = task_agent.session_manager.get_session_info(session_id)
+    session_info, directory = store.read_session(_data_root(), session_id)
     if not session_info:
         click.echo(click.style("[polyrob] ", fg="red") + f"Session {session_id} not found")
         sys.exit(1)
 
-    from agents.task.path import pm
-    from core.session_control import SessionControl
-    owner = session_info.get("user_id")
-    control = SessionControl(pm().get_session_root(session_id, owner)).read() if owner else None
+    sid = _sid(session_info) if session_info.get("id") or session_info.get("session_id") \
+        else directory.name
+    control = SessionControl(directory).read() if session_info.get("user_id") else None
+    chats, chat_error = store.chat_rows(_admin_home(), [sid])
     session_info = dict(session_info)
     session_info["control"] = control
+    session_info["chat"] = chats.get(sid)
+    session_info["title"] = store.title(session_info, session_info["chat"])
+    if chat_error:
+        session_info["chat_error"] = chat_error
     if as_json:
         click.echo(json.dumps(session_info, indent=2, default=str))
         return
 
-    sid16 = (session_info.get('id') or session_id)
-    click.echo(f"{click.style(sid16, fg='cyan', bold=True)}: {session_info.get('task') or 'No task'}")
+    click.echo(f"{click.style(sid, fg='cyan', bold=True)}: {session_info['title']}")
     click.echo(f"  status: {session_info.get('status', '?')}")
+    if session_info["chat"]:
+        chat = session_info["chat"]
+        click.echo(f"  chat: {chat['name']} ({chat['seat']})")
+    elif chat_error:
+        click.echo(click.style(f"  chat: unknown — could not read the chat store ({chat_error})",
+                               fg="yellow"))
     if control:
         click.echo(f"  control: {control['request']} / {control['acknowledged']} (pid {control['pid']})")
     click.echo(f"  created: {session_info.get('created_at', '?')}")
@@ -316,16 +356,7 @@ def session_pause(session_id: str):
 
 
 async def _session_pause(session_id: str):
-    container = await cli_container(require_llm=False)
-
-    task_agent = container.get_agent("task_agent")
-    if not task_agent:
-        click.echo("TaskAgent not available")
-        sys.exit(1)
-
-    user_id = container.get_service("identity").resolve()
-    from cli.commands._session_control import control_live_session
-    await control_live_session(task_agent, user_id, session_id, "pause")
+    await _session_control_verb(session_id, "pause")
 
 
 @session.command("resume")
@@ -336,16 +367,7 @@ def session_resume(session_id: str):
 
 
 async def _session_resume(session_id: str):
-    container = await cli_container(require_llm=False)
-
-    task_agent = container.get_agent("task_agent")
-    if not task_agent:
-        click.echo("TaskAgent not available")
-        sys.exit(1)
-
-    user_id = container.get_service("identity").resolve()
-    from cli.commands._session_control import control_live_session
-    await control_live_session(task_agent, user_id, session_id, "resume")
+    await _session_control_verb(session_id, "resume")
 
 
 @session.command("export")
@@ -384,21 +406,14 @@ def _render_training_format(session_id, session_info, session_dir, fmt) -> dict:
 
 
 async def _session_export(session_id: str, output: Optional[str], format: str):
-    container = await cli_container(require_llm=False)  # read-only (L11)
-
-    from agents.task.path import pm
-
-    # Fetch session metadata (status/model/task/created) to FOLD INTO the export —
-    # previously this was fetched then discarded, so the export omitted it.
-    ta = task_agent_or_none(container)
-    session_info = ta.session_manager.get_session_info(session_id) if ta else None
+    ensure_env_loaded()  # read-only (L11): no key, no container (T-04)
+    from cli.commands import _session_store as store
 
     if output is None:
         output = f"{session_id}_export.{format}"
 
-    # Find session directory
-    data_root = _data_root()
-    session_dir = session_directory(data_root, session_id)
+    # The session metadata (status/model/task/created) is FOLDED INTO the export.
+    session_info, session_dir = store.read_session(_data_root(), session_id)
 
     if not session_dir:
         click.echo(click.style("[polyrob] ", fg="red") + f"Session directory not found for {session_id}")
@@ -545,64 +560,42 @@ def session_artifacts(session_id: str):
 
 @session.command("costs")
 @click.argument("session_id")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def session_costs(session_id: str, as_json: bool):
     """Show cost breakdown for a session."""
     asyncio.run(_session_costs(session_id, as_json))
 
 
 async def _session_costs(session_id: str, as_json: bool):
-    container = await cli_container(require_llm=False)  # read-only (L11)
-
-    task_agent = container.get_agent("task_agent")
-    if not task_agent:
-        click.echo("TaskAgent not available")
-        sys.exit(1)
-
+    # Read-only (L11; T-04): the admin home's tree. A fresh process holds no live
+    # orchestrator, so its usage tracker was never reachable from here; the
+    # breakdown is what the session wrote.
+    ensure_env_loaded()
     costs = {"session_id": session_id, "breakdown": "unavailable", "errors": []}
 
-    # C52: `except Exception: pass` turned a live tracker fault into the SAME
-    # "unavailable" a session with no tracker produces, and the on-disk
-    # fallback was then printed as if it were the whole cost.
-    orchestrator = None
+    # The per-call llm_usage records on disk.
+    # C59: this carried its OWN three-pattern glob while `session_directory`
+    # (cli/session_paths.py) is what every sibling verb resolves through —
+    # including its AMBIGUITY refusal, which the private glob silently
+    # resolved by taking whichever directory the first pattern found.
+    session_dir = None
     try:
-        orchestrator = task_agent.get_orchestrator(session_id)
-    except Exception as exc:
-        costs["errors"].append(f"orchestrator lookup: {type(exc).__name__}: {exc}")
-
-    if orchestrator and hasattr(orchestrator, "usage_tracker"):
-        try:
-            costs["breakdown"] = await orchestrator.usage_tracker.get_session_breakdown(
-                session_id)
-        except Exception as exc:
-            costs["errors"].append(f"usage tracker: {type(exc).__name__}: {exc}")
-
-    # Fallback: the per-call llm_usage records on disk.
-    if costs["breakdown"] == "unavailable":
-        # C59: this carried its OWN three-pattern glob while `session_directory`
-        # (cli/session_paths.py) is what every sibling verb resolves through —
-        # including its AMBIGUITY refusal, which the private glob silently
-        # resolved by taking whichever directory the first pattern found.
-        session_dir = None
-        try:
-            session_dir = session_directory(_data_root(), session_id)
-        except click.ClickException as exc:
-            costs["errors"].append(str(exc))
-        if session_dir:
-            usage = _summarize_llm_usage(session_dir)
-            if usage:
-                costs["llm_usage"] = usage
-        else:
-            costs["errors"].append(
-                f"no session directory for {session_id} under {_data_root()}")
+        session_dir = session_directory(_data_root(), session_id)
+    except click.ClickException as exc:
+        costs["errors"].append(str(exc))
+    if session_dir:
+        usage = _summarize_llm_usage(session_dir)
+        if usage:
+            costs["llm_usage"] = usage
+    else:
+        costs["errors"].append(
+            f"no session directory for {session_id} under {_data_root()}")
 
     if as_json:
         click.echo(json.dumps(costs, indent=2, default=str))
         return
     click.echo(f"Costs for session {session_id}:")
-    if isinstance(costs["breakdown"], dict):
-        click.echo(f"  Total credits: {costs['breakdown'].get('total_credits', 0)}")
-    elif costs.get("llm_usage"):
+    if costs.get("llm_usage"):
         u = costs["llm_usage"]
         click.echo(f"  On-disk usage: {u['records']} call(s), "
                    f"{u['total_tokens']} tokens, ~${u['total_cost_estimate']} est.")
@@ -619,7 +612,7 @@ async def _session_costs(session_id: str, as_json: bool):
 
 @session.command("tools")
 @click.argument("session_id")
-@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+@json_option
 def session_tools(session_id: str, as_json: bool):
     """Show tools used in a session."""
     from agents.task.path import pm
@@ -666,7 +659,7 @@ def session_tools(session_id: str, as_json: bool):
               help="Name what would go and what is kept, and delete nothing.")
 @click.option("--max", "max_removals", default=None, type=int,
               help="Remove at most N trees in this run.")
-@click.option("--yes", is_flag=True, help="Do not ask before deleting.")
+@yes_option(help="Do not ask before deleting.")
 def session_prune(days, dry_run: bool, max_removals, yes: bool):
     """Delete session trees past the retention window.
 
