@@ -17,7 +17,7 @@
           "type": "integer"
         },
         "chain": {
-          "description": "Chain to read candles on — the same address is a DIFFERENT token on a different chain, so name it deliberately. Readable: ethereum, base, robinhood, robinhood-testnet, arbitrum, polygon, optimism, solana.",
+          "description": "Chain to read candles on — the same address is a DIFFERENT token on a different chain, so name it deliberately. Readable: ethereum, base, robinhood, robinhood-testnet, arbitrum, polygon, optimism, bnb, solana.",
           "type": "string"
         },
         "limit": {

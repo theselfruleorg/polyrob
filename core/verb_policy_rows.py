@@ -82,8 +82,6 @@ CORE_VERB_ROWS = {
         "load_skill": dict(effect="none"),
         "read_skill_resource": dict(effect="none"),
         "tool_search": dict(effect="none"),
-        # 112 W4: pure functions over its arguments — no I/O, no state, no network.
-        "compute": dict(effect="none"),
         # The group ledger holds the owner's own room lines: the disclosure class of
         # contact_history.
         "room_read": dict(effect="none", correspondent_blocked=True),

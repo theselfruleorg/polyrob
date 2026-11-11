@@ -109,14 +109,25 @@ class AuthStore:
                 pass
             return
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # Born whole: the file appears with its content (a link of a written temp
+        # file), so a concurrent first reader never sees an empty file.
+        fd, tmp = tempfile.mkstemp(dir=str(self.path.parent), prefix=".auth.json.", suffix=".tmp")
         try:
-            fd = os.open(str(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        except FileExistsError:
-            return  # another process won the race — fine
-        try:
-            os.write(fd, json.dumps(_EMPTY_STORE, indent=2).encode("utf-8"))
+            try:
+                os.fchmod(fd, 0o600)
+                os.write(fd, json.dumps(_EMPTY_STORE, indent=2).encode("utf-8"))
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            try:
+                os.link(tmp, str(self.path))
+            except FileExistsError:
+                pass  # another process won the race — fine
         finally:
-            os.close(fd)
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
     def _flock(self, fh, timeout: float = _LOCK_TIMEOUT_SEC) -> None:
         import fcntl

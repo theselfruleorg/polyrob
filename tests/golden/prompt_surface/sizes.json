@@ -15,8 +15,8 @@
         "tokens": 220
       },
       "system_prompt": {
-        "chars": 12148,
-        "tokens": 3037
+        "chars": 12113,
+        "tokens": 3028
       },
       "tool_catalog": {
         "chars": 4389,
@@ -24,15 +24,15 @@
       }
     },
     "system": {
-      "chars": 17827,
-      "tokens": 4456
+      "chars": 17792,
+      "tokens": 4448
     },
     "tools": {
-      "chars": 16376,
-      "count": 25,
-      "tokens": 4094
+      "chars": 14769,
+      "count": 24,
+      "tokens": 3692
     },
-    "total_tokens": 8550
+    "total_tokens": 8140
   },
   "cron": {
     "layers": {
@@ -61,8 +61,8 @@
         "tokens": 256
       },
       "system_prompt": {
-        "chars": 15493,
-        "tokens": 3873
+        "chars": 15458,
+        "tokens": 3864
       },
       "tool_catalog": {
         "chars": 4451,
@@ -74,15 +74,15 @@
       }
     },
     "system": {
-      "chars": 29933,
-      "tokens": 7483
+      "chars": 29898,
+      "tokens": 7474
     },
     "tools": {
-      "chars": 98597,
-      "count": 104,
-      "tokens": 24649
+      "chars": 96962,
+      "count": 103,
+      "tokens": 24240
     },
-    "total_tokens": 32132
+    "total_tokens": 31715
   },
   "goal": {
     "layers": {
@@ -111,8 +111,8 @@
         "tokens": 256
       },
       "system_prompt": {
-        "chars": 15493,
-        "tokens": 3873
+        "chars": 15458,
+        "tokens": 3864
       },
       "tool_catalog": {
         "chars": 4451,
@@ -124,15 +124,15 @@
       }
     },
     "system": {
-      "chars": 29917,
-      "tokens": 7479
+      "chars": 29882,
+      "tokens": 7470
     },
     "tools": {
-      "chars": 98597,
-      "count": 104,
-      "tokens": 24649
+      "chars": 96962,
+      "count": 103,
+      "tokens": 24240
     },
-    "total_tokens": 32128
+    "total_tokens": 31711
   },
   "leaf": {
     "layers": {
@@ -157,8 +157,8 @@
         "tokens": 651
       },
       "system_prompt": {
-        "chars": 9596,
-        "tokens": 2399
+        "chars": 9561,
+        "tokens": 2390
       },
       "tool_catalog": {
         "chars": 4760,
@@ -170,15 +170,15 @@
       }
     },
     "system": {
-      "chars": 18639,
-      "tokens": 4659
+      "chars": 18604,
+      "tokens": 4651
     },
     "tools": {
-      "chars": 39150,
-      "count": 42,
-      "tokens": 9787
+      "chars": 37529,
+      "count": 41,
+      "tokens": 9382
     },
-    "total_tokens": 14447
+    "total_tokens": 14033
   },
   "owner_repl": {
     "layers": {
@@ -207,8 +207,8 @@
         "tokens": 256
       },
       "system_prompt": {
-        "chars": 15946,
-        "tokens": 3986
+        "chars": 15859,
+        "tokens": 3964
       },
       "tool_catalog": {
         "chars": 4498,
@@ -220,15 +220,15 @@
       }
     },
     "system": {
-      "chars": 30491,
-      "tokens": 7622
+      "chars": 30404,
+      "tokens": 7601
     },
     "tools": {
-      "chars": 77328,
-      "count": 93,
-      "tokens": 19332
+      "chars": 75721,
+      "count": 92,
+      "tokens": 18930
     },
-    "total_tokens": 26954
+    "total_tokens": 26531
   },
   "owner_telegram_dm": {
     "layers": {
@@ -257,8 +257,8 @@
         "tokens": 256
       },
       "system_prompt": {
-        "chars": 16625,
-        "tokens": 4156
+        "chars": 16538,
+        "tokens": 4134
       },
       "tool_catalog": {
         "chars": 4552,
@@ -270,15 +270,15 @@
       }
     },
     "system": {
-      "chars": 31231,
-      "tokens": 7807
+      "chars": 31144,
+      "tokens": 7786
     },
     "tools": {
-      "chars": 74484,
-      "count": 60,
-      "tokens": 18621
+      "chars": 72849,
+      "count": 59,
+      "tokens": 18212
     },
-    "total_tokens": 26428
+    "total_tokens": 25998
   },
   "prod_owner_telegram_dm": {
     "layers": {
@@ -307,8 +307,8 @@
         "tokens": 782
       },
       "system_prompt": {
-        "chars": 17930,
-        "tokens": 4482
+        "chars": 17843,
+        "tokens": 4460
       },
       "tool_catalog": {
         "chars": 5346,
@@ -320,15 +320,15 @@
       }
     },
     "system": {
-      "chars": 37080,
-      "tokens": 9270
+      "chars": 36993,
+      "tokens": 9248
     },
     "tools": {
-      "chars": 126483,
-      "count": 86,
-      "tokens": 31620
+      "chars": 125111,
+      "count": 85,
+      "tokens": 31277
     },
-    "total_tokens": 40890
+    "total_tokens": 40526
   },
   "room": {
     "layers": {
@@ -345,8 +345,8 @@
         "tokens": 219
       },
       "system_prompt": {
-        "chars": 13482,
-        "tokens": 3370
+        "chars": 13447,
+        "tokens": 3361
       },
       "tool_catalog": {
         "chars": 3945,
@@ -354,15 +354,15 @@
       }
     },
     "system": {
-      "chars": 18635,
-      "tokens": 4658
+      "chars": 18600,
+      "tokens": 4650
     },
     "tools": {
-      "chars": 24849,
-      "count": 28,
-      "tokens": 6212
+      "chars": 23307,
+      "count": 27,
+      "tokens": 5826
     },
-    "total_tokens": 10871
+    "total_tokens": 10476
   },
   "server_owner_telegram_dm": {
     "layers": {
@@ -387,8 +387,8 @@
         "tokens": 719
       },
       "system_prompt": {
-        "chars": 16035,
-        "tokens": 4008
+        "chars": 15948,
+        "tokens": 3987
       },
       "tool_catalog": {
         "chars": 5814,
@@ -396,14 +396,14 @@
       }
     },
     "system": {
-      "chars": 31867,
-      "tokens": 7966
+      "chars": 31780,
+      "tokens": 7945
     },
     "tools": {
-      "chars": 36297,
-      "count": 37,
-      "tokens": 9074
+      "chars": 34690,
+      "count": 36,
+      "tokens": 8672
     },
-    "total_tokens": 17041
+    "total_tokens": 16617
   }
 }

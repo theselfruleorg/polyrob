@@ -15,7 +15,7 @@
           "type": "array"
         },
         "chain": {
-          "description": "Chain to read from — the same address is a DIFFERENT token on a different chain, so name it deliberately. Readable: ethereum, base, robinhood, robinhood-testnet, arbitrum, polygon, optimism, solana.",
+          "description": "Chain to read from — the same address is a DIFFERENT token on a different chain, so name it deliberately. Readable: ethereum, base, robinhood, robinhood-testnet, arbitrum, polygon, optimism, bnb, solana.",
           "type": "string"
         },
         "signature": {

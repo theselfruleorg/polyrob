@@ -28,7 +28,7 @@
         },
         "tier": {
           "default": null,
-          "description": "Optional model tier for this work's runs — from the owner's chat only: 'heavy' for work that decides money (who is paid, how much, a winner) or is hard to undo; 'light' for bulk reads; 'default' = the normal model. <environment> names each tier's model. Requires 'why'.",
+          "description": "Optional model tier for this work's runs — from the owner's chat only: 'heavy' for work that decides money (who is paid and how much) or is hard to undo; 'light' for bulk reads; 'default' = the normal model. <environment> names each tier's model. Requires 'why'.",
           "enum": [
             "default",
             "heavy",

@@ -45,60 +45,56 @@
       "sha": "7d8f9245f92d"
     },
     {
-      "name": "compute",
-      "sha": "30a9af73bd55"
-    },
-    {
       "name": "web_fetch_fetch_url",
       "sha": "3bbc659950d4"
     },
     {
       "name": "defi_data_contract_read",
-      "sha": "dae0db5291bc"
+      "sha": "e5d51fbf4bd5"
     },
     {
       "name": "defi_data_lp_pool_info",
-      "sha": "18f1635a2170"
+      "sha": "1b6cc4cacc40"
     },
     {
       "name": "defi_data_lp_quote",
-      "sha": "0f673be19029"
+      "sha": "f5c9a1630f52"
     },
     {
       "name": "defi_data_new_pools",
-      "sha": "ea70e42b00bd"
+      "sha": "89b46dbacec3"
     },
     {
       "name": "defi_data_nft_info",
-      "sha": "8005c8d421c3"
+      "sha": "b1aef219b5a7"
     },
     {
       "name": "defi_data_ohlcv",
-      "sha": "ae8abe45e195"
+      "sha": "824d0ddc7c54"
     },
     {
       "name": "defi_data_pool_metrics",
-      "sha": "ec53dbf2cefb"
+      "sha": "0a8a3f6e7d9c"
     },
     {
       "name": "defi_data_price",
-      "sha": "978d8371ea5e"
+      "sha": "cd9fad678b94"
     },
     {
       "name": "defi_data_scan",
-      "sha": "b316a8879f6a"
+      "sha": "b9a6846d4615"
     },
     {
       "name": "defi_data_swap_quote",
-      "sha": "b59f084a11dc"
+      "sha": "0d0c962d0584"
     },
     {
       "name": "defi_data_token_holders",
-      "sha": "4f661307a9a0"
+      "sha": "6b7ce47a267c"
     },
     {
       "name": "defi_data_token_info",
-      "sha": "7578d7404034"
+      "sha": "6c46cad38a7d"
     },
     {
       "name": "defi_data_token_origin",
@@ -110,7 +106,7 @@
     },
     {
       "name": "defi_data_trending",
-      "sha": "c314db246d3c"
+      "sha": "7a18c49bc299"
     }
   ]
 }

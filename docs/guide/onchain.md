@@ -34,7 +34,7 @@ one case read without it.
 
 Gated `DEFI_DATA_ENABLED` (default ON). Read-only actions, **multichain**: the chain registry (`core/wallet/chains.py`)
 is the one table of supported chains — Base, Ethereum, Arbitrum, Polygon, Robinhood
-Chain, **Optimism** (read only: no money moves there until the owner arms it), and
+Chain, **Optimism** and **BNB Chain** (read only: no money moves there until the owner arms it), and
 **Solana** (reads; base58 addresses, no checksum). **No signer is
 constructed and nothing is broadcast**, so this tool cannot move value:
 

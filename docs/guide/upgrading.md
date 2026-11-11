@@ -105,6 +105,13 @@ polyrob config check
 
 ## 3. Version notes
 
+### Upgrading to 1.7.8
+
+No database migration.
+
+- **The `compute` action is gone.** It was new in 1.7.7. For a hash or a draw, the agent writes and runs a script with code execution on.
+- **The files under `ops/host_jobs/` are no longer read.** `/status` does not show them. You can delete that directory.
+
 ### Upgrading to 1.7.7
 
 No database migration.

@@ -428,6 +428,40 @@ _ROWS: Dict[str, ChainRow] = {
         money_enabled=False,
         assets_verified=True,
     ),
+    # ---- BNB Chain (order 0015, 064 S1 stage R) ----------------------------
+    # READ ONLY: money_enabled=False, no router/quoter/spender pinned (the swap
+    # route is stage M, behind the owner's D2). Measured 2026-11-11 against TWO
+    # public RPCs (bsc-dataseed.binance.org, bsc-rpc.publicnode.com), which agreed:
+    # eth_chainId 0x38; USDC 0x8AC7…580d (Binance-peg, 18 DECIMALS, not 6) code
+    # 3,230 hex chars, symbol USDC; WBNB 0xbb4C…095c code 6,286 hex chars, symbol
+    # WBNB, decimals 18; eth_gasPrice 5.0e7 wei (0.05 gwei). dexscreener "bsc" and
+    # goplus "56" answered a WBNB read; geckoterminal lists network id "bsc";
+    # bnb-mainnet.g.alchemy.com serves NFT reads (a made-up slug does not resolve).
+    # The explorer is behind a browser challenge (403 to a bot), so no keyless
+    # Blockscout API is pinned.
+    "bnb": ChainRow(
+        name="bnb",
+        chain_id=56,
+        native_symbol="BNB",
+        public_rpc="https://bsc-dataseed.binance.org",
+        # 250k gas x 5.0e7 wei x 3 headroom = 3.75e13 wei; 0.005 BNB is a brake
+        # well above that and far below a wallet's worth.
+        max_fee_wei_per_tx=5 * 10 ** 15,      # 0.005 BNB
+        fee_reserve=Decimal("0.005"),
+        purpose=("BSC: the busiest EVM venue for memecoins, so token screens "
+                 "matter more here; READ ONLY (screens, prices, balances) until "
+                 "the owner arms it. Gas is BNB and costs well under a cent. "
+                 "Its USDC is Binance-peg with 18 decimals, not 6."),
+        usdc="0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
+        wrapped_native="0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",   # WBNB, verified
+        dexscreener_id="bsc",
+        geckoterminal_id="bsc",
+        goplus_id="56",
+        alchemy_slug="bnb-mainnet",
+        explorer="https://bscscan.com",
+        money_enabled=False,
+        assets_verified=True,
+    ),
     # ---- non-EVM ---------------------------------------------------------
     # Solana. `money_enabled=False` and `route_hints=()` are NOT "nothing is
     # armed here" — they say value never moves through the EVM rail or the EVM

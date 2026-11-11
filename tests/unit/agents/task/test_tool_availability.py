@@ -171,4 +171,4 @@ def test_capability_gap_rule_is_in_every_shape(monkeypatch):
                dict(catalog_pinned=False)):
         note = ta.build_tool_availability_note([], **kw)
         assert ta.CAPABILITY_GAP_RULE in note, kw
-    assert "compute" in ta.CAPABILITY_GAP_RULE and "third-party" in ta.CAPABILITY_GAP_RULE
+    assert "script" in ta.CAPABILITY_GAP_RULE and "third-party" in ta.CAPABILITY_GAP_RULE

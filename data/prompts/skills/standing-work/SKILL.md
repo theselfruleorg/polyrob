@@ -20,7 +20,7 @@ later run, which sees only what you wrote, can finish it.
 |---|---|---|
 | Steps of this turn | a TODO | `task_todo_add` |
 | One piece of work, done once, in the background | a goal | `goal_create` |
-| Pay people, pick a winner, or many reads — asked in the owner's chat | a heavy goal | `goal_create(tier="heavy", why=…, report_back=true)` |
+| Pay people, or many reads — asked in the owner's chat | a heavy goal | `goal_create(tier="heavy", why=…, report_back=true)` |
 | The same work again at set times, or a watch | a job | `cronjob_schedule` |
 | One reminder at one time | a one-time job | `cronjob_schedule(schedule="<ISO time ending in Z>")` |
 | A long side task for this chat only | a background child | `delegate_task(background=true)` (lost on a restart) |
