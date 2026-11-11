@@ -102,12 +102,11 @@ def _money_goal_clause(tools) -> str:
     return " On an owner turn a money goal becomes a card for the owner."
 
 
-#: 112 W4: what to do when a step needs a capability this session lacks.
+#: What to do when a step needs a capability this session lacks.
 CAPABILITY_GAP_RULE = (
-    "A step needs a capability you lack? Use the deterministic tool first: compute (a hash, "
-    "the fair draw) or a host job's output files. If none fits, say plainly what "
-    "you cannot do and raise ONE ask. Never decide a money outcome by hand; never send a seed, "
-    "a key or entrant data to a third-party service.")
+    "A step needs a capability you lack? If you can run code, write and run a script. If you "
+    "cannot run code here, say plainly what you cannot do and raise ONE ask. Never decide a "
+    "money outcome by hand; never send a seed, a key or personal data to a third-party service.")
 
 
 def build_tool_availability_note(loaded_tool_ids, *, can_create_goals: bool = True,

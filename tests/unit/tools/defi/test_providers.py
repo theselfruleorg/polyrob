@@ -51,13 +51,13 @@ def test_unsupported_chains_are_dropped_deliberately():
     genuinely does not carry — which is the only way this test can still be
     about the filter rather than about EIP-55 happening to reject base58."""
     payload = {"pairs": _fx("dexscreener_search.json")["pairs"] + [{
-        "chainId": "bsc",
+        "chainId": "cronos",
         "baseToken": {"address": "0x" + "ab" * 20, "symbol": "AERO", "name": "x"},
         "liquidity": {"usd": 9_999_999.0}, "priceUsd": "1.0",
     }]}
     cands = dexscreener.parse_search(payload)
     assert cands, "the carried chains must still come through"
-    assert all(c.chain != "bsc" for c in cands)
+    assert all(c.chain != "cronos" for c in cands)
     assert {c.chain for c in cands} <= set(dexscreener.SUPPORTED_CHAINS)
 
 

@@ -15,7 +15,7 @@ from typing import Tuple
 COMMON_TOOLS_FIRST: Tuple[str, ...] = (
 	# every rig
 	"done", "send_message", "load_skill", "read_skill_resource",
-	"task_todo_", "tool_describe", "tool_search", "compute",
+	"task_todo_", "tool_describe", "tool_search",
 	# all but the room
 	"filesystem_", "web_fetch_",
 	# most rigs

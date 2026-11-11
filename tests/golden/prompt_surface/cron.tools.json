@@ -45,10 +45,6 @@
       "sha": "7d8f9245f92d"
     },
     {
-      "name": "compute",
-      "sha": "30a9af73bd55"
-    },
-    {
       "name": "filesystem_append_file",
       "sha": "9a13b82415c9"
     },
@@ -346,7 +342,7 @@
     },
     {
       "name": "cronjob_edit",
-      "sha": "f6dc5a78c411"
+      "sha": "54cc905c8f02"
     },
     {
       "name": "cronjob_list",
@@ -358,7 +354,7 @@
     },
     {
       "name": "cronjob_schedule",
-      "sha": "003ce38fe215"
+      "sha": "b0a448f8b150"
     },
     {
       "name": "cronjob_show",
@@ -370,7 +366,7 @@
     },
     {
       "name": "goal_create",
-      "sha": "f048e89be59d"
+      "sha": "740d92c15836"
     },
     {
       "name": "goal_list",
@@ -386,7 +382,7 @@
     },
     {
       "name": "goal_update",
-      "sha": "81a2c10ed456"
+      "sha": "dca0525c60a5"
     },
     {
       "name": "knowledge_kb_ingest",

@@ -268,9 +268,8 @@ def solana_settle_enabled() -> bool:
 def _lookalike_warning(sender) -> str:
     """Name the paid address an unmatched sender imitates (address poisoning).
 
-    2026-10-14 01:33Z: dust from 0x1932fd…6d03 — a look-alike of a bounty
-    winner paid nine minutes earlier — reached the owner as a plain unmatched
-    payment. Sends to it are refused already; this tells the owner why it came.
+    Dust from a look-alike of an address paid minutes earlier reached the owner
+    as a plain unmatched payment. Sends to it are refused already; this tells the owner why it came.
     Fail-open: unreadable history adds nothing to a notice that must still go.
     """
     try:

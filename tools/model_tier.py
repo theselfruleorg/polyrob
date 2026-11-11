@@ -11,7 +11,7 @@ import agents.task.constants  # noqa: F401 — 112: registers the light-tier res
 
 TIER_FIELD_DESCRIPTION = (
     "Optional model tier for this work's runs — from the owner's chat only: 'heavy' for work "
-    "that decides money (who is paid, how much, a winner) or is hard to undo; 'light' for bulk "
+    "that decides money (who is paid and how much) or is hard to undo; 'light' for bulk "
     "reads; 'default' = the normal model. <environment> names each tier's model. Requires 'why'.")
 WHY_FIELD_DESCRIPTION = "One line: why this tier. Required with 'tier'; shown in /status."
 

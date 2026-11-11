@@ -45,10 +45,6 @@
       "sha": "7d8f9245f92d"
     },
     {
-      "name": "compute",
-      "sha": "30a9af73bd55"
-    },
-    {
       "name": "filesystem_append_file",
       "sha": "9a13b82415c9"
     },

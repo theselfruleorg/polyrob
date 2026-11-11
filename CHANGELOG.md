@@ -10,6 +10,25 @@ short, user-facing notes for each release are on its GitHub Release page.
 
 ## [Unreleased]
 
+## [1.7.8] — 2026-11-11
+
+### Added
+
+- BNB Chain (`bnb`, chain 56) is a read-only chain: token screens, prices, balances and NFT holdings work; no money moves (`money_enabled` off, no swap route pinned). Its USDC is the 18-decimal Binance-peg; `DEFI_EVM_RPC_BNB` pins an endpoint.
+
+### Changed
+
+- The rule for a missing capability says: write and run a script, or say what you cannot do and raise one ask. The owner-work rule and the model-tier help say "who is paid and how much".
+
+### Removed
+
+- The `compute` action (hashes and the fair draw) and the host-job status files with their `/status` and `<operations>` lines, added in 1.7.7. They served one install's task; an agent that needs a hash or a draw writes and runs its own script.
+- The agent NFT mint help no longer states a price; the quote names it.
+
+### Fixed
+
+- A new credential store (`auth.json`) appears with its content: two first writers at the same moment no longer meet an empty file and fail with "unreadable".
+
 ## [1.7.7] — 2026-11-10
 
 ### Added

@@ -320,7 +320,7 @@ def render_agent_health_note(snap: StatusSnapshot, *, max_items: int = 8,
 
 #: Per-list caps of the <operations> block: 1 header + 1 pause line + three
 #: lists of (heading + items + "+N more") stay within 25 lines.
-OPS_MAX_JOBS, OPS_MAX_GOALS, OPS_MAX_STOPS, OPS_MAX_HOST_JOBS = 6, 6, 5, 3
+OPS_MAX_JOBS, OPS_MAX_GOALS, OPS_MAX_STOPS = 6, 6, 5
 
 
 def _utc(ts, fmt: str = "%Y-%m-%d %H:%M") -> str:
@@ -387,8 +387,8 @@ def _ops_job(j: dict) -> str:
 def render_operations_block(snap, *, now: Optional[float] = None) -> str:
     """The agent's per-turn ``<operations>`` body: active jobs, open goals, the
     ``/pause`` record and the owner's stops, from the ``work`` and ``loops``
-    sections (``build_operations_sections`` or a full snapshot). At most 30
-    lines (25 + the host jobs, 112); a store that could not be read says so, never "none"."""
+    sections (``build_operations_sections`` or a full snapshot). At most 25
+    lines; a store that could not be read says so, never "none"."""
     sections = getattr(snap, "sections", snap) or {}
     work, loops = sections.get("work"), sections.get("loops")
     out = [f"Live harness state as of {_utc(now or time.time())} UTC (same source as /status):"]
@@ -420,20 +420,7 @@ def render_operations_block(snap, *, now: Optional[float] = None) -> str:
     _ops_list(out, "Owner stops", stops, stops_why, OPS_MAX_STOPS, "/goals and /jobs",
               lambda s: f"- {s.get('scope')}: {s.get('label')} since "
                         f"{_utc(s.get('since'), '%Y-%m-%d')} UTC")
-    # 112 W1: the host jobs (outside the agent) and their outputs — how the agent learns
-    # a deterministic job exists. No line when the install has none.
-    host = loops.data.get("host_jobs", []) if loops is not None and loops.available else []
-    if host is None or host:
-        _ops_list(out, "Host jobs (outside you; read their outputs, never redo them by hand)",
-                  host, (loops.data.get("host_jobs_reason") or "?") if loops else "?",
-                  OPS_MAX_HOST_JOBS, "/status", _ops_host_job)
     return "\n".join(out)
-
-
-def _ops_host_job(j: dict) -> str:
-    outs = ", ".join(j.get("outputs") or []) or "none listed"
-    why = f" ({j['why'][:80]})" if j.get("why") and j.get("state") != "ok" else ""
-    return f"- {j.get('name')}: {j.get('purpose') or '?'} · {j.get('state')}{why} · outputs: {outs}"
 
 
 def _notice_author(row: dict) -> str:

@@ -37,8 +37,11 @@ EXCUSED_ALCHEMY = {
 EXCUSED_NFT = {
     "robinhood-testnet": _TESTNET_ROW,
 }
-EXCUSED_8004: dict = {}  # robinhood pinned 2026-09-23 (measured; 050 §7.1 Phase 0)
+EXCUSED_8004 = {
+    "bnb": "ERC-8004 registry not checked on BSC — stage P (order 0015 is stage R)",
+}  # robinhood pinned 2026-09-23 (measured; 050 §7.1 Phase 0)
 EXCUSED_DEX = {
+    "bnb": "stage R only; PancakeSwap LP rows are stage P",
     "optimism": "stage R only; LP rows are stage P — E-S1-01",
     "robinhood-testnet": _TESTNET_ROW,
 }
@@ -120,3 +123,18 @@ def test_robinhood_alchemy_rows_are_the_measured_ones():
     made-up slug. The RPC row shares the slug (the demo key 429s eth_chainId)."""
     assert onchain._ALCHEMY_NETWORK["robinhood"] == "robinhood-mainnet"
     assert _nft_hosts()["robinhood"] == "robinhood-mainnet.g.alchemy.com"
+
+
+def test_bnb_row_is_pinned_and_read_only():
+    """Order 0015: measured 2026-11-11 on two RPCs; the USDC is the 18-decimal peg."""
+    row = chains.get("bnb")
+    assert row is not None and row.chain_id == 56 and row.native_symbol == "BNB"
+    assert row.usdc == "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d"
+    assert row.wrapped_native == "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c"
+    assert (row.dexscreener_id, row.geckoterminal_id, row.goplus_id) == ("bsc", "bsc", "56")
+    assert row.money_enabled is False and row.aggregator_spender is None
+    assert "bnb" not in chains.money_chains() and "bnb" not in chains.swap_chains()
+    ok, why = chains.money_capable("bnb")
+    assert ok is False and why
+    assert onchain._ALCHEMY_NETWORK["bnb"] == "bnb-mainnet"
+    assert _nft_hosts()["bnb"] == "bnb-mainnet.g.alchemy.com"

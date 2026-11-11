@@ -80,7 +80,7 @@
    "github_create_issue",
    "aave_supply"
   ],
-  "universe_size": 410
+  "universe_size": 409
  },
  "actions": {
   "": {
@@ -3675,51 +3675,6 @@
    "room": {
     "is_room_denied_call(name, None)": false,
     "is_room_denied_call(name, owner)": true
-   },
-   "spend_exemption": {},
-   "untrusted": {
-    "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
-   }
-  },
-  "compute": {
-   "approval": {
-    "autonomous_gating_lanes(env)": "reported"
-   },
-   "correspondent": {
-    "is_high_impact(name)": false,
-    "is_high_impact_call(name, None)": false,
-    "is_high_impact_call(name, owner)": false,
-    "reply_action": false
-   },
-   "effect": {
-    "classify_effect(None)": null,
-    "classify_effect(owner)": null,
-    "non_write_row_in": [],
-    "pause_kind_for(owner)": null,
-    "write_row": {}
-   },
-   "emitted": {
-    "direct_controller_action": true,
-    "live_default_env": false,
-    "live_twitter_enabled": false,
-    "synthetic_mcp": false
-   },
-   "listed_in": [
-    "effects.ACTION_EFFECTS"
-   ],
-   "money": {
-    "approval_queue._is_money_action(name)": false,
-    "authority.money_action(name)": false,
-    "authority.money_tool(owner)": null,
-    "metering_gate.MONEY_TOOLS∋owner": null,
-    "room_policy._is_money_call(name, None)": false,
-    "room_policy._is_money_call(name, owner)": false
-   },
-   "owner_tools": [],
-   "room": {
-    "is_room_denied_call(name, None)": false,
-    "is_room_denied_call(name, owner)": false
    },
    "spend_exemption": {},
    "untrusted": {

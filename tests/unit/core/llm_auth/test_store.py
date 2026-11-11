@@ -160,3 +160,25 @@ class TestWriteFailureHygiene:
                      if p.name.startswith(".auth.json.")]
         assert leftovers == []
         assert store.get_provider("p")["access_token"] == "t"  # old content intact
+
+
+def test_a_new_store_is_never_seen_empty(tmp_path):
+    """The first creation links a written file: no reader meets a zero-byte store."""
+    import threading
+    from core.llm_auth.store import AuthStore
+    errors = []
+
+    def first_write(i):
+        try:
+            AuthStore(tmp_path / f"s{i // 4}" / "auth.json").set_provider(f"p{i}", {"access_token": "t"})
+        except Exception as e:  # pragma: no cover - the failure this test guards
+            errors.append(repr(e))
+
+    threads = [threading.Thread(target=first_write, args=(i,)) for i in range(40)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    for d in range(10):
+        assert len(AuthStore(tmp_path / f"s{d}" / "auth.json").list_providers()) == 4
