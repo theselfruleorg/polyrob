@@ -523,7 +523,7 @@ def test_top_cost_reads_the_spend_view(tmp_path, monkeypatch):
 
 # --- routines review 2026-10-29: failed jobs first; ask age ---------------------
 
-def _quiet(monkeypatch):
+def _quiet_jobs(monkeypatch):
     monkeypatch.setattr(digest, "_ledger", lambda uid, days: _split_ledger())
     monkeypatch.setattr(digest, "_event_aggregate", lambda uid, since: {})
     monkeypatch.setattr(digest, "_episodes", lambda uid, since: [])
@@ -535,7 +535,7 @@ def _quiet(monkeypatch):
 async def test_a_failed_owner_job_comes_before_the_health_block(monkeypatch):
     import time as _t
     from datetime import datetime
-    _quiet(monkeypatch)
+    _quiet_jobs(monkeypatch)
     monkeypatch.setattr(digest, "_open_asks", lambda uid, d, *_: [])
     at = datetime.fromtimestamp(_t.time() - 3600).isoformat()
     job = SimpleNamespace(
@@ -553,7 +553,7 @@ async def test_a_failed_owner_job_comes_before_the_health_block(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_a_failure_outside_the_window_is_not_repeated(monkeypatch):
-    _quiet(monkeypatch)
+    _quiet_jobs(monkeypatch)
     monkeypatch.setattr(digest, "_open_asks", lambda uid, d, *_: [])
     job = SimpleNamespace(id="j1", task="x", status="scheduled", next_run_at=None,
                           last_run_at=None, schedule_spec="1h",
@@ -566,7 +566,7 @@ async def test_a_failure_outside_the_window_is_not_repeated(monkeypatch):
 @pytest.mark.asyncio
 async def test_an_old_ask_shows_its_age_and_how_to_withdraw_it(monkeypatch):
     import time as _t
-    _quiet(monkeypatch)
+    _quiet_jobs(monkeypatch)
     monkeypatch.setattr(digest, "_open_asks", lambda uid, d, *_: [
         {"id": "bc5f02a4e9b2", "title": "confirm the USDG contract",
          "created_at": _t.time() - 12.8 * 86400},
