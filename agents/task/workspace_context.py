@@ -14,8 +14,10 @@ import re
 import time
 import threading
 import os
+import stat as _stat
 
 from core.doc_kind import is_doc_path, parse_front_matter
+from core.walk_skip import prune_dirs
 from agents.task.path import pm
 from agents.task.agent.session import SessionManager
 
@@ -46,6 +48,44 @@ def _is_noise(rel_path: str) -> bool:
         return True
     name = parts[-1] if parts else rel_path
     return name.endswith(('.lock', '.tmp', '.swp', '.part', '~'))
+
+
+#: The scan is bounded: a workspace can be a whole project tree (prod: 21,101
+#: entries, 1 GB, and the walk held the event loop for up to 26 s).
+SCAN_MAX_ENTRIES = 5000
+SCAN_MAX_SECONDS = 1.0
+
+
+def scan_workspace(workspace_dir, *, max_entries: int = SCAN_MAX_ENTRIES,
+                   max_seconds: float = SCAN_MAX_SECONDS):
+    """``({relative path: FileInfo}, truncated)`` for the files under
+    ``workspace_dir``. Dot directories and ``core.walk_skip`` directories are
+    pruned BEFORE descent (a new file under one of them is never announced),
+    in sorted order so a cut scan stops at the same place each time."""
+    root = str(workspace_dir)
+    now = time.time()
+    deadline = time.monotonic() + max_seconds
+    files: Dict[str, FileInfo] = {}
+    seen = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = prune_dirs(dirnames, dot_dirs=True)
+        for name in sorted(filenames):
+            seen += 1
+            if seen > max_entries or time.monotonic() > deadline:
+                return files, True
+            full = os.path.join(dirpath, name)
+            rel_path = os.path.relpath(full, root)
+            if _is_noise(rel_path):
+                continue
+            try:
+                st = os.stat(full)
+            except OSError:
+                continue
+            if not _stat.S_ISREG(st.st_mode):
+                continue
+            files[rel_path] = FileInfo(name=name, path=rel_path, size=st.st_size,
+                                       mtime=st.st_mtime, age_seconds=now - st.st_mtime)
+    return files, False
 
 
 _WRITER_RE = re.compile(r"[^A-Za-z0-9 ._-]")
@@ -82,6 +122,9 @@ class WorkspaceChanges:
     uploaded: Set[str] = field(default_factory=set)
     # Relative path -> the writer the file itself declares (``authored_by:``).
     declared_by: Dict[str, str] = field(default_factory=dict)
+    # The scan hit its entry or time cap: the lists are what the scanned part
+    # shows, and no deletion is claimed (a cut scan cannot prove one).
+    truncated: bool = False
 
     def has_changes(self) -> bool:
         return bool(self.added or self.modified or self.deleted)
@@ -123,6 +166,10 @@ class WorkspaceChanges:
 
         for path in self.deleted[:max_files]:
             lines.append(f"Removed: {path}")
+
+        if self.truncated:
+            lines.append("(the workspace is large: the scan was cut, so a change "
+                         "deeper in the tree is not listed)")
 
         return "\n".join(lines)
 
@@ -211,37 +258,30 @@ class WorkspaceContext:
             if not workspace_dir.exists():
                 return WorkspaceChanges()
 
-            # Get current files
-            current_files = {}
             now = time.time()
-
-            for file_path in workspace_dir.rglob('*'):
-                if file_path.is_file():
-                    rel_path = str(file_path.relative_to(workspace_dir))
-                    if _is_noise(rel_path):
-                        continue
-                    stat = file_path.stat()
-                    current_files[rel_path] = FileInfo(
-                        name=file_path.name,
-                        path=rel_path,
-                        size=stat.st_size,
-                        mtime=stat.st_mtime,
-                        age_seconds=now - stat.st_mtime
-                    )
+            current_files, truncated = scan_workspace(workspace_dir)
 
             # Get previous snapshot
             cache = self._session_cache.get(session_id, {})
             previous_files = cache.get('files_snapshot', {})
+            # A cut scan (now or last time) does not see the same part of the
+            # tree twice for certain: a file is "new" only when it was also
+            # written after the last check, and nothing is called removed.
+            partial = truncated or bool(cache.get('truncated'))
+            last_check = float(cache.get('last_check_time') or 0.0)
 
             # Calculate changes
             changes = WorkspaceChanges(
                 uploaded={f.path for f in self.get_recent_uploads(session_id)},
+                truncated=truncated,
             )
 
             if since_last_check and previous_files:
                 # Added files
                 for path, file_info in current_files.items():
                     if path not in previous_files:
+                        if partial and file_info.mtime < last_check:
+                            continue
                         changes.added.append(file_info)
                         writer = _declared_writer(workspace_dir / path)
                         if writer:
@@ -250,7 +290,7 @@ class WorkspaceContext:
                         changes.modified.append(file_info)
 
                 # Deleted files
-                for path in previous_files:
+                for path in ([] if partial else previous_files):
                     if path not in current_files:
                         changes.deleted.append(path)
             else:
@@ -261,9 +301,14 @@ class WorkspaceContext:
                         changes.added.append(file_info)
 
             # Update cache
+            if partial:
+                # Keep what an earlier scan saw: a later full scan must not
+                # announce those files as new.
+                current_files = {**previous_files, **current_files}
             self._session_cache[session_id] = {
                 'last_check_time': now,
-                'files_snapshot': current_files
+                'files_snapshot': current_files,
+                'truncated': truncated,
             }
 
             return changes

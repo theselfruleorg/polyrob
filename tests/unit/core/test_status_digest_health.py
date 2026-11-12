@@ -71,3 +71,32 @@ def test_an_unreadable_cron_store_is_not_a_confident_zero(tmp_path, monkeypatch)
     Report the fact rather than a clean bill of health."""
     monkeypatch.setenv("OWNER_DIGEST_ENABLED", "true")
     assert "digest_unknown" in _health_keys(tmp_path)
+
+
+def test_a_digest_the_owner_stopped_is_a_fact_not_a_warning(tmp_path, monkeypatch):
+    """116 W5.9: prod warned 'schedule one' on every render for a job the owner
+    had stopped; the agent's own cancel still warns."""
+    from core.status_snapshot import _digest_health
+    monkeypatch.setenv("OWNER_DIGEST_ENABLED", "true")
+    _cron_db(tmp_path / "cron.db", [{"id": "d1", "status": "cancelled", "enabled": 0, "payload": {
+        "digest": True, "stopped": {"by": "alice", "via": "telegram", "at": "2026-11-03T08:00:00"}}}])
+    lines = []
+    assert _digest_health("alice", str(tmp_path), lines) == []
+    assert lines and lines[0].startswith("digest stopped by you 2026-11-03")
+
+
+def test_a_digest_the_agent_cancelled_still_warns(tmp_path, monkeypatch):
+    from core.status_snapshot import _digest_health
+    monkeypatch.setenv("OWNER_DIGEST_ENABLED", "true")
+    _cron_db(tmp_path / "cron.db", [{"id": "d1", "status": "cancelled", "enabled": 0, "payload": {
+        "digest": True, "stopped": {"by": "alice", "via": "agent", "at": "2026-11-03T08:00:00"}}}])
+    assert [h.key for h in _digest_health("alice", str(tmp_path), [])] == ["digest_unscheduled"]
+
+
+def test_the_pref_turns_the_warning_off(tmp_path, monkeypatch):
+    from core import owner_digest
+    from core.status_snapshot import _digest_health
+    monkeypatch.setenv("OWNER_DIGEST_ENABLED", "true")
+    _cron_db(tmp_path / "cron.db", [])
+    monkeypatch.setattr(owner_digest, "digest_enabled_for", lambda uid, home: False)
+    assert _digest_health("alice", str(tmp_path)) == []

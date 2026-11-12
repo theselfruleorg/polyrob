@@ -29,24 +29,97 @@ may be absent in a given deployment):
   (``register_inbound_receipts``; today the x402 rail registers it).
 """
 import logging
+import os
+import sqlite3
+import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 
-async def _resolve_db(db=None):
+class ReadOnlyBotDb:
+    """``fetch_one`` / ``fetch_all`` over ``core.sqlite_util.read_only_connect``
+    (116 W6.1): the db a ledger read takes when there is no container, or when it
+    runs off the main thread. It opens the file ``mode=ro`` per call — it never
+    creates bot.db, never takes the WAL write path, and never touches the shared
+    connection (whose ``asyncio.Lock`` is bound to the main loop and gives no
+    exclusion across threads). The legs keep their SQL."""
+
+    def __init__(self, path: str):
+        self.path = str(path)
+
+    def _query(self, query: str, params, one: bool):
+        from core.sqlite_util import read_only_connect
+        conn = read_only_connect(self.path)
+        try:
+            conn.row_factory = sqlite3.Row
+            cur = conn.execute(query, tuple(params or ()))
+            if one:
+                row = cur.fetchone()
+                return dict(row) if row is not None else None
+            return [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    async def fetch_one(self, query: str, params=()) -> Optional[Dict[str, Any]]:
+        return self._query(query, params, True)
+
+    async def fetch_all(self, query: str, params=()):
+        return self._query(query, params, False)
+
+
+def _container_db_path(container) -> Optional[str]:
+    """The path the container's own bot.db connection opened, else its config's
+    ``data_dir`` through the one rule. None when neither can be read."""
+    try:
+        dbm = container.get_service("database_manager")
+        path = getattr(getattr(dbm, "connection", None), "db_path", None)
+        if path:
+            return str(path)
+    except Exception:
+        logger.debug("ledger: container has no database_manager", exc_info=True)
+    cfg = getattr(container, "config", None)
+    data_dir = getattr(cfg, "data_dir", None)
+    if data_dir:
+        from core.runtime_paths import bot_db_path
+        return bot_db_path(str(data_dir))
+    return None
+
+
+async def _resolve_db(db=None, data_dir: Optional[str] = None) -> Tuple[Any, Optional[str]]:
+    """``(db, reason)``: the db the DB-backed legs read, or ``None`` and the real
+    reason it could not be opened (116 W6.1 — never a fixed "no table" text).
+
+    - an explicit ``db`` wins;
+    - a container on the MAIN thread: its shared ``database_manager``;
+    - otherwise (no container — ``polyrob doctor``, the recap, a bare CLI — or a
+      call off the main thread, the snapshot's bridge read): a
+      :class:`ReadOnlyBotDb` over the container's path, else
+      ``core.runtime_paths.bot_db_path(data_dir)``.
+
+    2026-09-21: ``get_instance()`` RAISES when no container was ever built, so
+    the instance is read directly; no container is never a raise here."""
     if db is not None:
-        return db
+        return db, None
     from core.container import DependencyContainer
-    # 2026-09-21: `get_instance()` RAISES when no container was ever built, so
-    # every container-less seat (`polyrob doctor`, the recap, a bare CLI) saw
-    # "could not verify: money (ValueError: Configuration required …)" — an
-    # unreadable ledger over a store it never tried to open. No container is
-    # simply no db here; the legs then render unavailable, never a raise.
-    if DependencyContainer._instance is None:
-        return None
-    return DependencyContainer.get_instance().get_service("database_manager")
+    container = DependencyContainer._instance
+    path = None
+    if container is not None:
+        if threading.current_thread() is threading.main_thread():
+            try:
+                shared = container.get_service("database_manager")
+            except Exception as e:
+                return None, f"no database_manager ({type(e).__name__}: {e})"
+            if shared is not None:
+                return shared, None
+        path = _container_db_path(container)
+    if not path:
+        from core.runtime_paths import bot_db_path
+        path = bot_db_path(data_dir)
+    if not os.path.isfile(path):
+        return None, f"no bot.db at {path}"
+    return ReadOnlyBotDb(path), None
 
 
 def _policy_gate():
@@ -109,6 +182,23 @@ def _caps_block() -> Dict[str, Any]:
         return empty
 
 
+def _reason(exc: BaseException) -> str:
+    return f"{type(exc).__name__}: {str(exc)[:160]}"
+
+
+def _costs_unavailable(reason: str) -> Dict[str, Any]:
+    return {"llm_api_cost_usd": 0.0, "credits_spent": 0.0, "llm_calls": 0,
+            "llm_api_cost_total_usd": 0.0, "llm_calls_total": 0,
+            "costs_available": False, "costs_reason": reason}
+
+
+def _inbound_unavailable(reason: str) -> Dict[str, Any]:
+    return {"income_usd": 0.0, "settled_payments": 0,
+            "pending_invoices_usd": 0.0, "pending_invoices": 0,
+            "refund_due_usd": 0.0, "refund_due_count": 0,
+            "inbound_available": False, "inbound_reason": reason}
+
+
 async def _costs_leg(database, user_id: str, days: int) -> Dict[str, Any]:
     # H14b (2026-07-15): each leg carries an availability marker so a MISSING /
     # corrupt table ("no data yet") is distinguishable from a genuine $0.00 —
@@ -140,13 +230,11 @@ async def _costs_leg(database, user_id: str, days: int) -> Dict[str, Any]:
             "llm_calls_total": int(total.get("calls") or 0) if total else 0,
             "costs_available": True,
         }
-    except Exception:
+    except Exception as e:
         # Was silent debug — a metering break must be observable, not a false $0
-        # to the owner (H14b). Warn, and flag the leg unavailable.
+        # to the owner (H14b). Warn, and flag the leg unavailable WITH its cause.
         logger.warning("ledger: usage_records (costs) leg unavailable", exc_info=True)
-        return {"llm_api_cost_usd": 0.0, "credits_spent": 0.0, "llm_calls": 0,
-                "llm_api_cost_total_usd": 0.0, "llm_calls_total": 0,
-                "costs_available": False}
+        return _costs_unavailable(_reason(e))
 
 
 def _wallet_leg(user_id: str, days: int) -> Dict[str, Any]:
@@ -221,16 +309,13 @@ async def _inbound_leg(database, user_id: str, days: int) -> Dict[str, Any]:
         if reader is None:
             raise LookupError("no inbound receipts reader is registered")
         return {**(await reader(database, user_id, days)), "inbound_available": True}
-    except Exception:
+    except Exception as e:
         logger.warning("ledger: x402 inbound leg unavailable", exc_info=True)
-        return {"income_usd": 0.0, "settled_payments": 0,
-                "pending_invoices_usd": 0.0, "pending_invoices": 0,
-                "refund_due_usd": 0.0, "refund_due_count": 0,
-                "inbound_available": False}
+        return _inbound_unavailable(_reason(e))
 
 
 async def build_ledger(user_id: str, *, days: int = 7, include_balances: bool = False,
-                       db=None) -> Dict[str, Any]:
+                       db=None, data_dir: Optional[str] = None) -> Dict[str, Any]:
     """The unified balance-sheet view for one tenant over a trailing window.
 
     Tenant-scoped by contract: an empty user_id is refused (mirrors
@@ -261,19 +346,19 @@ async def build_ledger(user_id: str, *, days: int = 7, include_balances: bool = 
     if not user_id:
         raise ValueError("accounting requires an authenticated tenant (empty user_id refused)")
     days = max(1, int(days))
-    database = await _resolve_db(db)
+    database, db_reason = await _resolve_db(db, data_dir)
     # No database at all (standalone caller with no bot.db) => the DB-backed legs
-    # are UNAVAILABLE, not zero (H14b): mark them so the renderers show "no data
-    # yet" rather than a fabricated $0.00.
-    costs = (await _costs_leg(database, user_id, days)) if database is not None else {
-        "llm_api_cost_usd": 0.0, "credits_spent": 0.0, "llm_calls": 0,
-        "llm_api_cost_total_usd": 0.0, "llm_calls_total": 0,
-        "costs_available": False}
-    inbound = (await _inbound_leg(database, user_id, days)) if database is not None else {
-        "income_usd": 0.0, "settled_payments": 0,
-        "pending_invoices_usd": 0.0, "pending_invoices": 0,
-        "refund_due_usd": 0.0, "refund_due_count": 0,
-        "inbound_available": False}
+    # are UNAVAILABLE, not zero (H14b), and each carries the real reason (W6.1).
+    if database is None:
+        # An absent bot.db is a fact about a fresh home, and the leg says so; only
+        # a store that exists and cannot be read is worth a warning line.
+        (logger.debug if str(db_reason or "").startswith("no bot.db")
+         else logger.warning)("ledger: bot.db not readable: %s", db_reason)
+        costs = _costs_unavailable(db_reason or "bot.db not readable")
+        inbound = _inbound_unavailable(db_reason or "bot.db not readable")
+    else:
+        costs = await _costs_leg(database, user_id, days)
+        inbound = await _inbound_leg(database, user_id, days)
     wallet = _wallet_leg(user_id, days)
 
     # Pop income_usd (mirrors the two runtime pops below): it belongs ONLY in
@@ -347,10 +432,13 @@ def ledger_availability_note(ledger: Dict[str, Any]) -> Optional[str]:
     # container-error line ("finance unavailable (…)") the views must never
     # regress to; tests guard on its absence.
     degraded = []
+    # 116 W6.1: the leg's own reason, never a fixed "no table" for every cause.
     if not costs_ok:
-        degraded.append("LLM/API cost metering absent (no usage_records table)")
+        degraded.append("LLM/API cost metering absent "
+                        f"({ledger.get('costs_reason') or 'usage_records not read'})")
     if not inbound_ok:
-        degraded.append("invoice/earnings metering absent (no x402 table)")
+        degraded.append("invoice/earnings metering absent "
+                        f"({ledger.get('inbound_reason') or 'x402 table not read'})")
     if metering == "disabled":
         degraded.append("wallet-spend metering OFF (TELEMETRY_EVENT_LOG_ENABLED)")
     elif metering == "error":

@@ -143,7 +143,9 @@ def test_each_unreadable_store_says_could_not_read_and_the_others_still_print(st
 
     def boom(*a, **k):
         raise sqlite3.OperationalError("database disk image is malformed")
-    monkeypatch.setattr("core.event_log.execute_retry", boom)
+    # Every event-log READ goes through ``_run`` (a read-only handle first, then the
+    # shared connection); patching ``execute_retry`` alone misses the read-only path.
+    monkeypatch.setattr("core.event_log.TelemetryEventLog._run", boom)
     out = _render(stores)
     assert "acts in 7 days: could not read" in out
     assert "money in 7 days: could not read" in out

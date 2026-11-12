@@ -505,7 +505,8 @@ def allow(c: GuardContext) -> Optional[Decision]:
     valuation_basis = c.valuation_basis
     _lane = ("owner_direct" if owner_direct
              else "owner_approved" if owner_granted else "autonomous")
-    return Decision(True, "authorized" + (" (paired-leg implied valuation)" if lp_implied else ""), lane=_lane, amount_usd=amount_usd,
+    return Decision(True, "authorized" + (" (paired-leg implied valuation)" if lp_implied else "")
+                    + "".join(f" — NOTE: {n}" for n in c.notes), lane=_lane, amount_usd=amount_usd,
                     sim_gas_used=deltas.gas_used, deploy=deploy_facts,
                     agent_id=registered_agent_id, position_token_id=position_token_id,
                     simulated_token_deltas=dict(deltas.token_deltas),

@@ -135,8 +135,17 @@ def test_realized_gross_reasons_and_gas(home):
                                     proceeds_usd=4.0, close_reason="stop_loss"),
                 db_path=home["book_path"], now=2500.0)
     t = _text(home)
-    assert "realized P&L: -$6.00 gross" in t and "stop_loss 1" in t
+    assert "realized P&L: -$6.00 gross" in t and "closes by reason: stop_loss 1" in t
     assert "gas not recorded" in t
+
+
+def test_a_blank_close_reason_is_unrecorded_not_unknown(home):
+    """116 W6.2: a close with no reason recorded says so."""
+    _mandate(home)
+    _buy(home)
+    apply_delta("u1", PositionDelta(chain="base", address=MEME, symbol="MEME", qty=-100.0,
+                                    proceeds_usd=4.0), db_path=home["book_path"], now=2500.0)
+    assert "closes by reason: unrecorded 1" in _text(home)
 
 
 def test_no_episode_store_is_unknown(home):
@@ -154,7 +163,7 @@ def test_unreadable_mandate_store_is_unknown(home):
 def test_book_without_mandate(home):
     _buy(home)
     t = _text(home)
-    assert "open positions: 1 in the book, no mandate" in t
+    assert "open positions: 1 open in the book, no mandate" in t
 
 
 def test_render_wraps(home):

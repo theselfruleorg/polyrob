@@ -81,7 +81,6 @@ _COMMANDS = ("/task", "/cancel", "/new", "/help",
              "/kb", "/files",
              "/model", "/skills",  # 080 D8: the model + its source; the skill list
              "/usage",  # 2026-10-14 D6: AI cost by kind of work, job, model, day
-             "/dev",  # owner ↔ on-host dev-loop rail (proposal 027 WS-1)
              "/restart", "/update",  # 077: drained restart / update, card-confirmed
              "/start")  # Telegram first-contact convention -> welcome (030 L9);
                         # NOT owner-gated, so it stays out of _OWNER_ADMIN_COMMANDS

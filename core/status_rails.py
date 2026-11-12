@@ -89,7 +89,9 @@ def _rail_verdict_line(v):
                 f"{v.remedy or 're-check the mailbox credential'}",
                 SEVERITY_WARN, "email_inbound_rejected")
     if v.kind == "twitter_api":
-        return (f"x api: {v.code or '402'} since {since}, {n} call(s) refused — "
+        # 116 W6.3: the count is the 402 answers recorded; a call refused
+        # locally in the backoff is not one of them.
+        return (f"x api: {v.code or '402'} since {since}, {n} {v.code or '402'} response(s) — "
                 f"browser rail (x_browser) needs no API credits",
                 SEVERITY_WARN, "x_api_rejected")
     if v.kind == "x_oauth2":
@@ -106,7 +108,9 @@ def _rail_verdict_line(v):
 
 
 def _rail_cost_bits(slot: Optional[Dict[str, Any]]) -> List[str]:
-    """``["$0.15 over 3 runs today"]`` — or nothing when the rail did not run.
+    """``["$0.15 over 3 runs in 24h"]`` — or nothing when the rail did not run.
+    The window is the rolling 24 h of ``rails_spend_24h``, so it is not "today"
+    (116 W5.1).
 
     Any run whose cost was not recorded is named, never averaged away: the
     figure a reader acts on has to say how much of the window it covers.
@@ -121,9 +125,9 @@ def _rail_cost_bits(slot: Optional[Dict[str, Any]]) -> List[str]:
         # NOTHING was priced. "$0.00" here would be a confident zero for a rail
         # that may well have spent money — the exact failure `$0.00` is banned
         # for elsewhere in this file. Say what is true: the cost is unknown.
-        return [f"cost not recorded for {runs} run{plural} today"]
+        return [f"cost not recorded for {runs} run{plural} in 24h"]
     bits = [f"${usd:.2f}" if usd > 0 else "$0"]
-    bits[0] += f" over {runs} run{plural} today"
+    bits[0] += f" over {runs} run{plural} in 24h"
     if unpriced:
         bits.append(f"{unpriced} unpriced")
     return bits

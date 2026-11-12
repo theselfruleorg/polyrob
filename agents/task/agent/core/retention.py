@@ -56,6 +56,7 @@ class RetentionSweeper:
         self._prune_episodes()
         self._prune_memories()
         self._prune_sessions()
+        self._prune_saved_tool_results()
         self._consolidate_notes()
         removed = self._age_out_written_kb()
         return {"kb_written_removed": removed}
@@ -102,6 +103,23 @@ class RetentionSweeper:
                     logger.info("retention: pruned %d old episodes", removed)
         except Exception:
             logger.warning("episodic prune skipped", exc_info=True)
+
+    def _prune_saved_tool_results(self) -> None:
+        """116 W1.2: saved tool results older than 7 d leave the SHARED project
+        workspace (a per-session workspace goes with its session tree). The
+        files were written by no retention window: prod held 535 at the
+        project root, the oldest 12 weeks old."""
+        try:
+            from agents.task.path import pm
+            from core.tool_results import prune
+            root = getattr(pm(), "_project_root", None)
+            if root is None or not getattr(pm(), "_workspace_is_project_root", False):
+                return
+            removed = prune(root, now=self._now())
+            if removed:
+                logger.info("retention: removed %d saved tool result(s) over 7 d old", removed)
+        except Exception:
+            logger.warning("saved tool result sweep skipped", exc_info=True)
 
     def _prune_sessions(self) -> None:
         """Session-TREE retention (WS-K2, 2026-09-22) — the third window, on the

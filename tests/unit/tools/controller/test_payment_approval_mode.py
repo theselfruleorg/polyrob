@@ -292,7 +292,15 @@ _SPEND_VERBS = (
     "defi_trade_unwrap",
     "dapp_browser_dapp_connect",
     # 050/069: the agent_nft writes, all SPEND-side (mint/take additionally never exemptible).
-    "agent_nft_collection_mint", "agent_nft_withdraw_token", "agent_nft_adopt", "agent_nft_bind_identity", "agent_nft_journal", "agent_nft_revoke_all", "agent_nft_collection_reveal",
+    "agent_nft_collection_mint", "agent_nft_withdraw_token", "agent_nft_bind_identity", "agent_nft_journal", "agent_nft_revoke_all", "agent_nft_collection_reveal",
+    # 115 W8: the sale pays the treasury back (the claim shape, like launchpad_claim).
+    "agent_nft_sale_claim", "agent_nft_sale_settle",
+    # 115 W7: the seller's on-chain sale acts (ready is owner_always).
+    "agent_nft_sale_ready", "agent_nft_sale_unready", "agent_nft_sale_cancel_listing",
+    # 115 W9: the buyer's verbs (buy is owner_always; the market claim is the claim shape).
+    "agent_nft_buy", "agent_nft_market_claim",
+    # 111 W9a: the seller's market orders (a class-O listing, an accept), both owner_always.
+    "agent_nft_sale_list", "agent_nft_sale_accept",
 )
 
 #: On the hook, but never waiting on a tap (2026-10-08): a Polymarket cancel
@@ -748,3 +756,39 @@ def test_polymarket_cancel_skips_the_owner_queue(tmp_path, monkeypatch, mode, ve
     reason = asyncio.run(c._run_pre_tool_call_hooks(
         "polymarket_place_limit_order", {"amount_usd": 5}, _owner_ctx()))
     assert reason is not None and _SpyProvider.calls
+
+
+def test_the_owners_card_for_a_listing_or_an_accept_is_the_withdraw_cards_grant(tmp_path, monkeypatch):
+    """111 W9a (D9): ``agent_nft_sale_list`` / ``agent_nft_sale_accept`` take the SAME path as
+    ``agent_nft_withdraw_token``: the same policy row (owner_always), the same owner_queue hook;
+    an owner's approval stamps ``owner_grant`` on the context, and the verbs' own gate
+    (``sale_list._owner_asked`` = ``tx_guard.owner_authority``) reads exactly that grant."""
+    from core.verb_policy_rows import CORE_VERB_ROWS as POLICY_ROWS
+    from core.wallet import tx_guard
+    from tools.agent_nft import sale_list
+
+    class _Owner(_SpyProvider):
+        decides_as_owner = True
+    monkeypatch.setenv("PAYMENT_APPROVAL_MODE", "auto")
+    constants._refreeze_payment_approval_flags_for_tests()
+    monkeypatch.setitem(approval._PROVIDERS, "owner_queue", _Owner)
+    rows = {v: r for t in POLICY_ROWS.values() for v, r in t.items()}
+    keys = ("effect", "lane", "side", "approval_owner", "correspondent_blocked")
+    want = {k: rows["agent_nft_withdraw_token"].get(k) for k in keys}
+    c = _make_controller(tmp_path)
+    live = {"dry_run": False, "max_spend_usd": 2.0}
+    for verb in ("agent_nft_withdraw_token", "agent_nft_sale_list", "agent_nft_sale_accept"):
+        assert {k: rows[verb].get(k) for k in keys} == want, verb
+        ctx = _owner_ctx()
+        ctx.metadata = {}
+        autonomous = lambda _c, _t: True   # noqa: E731 — no owner turn: only the card counts
+        assert tx_guard.owner_authority(ctx, autonomous, None,
+                                        types.SimpleNamespace(max_spend_usd=2.0)) == (False, False)
+        assert asyncio.run(c._run_pre_tool_call_hooks(verb, dict(live), ctx)) is None, verb
+        assert ctx.metadata.get("owner_grant") == {"approved": True, "max_spend_usd": 2.0}, verb
+        assert tx_guard.owner_authority(ctx, autonomous, None,
+                                        types.SimpleNamespace(max_spend_usd=2.0)) == (False, True)
+        monkeypatch.setattr("tools.controller.action_registration._is_forged_or_autonomous_turn",
+                            autonomous)
+        assert sale_list._owner_asked(None, ctx, 2.0) is True, verb
+        assert sale_list._owner_asked(None, ctx, 3.0) is False, verb   # above the card's bound

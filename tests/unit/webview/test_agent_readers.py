@@ -38,10 +38,27 @@ def test_capabilities_lists_a_tool_with_on_off_and_source():
     assert dt["risk"] == "high"
 
 
-def test_capabilities_never_faked_last_used_for_a_tool():
-    """Per-tool usage is not tracked anywhere — a confident timestamp would be
-    invented, so it stays None."""
+def test_capabilities_last_used_is_the_snapshot_tools_section(monkeypatch, tmp_path):
+    """116 W7.4: per-tool usage IS tracked (``core.status_tools``, the
+    ``tool_invoked`` rows). A tool with a row shows its newest time, a tool
+    with none shows None, and a failed read is named — never "never used"."""
+    from core.status_types import Section
+    sec = Section(name="tools", data={"tools": {"filesystem": {"count": 2, "last": 1234.0,
+                                                               "errors": 0}}})
+    seen = {}
+    monkeypatch.setattr("core.status_tools.tools_section",
+                        lambda uid, d, now=None: seen.update(uid=uid) or sec)
     body = mod._capabilities_body("u1")
+    by_id = {r["id"]: r for r in body["tools"]["items"]}
+    assert seen["uid"] == "u1" and body["tools"]["usage_error"] is None
+    assert by_id["filesystem"]["last_used"] == 1234.0
+    assert by_id["defi_trade"]["last_used"] is None
+
+    def _boom(uid, d, now=None):
+        raise OSError("disk gone")
+    monkeypatch.setattr("core.status_tools.tools_section", _boom)
+    body = mod._capabilities_body("u1")
+    assert "disk gone" in body["tools"]["usage_error"]
     assert all(r["last_used"] is None for r in body["tools"]["items"])
 
 

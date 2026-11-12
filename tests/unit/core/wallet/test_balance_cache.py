@@ -222,3 +222,22 @@ def test_a_wallet_less_deployment_is_not_a_degraded_one(tmp_path, monkeypatch):
     assert sec.state == "ok"
     assert "not enabled" in sec.lines[0]
     assert not sec.health
+
+
+def test_a_failed_usdc_read_says_usdc_unknown_and_degrades_the_wallet(tmp_path, monkeypatch):
+    """116 W6.8: an EVM row asked for USDC; a None there is a failed read."""
+    snap = bc.collect(_Wallet(), evm_reader=lambda a, c: (1.0, None),
+                      solana_reader=lambda a: 1.0)
+    base = next(c for c in snap.chains if c.chain == "base")
+    sol = next(c for c in snap.chains if c.chain == "solana")
+    assert base.usdc_unknown and not sol.usdc_unknown
+    lines = bc.render_lines(snap)
+    assert any(ln.strip().startswith("base:") and "USDC unknown" in ln for ln in lines)
+    assert not any(ln.strip().startswith("solana:") and "USDC" in ln for ln in lines)
+    bc.write(snap, str(tmp_path))
+    back = bc.read(str(tmp_path))
+    assert next(c for c in back.chains if c.chain == "base").usdc_unknown
+    from core.status_money import STATE_DEGRADED, _wallet_section
+    monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
+    sec = _wallet_section(str(tmp_path))
+    assert sec.state == STATE_DEGRADED and "base" in sec.data["usdc_unknown_chains"]

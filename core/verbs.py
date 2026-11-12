@@ -135,7 +135,7 @@ class Verb:
 #: /thread (061) is the one owner transcript; /contacts is private
 #: correspondence; /why (O10) names tools, amounts and addresses; /cards
 #: confirms a money line; /approve /reject /allow /deny /config /prefs /mcp
-#: /apps /dev /identity are owner writes. A contributed verb (the money verbs,
+#: /apps /identity are owner writes. A contributed verb (the money verbs,
 #: /writeoff, /check …) is refused unless its contributor names it
 #: room-safe.
 _CORE_TABLE: tuple[Verb, ...] = (
@@ -181,7 +181,6 @@ _CORE_TABLE: tuple[Verb, ...] = (
     Verb("/run", "control", "Pause, resume or stop one background run", room_refused=True),
     Verb("/mode", "control",
          "What I may do without you, what I do when you are away, and how to change it"),
-    Verb("/dev", "control", "Pass a message to an operator-run maintenance script, if this host has one", room_refused=True),
     # 077: confirmed by a card; the restart drains first and reports back here.
     Verb("/restart", "control", "Restart me once my current work is done", room_refused=True),
     # 093 D6: `/update now` lets the operator's waiting deploy skip the owner-quiet window.

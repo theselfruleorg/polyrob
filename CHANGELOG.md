@@ -10,6 +10,94 @@ short, user-facing notes for each release are on its GitHub Release page.
 
 ## [Unreleased]
 
+## [1.7.9] — 2026-11-12
+
+### Added
+
+- A pack's REPL command can take free text (the handler sets `raw_arguments = True`).
+- `agent_nft_sale_list` and `agent_nft_sale_accept`: the wallet lists an owned agent NFT on its collection's pinned market
+  (one signed listing, a single-token approval) and accepts a buyer's signed offer; `/nft` shows the open orders.
+- `agent_nft_buy`: the wallet buys a listing of a pinned ERC-6551P collection's market (ETH price), with buyer conditions
+  built from a fresh read of the NFT's account; `agent_nft_market_claim` takes what the market owes the wallet.
+- `agent_nft_bind_identity` publishes the agent's card on the identity that an NFT's account already owns; the instance's
+  registration file names that identity, and a delivered order names where to give feedback on chain.
+- `agent_nft_sale_ready`, `agent_nft_sale_unready`, `agent_nft_sale_cancel_listing` (`/nft ready|unready`): an owned
+  ERC-6551P NFT is made ready for sale by its own account; while it is ready, no automatic act goes through the account.
+- The account view says how many of an identity's feedback clients paid an invoice or order here.
+- `polyrob doctor --audit-status` recounts what `/status` prints with direct queries and names
+  each disagreement; a label and seat-parity ratchet holds the wording of every count line.
+- The owner's clock: the pref `owner.timezone` (old name `digest.timezone` still works) puts the
+  owner's time beside UTC in status, in the agent's step clock and in the schedule tool's result.
+- A job can wait for its own question: `owner_ask(holds_this_job=true)`, and a job is held after
+  3 idle or unverified runs in a row with its question open. Status prints "held by your question".
+- `agent_nft_sale_settle` and `agent_nft_sale_claim`: the pinned sale pays the wallet back its
+  auction excess and what it owes, as guarded claims; any other call to a pinned sale refuses.
+- The collection mint goes through the collection's pinned sale: the profile key `sale`, the
+  whitelist mint (`allowance`, `proof`), a public price bounded by the pinned maximum.
+- `lp_collect` for Uniswap v4: takes a position's fees with its liquidity unchanged, from the
+  wallet or, with `account=` / `nft=`, for a position an NFT's account owns (the fees land there).
+- Agent NFT accounts: the snapshot and inspect views read the on-chain ERC-8004 reputation of the
+  account's identity (feedback count, summed value and the clients that gave it).
+
+### Changed
+
+- Status run lines print endings apart from starts and what `done` did (`effect`, `idle`,
+  `missed`, `unverified`); a skipped slot is not a run; a window is `24h`, never "today"; the
+  Goals line prints every live status; open questions are one health item, after liveness.
+- A loop is alive when its ticks complete: the heartbeat carries its process, its last tick and
+  its error streak, and status prints `alive`, `silent`, `dead`, `failing` or `stuck`.
+- Saved tool results go to `<workspace>/.tool_results/<session>/`, a read returns a slice, and
+  they are pruned after 7 days. A pending outbound message with no host is dead-lettered after 7 days.
+- The credential-verdict key is read first from `$CREDENTIALS_DIRECTORY/verdicts.key`, so the
+  services of one install share one key and one backoff.
+- NFT accounts are two standard kinds, proven by ERC-165 at `/nft trust`; pins use profile
+  schema 2 (schema 1 loads; `polyrob nft profile upgrade`); reverts name their error and
+  arguments; `defi_trade.call` takes `account=`, other money verbs refuse it.
+- The collection revealer takes as many due ids for each run as its fee cap allows, oldest first, and says how many stay due.
+- A transaction that the gas ceiling leaves with under 20% headroom refuses with "split the call".
+
+### Removed
+
+- The off-chain ERC-8004 feedback API: the `/eip8004/reputation/*` routes, the `FeedbackAuth` grant, the flags
+  `EIP8004_PAYMENT_FEEDBACK` and `EIP8004_AGENT_PRIVATE_KEY`. It matched no live registry; feedback is read on chain.
+- The `/dev` owner verb and its flag `DEV_RAIL_SCRIPT`: a relay to an operator's maintenance
+  script is one install's plumbing. A pack can contribute such a verb (`owner.verbs`).
+- `agent_nft_adopt`. Holding the NFT is the whole relation: the holdings watch now records the
+  tokens an arrived NFT's account already holds as inherited positions, with no adopt step.
+
+### Security
+
+- The wallet signs one order type only: a listing of a pinned market with every field bound to a live read. The signer
+  process needs the owner's approval on the signer's host for each one; its own offers and all Seaport orders refuse.
+- The signer signs a resource call only for a contract and function its own file lists
+  (`[policy] resource_calls`), reads the held balance itself, and refuses a negative
+  liquidity leg; the cut-over needs five agreed sends on distinct transactions.
+- A script job is set only in an owner turn, pins the content of its file, never runs a
+  received file, and is named in the job views; its output is shown as literal text.
+- A non-owner API tenant gets no execution tools.
+- Logs redact a 64-hex value assigned to a key-like name; the app slug `app` is reserved.
+
+### Fixed
+
+- A goal that stops again after a retry is always told to the owner; a time-stamp compare could miss about one stop in eight.
+- BNB Chain USDC is read with its 18 decimals. The verified token record said 6, so a balance
+  there read far too large; the agent's chain table now lists BNB Chain as read-only.
+- A helper's usage is counted once: a credit-billed tenant's window totals no longer count each helper call twice.
+- An owner turn no longer waits on the workspace lock that a running job or goal holds.
+- `polyrob doctor` puts its credential and host alerts in the health headline; no alert follows "Health: OK".
+- An agent registration file builds on a chain with an id of five digits or more (it read as a credential).
+- The collection mint refuses an id that the collection would mint without its ERC-8004 identity (a skip is permanent).
+- The event loop no longer stops on the workspace scan (bounded, off the loop, one skip-set), on
+  a busy event log (2 s write deadline) or on sync network calls in the launchpad and browser tools.
+- Status counts match their stores: money reads `bot.db` at one path, held positions, the X 402
+  verdict, missed messages, delivery counts, the digest switch, the tool table, knowledge labels.
+- A store that cannot be read is named on every seat (cron store, drafts, owner thread, provider
+  credentials, telemetry cut or dropped) and a seat with no agent says "not checked".
+- Every goal run writes one end row; a restart or a pause no longer leaves a run with no ending.
+- Agent NFT accounts: the identity a held NFT's account registers names the account as the agent
+  wallet; an account call is sized from a gas estimate even without a simulation measurement; the
+  registration file lists MCP only when the instance serves it; a collection's refusal is named.
+
 ## [1.7.8] — 2026-11-11
 
 ### Added
@@ -53,7 +141,7 @@ short, user-facing notes for each release are on its GitHub Release page.
 - Model tiers the agent picks by name (`default`, `heavy`, `light`) with a reason: on `delegate_task` (at most 2 heavy) and, from the owner's chat only, on goals and jobs; `/status` shows the last choices.
 - `compute`: sha256, sha3_256, keccak256 and the provably fair draw, with no code exec, on every seat; a host script can draw with the same function. Every seat's `<tool-availability>` says to use it, never a hand judgement or a third-party service.
 - Host jobs outside the agent write a status file (`<data home>/ops/host_jobs/`): a stale, failed or unreadable job is a `/status` health item, and `<operations>` names each job's purpose and outputs to the agent.
-- Uniswap v3 liquidity verbs now work on Arbitrum and Polygon (the v4 contracts there are pinned for reads; v4 deposits stay Robinhood only): deployments pinned in `core/wallet/dex_registry.py` with code hashes measured on-chain and re-checked before every write; no money cap changed.
+- Uniswap v3 liquidity verbs now work on Arbitrum and Polygon (the v4 contracts there are pinned for reads; v4 deposits stay Robinhood only). Each deployment is pinned by its code hash and re-checked before every write.
 - A collection's own ERC-6551 account (POLYROB's `PolyrobAccount`): pinned with `transfer_safe`, verified by code hash, no lock or forwarder reads; account-call gas comes from `eth_estimateGas`.
 - Public-thread selling: after a live offer is announced (`offer_manage(op="announce")`), code answers `/buy` and `/order` replies under that X post in the thread — payment details, status and delivery proof; `/offer report`, `/offer threads` and a selling line in `/status`.
 - Robinhood Chain is served by Alchemy: with `ALCHEMY_API_KEY` set its reads use `robinhood-mainnet`, and NFT holdings enumerate there.
@@ -62,9 +150,8 @@ short, user-facing notes for each release are on its GitHub Release page.
 - owner.md refuses a new line with a job id or job on/off claim; `## History` is frozen and not injected; `owner_doc_manage(action='sweep_all')` and the `rule-conflict-check` skill report rule conflicts with both quotes.
 - A cron job can state `expect`, and code writes `verified` from the run's act rows. An owner reply bound to a job or goal gets one background classification on that rail's latest episode.
 - `TELEGRAM_BOT_API_URL` (a local Bot API server, files up to 2000 MB) and `INBOUND_VIDEO_MAX_MB` (500) let the agent receive a video over the 20 MB public limit.
-- `LLM_FALLBACK_PROVIDERS` limits failover to the named providers, and native DeepSeek can serve as a fallback. `OPENROUTER_PROVIDER_ORDER` also takes a per-model form: `model=a,b;model2=c,d`.
+- `OPENROUTER_PROVIDER_ORDER` and `OPENROUTER_PROVIDER_IGNORE` name the OpenRouter upstreams to prefer or refuse (per model too: `model=a,b;model2=c,d`). `LLM_FALLBACK_PROVIDERS` limits failover to the named providers, and native DeepSeek can serve as a fallback.
 - `polyrob doctor` names a configured model with no exact catalog row and the limits it then gets, splits cache use per upstream, counts cold calls by cause, and warns when the cache hit rate falls.
-- `OPENROUTER_PROVIDER_ORDER` and `OPENROUTER_PROVIDER_IGNORE`: name the OpenRouter upstreams to prefer or to refuse. The same model id behaves differently per upstream.
 - `cronjob_schedule`, `cronjob_show` and `cronjob_edit` print what will stop a job's X posts: the shared cooldown, the job's spacing, a pause, and that a limit in the task text alone is not enforced.
 
 ### Changed
@@ -76,7 +163,7 @@ short, user-facing notes for each release are on its GitHub Release page.
 - `/ban`, `/unban` and `/unmute` run only where the platform can moderate (Telegram, the terminal, the console); other chat apps say where they run. The help of `/steer` and `/skills` says where each action runs.
 - Console: Agent › Settings shows a plain label and a help line for every setting, groups them by when a change takes effect, and has one Save per group.
 - Console: the start page answers a command with the same note and buttons as a chat; with no model it names Telegram and links to Agent › Settings. State badges are filled, so they no longer look like buttons.
-- `polyrob run --continue <id> "message"` continues a chat; `--resume` still works as its old name, so "resume" means only "lift a pause".
+- `polyrob run --continue <id> "message"` continues a chat; `--resume` still works as its old name (alone it ended at once on a finished chat).
 - Every `polyrob session` command reads the same session tree as the running agent (the deployed one on a server). `session list` shows a title and the chat of each, newest first, says how many finished ones `--all` adds, and names a store it cannot read.
 - `polyrob skills` holds the install commands (`install`, `approve`, `status`, `info`, `remove`, `update`, `search`, `tap`) and `polyrob surfaces` holds `pause`, `resume`, `state`. `skill`, `surface`, `autonomy halt` and `owner halt` are hidden old names. Every confirm takes `-y`.
 - `polyrob owner approve <id>` (or `all`) approves any pending item, as `/approve` does in chat. To approve a person, use `polyrob owner person-approve`; the old two-argument form still works.
@@ -97,8 +184,8 @@ short, user-facing notes for each release are on its GitHub Release page.
 - `OWNER_<SURFACE>_ID` is the owner on every chat app that signs its senders; the `/pair` owner verb (and `polyrob owner pair`) lists, approves and revokes paired senders (approve needs `<surface> <code>` on both); a stranger, on Telegram too, gets the code once per 10 minutes.
 - Every dollar pinned for a money network is payable with no step (`usdg-robinhood`); a contract call takes `function` + `args`; an order's tx proof is read on chain before it counts as delivered.
 - The after-run reviewer runs only on an owner correction, a failed check or a run error, sees each lane skill's body, and defaults to no change. The curator measures each live change and rolls back on harm, once, with one owner line.
-- Recall keeps `next_goal` over the term cap, injects no weak match and fuses any-term with all-terms queries. `session_search` also reads run records. `payload.kb_holdout_pct` tests KB auto-injection.
-- `is_owner_driven` is the one rule outside money, secrets and the host: the owner's turn or job needs no tap to publish, add a worker, keep notes, set a preference or steer another goal. A clean owner turn writes owner rules at once.
+- Recall keeps `next_goal` over the term cap, injects no weak match and fuses any-term with all-terms queries. `session_search` also reads run records.
+- Outside money, secrets and the host there is one rule: the owner's turn or job needs no tap to publish, add a worker, keep notes, set a preference or steer another goal. A clean owner turn writes owner rules at once.
 
 ### Deprecated
 
@@ -108,7 +195,7 @@ short, user-facing notes for each release are on its GitHub Release page.
 
 - `GEMINI_PROMPT_CACHE` and `GEMINI_CACHE_TTL_MIN`: Gemini's implicit caching needs no setting. The retired models and aliases are gone from the catalog.
 - `goal_ask` and `present_choice`: `owner_ask` is the one verb to ask the owner. With `options` in a live turn it waits for the pick; otherwise it raises a durable ask, and `blocks_goal_ids` holds goals.
-- `detect_action_loop`: it never warned. The no-progress guard replaces it.
+- The old action-loop detector: it never warned. The no-progress guard replaces it.
 - `SELF_CONTEXT_REQUIRE_REVIEW` and `OWNER_DOC_REQUIRE_REVIEW`: nothing read them.
 - `SKILLS_WRITABLE_REQUIRE_REVIEW` and `SKILL_OVERWRITE_PROTECT`: a skill the owner's agent, job or reviewer writes is live at once with a rollback; only a correspondent, room or other-tenant session stays a draft.
 - `TWITTER_REQUIRE_APPROVAL`: an owner's turn or standing job posts to X with no tap, also on the browser rail; a rule about what to post goes in the owner rules, and `APPROVAL_PROVIDER=deny` still stops every post.
@@ -116,24 +203,22 @@ short, user-facing notes for each release are on its GitHub Release page.
 ### Fixed
 
 - Signer egress: a connection to a host outside the allow-list is refused at once and logged (`polyrob_signer_blocked` in the kernel log), not dropped in silence. A silent drop made a verdict wait 25 s for a connect timeout.
-- Console: an empty list setting on Agent › Settings reads No entries, and Save can no longer store the placeholder word. A model change that names no chat says only the default for new chats moved.
-- Job, trading and `/mode` changes made from Slack, Discord or the console record the real chat app, not Telegram. Help and guides name `polyrob run --continue`, `polyrob skills` and `polyrob surfaces pause|resume`.
+- Console: an empty list setting on Agent › Settings reads No entries, and Save can no longer store the placeholder word.
+- Job, trading and `/mode` changes made from Slack, Discord or the console record the real chat app, not Telegram.
 - Console: a new chat's timeline and Agent › Abilities on a fresh install no longer say "I could not read"; a chat that does not exist says so and offers a new chat.
 - Console: Money › Book with no wallet says how to give the agent one, folds the trusted-token list and labels the token form; the chat box has a visible focus ring. A group chat's run no longer reads as started by "you".
 - `polyrob session list` no longer marks a run that is live in another terminal as suspended.
 - An owner command typed in a Slack, Discord or Signal room is answered in the owner's DM on the same app, and the room reads one line that says so. If the DM cannot be reached, the room says that. Before, the owner read nothing.
 - `/help` for a person who is not the owner lists only the commands they can run (new chat, chats, switch, rename, close, cancel, help). The Telegram command menu goes to the owner's own chat only, not to every allowed id.
-- The `docker` sandbox backend ignored `DOCKER_HOST`: the scrubbed CLI env dropped it, so a rootless or remote daemon was probed but the rootful default socket was used. The CLI env now carries the daemon address (`docker_cli_env`).
+- The `docker` sandbox backend ignored `DOCKER_HOST`: the scrubbed CLI env dropped it, so a rootless or remote daemon was probed but the rootful default socket was used. It now carries the daemon address.
 - Console: Work › Apps lists the files of every chat (it said "I could not read" on every install); a chat that does not exist is the not-found page, not "could not be read"; the Money tabs follow Back, Forward and a `#tab` link.
 - The chat REPL exits 1 when it cannot start (it exited 0); `polyrob kb export` exports the owner's knowledge by default (`--user` defaulted to an empty `local` tenant); the console's read-only banner no longer prints a flag name.
 - A verb that runs in the terminal answers "it runs in the terminal" on Telegram and in the console chat box instead of "Unknown command"; `/stop` cancels, `/settings` shows the settings, and the console chat box resolves aliases (`/h`, `/cost`).
 - A direct chat that starts fresh after an idle gap says so once, with the gap (it lost its history with no word); the guide no longer says the console and the terminal reset on idle.
-- `polyrob run --resume <id> "message"` continues a chat with a new message; `--resume` alone ended at once on a finished chat, though the help and the guide said it continues one.
 - Console: a message to an idle chat in a process with no model is refused with the same `no_model` answer as a new chat (it resumed the chat, which then failed); the line names Telegram and the terminal.
 - Telegram: the reply of a person the agent wrote to reaches the agent as data (with the correspondent tier model on); the direct-message lock dropped it before routing.
 - Browser: text input failed on a rich-text editor (or reported a success that changed nothing), held a read-only field for 120 seconds, and `browser_send_keys` refused text. Each input now has a 5-second limit and reports what the element holds; a page dialog is accepted and named.
-- A held file lock (the owner turn, the update lock) is never taken through the lock-file fallback, whatever its age; the fallback records its holder's process identity, so a pid reused after a reboot does not hold it for ever; the update's lock probe no longer reads a free lock as held.
-- A model refusal is named with its category on a chat turn, the console chat, a goal (blocked at the first refusal), a cron run and a delegated child, with no "continue" hint; a 403 that says flagged or moderation is a refusal; a refused compaction summary is not sent again.
+- A held file lock is never taken by a second process, whatever its age (two updates could run at once), and a pid reused after a reboot does not hold it for ever. Two processes cannot both roll back one update; the back-online message claims no rollback that failed or never ran.
 - `bot.db`: a reader that waits on another task's transaction resumes when that task ends; a transaction takes the write lock when it begins; the -wal file shrinks after a checkpoint; `migrate status`, `doctor` and the `polyrob owner` money verbs name an unreadable database, not a traceback.
 - An unreadable update journal is named, never a traceback: `update --apply` refuses it unless `--force` sets it aside, `--rollback` moves it aside, and a boot apply that failed before any change says that nothing changed.
 - A valid hand edit of `preferences.toml` becomes the last good copy, so a later typo keeps the owner's own values, never an older looser copy; a write over a corrupt room-focus or pending-links file sets the file aside and no longer fails for ever.
@@ -145,7 +230,7 @@ short, user-facing notes for each release are on its GitHub Release page.
 - A remote-signer reply without a transaction hash is an unknown outcome, so the interlock holds instead of a failure that invites a second send.
 - Deposits: a credited deposit records its address (older rows are filled in), so the treasury sweep no longer refuses it for ever; a remote-signer sweep waits for funds not yet credited; the owner deposit report shows a read error, not "no credited deposits".
 - Credits: a deduction or a settlement waits for another task's transaction instead of failing; resolving an already-charged billing failure no longer fails on its index; a full x402 token accumulator no longer resets the budgets of paid requests in flight.
-- Commerce: an older held thread notice is never posted after a newer one; `/status` names a refund owed once; an order paid on a test network expires; a stuck unpaid order no longer stops later expiries; `/invoices refunded <id>` works on the terminal.
+- Commerce: no false refund notice on a delivered order, no second fulfillment goal after a crash, an older thread notice never follows a newer one, `/status` names a refund owed once, an order paid on a test network expires, and a stuck unpaid order no longer stops later expiries.
 - The `/send` repeat check compares chain, token and recipient, not the typed words; a refused `/settle` names an order's invoice, which needs its transaction hash; a contract call's float argument must be an exact integer (1.5 was sent as 1).
 - Email: an AgentMail send with no answer after the connect is "delivery unknown" and is never sent again; a recipient the SMTP server refused is named, not reported as sent; `email_list` on AgentMail says it searched only the newest messages.
 - X browser rail: a post whose composer never closed is reported as not confirmed, and the permalink is always under the agent's own handle; each signup pass closes its browser context; a token-store write over an unreadable file raises instead of replacing every row.
@@ -157,12 +242,10 @@ short, user-facing notes for each release are on its GitHub Release page.
 - On macOS a live lease no longer reads as left over from a past boot after a clock step; `/status` times are right on a host that is not on UTC; a delegation id is never reused over a waiting result; an owner correction that arrives during a review is not skipped.
 - Cron and goals: an owner approval no longer strands its job as running (aware vs naive time); a pause cut does not re-run a post or a payment; the tick lock is a kernel flock; an unreadable open-ask set or dependency read holds the goal instead of running it.
 - Run loop: a retry in one step keeps the one-shot messages (a correspondent reply was lost); the truncation note and the no-vision image strip reach the request; a model switch no longer closes a client a delegation uses; an owner verdict lands on the answered run.
-- LLM: a model refusal or a safety-filter stop is a typed error that never moves to another provider, never marks the provider unhealthy and is told to the owner; a stream with no finish reason is an error; capability refusals are remembered for one hour, not for the process.
-- Commerce: false refund notices on a delivered order, offers blocked from going live after a lost race, unpaid orders with no exit, a second fulfillment goal after a crash, a newer thread notice cleared by an old retry and the buyer's chosen rail on a quote are fixed.
+- A model refusal or safety-filter stop is named with its category on a chat turn, a goal (blocked at once), a cron run and a delegated child. It never moves to another provider or marks one unhealthy. A stream with no finish reason is an error; capability refusals are kept for one hour.
 - Wallet: every EVM money verb books its receipt through one helper, so a revert leaves the daily caps and a timed-out receipt is resolved on its own ticker; a buy cannot overwrite a quarantine; an order budget is booked only for an allowed transaction; the remote signer re-checks resource calls.
 - Action cards have a declared state table; a `/send` of unknown outcome counts as paid and an unreadable card store refuses a repeat; a late DONE wakes the agent again; held card pushes are announced when the hour ends.
-- Stores that cannot be read are no longer read as empty: `fetch_all` raises, notes and KB reads raise, an unreadable `preferences.toml` is never overwritten and keeps the last good caps, a usage read error is unmeasured spend, and state files and journals raise.
-- A file lock held for more than five minutes can no longer be taken by a second process (two updates could run at once); two processes cannot both roll back one update; the back-online message no longer claims a rollback that failed or never ran.
+- Stores that cannot be read are no longer read as empty: database, notes and KB reads raise, an unreadable `preferences.toml` is never overwritten and keeps the last good caps, a usage read error is unmeasured spend, and state files and journals raise.
 - A streamed paid `/v1` turn that fails after its headers is marked for refund; a non-streamed turn is cancelled on client disconnect; a broken MCP stdio pipe marks the server lost; a stuck app removal says why; the X storefront reads an overflow oldest-first.
 - A money-class run keeps a money model when its provider fails; a re-routed goal drops the dead provider's model; an owner-chosen child model is refused on another provider; no host binaries listed when no exec tool is open.
 - Native DeepSeek gets back only the reasoning it wrote: a `/model` switch no longer sends it the text OpenRouter left in an old history, and that text no longer counts as input.
@@ -170,11 +253,7 @@ short, user-facing notes for each release are on its GitHub Release page.
 - OpenRouter no longer replays stored reasoning: it fed a loop of one repeated word up to the output limit, so a long chat stalled for minutes.
 - A model call cut at its output limit while it only reasons no longer repeats four times: the one retry runs with thinking off. A near-match send names itself and goes out when sent again, so a second version reaches the owner.
 - `anthropic-oauth`: a Claude Pro or Max seat on the real API no longer sends a sampling param, which the API refuses with a 400.
-- owner.md: a `## History` with an ordinary `##` heading after it stays active, so an upgrade takes no rule out of the prompt.
 - Skills: a reviewer's patch or a curator's rollback keeps who owns the skill, so the curator does not archive an owner's skill by age.
-- `polyrob doctor` says what changed for `TWITTER_REQUIRE_APPROVAL`, `SKILLS_WRITABLE_REQUIRE_REVIEW` and `SKILL_OVERWRITE_PROTECT`.
-- The owner verdict judge makes no paid call on a rail with no episode, a non-ASCII quote fits the meta cap, and a late job's wait does not make the prompt cache cold.
-- A live skill change no longer retires owner.md rules: the word match only names them, and a retire needs the owner.
 - Recall: a prefetch no longer keeps KB documents alive, unmarked old rows age out of owner recall, `[unverified]` filters per line, a failed reflection keeps its findings, and an empty recall records `memory_recall_empty`.
 - Compaction keeps exact ids, paths and amounts from compacted tool results in one bounded block beside the ledger, removes a summary line that claims an owner approval with no matching owner line, and stores the bounded summary in the episode meta.
 - Telegram video: a refused file names its size and limit, a video streams to disk, a large file does not stop the poll, a failed download logs its reason, and a channel post keeps its attachment.

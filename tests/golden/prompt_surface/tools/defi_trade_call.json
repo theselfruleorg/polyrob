@@ -5,6 +5,12 @@
     "parameters": {
       "additionalProperties": false,
       "properties": {
+        "account": {
+          "default": null,
+          "description": "Optional — work FROM the token-bound (ERC-6551) account of an NFT this treasury OWNS, instead of from the treasury: the account's assets move, the treasury signs as the NFT's owner. A 0x account address. Only accounts of a collection the owner pinned. Needs AGENT_NFT_ENABLED. What each account kind can do: the `account` parameter of defi_trade.transfer. From an account the call grants no allowance (allow_spender is refused) and may not address the account's own collection, its sale or its sale rails.",
+          "nullable": true,
+          "type": "string"
+        },
         "allow_max_raw": {
           "default": 0,
           "description": "The most raw units allow_spender may be granted.",
@@ -48,6 +54,12 @@
           "description": "The most USD you authorize to leave the wallet on this call.",
           "exclusiveMinimum": 0,
           "type": "number"
+        },
+        "nft": {
+          "default": null,
+          "description": "Optional — the same as `account`, naming the NFT instead: '<collection>#<id>', or just '<id>' when one collection is pinned on the chain.",
+          "nullable": true,
+          "type": "string"
         },
         "receive_min_raw": {
           "default": 0,

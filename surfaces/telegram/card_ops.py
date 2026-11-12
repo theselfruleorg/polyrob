@@ -169,6 +169,22 @@ def _records_out(cmd: str) -> bool:
     return bool(background_word(cmd))
 
 
+def record_verb(task_agent: Any, result: Any, cmd: str, text: str = "", *,
+                failed: bool = False) -> None:
+    """116 W3.7: one ``owner_command`` event for an owner verb (and the last
+    `/status` text per seat). ``/status`` left no row and no log line. Never raises."""
+    try:
+        from core.runtime_paths import container_data_home
+        from core.surfaces.owner_verb_log import record_owner_command
+        from surfaces.telegram.status_ops import _seat_via
+        record_owner_command(
+            result.inbound.identity.user_id, cmd, _seat_via(result), text, failed=failed,
+            session_id=getattr(result.decision, "session_id", None) or "",
+            data_dir=container_data_home(getattr(task_agent, "container", None)))
+    except Exception:
+        logger.debug("owner verb %s: event skipped (fail-open)", cmd, exc_info=True)
+
+
 def record_out(task_agent: Any, result: Any, cmd: str, reply: Any) -> Any:
     """079 R5: write a money-verb or card reply into the ONE owner thread as an
     "out" row (``source="owner_verb"``), and log the outcome once. The agent
@@ -176,6 +192,7 @@ def record_out(task_agent: Any, result: Any, cmd: str, reply: Any) -> Any:
     been refused or had landed. Returns ``reply`` unchanged; never raises."""
     try:
         text = reply_text(reply).strip()
+        record_verb(task_agent, result, cmd, text)       # 116 W3.7: EVERY verb
         if not text or not _records_out(cmd):
             return reply
         outcome = ("refused" if cards.refused_quote(text)

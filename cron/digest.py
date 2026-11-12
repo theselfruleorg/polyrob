@@ -22,14 +22,9 @@ _logger = logging.getLogger(__name__)
 
 
 def digest_enabled_for(user_id: Optional[str], home_dir: Optional[str]) -> bool:
-    """Owner's digest on/off switch: pref (override, spec ``digest.enabled``)
-    over the ``OWNER_DIGEST_ENABLED`` env default. No pref file present =>
-    byte-identical to ``AutonomyConfig.owner_digest_enabled()`` (owner-UX P1 T4)."""
-    from core.config_policy import AutonomyConfig
-    from core import prefs
-    env_value = AutonomyConfig.owner_digest_enabled()
-    return prefs.resolve("digest.enabled", user_id, home_dir,
-                         env_value=env_value, default=env_value)
+    """The ONE switch lives in ``core.owner_digest`` (status reads it too)."""
+    from core.owner_digest import digest_enabled_for as _enabled
+    return _enabled(user_id, home_dir)
 
 
 def _ledger(user_id: str, days: int) -> Dict[str, Any]:
@@ -71,18 +66,63 @@ def _outward(user_id: str, since_ts: float, data_dir: Optional[str]) -> str:
         return "unavailable (event log unreadable)"
 
 
-def _open_asks(user_id: str, data_dir: Optional[str]) -> List[Dict[str, Any]]:
-    """The open asks on the goal board. Raises on a failed read."""
-    from agents.task.goals.board import GoalBoard
-    from core.runtime_paths import goals_db_path
-    board = GoalBoard(goals_db_path(data_dir))
-    rows = board.asks(user_id=user_id, status="open") or []
-    out = []
-    for a in rows:
-        get = (a.get if isinstance(a, dict) else lambda k, d=None: getattr(a, k, d))
-        out.append({"id": get("id") or "", "title": get("title") or get("what") or "",
-                    "created_at": get("created_at")})
-    return out
+def _snapshot(user_id: str, data_dir: Optional[str], days: int = 1):
+    """The ONE status snapshot the digest renders from (116 W7.4): the health
+    block, the open asks and the missed messages are its sections, over the
+    digest's own window. Raises; the composer names the failure."""
+    from core.status_snapshot import build_status_snapshot
+    return build_status_snapshot(user_id, data_dir=data_dir, include_money=False,
+                                 window_hours=24 * max(1, int(days)))
+
+
+class _OneSnapshot:
+    """The digest's snapshot, built on first use and at most once (a failed build
+    is kept and re-raised, so every reader names the same failure)."""
+
+    def __init__(self, user_id: str, data_dir: Optional[str], days: int):
+        self._args, self._value, self._error = (user_id, data_dir, days), None, None
+
+    def get(self):
+        if self._value is None and self._error is None:
+            try:
+                self._value = _snapshot(*self._args)
+            except Exception as e:  # noqa: BLE001 — re-raised to every reader below
+                self._error = e
+        if self._error is not None:
+            raise self._error
+        return self._value
+
+
+def _snap(snap, user_id: str, data_dir: Optional[str]):
+    """*snap* as a snapshot: a :class:`_OneSnapshot`, a built one, or None (build)."""
+    if isinstance(snap, _OneSnapshot):
+        return snap.get()
+    return snap if snap is not None else _snapshot(user_id, data_dir)
+
+
+def _section(snap, name: str):
+    """A snapshot section that could be read, else RAISE with its reason (an
+    unreadable section is never rendered as an empty one)."""
+    sec = snap.sections.get(name)
+    if sec is None or not sec.available:
+        raise RuntimeError(f"{name} section unavailable ({getattr(sec, 'reason', '') or '?'})")
+    return sec
+
+
+def _open_asks(user_id: str, data_dir: Optional[str], snap=None) -> List[Dict[str, Any]]:
+    """The owner's open asks: ``work.data["open_asks"]`` — the selection /status
+    counts (an ask decided on /pending is in :func:`_pending_items`). Raises."""
+    snap = _snap(snap, user_id, data_dir)
+    return [{"id": a.get("id") or "", "title": a.get("title") or "",
+             "created_at": a.get("created_at")}
+            for a in _section(snap, "work").data.get("open_asks") or []]
+
+
+def _pending_items(user_id: str, data_dir: Optional[str], snap=None) -> List[Dict[str, Any]]:
+    """What waits on /pending: ``approvals.data["items"]`` (tool approvals, drafts,
+    contacts). Raises."""
+    snap = _snap(snap, user_id, data_dir)
+    return list(_section(snap, "approvals").data.get("items") or [])
 
 
 def _failed_jobs(user_id: str, data_dir: Optional[str]) -> List[Any]:
@@ -207,53 +247,58 @@ def _read(failures: List[str], source: str, fn, *args):
 
 #: How many curator proposal lines the digest quotes.
 PROPOSALS_MAX_LINES = 5
-#: How many suppressed owner messages the digest quotes in full; the rest are counted.
+#: How many suppressed owner messages the digest quotes in full; the rest are
+#: counted. The snapshot holds at most ``core.status_types.MISSED_IN_SNAPSHOT``.
 MISSED_MAX_LINES = 8
-#: How many rows to read back — bounded, the window filter runs on top.
-MISSED_READ_LIMIT = 40
 
 
-def _missed(user_id: str, data_dir: Optional[str], n: int) -> List[Dict[str, Any]]:
-    """Seam: the cap-/pause-suppressed owner notices (`core/surfaces/missed.py`).
+def _missed(user_id: str, data_dir: Optional[str], snap=None) -> tuple:
+    """Seam: ``(entries, left_out, window label)`` — the snapshot's delivery
+    section (``core/surfaces/missed.py``: the ``/missed`` selection and its
+    ``missed_count``, since the owner's last ``/missed`` else the window).
     Raises on an unreadable store — the caller renders the reason."""
-    from core.surfaces.missed import missed_notices
-    from core.runtime_paths import effective_data_home
-    return missed_notices(user_id, data_dir or str(effective_data_home()), n=n)
+    snap = _snap(snap, user_id, data_dir)
+    d = _section(snap, "delivery").data
+    if d.get("missed_unavailable"):
+        raise RuntimeError(str(d["missed_unavailable"]))
+    return list(d.get("missed") or []), int(d.get("missed_more") or 0), d.get("missed_window") or ""
 
 
-def _missed_lines(user_id: str, data_dir: Optional[str], since_ts: float) -> List[str]:
+def _missed_lines(user_id: str, data_dir: Optional[str], snap=None) -> List[str]:
     """The 'Missed owner messages' section. `user_delivery.py` suppresses a
     capped/paused owner message ON THE PROMISE that it is rolled into the
     digest; until 2026-09-20 no digest path read them back (195/196 suppressed
-    over 8 days never reached the owner). Window-bounded, oldest first,
-    kind-tagged, capped at MISSED_MAX_LINES with the remainder counted. An
-    unreadable store is NAMED — 'none' must never mean 'could not tell'."""
+    over 8 days never reached the owner). The count and window are /status's
+    own (116 W7.4); oldest first, kind-tagged, capped at MISSED_MAX_LINES with
+    the remainder counted. An unreadable store is NAMED — 'none' must never
+    mean 'could not tell'."""
     try:
-        rows = _missed(user_id, data_dir, MISSED_READ_LIMIT)
+        rows, more, label = _missed(user_id, data_dir, snap)
     except Exception as e:  # noqa: BLE001 — render the reason, never a silent blank
         return [f"• Missed owner messages: unreadable ({type(e).__name__}: {str(e)[:120]})"]
-    inwin = [r for r in rows if float(r.get("ts") or 0) >= since_ts]
-    if not inwin:
-        return ["• Missed owner messages: none"]
-    inwin.sort(key=lambda r: float(r.get("ts") or 0))
-    out = [f"• Missed owner messages ({len(inwin)}) — held by the send cap or a pause, "
-           f"rolled up here:"]
-    for r in inwin[:MISSED_MAX_LINES]:
+    if not rows:
+        return ["• Missed owner messages: none" + (f" {label}" if label else "")]
+    rows = sorted(rows, key=lambda r: float(r.get("ts") or 0))
+    shown, total = rows[:MISSED_MAX_LINES], len(rows) + more
+    out = [f"• Missed owner messages ({total}{' ' + label if label else ''}) — held by the "
+           f"send cap or a pause, rolled up here:"]
+    for r in shown:
         stamp = time.strftime("%m-%d %H:%M", time.gmtime(float(r.get("ts") or 0)))
         text = " ".join(str(r.get("text") or "").split())[:160]
         out.append(f"   - {stamp}Z [{r.get('kind') or 'undelivered'}] {text}")
-    if len(inwin) > MISSED_MAX_LINES:
-        out.append(f"   … and {len(inwin) - MISSED_MAX_LINES} more (`/missed` shows them)")
+    if total > len(shown):
+        out.append(f"   … and {total - len(shown)} more (`/missed` shows them)")
     return out
 
 
-def _health_lines(user_id: str, data_dir: Optional[str]) -> List[str]:
+def _health_lines(user_id: str, data_dir: Optional[str], snap=None) -> List[str]:
     """Seam kept module-level for test monkeypatching (like ``_ledger``)."""
     try:
-        from core.status_snapshot import build_status_snapshot
         from core.status_render import render_health_lines
-        snap = build_status_snapshot(user_id, data_dir=data_dir, include_money=False)
-        out = render_health_lines(snap, prefix="• ", limit=6)
+        snap = _snap(snap, user_id, data_dir)
+        # The same number of health items as a chat /status (one constant).
+        from core.status_render import SEAT_HEALTH_LIMIT
+        out = render_health_lines(snap, prefix="• ", limit=SEAT_HEALTH_LIMIT)
         # 080 WS-4: what runs next, by name — the snapshot's ONE Next list.
         nxt = [ln for ln in (snap.sections["loops"].lines or []) if ln.startswith("next: ")]
         if snap.sections["loops"].available and nxt:
@@ -306,9 +351,11 @@ async def compose_digest(user_id: str, *, days: int = 1,
     """Build the digest text from evidence. Pure-ish (all reads fail-open)."""
     since_ts = time.time() - max(1, int(days)) * 86400
     failures: List[str] = []
+    snap = _OneSnapshot(user_id, data_dir, days)   # built once, on first use
     ledger = _read(failures, "ledger", _ledger, user_id, days)
     agg = _read(failures, "event log", _event_aggregate, user_id, since_ts)
-    asks = _read(failures, "open asks", _open_asks, user_id, data_dir)
+    asks = _read(failures, "open asks", _open_asks, user_id, data_dir, snap)
+    pending = _read(failures, "pending approvals", _pending_items, user_id, data_dir, snap)
     episodes = _read(failures, "episodes", _episodes, user_id, since_ts)
     top_cost = _read(failures, "AI cost records", _top_cost, user_id, data_dir, days)
     failed_jobs = _read(failures, "job store", _failed_jobs, user_id, data_dir)
@@ -329,12 +376,18 @@ async def compose_digest(user_id: str, *, days: int = 1,
 
     # 080 WS-4: the window is ROLLING, not the calendar day — say so.
     period = "last 24 h" if days == 1 else f"last {days} days"
-    lines = [f"Daily digest — {period}:"]
+    head = period
+    try:   # the owner's calendar day (core/owner_time); the window stays rolling
+        from core.owner_time import owner_day
+        head += f", {owner_day()[0]}"
+    except Exception as e:  # noqa: BLE001 — a label, never a reason to drop the digest
+        _logger.debug("digest: owner day unreadable (%s)", type(e).__name__)
+    lines = [f"Daily digest — {head}:"]
     lines.extend(_failed_job_lines(failed_jobs, since_ts))
     # 2026-08-28 status SSOT: the digest leads with the same health block
     # /status renders. A degraded instance is the first thing the owner reads;
     # a builder failure is one honest line, never a silently clean digest.
-    lines.extend(_health_lines(user_id, data_dir))
+    lines.extend(_health_lines(user_id, data_dir, snap))
     lines.append(f"• Activity: {sessions} session(s), {_n(n_goals, agg is None)} goal event(s), "
                  f"{_n(n_self_mods, agg is None)} self-change(s)")
     lines.extend(f"• {p}" for p in (proposals or [])[:PROPOSALS_MAX_LINES])
@@ -400,14 +453,20 @@ async def compose_digest(user_id: str, *, days: int = 1,
 
     if asks is None:
         lines.append("• Pending approvals: could not read the open asks (see above)")
-    elif asks:
-        lines.append(f"• Pending approvals ({len(asks)}):")
+    elif asks or pending:
+        lines.append(f"• Pending approvals ({len(asks) + len(pending or [])}"
+                     + ("+" if pending is None else "") + "):")
         for a in asks[:5]:
             title = (a.get("title") or "").strip().replace("\n", " ")[:80]
             lines.append(f"   - {title}{_ask_age(a)}")
+        for it in (pending or [])[:5]:
+            lines.append(f"   - [{it.get('kind') or '?'}] {it.get('preview') or it.get('id') or ''}"
+                         f" — /pending")
+    elif pending is None:
+        lines.append("• Pending approvals: no open asks; /pending could not be read (see above)")
     else:
         lines.append("• Pending approvals: none")
-    lines.extend(_missed_lines(user_id, data_dir, since_ts))
+    lines.extend(_missed_lines(user_id, data_dir, snap))
     # QW-3 (proposal 021): hand the owner the console — WEBVIEW_PUBLIC_URL
     # unset (no public console) keeps the digest byte-identical.
     try:

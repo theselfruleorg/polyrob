@@ -249,6 +249,11 @@ PAYOUT_ANSWERS = {
     "agent_nft_collection_reveal": "pinned collection; moves nothing",
     "agent_nft_journal": "pinned JournalLog; moves nothing",
     "agent_nft_revoke_all": "risk reducing",
+    "agent_nft_sale_claim": "receives only (the claim shape); claim(treasury) on the pinned sale",
+    "agent_nft_sale_settle": "receives only (the claim shape); the treasury's own records on the pinned sale",
+    "agent_nft_sale_unready": "moves nothing; cancelReady on the pinned collection (115 W7)",
+    "agent_nft_sale_cancel_listing": "moves nothing; cancel / incrementNonce on the pinned market",
+    "agent_nft_market_claim": "receives only (the claim shape); claim(treasury) on the pinned market",
 }
 
 

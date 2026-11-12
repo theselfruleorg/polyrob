@@ -198,6 +198,24 @@ def test_identity_reports_provisioned_inbox_and_x_api(tmp_path, monkeypatch):
     assert "x: api configured @exampleagent" in text and "writes ON" in text
     # secret hygiene: no key VALUE leaks into a status line
     assert "x" * 20 not in text
+    assert "ask x_login_check" not in text  # the session line states that fact
+
+
+def test_identity_x_line_reads_the_402_verdict(tmp_path, monkeypatch):
+    """116 W6.3: configured keys are not working keys — a standing verdict is named."""
+    from core import credential_verdicts as cv
+    _clear_reach_env(monkeypatch)
+    monkeypatch.setenv("VERDICTS_DB_PATH", str(tmp_path / "verdicts.db"))
+    cv._reset_for_tests()
+    for k in ("TWITTER_API_KEY", "TWITTER_API_SECRET_KEY", "TWITTER_ACCESS_TOKEN",
+              "TWITTER_ACCESS_TOKEN_SECRET"):
+        monkeypatch.setenv(k, "x" * 20)
+    cv.record_rejection("twitter_api", "account#abc", code="402", remedy="top up")
+    try:
+        text = "\n".join(_identity_section("alice", str(tmp_path)).lines)
+    finally:
+        cv._reset_for_tests()
+    assert "x: api configured" in text and "— refused (402) since " in text
 
 
 def test_identity_x_partial_names_the_missing_keys(tmp_path, monkeypatch):
@@ -207,3 +225,28 @@ def test_identity_x_partial_names_the_missing_keys(tmp_path, monkeypatch):
     text = "\n".join(sec.lines)
     assert sec.data["x_api"] == "partial"
     assert "PARTIAL" in text and "TWITTER_ACCESS_TOKEN_SECRET" in text
+
+
+def test_erc8004_absent_unreadable_and_incomplete_are_three_answers(tmp_path, monkeypatch):
+    """116 W6.4: a broken record says "do NOT register again" with a WARN; only an
+    absent one says "not registered"."""
+    from core.instance import erc8004_record_path, read_erc8004_record
+    _clear_reach_env(monkeypatch)
+    path = erc8004_record_path(tmp_path, "alice")
+    assert read_erc8004_record(tmp_path, "alice")[0] == "absent"
+    sec = _identity_section("alice", str(tmp_path))
+    assert "erc-8004: not registered (optional)" in sec.lines
+    assert not any(h.key == "erc8004_record_unreadable" for h in sec.health)
+    path.parent.mkdir(parents=True)
+    for body, why in (("{not json", "JSONDecodeError"),
+                      (json.dumps({"agent_id": 7}), "incomplete (no tx_hash)")):
+        path.write_text(body)
+        state, rec, got = read_erc8004_record(tmp_path, "alice")
+        assert (state, rec, got) == ("unreadable", None, why)
+        sec = _identity_section("alice", str(tmp_path))
+        text = "\n".join(sec.lines)
+        assert "not registered" not in text and "do NOT register again" in text
+        assert any(h.key == "erc8004_record_unreadable" for h in sec.health)
+    path.write_text(json.dumps({"agent_id": 7, "tx_hash": "0x" + "ab" * 32,
+                                "chain": "base", "registry": "0x" + "1" * 40}))
+    assert read_erc8004_record(tmp_path, "alice")[0] == "ok"

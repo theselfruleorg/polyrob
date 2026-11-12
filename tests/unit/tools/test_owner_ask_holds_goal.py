@@ -85,3 +85,34 @@ def test_autonomous_ask_cannot_hold_an_unrelated_goal(ask):
     assert result.error and "own goal" in result.error
     assert ask.board.get(goal.id).status != "blocked"
     assert ask.board.asks(user_id="alice", status="open") == []
+
+
+# --- 116 W2.3: holds_this_job, the cron twin of blocks_goal_ids ----------------
+
+def test_holds_this_job_holds_the_asking_job(ask):
+    from core.autonomy_marker import mark_autonomous
+    from core.cron_expect import job_held_by
+    mark_autonomous("cron-run-sess", cron_job_id="job-outreach")
+    r = ask.call(_ctx(session_id="cron-run-sess"), question="expand the list or stop?",
+                 holds_this_job=True)
+    assert not r.error and "HELD" in r.extracted_content
+    a = ask.board.asks(user_id="alice", status="open")[0]
+    assert a.payload["rail_id"] == "cron:job-outreach"
+    assert a.payload["holds_rail"] is True and a.payload["holds_rail_via"] == "owner_ask"
+    assert job_held_by(ask.board.db_path, "alice", "job-outreach")["ask_id"] == a.id
+
+
+def test_a_cron_ask_without_holds_this_job_holds_nothing(ask):
+    from core.autonomy_marker import mark_autonomous
+    from core.cron_expect import job_held_by
+    mark_autonomous("cron-run-sess2", cron_job_id="job-quiet")
+    r = ask.call(_ctx(session_id="cron-run-sess2"), question="expand the list or stop?")
+    assert not r.error and "HELD" not in r.extracted_content
+    assert job_held_by(ask.board.db_path, "alice", "job-quiet") is None
+
+
+def test_holds_this_job_outside_a_job_run_is_refused(ask):
+    r = ask.call(_ctx(session_id="plain-chat"), question="expand the list or stop?",
+                 holds_this_job=True)
+    assert r.error and "scheduled job" in r.error
+    assert ask.board.asks(user_id="alice", status="open") == []

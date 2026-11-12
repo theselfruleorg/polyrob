@@ -230,13 +230,6 @@ async def _files(c: AdminCall) -> str:
     return await _files_reply(c.user_id, c.args)
 
 
-async def _dev(c: AdminCall) -> str:
-    # Owner ↔ on-host dev-loop rail (proposal 027 WS-1). Raw text, not
-    # `args` — the loop should see exactly what the owner typed.
-    from surfaces.telegram.dev_rail import perform_dev_command, strip_dev_prefix
-    return await perform_dev_command(strip_dev_prefix(c.result.inbound.text))
-
-
 async def _pause(c: AdminCall) -> str:
     from surfaces.telegram.status_ops import _pause_reply, _seat_via
     return _pause_reply(c.data_dir, c.cmd, c.args, via=_seat_via(c.result))
@@ -452,7 +445,6 @@ ADMIN_VERBS: dict[str, Callable[[AdminCall], Awaitable[Any]]] = {
     "/memory": _memory,
     "/kb": _kb,
     "/files": _files,
-    "/dev": _dev,
     "/resume": _pause,
     "/pause": _pause,
     "/claim": _claim,

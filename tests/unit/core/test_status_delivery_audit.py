@@ -40,6 +40,26 @@ def test_a_dead_letter_is_named_and_raises_a_health_item(tmp_path, monkeypatch):
     assert [h.key for h in sec.health] == ["outbound_dead_letters"]
 
 
+def test_an_old_pending_row_is_named_and_warns_and_delivered_says_7d(tmp_path):
+    """116 W3.6: the oldest pending row is on the line; over 1 h it is a WARN."""
+    from core.sqlite_util import execute_retry
+    path = os.path.join(str(tmp_path), "outbox.db")
+    q = OutboundDeliveryQueue(path)
+    q.enqueue(idempotency_key="k", session_key="s", surface_id="nohost",
+              dest="1", payload="waits")
+    sec = Section(name="delivery")
+    _outbound_queue_lines(sec, str(tmp_path))
+    assert any("oldest pending 0m" in line and "delivered last 7 d" in line
+               for line in sec.lines)
+    assert [h.key for h in sec.health] == []
+    execute_retry(path, "UPDATE outbound_queue SET created_at=?", (time.time() - 2 * 3600,))
+    sec = Section(name="delivery")
+    _outbound_queue_lines(sec, str(tmp_path))
+    assert any("oldest pending 2.0h" in line for line in sec.lines)
+    assert [h.key for h in sec.health] == ["outbound_pending_stale"]
+    assert sec.data["outbound_delivered_7d"] == 0
+
+
 def test_the_queue_is_looked_for_beside_the_surface_stores_not_the_telemetry_db(
         tmp_path, monkeypatch):
     """⚠️ Revalidation: the path is ``data_dir``, NOT ``dirname(telemetry db)``.
@@ -111,6 +131,31 @@ def test_cap_used_excludes_the_lanes_the_cap_cannot_deny(monkeypatch, tmp_path):
     assert sec.data["consumed"] == 1        # not 3
     assert sec.data["uncounted"] == 2
     assert any("uncapped lane" in line for line in sec.lines)
+
+
+def test_a_fallback_is_queued_or_refused_never_delivered(monkeypatch, tmp_path):
+    """116 W6.7: `fallback` splits by `attrs.queued`; the uncapped line counts `sent` only."""
+    monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH",
+                       os.path.join(str(tmp_path), "telemetry_events.db"))
+    now = time.time()
+    rows = [
+        {"kind": "user_delivery", "source": "cron", "ts": now,
+         "attrs": {"outcome": "fallback", "lane": "normal", "queued": True}},
+        {"kind": "user_delivery", "source": "cron", "ts": now,
+         "attrs": {"outcome": "fallback", "lane": "normal"}},
+        {"kind": "user_delivery", "source": "credit_sentinel", "ts": now,
+         "attrs": {"outcome": "fallback", "lane": "critical", "queued": True}},
+        {"kind": "user_delivery", "source": "credit_sentinel", "ts": now,
+         "attrs": {"outcome": "sent", "lane": "critical"}},
+    ]
+    sec = _delivery_section("u", str(tmp_path), _tele(rows), None, now)
+    assert sec.data["fallback_queued"] == 2
+    assert sec.data["fallback_refused"] == 1
+    assert sec.data["uncapped_sent"] == 1
+    head = next(line for line in sec.lines if line.startswith("owner messages 24h:"))
+    assert "2 queued to the outbox, 1 refused by a sink" in head
+    assert "fallback" not in head and "telemetry_events.db" in head
+    assert any(line.startswith("plus 1 sent in 24h on an uncapped lane") for line in sec.lines)
 
 
 # --- D69: the SMTP line states a condition, never an unseen effect ----------
@@ -213,3 +258,19 @@ def test_moves_section_says_nothing_moved_only_when_it_could_read(tmp_path, monk
     assert sec.data["moves"] == []
     assert sec.data["total_usd"] is None   # never 0.0
     assert "nothing moved" in sec.lines[0]
+
+
+def test_an_unreadable_owner_thread_renders_unavailable_and_degrades(monkeypatch, tmp_path):
+    """116 W5.11: a failed thread read is never "nothing recorded yet"."""
+    monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH",
+                       os.path.join(str(tmp_path), "telemetry_events.db"))
+    from core.surfaces import owner_thread as ot
+
+    def _boom(*a, **k):
+        raise OSError("disk I/O error")
+    monkeypatch.setattr(ot, "thread_counts", _boom)
+    sec = _delivery_section("u", str(tmp_path), _tele([]), None, time.time())
+    assert "owner thread 24h: unavailable (OSError: disk I/O error)" in sec.lines
+    assert not any("nothing recorded yet" in line for line in sec.lines)
+    assert sec.state == "degraded"
+    assert sec.data["owner_thread_unavailable"] == "OSError: disk I/O error"

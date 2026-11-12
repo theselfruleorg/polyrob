@@ -111,7 +111,7 @@ def test_the_telegram_room_and_background_sets_are_the_verb_rows():
     from surfaces.telegram import harness as H
     # The membership of the old Telegram literal, now the rows.
     assert H._ROOM_REFUSED_COMMANDS == {
-        "/trade", "/offer", "/wallet", "/deploy", "/lp", "/launch", "/bridge", "/dev", "/claim",
+        "/trade", "/offer", "/wallet", "/deploy", "/lp", "/launch", "/bridge", "/claim",
         "/pay", "/nft", "/dapp", "/identity", "/pause", "/resume", "/approve",
         "/reject", "/run", "/allow", "/deny", "/pair", "/config", "/prefs", "/mcp", "/apps",
         "/invoices", "/settle", "/job", "/goal", "/fulfill", "/contacts",

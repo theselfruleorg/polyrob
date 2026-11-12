@@ -103,3 +103,18 @@ async def test_negative_offset_is_still_refused(tool):
     await _write_raw(tool, "r.md", _TEN)
     with pytest.raises(Exception):
         await tool.read_file(ReadFileAction(filePath="r.md", offset=-1, limit=1))
+
+
+@pytest.mark.asyncio
+async def test_a_saved_tool_result_is_read_in_slices(tool):
+    """116 W1.2: an unpaged read of a saved result returns one slice and the
+    next offset; a whole read was over the wire cap and was saved again."""
+    from core.tool_results import READ_SLICE_CHARS, relative_path
+    rel = relative_path("s1", "big.txt")
+    await _write_raw(tool, rel, "a" * (READ_SLICE_CHARS + 500))
+    out = await tool.read_file(ReadFileAction(filePath=rel))
+    head, body = out.split("\n", 1)
+    assert len(body) == READ_SLICE_CHARS and f"char_offset={READ_SLICE_CHARS}" in head
+    out = await tool.read_file(ReadFileAction(filePath=rel, char_offset=READ_SLICE_CHARS,
+                                              char_limit=10 ** 9))
+    assert out.split("\n", 1)[1] == "a" * 500 and "end of the saved result" in out

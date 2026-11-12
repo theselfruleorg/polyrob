@@ -710,9 +710,7 @@ async def get_payment_request(request_id: str, *, db=None) -> Optional[Dict[str,
 async def get_payment_request_by_tx_hash(transaction_hash: str, *, db=None) -> Optional[Dict[str, Any]]:
     """Read one invoice row by its settlement transaction hash — the
     counterpart to :func:`get_payment_request` for callers that only carry a
-    ``transaction_hash`` reference, not the ``request_id`` (Task 15, Phase 4:
-    ERC-8004 ``ProofOfPayment`` only carries a ``txHash``, never the invoice's
-    own id — see ``modules/eip8004/reputation.py::_verify_payment_proof``).
+    ``transaction_hash`` reference, not the ``request_id``.
 
     ``transaction_hash`` carries a partial UNIQUE index (see
     :func:`settle_payment_request`), so at most one row can ever match — this

@@ -45,7 +45,7 @@ the ONE copy for every on-chain money verb; the other money skills point here.
   `agent_nft_collection_reveal`) waits for the owner's approval card, in every
   turn, unless the owner turned on `DEFI_TIERED_SPEND_LANE`; then only a call
   above the autonomous ceiling asks. A dry run never asks and never queues. The
-  other `agent_nft` writes (mint, withdraw, adopt, bind) always ask.
+  other `agent_nft` writes (mint, withdraw, bind) always ask.
 - `transfer`, `solana_transfer`, `nft_transfer` and every call that pays an
   address nobody pinned always ask (`send-funds`). The owner's own transfer to
   the owner's address or to this wallet does not ask twice.

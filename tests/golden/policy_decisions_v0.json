@@ -80,7 +80,7 @@
    "github_create_issue",
    "aave_supply"
   ],
-  "universe_size": 409
+  "universe_size": 417
  },
  "actions": {
   "": {
@@ -274,61 +274,6 @@
     "is_untrusted_tool(name, owner)": false
    }
   },
-  "agent_nft_adopt": {
-   "approval": {
-    "autonomous_gating_lanes(env)": "reported"
-   },
-   "correspondent": {
-    "is_high_impact(name)": true,
-    "is_high_impact_call(name, None)": true,
-    "is_high_impact_call(name, owner)": true,
-    "reply_action": false
-   },
-   "effect": {
-    "classify_effect(None)": null,
-    "classify_effect(owner)": [
-     "money",
-     "action"
-    ],
-    "non_write_row_in": [],
-    "pause_kind_for(owner)": "spend",
-    "write_row": {
-     "agent_nft": "money"
-    }
-   },
-   "emitted": {
-    "direct_controller_action": false,
-    "live_default_env": true,
-    "live_twitter_enabled": true,
-    "synthetic_mcp": false
-   },
-   "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.WRITE_ACTIONS",
-    "payment_tools.PAYMENT_APPROVAL_TOOLS",
-    "spend_lane.ALWAYS_OWNER_APPROVED_VERBS"
-   ],
-   "money": {
-    "approval_queue._is_money_action(name)": true,
-    "authority.money_action(name)": true,
-    "authority.money_tool(owner)": true,
-    "metering_gate.MONEY_TOOLS∋owner": true,
-    "room_policy._is_money_call(name, None)": true,
-    "room_policy._is_money_call(name, owner)": true
-   },
-   "owner_tools": [
-    "agent_nft"
-   ],
-   "room": {
-    "is_room_denied_call(name, None)": true,
-    "is_room_denied_call(name, owner)": true
-   },
-   "spend_exemption": {},
-   "untrusted": {
-    "is_untrusted_tool(name, None)": false,
-    "is_untrusted_tool(name, owner)": false
-   }
-  },
   "agent_nft_bind_identity": {
    "approval": {
     "autonomous_gating_lanes(env)": "reported"
@@ -395,6 +340,61 @@
     "tiered/x402_amount_large": "dry run — the guard is consulted but nothing is broadcast",
     "tiered/x402_amount_small": "dry run — the guard is consulted but nothing is broadcast"
    },
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": false
+   }
+  },
+  "agent_nft_buy": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "money",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": "spend",
+    "write_row": {
+     "agent_nft": "money"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.WRITE_ACTIONS",
+    "payment_tools.PAYMENT_APPROVAL_TOOLS",
+    "spend_lane.ALWAYS_OWNER_APPROVED_VERBS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": true,
+    "authority.money_action(name)": true,
+    "authority.money_tool(owner)": true,
+    "metering_gate.MONEY_TOOLS∋owner": true,
+    "room_policy._is_money_call(name, None)": true,
+    "room_policy._is_money_call(name, owner)": true
+   },
+   "owner_tools": [
+    "agent_nft"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
    "untrusted": {
     "is_untrusted_tool(name, None)": false,
     "is_untrusted_tool(name, owner)": false
@@ -653,7 +653,542 @@
     "is_untrusted_tool(name, owner)": false
    }
   },
+  "agent_nft_market_claim": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "money",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": "spend",
+    "write_row": {
+     "agent_nft": "money"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.WRITE_ACTIONS",
+    "payment_tools.PAYMENT_APPROVAL_TOOLS",
+    "spend_lane.DEFI_SPEND_VERBS",
+    "spend_lane.DRY_RUN_VERBS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": true,
+    "authority.money_action(name)": true,
+    "authority.money_tool(owner)": true,
+    "metering_gate.MONEY_TOOLS∋owner": true,
+    "room_policy._is_money_call(name, None)": true,
+    "room_policy._is_money_call(name, owner)": true
+   },
+   "owner_tools": [
+    "agent_nft"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {
+    "default/dry_run_true": "dry run — the guard is consulted but nothing is broadcast",
+    "default/empty": "dry run — the guard is consulted but nothing is broadcast",
+    "default/x402_amount_large": "dry run — the guard is consulted but nothing is broadcast",
+    "default/x402_amount_small": "dry run — the guard is consulted but nothing is broadcast",
+    "is_simulation": [
+     "empty",
+     "dry_run_true",
+     "x402_amount_small",
+     "x402_amount_large"
+    ],
+    "tiered/dry_run_true": "dry run — the guard is consulted but nothing is broadcast",
+    "tiered/empty": "dry run — the guard is consulted but nothing is broadcast",
+    "tiered/live_spend_small": "declared ceiling $5.0000 is within the $25.00 autonomous limit",
+    "tiered/live_spend_small_session_large": "declared ceiling $5.0000 is within the $25.00 autonomous limit",
+    "tiered/live_spend_small_session_small": "declared ceiling $5.0000 is within the $25.00 autonomous limit",
+    "tiered/x402_amount_large": "dry run — the guard is consulted but nothing is broadcast",
+    "tiered/x402_amount_small": "dry run — the guard is consulted but nothing is broadcast"
+   },
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": false
+   }
+  },
   "agent_nft_revoke_all": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "money",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": "spend",
+    "write_row": {
+     "agent_nft": "money"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.WRITE_ACTIONS",
+    "payment_tools.PAYMENT_APPROVAL_TOOLS",
+    "spend_lane.DEFI_SPEND_VERBS",
+    "spend_lane.DRY_RUN_VERBS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": true,
+    "authority.money_action(name)": true,
+    "authority.money_tool(owner)": true,
+    "metering_gate.MONEY_TOOLS∋owner": true,
+    "room_policy._is_money_call(name, None)": true,
+    "room_policy._is_money_call(name, owner)": true
+   },
+   "owner_tools": [
+    "agent_nft"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {
+    "default/dry_run_true": "dry run — the guard is consulted but nothing is broadcast",
+    "default/empty": "dry run — the guard is consulted but nothing is broadcast",
+    "default/x402_amount_large": "dry run — the guard is consulted but nothing is broadcast",
+    "default/x402_amount_small": "dry run — the guard is consulted but nothing is broadcast",
+    "is_simulation": [
+     "empty",
+     "dry_run_true",
+     "x402_amount_small",
+     "x402_amount_large"
+    ],
+    "tiered/dry_run_true": "dry run — the guard is consulted but nothing is broadcast",
+    "tiered/empty": "dry run — the guard is consulted but nothing is broadcast",
+    "tiered/live_spend_small": "declared ceiling $5.0000 is within the $25.00 autonomous limit",
+    "tiered/live_spend_small_session_large": "declared ceiling $5.0000 is within the $25.00 autonomous limit",
+    "tiered/live_spend_small_session_small": "declared ceiling $5.0000 is within the $25.00 autonomous limit",
+    "tiered/x402_amount_large": "dry run — the guard is consulted but nothing is broadcast",
+    "tiered/x402_amount_small": "dry run — the guard is consulted but nothing is broadcast"
+   },
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": false
+   }
+  },
+  "agent_nft_sale_accept": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "money",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": "spend",
+    "write_row": {
+     "agent_nft": "money"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.WRITE_ACTIONS",
+    "payment_tools.PAYMENT_APPROVAL_TOOLS",
+    "spend_lane.ALWAYS_OWNER_APPROVED_VERBS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": true,
+    "authority.money_action(name)": true,
+    "authority.money_tool(owner)": true,
+    "metering_gate.MONEY_TOOLS∋owner": true,
+    "room_policy._is_money_call(name, None)": true,
+    "room_policy._is_money_call(name, owner)": true
+   },
+   "owner_tools": [
+    "agent_nft"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": false
+   }
+  },
+  "agent_nft_sale_cancel_listing": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "money",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": "spend",
+    "write_row": {
+     "agent_nft": "money"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.WRITE_ACTIONS",
+    "payment_tools.PAYMENT_APPROVAL_TOOLS",
+    "spend_lane.DEFI_SPEND_VERBS",
+    "spend_lane.DRY_RUN_VERBS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": true,
+    "authority.money_action(name)": true,
+    "authority.money_tool(owner)": true,
+    "metering_gate.MONEY_TOOLS∋owner": true,
+    "room_policy._is_money_call(name, None)": true,
+    "room_policy._is_money_call(name, owner)": true
+   },
+   "owner_tools": [
+    "agent_nft"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {
+    "default/dry_run_true": "dry run — the guard is consulted but nothing is broadcast",
+    "default/empty": "dry run — the guard is consulted but nothing is broadcast",
+    "default/x402_amount_large": "dry run — the guard is consulted but nothing is broadcast",
+    "default/x402_amount_small": "dry run — the guard is consulted but nothing is broadcast",
+    "is_simulation": [
+     "empty",
+     "dry_run_true",
+     "x402_amount_small",
+     "x402_amount_large"
+    ],
+    "tiered/dry_run_true": "dry run — the guard is consulted but nothing is broadcast",
+    "tiered/empty": "dry run — the guard is consulted but nothing is broadcast",
+    "tiered/live_spend_small": "declared ceiling $5.0000 is within the $25.00 autonomous limit",
+    "tiered/live_spend_small_session_large": "declared ceiling $5.0000 is within the $25.00 autonomous limit",
+    "tiered/live_spend_small_session_small": "declared ceiling $5.0000 is within the $25.00 autonomous limit",
+    "tiered/x402_amount_large": "dry run — the guard is consulted but nothing is broadcast",
+    "tiered/x402_amount_small": "dry run — the guard is consulted but nothing is broadcast"
+   },
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": false
+   }
+  },
+  "agent_nft_sale_claim": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "money",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": "spend",
+    "write_row": {
+     "agent_nft": "money"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.WRITE_ACTIONS",
+    "payment_tools.PAYMENT_APPROVAL_TOOLS",
+    "spend_lane.DEFI_SPEND_VERBS",
+    "spend_lane.DRY_RUN_VERBS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": true,
+    "authority.money_action(name)": true,
+    "authority.money_tool(owner)": true,
+    "metering_gate.MONEY_TOOLS∋owner": true,
+    "room_policy._is_money_call(name, None)": true,
+    "room_policy._is_money_call(name, owner)": true
+   },
+   "owner_tools": [
+    "agent_nft"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {
+    "default/dry_run_true": "dry run — the guard is consulted but nothing is broadcast",
+    "default/empty": "dry run — the guard is consulted but nothing is broadcast",
+    "default/x402_amount_large": "dry run — the guard is consulted but nothing is broadcast",
+    "default/x402_amount_small": "dry run — the guard is consulted but nothing is broadcast",
+    "is_simulation": [
+     "empty",
+     "dry_run_true",
+     "x402_amount_small",
+     "x402_amount_large"
+    ],
+    "tiered/dry_run_true": "dry run — the guard is consulted but nothing is broadcast",
+    "tiered/empty": "dry run — the guard is consulted but nothing is broadcast",
+    "tiered/live_spend_small": "declared ceiling $5.0000 is within the $25.00 autonomous limit",
+    "tiered/live_spend_small_session_large": "declared ceiling $5.0000 is within the $25.00 autonomous limit",
+    "tiered/live_spend_small_session_small": "declared ceiling $5.0000 is within the $25.00 autonomous limit",
+    "tiered/x402_amount_large": "dry run — the guard is consulted but nothing is broadcast",
+    "tiered/x402_amount_small": "dry run — the guard is consulted but nothing is broadcast"
+   },
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": false
+   }
+  },
+  "agent_nft_sale_list": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "money",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": "spend",
+    "write_row": {
+     "agent_nft": "money"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.WRITE_ACTIONS",
+    "payment_tools.PAYMENT_APPROVAL_TOOLS",
+    "spend_lane.ALWAYS_OWNER_APPROVED_VERBS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": true,
+    "authority.money_action(name)": true,
+    "authority.money_tool(owner)": true,
+    "metering_gate.MONEY_TOOLS∋owner": true,
+    "room_policy._is_money_call(name, None)": true,
+    "room_policy._is_money_call(name, owner)": true
+   },
+   "owner_tools": [
+    "agent_nft"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": false
+   }
+  },
+  "agent_nft_sale_ready": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "money",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": "spend",
+    "write_row": {
+     "agent_nft": "money"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.WRITE_ACTIONS",
+    "payment_tools.PAYMENT_APPROVAL_TOOLS",
+    "spend_lane.ALWAYS_OWNER_APPROVED_VERBS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": true,
+    "authority.money_action(name)": true,
+    "authority.money_tool(owner)": true,
+    "metering_gate.MONEY_TOOLS∋owner": true,
+    "room_policy._is_money_call(name, None)": true,
+    "room_policy._is_money_call(name, owner)": true
+   },
+   "owner_tools": [
+    "agent_nft"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": false
+   }
+  },
+  "agent_nft_sale_settle": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "money",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": "spend",
+    "write_row": {
+     "agent_nft": "money"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.WRITE_ACTIONS",
+    "payment_tools.PAYMENT_APPROVAL_TOOLS",
+    "spend_lane.DEFI_SPEND_VERBS",
+    "spend_lane.DRY_RUN_VERBS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": true,
+    "authority.money_action(name)": true,
+    "authority.money_tool(owner)": true,
+    "metering_gate.MONEY_TOOLS∋owner": true,
+    "room_policy._is_money_call(name, None)": true,
+    "room_policy._is_money_call(name, owner)": true
+   },
+   "owner_tools": [
+    "agent_nft"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {
+    "default/dry_run_true": "dry run — the guard is consulted but nothing is broadcast",
+    "default/empty": "dry run — the guard is consulted but nothing is broadcast",
+    "default/x402_amount_large": "dry run — the guard is consulted but nothing is broadcast",
+    "default/x402_amount_small": "dry run — the guard is consulted but nothing is broadcast",
+    "is_simulation": [
+     "empty",
+     "dry_run_true",
+     "x402_amount_small",
+     "x402_amount_large"
+    ],
+    "tiered/dry_run_true": "dry run — the guard is consulted but nothing is broadcast",
+    "tiered/empty": "dry run — the guard is consulted but nothing is broadcast",
+    "tiered/live_spend_small": "declared ceiling $5.0000 is within the $25.00 autonomous limit",
+    "tiered/live_spend_small_session_large": "declared ceiling $5.0000 is within the $25.00 autonomous limit",
+    "tiered/live_spend_small_session_small": "declared ceiling $5.0000 is within the $25.00 autonomous limit",
+    "tiered/x402_amount_large": "dry run — the guard is consulted but nothing is broadcast",
+    "tiered/x402_amount_small": "dry run — the guard is consulted but nothing is broadcast"
+   },
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": false
+   }
+  },
+  "agent_nft_sale_unready": {
    "approval": {
     "autonomous_gating_lanes(env)": "reported"
    },

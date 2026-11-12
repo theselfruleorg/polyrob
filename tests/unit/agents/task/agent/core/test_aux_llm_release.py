@@ -154,3 +154,18 @@ async def test_a_sub_agent_closes_no_retired_model():
     agent = SimpleNamespace(llm=None, _is_sub_agent=True, _retired_llms=[retired])
     await close_session_llms(agent, _Container(gemini_client=_Client()))
     assert retired._client.closed == 0
+
+
+@pytest.mark.asyncio
+async def test_the_main_slot_refusal_is_debug_and_an_aux_refusal_stays_a_warning(caplog):
+    """116 W9.1: the root's MAIN model is the shared client on most sessions, so its
+    refusal is the expected path (76 warnings in 30 h on prod). The aux, judge and
+    swap slots keep the WARNING: a shared client there is a defect."""
+    main, aux = _llm(), _llm()
+    container = _Container(gemini_client=main._client, other=aux._client)
+    agent = SimpleNamespace(llm=main, message_manager=SimpleNamespace(aux_llm=aux))
+    with caplog.at_level(logging.DEBUG, logger="agents.task.agent.core.llm_slots"):
+        await close_session_llms(agent, container)
+    refusals = [r for r in caplog.records if "refused to close the shared" in r.getMessage()]
+    assert [r.levelno for r in refusals] == [logging.WARNING, logging.DEBUG]
+    assert (main._client.closed, aux._client.closed) == (0, 0)

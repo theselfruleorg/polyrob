@@ -6,12 +6,11 @@ https://eips.ethereum.org/EIPS/eip-8004
 
 from typing import Optional, List, Dict, Any, Literal
 from pydantic import BaseModel, Field
-from datetime import datetime
 from enum import Enum
 
-# M21 (2026-07-15 wallet/crypto review): ReputationManager/ValidationManager are
-# process-volatile in-memory simulations — a restart wipes all "reputation" — and
-# these reads stay served even when EIP8004_ENABLED is off. Rather than hard-gate
+# M21 (2026-07-15 wallet/crypto review): ValidationManager is a
+# process-volatile in-memory simulation — a restart wipes it — and
+# its reads stay served even when EIP8004_ENABLED is off. Rather than hard-gate
 # the reads, every response carries this honest marker.
 _SIMULATION_NOTE = (
     "This registry is a local, process-volatile simulation (in-memory; a restart "
@@ -141,78 +140,6 @@ class RegistrationFile(BaseModel):
 
 
 # =============================================================================
-# Reputation Registry Models
-# =============================================================================
-
-class ProofOfPayment(BaseModel):
-    """Proof of payment for x402 integration."""
-    fromAddress: str = Field(..., description="Payer wallet address")
-    toAddress: str = Field(..., description="Recipient wallet address")
-    chainId: str = Field(..., description="Chain ID")
-    txHash: str = Field(..., description="Transaction hash")
-
-
-class FeedbackAuth(BaseModel):
-    """Signed authorization for feedback submission.
-    
-    Agent signs this to authorize a client to submit feedback.
-    """
-    agentId: int = Field(..., description="Agent's on-chain ID")
-    clientAddress: str = Field(..., description="Authorized client address")
-    expiresAt: int = Field(..., description="Authorization expiry timestamp")
-    nonce: str = Field(..., description="Unique nonce to prevent replay")
-    signature: str = Field(..., description="Agent's EIP-712 signature")
-
-
-class FeedbackEntry(BaseModel):
-    """Feedback entry for the Reputation Registry."""
-    
-    # Required on-chain fields
-    agentId: int = Field(..., description="Agent's on-chain ID")
-    clientAddress: str = Field(..., description="Client wallet address")
-    score: int = Field(..., ge=0, le=100, description="Score 0-100")
-    tag1: Optional[str] = Field(None, max_length=32, description="Primary tag (bytes32)")
-    tag2: Optional[str] = Field(None, max_length=32, description="Secondary tag (bytes32)")
-    
-    # Off-chain file reference
-    fileUri: Optional[str] = Field(None, description="URI to off-chain feedback JSON")
-    fileHash: Optional[str] = Field(None, description="KECCAK-256 hash of file content")
-    
-    # Authorization
-    feedbackAuth: FeedbackAuth = Field(..., description="Agent's authorization signature")
-
-
-class FeedbackFile(BaseModel):
-    """Off-chain feedback file structure (optional).
-    
-    Stored at fileUri, hash verified by fileHash.
-    """
-    # Required
-    agentRegistry: str = Field(..., description="eip155:chainId:address")
-    agentId: int
-    clientAddress: str
-    createdAt: str = Field(default_factory=lambda: datetime.now().isoformat())
-    feedbackAuth: str
-    score: int
-    
-    # Optional categorization
-    tag1: Optional[str] = None
-    tag2: Optional[str] = None
-    skill: Optional[str] = Field(None, description="A2A skill identifier")
-    context: Optional[str] = Field(None, description="A2A context")
-    task: Optional[str] = Field(None, description="A2A task identifier")
-    capability: Optional[str] = Field(None, description="MCP capability: prompts, resources, tools, completions")
-    name: Optional[str] = Field(None, description="MCP tool/prompt/resource name")
-    
-    # x402 integration
-    proof_of_payment: Optional[ProofOfPayment] = None
-    
-    # Additional metadata
-    comment: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
-
-
-# =============================================================================
 # Validation Registry Models
 # =============================================================================
 
@@ -249,57 +176,6 @@ class ValidationStatus(BaseModel):
 # =============================================================================
 # API Request/Response Models
 # =============================================================================
-
-class CreateFeedbackAuthRequest(BaseModel):
-    """Request to create a feedback authorization."""
-    
-    clientAddress: str = Field(..., description="Client address to authorize")
-    taskId: Optional[str] = Field(None, description="Associated A2A task ID")
-    expiresInSeconds: int = Field(default=86400, description="Authorization validity period")
-
-
-class CreateFeedbackAuthResponse(BaseModel):
-    """Response with signed feedback authorization."""
-    
-    feedbackAuth: FeedbackAuth
-    message: str = "Feedback authorization created"
-
-
-class SubmitFeedbackRequest(BaseModel):
-    """Request to submit feedback."""
-    
-    agentId: int
-    score: int = Field(..., ge=0, le=100)
-    feedbackAuth: FeedbackAuth
-    
-    # Optional
-    tag1: Optional[str] = None
-    tag2: Optional[str] = None
-    skill: Optional[str] = None
-    taskId: Optional[str] = None
-    proof_of_payment: Optional[ProofOfPayment] = None
-    comment: Optional[str] = None
-
-
-class GetReputationRequest(BaseModel):
-    """Request to get agent reputation."""
-    
-    agentId: int
-    clientAddress: Optional[str] = None
-    tag1: Optional[str] = None
-    tag2: Optional[str] = None
-
-
-class ReputationSummary(BaseModel):
-    """Agent reputation summary."""
-
-    agentId: int
-    totalFeedback: int
-    averageScore: float
-    recentScores: List[int]
-    topTags: List[str]
-    simulated: bool = Field(default=True, description=_SIMULATION_NOTE)
-
 
 class RequestValidationRequest(BaseModel):
     """Request to request validation."""

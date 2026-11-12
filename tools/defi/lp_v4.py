@@ -2,9 +2,10 @@
 
 Reads (StateView ``getSlot0``/``getLiquidity``, with the PoolManager
 ``extsload`` fallback), the Permit2 allowance read, and the PositionManager
-``modifyLiquidities`` encoder for ONE shape: mint a new position, settle the
-pair, sweep the unused native back. Nothing here signs or broadcasts; the
-guard (``core.wallet.tx_guard``) is the one authorizer.
+``modifyLiquidities`` encoder for TWO shapes: mint a new position, settle the
+pair, sweep the unused native back; and collect a position's fees (a
+decrease of 0, take the pair to the holder; 115 W4). Nothing here signs or
+broadcasts; the guard (``core.wallet.tx_guard``) is the one authorizer.
 
 The PoolKey is never taken from the caller. It is derived from the Pons
 factory's own ``launched_token`` record (``lp_reads.pons_pool_key``): native
@@ -24,8 +25,10 @@ MAX_UINT128 = 2 ** 128 - 1
 MAX_UINT160 = 2 ** 160 - 1
 
 #: v4-periphery ``Actions`` ids (Actions.sol).
+ACTION_DECREASE_LIQUIDITY = 0x01
 ACTION_MINT_POSITION = 0x02
 ACTION_SETTLE_PAIR = 0x0D
+ACTION_TAKE_PAIR = 0x11
 ACTION_SWEEP = 0x14
 
 #: ``ModifyLiquidity(PoolId indexed id, address indexed sender, int24 tickLower,
@@ -176,6 +179,31 @@ def encode_mint_unlock(key, tick_lower, tick_upper, liquidity, amount0_max,
     actions = bytes([ACTION_MINT_POSITION, ACTION_SETTLE_PAIR, ACTION_SWEEP])
     return abi.encode([{"type": "bytes"}, {"type": "bytes[]"}],
                       [actions, [mint, settle, sweep]])
+
+
+def encode_collect_unlock(token_id, currency0, currency1, recipient) -> bytes:
+    """``abi.encode(bytes actions, bytes[] params)`` for DECREASE_LIQUIDITY of
+    0 (``tokenId, 0, 0, 0, ""``: it removes no liquidity, it only settles the
+    fees owed) and TAKE_PAIR(currency0, currency1 → recipient). Nothing is
+    settled in, so no approval and no Permit2 are involved (115 W4)."""
+    decrease = abi.encode([{"type": "uint256"}, {"type": "uint256"}, {"type": "uint128"},
+                           {"type": "uint128"}, {"type": "bytes"}],
+                          [int(token_id), 0, 0, 0, b""])
+    take = abi.encode([{"type": "address"}, {"type": "address"}, {"type": "address"}],
+                      [currency0, currency1, recipient])
+    actions = bytes([ACTION_DECREASE_LIQUIDITY, ACTION_TAKE_PAIR])
+    return abi.encode([{"type": "bytes"}, {"type": "bytes[]"}], [actions, [decrease, take]])
+
+
+def position_pool_key(rpc, chain: str, token_id: int) -> Dict[str, Any]:
+    """The PoolKey of a v4 position, read from the pinned PositionManager
+    (``getPoolAndPositionInfo``) — never from the caller. The guard reads it
+    again for itself (``liquidity_guard.read_v4_position_key``)."""
+    from core.wallet.liquidity_guard import read_v4_position_key
+    try:
+        return read_v4_position_key(rpc, chain, token_id)
+    except ValueError as exc:
+        raise LpReadError(str(exc)) from exc
 
 
 def encode_modify_liquidities(unlock: bytes, deadline: int) -> str:

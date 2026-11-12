@@ -1,4 +1,4 @@
-"""Tests for the ten REPL parity verbs (043 A23).
+"""Tests for the nine REPL parity verbs (043 A23).
 
 The verbs live one-per-module under ``cli/ui/commands/h_*.py`` and are wired into
 ``build_default_registry`` through the ``h_a23`` aggregator (``handlers.py`` is at
@@ -20,9 +20,9 @@ from cli.ui.commands.registry import GROUP_ORDER, CommandContext
 from cli.ui.plain_renderer import PlainRenderer
 from cli.ui.state import SessionState
 
-# The ten A23 verbs. `/inbox` and `/missed` already existed — they are NOT here.
+# The nine A23 verbs (`/dev` left the core: a pack contributes such a verb). `/inbox` and `/missed` already existed — they are NOT here.
 A23_VERBS = ("steer", "goal", "reject", "wallet", "trade", "bridge",
-             "dev", "mode", "prefs", "files")
+             "mode", "prefs", "files")
 
 
 def _ctx(buf=None, **overrides):
@@ -44,7 +44,7 @@ def _fake_container(data_dir):
 # Registration + /help
 # ---------------------------------------------------------------------------
 
-def test_all_ten_verbs_registered_with_group_and_help():
+def test_all_nine_verbs_registered_with_group_and_help():
     reg = build_default_registry()
     for verb in A23_VERBS:
         cmd = reg.lookup(verb)
@@ -166,7 +166,7 @@ def test_surface_parity_rows_resolve():
     reg = build_default_registry()
     # (capability, repl slash) pairs updated for A23.
     expected = {
-        "wallet", "trade", "bridge", "goal", "reject", "files", "dev",
+        "wallet", "trade", "bridge", "goal", "reject", "files",
     }
     for slash in expected:
         assert reg.lookup(slash) is not None, f"REPL /{slash} missing (A23 parity)"

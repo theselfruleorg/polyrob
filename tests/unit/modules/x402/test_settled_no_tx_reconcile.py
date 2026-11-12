@@ -1,5 +1,5 @@
 """098 W1 MO-21: a payment recorded with no on-chain tx (`settled_no_tx`) is
-UNPROVEN: never income or 8004 reputation, one owner notice after 24 h, and a
+UNPROVEN: never income, one owner notice after 24 h, and a
 tx completes it."""
 import time
 
@@ -43,8 +43,6 @@ async def test_unused_nonce_after_24h_notifies_once_and_leaves_income(x402_db):
 
 def test_scan_pass_never_completes_settled_no_tx():
     assert X402_INVOICE.allowed("settled_no_tx", "completed")
-    from modules.eip8004 import reputation
-    assert reputation._SETTLED_STATUSES == ("completed",)
 
 
 PAYER = "0x" + "a1" * 20

@@ -50,3 +50,45 @@ def test_success_clears_rows_for_older_digests_of_the_same_rail(home):
     cv.clear_rejection("smtp", "s:587:u#cccccccccccc")
     assert cv.verdict("smtp", "s:587:u#aaaaaaaaaaaa") is None
     assert cv.verdict("smtp", "s:587:u2#bbbbbbbbbbbb") is not None
+
+
+def _hmac(key: bytes, value: bytes) -> str:
+    import hmac
+    return hmac.new(key, value, hashlib.sha256).hexdigest()[:12]
+
+
+def test_the_systemd_delivered_key_is_read_first(home, tmp_path, monkeypatch):
+    """116 W9.2: every unit that computes a digest gets ONE root-owned key through
+    LoadCredential=, so two uids compute the same digest for one credential."""
+    creds = tmp_path / "creds"
+    creds.mkdir()
+    (creds / "verdicts.key").write_text("a" * 64)
+    os.chmod(creds / "verdicts.key", 0o400)
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(creds))
+    assert cv.credential_digest("pw") == _hmac(b"a" * 64, b"pw")
+    assert not (home / "verdicts.key").exists()  # the data-home key is not created
+
+
+def test_a_world_readable_or_short_delivered_key_falls_back(home, tmp_path, monkeypatch):
+    creds = tmp_path / "creds"
+    creds.mkdir()
+    key = creds / "verdicts.key"
+    key.write_text("b" * 64)
+    os.chmod(key, 0o444)
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(creds))
+    assert cv.credential_digest("pw") != _hmac(b"b" * 64, b"pw")
+    cv._DIGEST_KEYS.clear()
+    os.chmod(key, 0o600)
+    key.write_text("short")
+    assert cv.credential_digest("pw") != _hmac(b"short", b"pw")
+    assert (home / "verdicts.key").is_file()  # fell back to the data-home key
+
+
+def test_a_credentials_directory_without_the_key_uses_the_data_home_key(home, tmp_path,
+                                                                        monkeypatch):
+    creds = tmp_path / "creds"
+    creds.mkdir()
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(creds))
+    d = cv.credential_digest("pw")
+    data_key = (home / "verdicts.key").read_bytes().strip()
+    assert d == _hmac(data_key, b"pw")

@@ -89,3 +89,14 @@ def test_the_record_defaults_to_the_config_home_not_the_data_home(tmp_path, monk
     assert not (tmp_path / "project-data" / bm.MARKER_NAME).exists()
     status, data = bm.read_marker()
     assert status == bm.OK and data["version"] == "9.9.9"
+
+
+def test_a_git_deployed_box_with_no_marker_is_not_told_to_run_setup(tmp_path, monkeypatch):
+    """116 W6.4: a deploy-stamped box was installed from git, not by `polyrob setup`."""
+    import core.version as v
+    monkeypatch.setattr(v, "deployed_sha", lambda: "0123456789abcdef0123")
+    line = bm.describe(tmp_path)
+    assert line == "bootstrap: deployed from git (0123456789ab); no install record"
+    assert "polyrob setup" not in line
+    monkeypatch.setattr(v, "deployed_sha", lambda: None)
+    assert "run `polyrob setup`" in bm.describe(tmp_path)

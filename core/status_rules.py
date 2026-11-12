@@ -16,6 +16,7 @@ handlers).
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -171,11 +172,11 @@ def _self_notes(sec: Section, data_dir: str, uid: str, instance_id: str,
 
 def _skills(sec: Section, pending_kinds: Dict[str, List[dict]]) -> None:
     pending = pending_kinds.get("skill", [])
-    sec.data["skills"] = {"surface": "skills", "pending": len(pending),
-                          "inventory_state": "unavailable", "approved": None, "loaded": None}
+    # 116 W5.5: the loaded-skill count is the knowledge section's line (it reads
+    # skill_usage.db); this section printed a fixed "unavailable" beside it.
+    sec.data["skills"] = {"surface": "skills", "pending": len(pending)}
     sec.lines.append("skill drafts: " + (f"{len(pending)} draft(s) pending — NOT in effect"
                                    if pending else "no pending drafts"))
-    sec.lines.append("skills: approved and session-loaded counts unavailable")
 
 
 def _rail_prose(sec: Section, uid: str, cron_db: str) -> None:
@@ -241,8 +242,10 @@ def _goal_prose(sec: Section, uid: str, data_dir: str) -> None:
 def _workspace_doctrine(sec: Section, uid: str, data_dir: str) -> None:
     """060 WS-3: the persistent workspace's marked documents (``kind:`` front-matter).
     Undeclared documents are RECORDS; only ``kind: instruction`` ones are doctrine."""
-    from core.doc_kind import classify_tree
-    info: Dict[str, Any] = dict(classify_tree(str(Path(data_dir) / "workspace")))
+    from core.rules_sweep import workspace_doctrine_tree
+    tree, ws = workspace_doctrine_tree()  # 116 W5.4: the folder the agent works in
+    info: Dict[str, Any] = dict(tree)
+    info["root"] = ws or None
     info["surface"] = "workspace_doctrine"
     sec.data["workspace_doctrine"] = info
     if info.get("state"):
@@ -275,6 +278,22 @@ def _rail_skill_misses(sec: Section, tele: Optional[Section]) -> None:
         remedy="fix the id in the job's `skills` (see /job show <id>) or author the skill"))
 
 
+def identity_home(data_dir: str) -> str:
+    """The home the identity docs are read from. *data_dir* when it holds an
+    ``identity`` tree (or is not inside the process's identity home: a test, an
+    explicit other home); else ``prefs_home_dir()``, the home every identity
+    writer and the session prompt use."""
+    from core.runtime_paths import prefs_home_dir
+    here = os.path.abspath(str(data_dir or ""))
+    if os.path.isdir(os.path.join(here, "identity")):
+        return str(data_dir)
+    home = os.path.abspath(prefs_home_dir())
+    if here != home and here.startswith(home + os.sep) \
+            and os.path.isdir(os.path.join(home, "identity")):
+        return home
+    return str(data_dir)
+
+
 def rules_section(user_id: str, data_dir: str, cron_db: str,
                   tele: Optional[Section] = None) -> Section:
     """Per instruction surface: active · pending · superseded · last change, and
@@ -285,19 +304,33 @@ def rules_section(user_id: str, data_dir: str, cron_db: str,
     uid = str(user_id or "")
     instance_id = resolve_instance_id()
     pending_kinds: Dict[str, List[dict]] = {}
+    # 116 W7.3: the rules live on the IDENTITY axis, which has one home per
+    # process. `agent_status` passes a container's `config.data_dir` (`<home>/data`
+    # on a server), where no rule was ever written.
+    store_dir, data_dir = data_dir, identity_home(data_dir)
+    errors: List[str] = []
     try:
-        for it in self_evolution.list_pending(uid, home_dir=data_dir, instance_id=instance_id) or []:
+        for it in self_evolution.list_pending(uid, home_dir=data_dir, instance_id=instance_id,
+                                              errors=errors) or []:
             pending_kinds.setdefault(str(it.get("kind")), []).append(it)
     except Exception as e:
-        sec.lines.append(f"pending drafts: unreadable ({type(e).__name__}: {str(e)[:80]})")
+        errors.append(f"{type(e).__name__}: {str(e)[:80]}")
+    if errors:
+        sec.lines.append("pending drafts: unreadable (" + "; ".join(errors[:3]) + ")")
+        sec.data["pending_unreadable"] = errors
+        sec.health.append(HealthItem(
+            key="rules_pending_unreadable", severity=SEVERITY_WARN,
+            text="a draft store cannot be read — a rule change may wait on you unseen ("
+                 + "; ".join(errors[:2]) + ")",
+            remedy="`polyrob doctor` (the identity directory and its permissions)"))
     sec.data["system_prompt"] = {"surface": "system_prompt", "state": "code (changes with a deploy)"}
     _owner_rules(sec, data_dir, uid, instance_id, pending_kinds)
     _soul(sec, data_dir)
     _self_notes(sec, data_dir, uid, instance_id, pending_kinds)
     _skills(sec, pending_kinds)
     _rail_prose(sec, uid, cron_db)
-    _goal_prose(sec, uid, data_dir)
-    _workspace_doctrine(sec, uid, data_dir)
+    _goal_prose(sec, uid, store_dir)
+    _workspace_doctrine(sec, uid, store_dir)
     _rail_skill_misses(sec, tele)
     sec.data["surfaces"] = [k for k in sec.data if isinstance(sec.data.get(k), dict)
                             and sec.data[k].get("surface")]

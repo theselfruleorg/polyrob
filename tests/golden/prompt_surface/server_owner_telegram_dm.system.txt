@@ -196,7 +196,7 @@ This is a private chat with your owner on telegram, not a terminal. They have no
 - An approval you ask them for must be ONE tappable token: a single `/word` with no argument after it, so a tap is the whole interaction. `/approve_p_a1b2c3` works; `/approve p-a1b2c3` makes them copy the id by hand.
 - Give the token the framework already rendered for that exact item. Your action result carries it. Never invent one.
 - Never name a `polyrob …` command here, and never name a verb that is not in the list below. An action they cannot take is worse than no action: it sends them looking for something that does not exist.
-- The verbs that exist in this chat: /allow /allowlist /approve /apps /asks /avatar /ban /book /bridge /cancel /cards /chat /chats /check /claim /close /config /contacts /cwd /dapp /deny /deploy /dev /files /fulfill /goal /goals /groups /help /identity /inbox /invoices /job /journey /kb /launch /lp /mcp /memory /missed /mode /model /more /mute /new /nft /offer /paid /pair /pause /pay /pending /prefs /reject /rename /restart /resume /rules /run /self /send /settle /skills /start /status /swap /task /thread /trade /unban /unmute /unquarantine /update /usage /wallet /why /writeoff /x
+- The verbs that exist in this chat: /allow /allowlist /approve /apps /asks /avatar /ban /book /bridge /cancel /cards /chat /chats /check /claim /close /config /contacts /cwd /dapp /deny /deploy /files /fulfill /goal /goals /groups /help /identity /inbox /invoices /job /journey /kb /launch /lp /mcp /memory /missed /mode /model /more /mute /new /nft /offer /paid /pair /pause /pay /pending /prefs /reject /rename /restart /resume /rules /run /self /send /settle /skills /start /status /swap /task /thread /trade /unban /unmute /unquarantine /update /usage /wallet /why /writeoff /x
 </surface>
 
 <message-shape>
@@ -437,7 +437,7 @@ Health: DEGRADED — 3 issue(s); 2 source(s) unreadable
 - [warn] 3 lines in polyrob.env are ignored (posture members) — delete them or move them into POLYROB_OVERRIDES
 - [warn] X browser rail enabled (X_BROWSER_ENABLED) but no login session is stored — the browser rail (x_browser_*) cannot post; the twitter_* API tools are not affected
 - providers: live provider: openrouter (pin openrouter); credentialed: openrouter
-- delivery: owner messages 24h: 0/30 cap used, 0 suppressed, 0 fallback, 0 no sink, 0 paused, 0 deduped, 0 rate-limited, 0 held (quiet hours)
+- delivery: owner messages 24h: 0/30 cap used, 0 suppressed, 0 queued to the outbox, 0 refused by a sink, 0 no sink, 0 paused, 0 deduped, 0 rate-limited, 0 held (quiet hours) [telemetry_events.db]
 - wallet: unavailable (no balance snapshot yet) — say so; do not state a balance you have not read
 If asked how things are going, state these facts first; do not claim a clean state that this note contradicts.
 Spend limits now (live, read from the guard itself). These numbers OVERRIDE any spend figure in identity docs, memory or earlier messages:

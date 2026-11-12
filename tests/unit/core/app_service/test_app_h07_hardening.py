@@ -25,6 +25,7 @@ def _req(r, slug="st", uid="u1", **over):
 @pytest.mark.parametrize("over,needle", [
     (dict(slug="../../etc"), "slug"),
     (dict(slug="www"), "slug"),
+    (dict(slug="app"), "slug"),   # a host label an apex base domain already uses
     (dict(uid="a/b"), "tenant"),
     (dict(uid=".."), "tenant"),
     (dict(workspace_digest="/etc"), "workspace_digest"),

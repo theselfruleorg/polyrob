@@ -83,7 +83,6 @@ from core.config_policy.capability_toggles import (  # noqa: F401
     dead_target_registry_enabled,
     defi_data_enabled,
     defi_trade_enabled,
-    eip8004_payment_feedback_enabled,
     email_provider,
     invoice_card_enabled,
     room_action_card_enabled,

@@ -42,6 +42,8 @@ import stat
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+from core.walk_skip import WALK_SKIP_DIRS
+
 #: The group every shared-data identity is a member of
 #: (``deployment/hardening/install-service-identities.sh``).
 DEFAULT_DATA_GROUP = "polyrob-data"
@@ -66,7 +68,7 @@ GROUP_WRITE_EXEMPT_DIRS = ("wallet",)
 GROUP_WRITE_EXEMPT_FILES = ("verdicts.key",)
 
 #: Never walked: caches and VCS metadata carry no shared state.
-_SKIP_NAMES = frozenset({"__pycache__", ".git", "node_modules"})
+_SKIP_NAMES = WALK_SKIP_DIRS
 
 REASON_WRONG_GROUP = "wrong_group"
 REASON_NOT_GROUP_WRITABLE = "not_group_writable"
@@ -137,6 +139,11 @@ class PermsReport:
     counts: dict = field(default_factory=dict)
     offenders: List[PermsOffender] = field(default_factory=list)
     offender_total: int = 0
+    #: 116 W6.6: the offenders that block a sibling service — a directory or a
+    #: ``core.db_manifest`` store (with its -wal/-shm/-journal). A leaf file the
+    #: agent wrote is counted in ``offender_total`` and named by ``doctor --perms``.
+    material: List[PermsOffender] = field(default_factory=list)
+    material_total: int = 0
 
     @property
     def ok(self) -> bool:
@@ -151,8 +158,9 @@ class PermsReport:
             return (f"data perms: OK ({self.scanned} entries, group {self.group}, "
                     f"group-writable, setgid dirs)")
         parts = [f"{k}={v}" for k, v in sorted(self.counts.items()) if v]
+        checked = f"; first {self.scanned:,} checked" if self.truncated else ""
         return (f"data perms: {self.offender_total} offender(s) in {self.data_dir} "
-                f"({', '.join(parts)})")
+                f"(by reason: {', '.join(parts)}{checked})")
 
     @property
     def remedy(self) -> str:
@@ -199,13 +207,31 @@ def _rel_top(data_dir: str, path: str) -> str:
     return rel.split(os.sep, 1)[0]
 
 
+def _store_paths(data_dir: str, stores) -> set:
+    """The given store paths (``core.db_manifest`` candidates, passed in by the
+    caller — this module sits under the manifest and must not import it) plus
+    their SQLite sidecars, joined the way the walk joins *data_dir*."""
+    real, given = os.path.realpath(data_dir), os.path.normpath(data_dir)
+    out = set()
+    for raw in stores or ():
+        p = os.path.normpath(str(raw))
+        cands = {p}
+        if p.startswith(real + os.sep):
+            cands.add(os.path.join(given, os.path.relpath(p, real)))
+        for q in cands:
+            out.update(q + sfx for sfx in ("", "-wal", "-shm", "-journal"))
+    return out
+
+
 def audit_data_perms(data_dir: str, group: str = DEFAULT_DATA_GROUP,
                      *, max_offenders: int = 20,
-                     max_entries: Optional[int] = None) -> PermsReport:
+                     max_entries: Optional[int] = None, stores=()) -> PermsReport:
     """Walk ``data_dir`` and name every entry the shared group cannot write.
 
     Never raises: an unreadable tree, a missing group or a non-POSIX host all
-    come back as ``skipped`` with the reason. Pure read.
+    come back as ``skipped`` with the reason. Pure read. ``stores``: the store
+    paths an offender counts as MATERIAL for (``report.material``), beside every
+    directory — the status caller passes ``core.db_manifest.candidate_sqlite_dbs``.
     """
     report = PermsReport(data_dir=data_dir, group=group)
     if not data_dir or not os.path.isdir(data_dir):
@@ -246,15 +272,27 @@ def audit_data_perms(data_dir: str, group: str = DEFAULT_DATA_GROUP,
             reasons.append(REASON_ROOT_OWNED)
         return reasons
 
+    stores = _store_paths(data_dir, stores)
+
     def record(path: str, st: os.stat_result, is_dir: bool, reasons: List[str]) -> None:
         for r in reasons:
             counts[r] = counts.get(r, 0) + 1
         report.offender_total += 1
-        if len(report.offenders) < max_offenders:
-            report.offenders.append(PermsOffender(
-                path=path, kind="dir" if is_dir else "file", reasons=reasons,
-                group=_name_for_gid(st.st_gid), owner=_name_for_uid(st.st_uid),
-                mode=oct(stat.S_IMODE(st.st_mode))))
+        material = is_dir or os.path.normpath(path) in stores
+        if material:
+            report.material_total += 1
+        want_all = len(report.offenders) < max_offenders
+        want_material = material and len(report.material) < max_offenders
+        if not (want_all or want_material):
+            return
+        off = PermsOffender(
+            path=path, kind="dir" if is_dir else "file", reasons=reasons,
+            group=_name_for_gid(st.st_gid), owner=_name_for_uid(st.st_uid),
+            mode=oct(stat.S_IMODE(st.st_mode)))
+        if want_all:
+            report.offenders.append(off)
+        if want_material:
+            report.material.append(off)
 
     try:
         root_st = os.lstat(data_dir)

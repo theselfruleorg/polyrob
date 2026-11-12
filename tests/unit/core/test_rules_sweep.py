@@ -16,8 +16,10 @@ RULE = "NO PUBLIC BUG-FIX REPORTS: never publish reports about bugs we fix."
 
 
 @pytest.fixture(autouse=True)
-def _env(monkeypatch):
+def _env(monkeypatch, tmp_path):
 	monkeypatch.setenv("POLYROB_INSTANCE_ID", "alice")
+	# 116 W5.4: the sweep reads the ONE persistent workspace (the project folder)
+	monkeypatch.setenv("POLYROB_PROJECT_DIR", str(tmp_path / "workspace"))
 
 
 def _dbs(tmp_path, cron_tasks=(), goals=()):

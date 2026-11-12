@@ -30,7 +30,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-from agents.task.goals.board import Goal
+from agents.task.goals.board import STATUS_RUNNING as _STATUS_RUNNING, Goal
 from core.money.classify import is_money_class as _money_class  # 112 F2
 from core.model_routing import record_stored_tier  # 112 W2
 
@@ -73,6 +73,13 @@ class _GoalRunCtx:
     salvaged_without_done: bool = False
     judge_on: bool = False
     verify_reason: str = ""
+    #: 116 W2.2: every declared acceptance check ran and passed.
+    checks_passed: bool = False
+
+
+#: 116 W2.4: the terminal ``goal_run`` outcome of a run a hold returned to ``ready``,
+#: by ``hold_inflight``'s ``reason_kind`` (``rail`` = a yield: ``yielded`` instead).
+_HOLD_ENDINGS = {"pause": "held", "restart": "cut_by_restart"}
 
 
 class GoalRunMixin:
@@ -617,6 +624,7 @@ class GoalRunMixin:
                     steps=run.steps, spend_usd=run.spend_usd,
                     artifacts=run.artifacts, run=run)
                 return False
+        ctx.checks_passed = bool(check_results)
         # §4.3 evidence-grounded completion review (autonomous runs): the
         # CLAIM read against the evidence pack — no acceptance required.
         # unmet (claim contradicted by evidence) -> failure with the gap;
@@ -700,9 +708,13 @@ class GoalRunMixin:
         try:
             # Provenance was collected into the envelope while the
             # orchestrator was resident (run_task_to_outcome).
+            # 116 W2.2: `verified` is written only when a judge or an acceptance
+            # check really ran and passed the run; a run nothing checked carries
+            # no `verified` (the RunOutcome default "unverified" read as a miss).
+            _checked = self._checked_word(ctx)
             await self._goal_record(goal, session_id, "done", run=run,
                                     summary=result_record[:2000],
-                                    meta={"verified": run.verified})
+                                    meta={"verified": _checked} if _checked else None)
             ctx.recorded_success = True
             _d()._goal_ev(goal, "done", session_id=session_id,
                      spend_usd=run.spend_usd, steps=run.steps,
@@ -712,8 +724,8 @@ class GoalRunMixin:
                      duration_sec=self._elapsed(goal.id),
                      artifacts=len(run.artifacts),
                      user_messages=len(run.user_messages),
-                     verified=run.verified, promoted=_promoted,
-                     stop_reason=run.stop_reason)
+                     promoted=_promoted, stop_reason=run.stop_reason,
+                     **({"verified": _checked} if _checked else {}))
         except Exception:
             logger.warning("goal episodic write failed", exc_info=True)
         if outcome:
@@ -746,6 +758,18 @@ class GoalRunMixin:
         if AutonomyConfig.goal_self_wake_enabled() and \
                 (not judge_on or run.verified == "verified"):
             await self._self_wake(goal, session_id, result_record)
+
+    @staticmethod
+    def _checked_word(ctx: _GoalRunCtx) -> Optional[str]:
+        """``"verified"`` when the completion judge said MET, a salvaged run's
+        checks passed, or (judge off) every declared acceptance check passed;
+        else ``None`` — nothing checked this run (116 W2.2)."""
+        run = ctx.run
+        if getattr(run, "verified", None) == "verified" and (ctx.judge_on or ctx.salvaged_without_done):
+            return "verified"
+        if ctx.checks_passed and not ctx.judge_on:
+            return "verified"
+        return None
 
     async def _goal_run_failed(self, ctx: _GoalRunCtx, e: Exception) -> None:
         """The outer ``except``: record the raise as this run's failure."""
@@ -866,12 +890,56 @@ class GoalRunMixin:
             logger.debug("goal: cut run unreadable (%s)", session_id, exc_info=True)
             return None
 
+    def _record_hold_endings(self, held: list, reason: str, reason_kind: str) -> None:
+        """116 W2.4: the ONE terminal ``goal_run`` row for each run a hold returned
+        to ``ready``: ``held`` (owner pause) or ``cut_by_restart`` (a drained
+        shutdown). A rail yield writes none here: ``yield_for_rail`` emits
+        ``yielded``. Never raises."""
+        outcome = _HOLD_ENDINGS.get(str(reason_kind or ""))
+        if outcome is None:
+            return
+        for gid in held or []:
+            try:
+                try:
+                    row = self.board.get(gid)
+                except Exception:
+                    row = None
+                _d()._goal_ev(row or _d()._goal_ref(gid), outcome, reason=str(reason)[:200],
+                              session_id=self._goal_sessions.get(gid) or "",
+                              duration_sec=self._elapsed(gid))
+            except Exception:
+                logger.debug("goal %s: hold ending not recorded", gid, exc_info=True)
+
+    def _cut_ending(self, ctx: _GoalRunCtx) -> None:
+        """116 W2.4: a cancel no hold made (the owner moved the row, the claim was
+        lost or taken again) ends the run with ``cut``. Silent while the row is
+        still ``running`` under this run's claim: the drain, the boot requeue or
+        the reclaim gives that run its ending. Never raises."""
+        goal = ctx.goal
+        try:
+            if (goal.id in getattr(self, "_cut_kinds", {})
+                    or goal.id in getattr(self, "_yield_requested", ())):
+                return
+            try:
+                row = self.board.get(goal.id)
+            except Exception:
+                row = None
+            if (row is not None and getattr(row, "status", None) == _STATUS_RUNNING
+                    and getattr(row, "claim_token", None) == goal.claim_token):
+                return
+            _d()._goal_ev(goal, "cut", reason="cancelled before done()",
+                          session_id=ctx.session_id or ctx.pre_sid or "",
+                          duration_sec=self._elapsed(goal.id))
+        except Exception:
+            logger.debug("goal %s: cut ending not recorded", goal.id, exc_info=True)
+
     async def _goal_run_cut(self, ctx: _GoalRunCtx) -> None:
         """B5: the run was CANCELLED (owner pause, rail yield). Record what it
         did — PARTIAL when it sent, produced or signed anything. Never raises."""
         try:
             if ctx.recorded_success:
                 return
+            self._cut_ending(ctx)
             sid = ctx.session_id or self._own_pre_sid(ctx)
             if not sid:
                 return

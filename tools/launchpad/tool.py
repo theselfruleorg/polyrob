@@ -9,6 +9,7 @@ here bound what can be SPENT and assert what is RECEIVED; nothing here makes a
 launch or a buy a good idea, and the tool ships default-OFF and out of every
 default toolset.
 """
+import asyncio
 import logging
 import types
 from typing import Optional
@@ -16,6 +17,7 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from tools.base_tool import BaseTool
+from tools.defi.account_mode import NoAccountMode
 from tools.wallet_holder import WalletHolderMixin
 
 logger = logging.getLogger(__name__)
@@ -36,7 +38,7 @@ def launchpad_enabled() -> bool:
     return bool_env(FLAG, False)
 
 
-class LaunchParams(BaseModel):
+class LaunchParams(NoAccountMode):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(..., description="Token name, e.g. 'Demo Coin'.")
     symbol: str = Field(..., description="Ticker, e.g. 'DEMO'.")
@@ -62,7 +64,7 @@ class LaunchParams(BaseModel):
         "WOULD happen without broadcasting."))
 
 
-class TradeParams(BaseModel):
+class TradeParams(NoAccountMode):
     model_config = ConfigDict(extra="forbid")
     token: str = Field(..., description=(
         "CONTRACT ADDRESS of the launchpad token (0x…). The curve is looked up "
@@ -89,7 +91,7 @@ class StatusParams(BaseModel):
     token: str = Field(..., description="CONTRACT ADDRESS of the launchpad token.")
 
 
-class ClaimParams(BaseModel):
+class ClaimParams(NoAccountMode):
     model_config = ConfigDict(extra="forbid")
     token: str = Field(..., description=(
         "CONTRACT ADDRESS of a token YOU launched. Everything else is read on "
@@ -396,6 +398,8 @@ class LaunchpadTool(WalletHolderMixin, BaseTool):
                 f"  Nothing was broadcast."))
 
         built = pons.build_claim(escrow=owed.escrow)
+        # 116 W1.4: the price read is a sync network call — off the event loop.
+        worth = await asyncio.to_thread(self._native_worth_text, owed.native_wei)
         header = (
             f"claim creator fees for {params.token} on {P.CHAIN} (Pons V2)\n"
             f"  curve:     {record['curve']}\n"
@@ -403,7 +407,7 @@ class LaunchpadTool(WalletHolderMixin, BaseTool):
             f"  recipient: {who}\n"
             f"  claiming:  {_fmt_native(owed.native_wei)} native, the full balance "
             f"the escrow reports owing this wallet\n"
-            f"  worth:     {self._native_worth_text(owed.native_wei)}\n"
+            f"  worth:     {worth}\n"
             f"  ⚠ scope:   the escrow credits an ADDRESS, not a token. This "
             f"collects what is owed for EVERY token this wallet launched, so "
             f"there is no second claim to make afterwards.\n")

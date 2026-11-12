@@ -252,3 +252,26 @@ def test_the_result_names_a_server_clock_that_is_not_utc(monkeypatch):
     finally:
         monkeypatch.delenv("TZ")
         _time.tzset()
+
+
+def test_the_result_shows_the_owner_clock_next_to_the_server_clock(monkeypatch):
+    """116 W8: cron stays on the server clock; the schedule result shows both clocks."""
+    import time as _time
+    from datetime import datetime
+    from core import owner_time
+    from tools.cronjob_tools import _owner_clock_note
+    monkeypatch.setenv("TZ", "UTC")
+    _time.tzset()
+    try:
+        runs = [datetime(2026, 11, 12, 2, 0), datetime(2026, 11, 12, 18, 0)]  # server clock
+        monkeypatch.setattr(owner_time, "owner_zone", lambda *a, **k: "Asia/Bangkok")
+        assert _owner_clock_note(runs, "u1") == (
+            "; owner clock (Asia/Bangkok): 2026-11-12 09:00, 2026-11-13 01:00")
+        monkeypatch.setattr(owner_time, "owner_zone", lambda *a, **k: "Etc/UTC")
+        assert _owner_clock_note(runs, "u1") == ""  # the same clock
+        monkeypatch.setattr(owner_time, "owner_zone", lambda *a, **k: None)
+        assert _owner_clock_note(runs, "u1") == ""
+        assert _owner_clock_note([None], "u1") == ""
+    finally:
+        monkeypatch.delenv("TZ")
+        _time.tzset()

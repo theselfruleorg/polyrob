@@ -22,7 +22,7 @@ update it to a new release, and do both from a shell **or from your chat**.
 ## Memory and the event loop
 
 An idle goal or job leaves memory after 15 minutes, and a chat opens no browser
-until it uses a page. `/status` shows the worst event-loop stall of the last heartbeat window;
+until it uses a page. `/status` shows the worst event-loop stall of the last 24 hours;
 the log line `event loop stuck` names the blocking call. To lower memory use, lower
 `MAX_BROWSER_CONTEXTS` (default 6, about 200 MB each).
 

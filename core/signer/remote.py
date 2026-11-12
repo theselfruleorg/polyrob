@@ -243,6 +243,19 @@ class RemoteEvmSigner:
         """090: a class-A login/challenge text — ``sign.classified`` re-classifies it."""
         return _sign_classified(self._client, self._address, self._verified_fn, req)
 
+    def sign_order(self, req, chain: str) -> str:
+        """111 §8.3: a class-O pinned market Listing — ``sign.order`` re-reads its facts and
+        re-classifies it; the caller checks the signature recovers over the market's digest."""
+        if not self._verified_fn():
+            raise WalletSigningUnavailable(
+                "the remote signer is not VERIFIED in this process — refusing to sign")
+        from core.wallet.addresses import same_address
+        result = self._client.call("sign.order", {"chain": str(chain), "payload": req.payload})
+        if not same_address(str(result.get("address") or ""), self._address):
+            raise WalletSigningUnavailable(
+                f"the signer signed with {result.get('address')}, not {self._address}")
+        return str(result["signature"])
+
     def sign_transaction(self, tx):
         raise WalletSigningUnavailable(_refusal("sign a transaction without sending it"))
 

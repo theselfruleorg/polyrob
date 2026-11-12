@@ -73,7 +73,7 @@ def _canonical_pins() -> Dict[Tuple[str, str], Dict[str, object]]:
             continue
         if row.usdc:
             pins[(row.name, row.usdc)] = {
-                "symbol": "USDC", "name": "USD Coin", "decimals": 6}
+                "symbol": "USDC", "name": "USD Coin", "decimals": row.usdc_decimals}
         for addr, symbol, name, decimals in row.stables:
             # Each stable carries its OWN verified identity (USDG is not USDC).
             pins[(row.name, addr)] = {

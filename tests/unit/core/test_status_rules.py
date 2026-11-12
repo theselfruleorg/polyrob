@@ -113,7 +113,8 @@ def test_the_snapshot_carries_the_section(tmp_path):
 	assert snap.sections["rules"].available
 
 
-def test_workspace_doctrine_counts_marked_docs(tmp_path):
+def test_workspace_doctrine_counts_marked_docs(tmp_path, monkeypatch):
+	monkeypatch.setenv("POLYROB_PROJECT_DIR", str(tmp_path / "workspace"))
 	ws = tmp_path / "workspace" / "reports"; ws.mkdir(parents=True)
 	(ws / "rules.md").write_text("---\nkind: instruction\n---\n- rule\n")
 	(ws / "log.md").write_text("- 2026-09-20 posted\n")
@@ -150,7 +151,62 @@ def test_skill_pending_count_does_not_claim_an_approval_or_loaded_inventory(tmp_
     sec = rules_section(UID, str(tmp_path), str(tmp_path / "cron.db"))
     info = sec.data["skills"]
     assert info["pending"] == 0
-    assert info["inventory_state"] == "unavailable"
-    assert info["approved"] is None
-    assert info["loaded"] is None
-    assert "skills: approved and session-loaded counts unavailable" in sec.lines
+    # 116 W5.5: no fixed "unavailable" line; the knowledge section counts skills.
+    assert set(info) == {"surface", "pending"}
+    assert not any(l.startswith("skills:") for l in sec.lines)
+
+
+def test_the_rules_are_read_from_the_identity_home_not_a_container_data_dir(tmp_path, monkeypatch):
+    """116 W7.3: `agent_status` passes `<home>/data`; the rules are in `<home>`."""
+    from core.status_rules import identity_home
+    home = tmp_path / "home"
+    (home / "identity").mkdir(parents=True)
+    (home / "data").mkdir()
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(home))
+    assert identity_home(str(home / "data")) == str(home)
+    assert identity_home(str(home)) == str(home)
+    other = tmp_path / "other"
+    other.mkdir()
+    assert identity_home(str(other)) == str(other)      # not inside the home
+
+
+def test_an_unreadable_draft_store_is_named(tmp_path, monkeypatch):
+    from core import self_evolution
+
+    def boom(*a, **k):
+        raise PermissionError("denied")
+    monkeypatch.setattr(self_evolution, "_writer", boom)
+    sec = rules_section(UID, str(tmp_path), str(tmp_path / "cron.db"))
+    assert any(l.startswith("pending drafts: unreadable (self-context: PermissionError")
+               for l in sec.lines), sec.lines
+    assert any(h.key == "rules_pending_unreadable" for h in sec.health)
+
+
+def test_workspace_doctrine_reads_the_one_persistent_workspace(tmp_path, monkeypatch):
+	"""116 W5.4: the reader reads the folder the agent works in, never
+	<data_dir>/workspace (a path nothing creates)."""
+	(tmp_path / "workspace").mkdir()
+	(tmp_path / "workspace" / "rules.md").write_text("---\nkind: instruction\n---\n- rule\n")
+	proj = tmp_path / "project"; proj.mkdir()
+	monkeypatch.setenv("POLYROB_PROJECT_DIR", str(proj))
+	info = rules_section(UID, str(tmp_path), str(tmp_path / "cron.db")).data["workspace_doctrine"]
+	assert info["instruction"] == 0 and info["root"] == str(proj.resolve())
+	monkeypatch.delenv("POLYROB_PROJECT_DIR")
+	monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+	sec = rules_section(UID, str(tmp_path), str(tmp_path / "cron.db"))
+	assert "workspace doctrine: no persistent workspace (each session has its own)" in sec.lines
+
+
+def test_persistent_workspace_root_is_the_bootstrap_rule(tmp_path, monkeypatch):
+	from core.runtime_paths import persistent_workspace_root
+	from polyrob.app.bootstrap import _resolve_cli_data_home
+	monkeypatch.delenv("POLYROB_PROJECT_DIR", raising=False)
+	monkeypatch.delenv("POLYROB_DATA_DIR", raising=False)
+	monkeypatch.chdir(tmp_path)
+	assert persistent_workspace_root() == str(tmp_path.resolve())
+	monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "d"))
+	assert persistent_workspace_root() is None
+	assert _resolve_cli_data_home()[1:] == (False, None)
+	monkeypatch.setenv("POLYROB_PROJECT_DIR", str(tmp_path / "p"))
+	assert persistent_workspace_root() == str((tmp_path / "p").resolve())
+	assert _resolve_cli_data_home()[1:] == (True, str((tmp_path / "p").resolve()))

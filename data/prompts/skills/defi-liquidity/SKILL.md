@@ -15,7 +15,9 @@ metadata:
 Use `defi_data.lp_positions`, `lp_pool_info`, and `lp_quote` to read Uniswap v3
 positions and price a deposit. `defi_trade.lp_add` creates/initializes and mints,
 or increases a held token_id; `lp_remove` decreases and collects (optional burn
-at 100%); `lp_collect` collects both tokens without reducing liquidity. Writes
+at 100%); `lp_collect` collects both tokens without reducing liquidity
+(`protocol='v4'` too; with `account=`/`nft=` for a v4 position an NFT's account
+owns: the fees land in that account). Writes
 require `DEFI_LIQUIDITY_ENABLED=true`, default to dry_run, and pass the shared
 money guard. Run each exact token approval separately when the verb names it.
 The owner's chat verb is `/lp`; `propose_action` cannot carry it (it is not a

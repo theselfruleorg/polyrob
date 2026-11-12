@@ -21,6 +21,7 @@ container, which this tier cannot see. The console's Capabilities tab and
 """
 from __future__ import annotations
 
+from core.event_log import TENANT_OR_INSTANCE_SQL
 import json
 import time
 from typing import Any, Dict, List, Optional
@@ -61,6 +62,11 @@ def _append_absent_extras(sec) -> None:
         sec.lines.append(f"optional extras unreadable ({type(exc).__name__})")
 
 
+#: The tool id of an action that belongs to no tool (``tools.controller.execution``).
+_CORE = "core"
+_MAX_CORE_ACTIONS = 5
+
+
 def tools_section(user_id: str, data_dir: str, now: Optional[float] = None) -> Section:
     from core.event_log import open_event_log
     from core.tool_capabilities import TOOL_CAPABILITIES
@@ -93,9 +99,10 @@ def tools_section(user_id: str, data_dir: str, now: Optional[float] = None) -> S
     rows = _rows(
         path,
         "SELECT ts, attrs FROM telemetry_events WHERE kind = 'tool_invoked' "
-        "AND ts >= ? AND (user_id = ? OR user_id = '') ORDER BY ts DESC LIMIT 200000",
+        "AND ts >= ? AND " + TENANT_OR_INSTANCE_SQL + " ORDER BY ts DESC LIMIT 200000",
         (since, str(user_id)))
     per: Dict[str, Dict[str, Any]] = {}
+    core_actions: Dict[str, int] = {}
     unparseable = 0
     for r in rows:
         attrs: Dict[str, Any] = {}
@@ -112,15 +119,22 @@ def tools_section(user_id: str, data_dir: str, now: Optional[float] = None) -> S
             slot["last"] = ts
         if isinstance(attrs, dict) and attrs.get("ok") is False:
             slot["errors"] += 1
+        if tool == _CORE and isinstance(attrs, dict):
+            action = str(attrs.get("action") or "?")
+            core_actions[action] = core_actions.get(action, 0) + 1
     sec.data["tools"] = per
+    sec.data["core_actions"] = core_actions
     sec.data["unparseable"] = unparseable
 
+    # The headline and the rows count the SAME set: the known tools. `core`
+    # (done, send_message, every action with no tool id) and `unknown` (a row
+    # the registry could not map) are not tools and get their own lines.
     used_known = [t for t in known if t in per]
     never = [t for t in known if t not in per]
     sec.lines.append(
         f"{len(used_known)} of {len(known)} tools invoked in {WINDOW_DAYS} d "
         f"(recording since {_day(recording_since)})")
-    ranked = sorted(((t, d) for t, d in per.items()), key=lambda kv: -kv[1]["count"])
+    ranked = sorted(((t, per[t]) for t in used_known), key=lambda kv: -kv[1]["count"])
     for tool, d in ranked[:_MAX_USED_LINES]:
         err = f", {d['errors']} err" if d["errors"] else ""
         sec.lines.append(f"{tool}: {d['count']} ×{err} · last {_hhmm_day(d['last'])}")
@@ -131,6 +145,19 @@ def tools_section(user_id: str, data_dir: str, now: Optional[float] = None) -> S
         more = f" +{len(never) - _MAX_NEVER_NAMES} more" if len(never) > _MAX_NEVER_NAMES else ""
         sec.lines.append(
             f"never invoked (recording since {_day(recording_since)}): {names}{more}")
+    others = sorted(t for t in per if t not in known and t not in (_CORE, "unknown"))
+    if _CORE in per:
+        d = per[_CORE]
+        top = sorted(core_actions.items(), key=lambda kv: -kv[1])[:_MAX_CORE_ACTIONS]
+        err = f", {d['errors']} err" if d["errors"] else ""
+        sec.lines.append(
+            f"core actions (not a tool): {d['count']} ×{err}"
+            + (" — " + ", ".join(f"{a} {n}" for a, n in top) if top else ""))
+    if "unknown" in per or others:
+        n = per.get("unknown", {}).get("count", 0) + sum(per[t]["count"] for t in others)
+        sec.lines.append(
+            f"not in the tool table: {n} call(s)"
+            + (f" ({', '.join(others[:4])})" if others else " (the registry could not name the tool)"))
     if unparseable:
         sec.lines.append(f"{unparseable} tool_invoked row(s) unparseable — counted under 'unknown'")
     _append_absent_extras(sec)

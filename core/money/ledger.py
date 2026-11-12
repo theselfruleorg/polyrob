@@ -254,15 +254,6 @@ class SpendLedger:
                 False, "the owner paused autonomous work — money movement refused "
                        "(the owner lifts it with /resume)")
         self._refresh_caps()
-        if amount_usd > self._ceiling:
-            # 079 R6: the old words ("catastrophic ceiling") named no remedy and
-            # read as if the owner's own verbs were exempt. They are not.
-            from core.money import PER_TX_CAP_REMEDY
-            return PolicyDecision(
-                False, f"amount ${amount_usd:.2f} exceeds the per-transaction cap "
-                       f"${self._ceiling:.2f} (binds the owner's own verbs too) — owner "
-                       f"raises it: {PER_TX_CAP_REMEDY}",
-                cap_exceeded=True)
         try:
             journal = _hooks.submission_journal()
             if journal is None:
@@ -287,6 +278,18 @@ class SpendLedger:
             return PolicyDecision(False, "wallet audit ledger contains invalid money history")
         if idempotency_key and idempotency_key in self._seen_idempotency:
             return PolicyDecision(False, f"idempotency key '{idempotency_key}' already used (replay blocked)")
+        # M6: the caps run AFTER journal health and replay, so an over-cap REPLAY
+        # reads as a replay and an unreadable journal as unreadable — never as a
+        # cap the owner could approve past.
+        if amount_usd > self._ceiling:
+            # 079 R6: the old words ("catastrophic ceiling") named no remedy and
+            # read as if the owner's own verbs were exempt. They are not.
+            from core.money import PER_TX_CAP_REMEDY
+            return PolicyDecision(
+                False, f"amount ${amount_usd:.2f} exceeds the per-transaction cap "
+                       f"${self._ceiling:.2f} (binds the owner's own verbs too) — owner "
+                       f"raises it: {PER_TX_CAP_REMEDY}",
+                cap_exceeded=True)
         if self._daily_cap is not None:
             spent = self._rolling_24h_spend()
             if spent + amount_usd > self._daily_cap:

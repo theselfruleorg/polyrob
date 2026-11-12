@@ -898,7 +898,13 @@ class AgentMessagePrompt:
 			step_info_description = f'Current step: {self.step_info.step_number + 1}'  # 083 WS-5: no denominator
 		else:
 			step_info_description = ''
-		time_str = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+		now = datetime.now(timezone.utc)
+		time_str = now.strftime('%Y-%m-%d %H:%M UTC')
+		# 116 W8: the owner's clock next to the server's (the agent gave the owner
+		# yesterday's date). This message is the per-step tail, never a cached prefix.
+		from core.owner_time import owner_clock
+		if owner := owner_clock(now.timestamp()):
+			time_str += f" · owner: {owner}. Use the owner's date and time in replies to the owner"
 		step_info_description += f' | Current date and time: {time_str}'
 
 		# Build memory section from previous brain state

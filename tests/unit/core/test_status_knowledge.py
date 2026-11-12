@@ -96,14 +96,14 @@ def test_counts_every_store_and_leads_with_one_headline(home):
 
     assert sec.state == STATE_OK and not sec.health
     body = "\n".join(sec.lines)
-    assert sec.lines[0].startswith("12 recalled · 3 episodes · 2 curated · 3 indexed · 10 written")
-    assert "recall: 12 rows" in body
+    assert sec.lines[0].startswith("12 memories · 3 episodes · 2 curated · 3 KB sources · 10 documents registered")
+    assert "memories: 12 rows" in body
     assert "curated: 2 notes" in body
     assert "33% surfaced" in body          # 1 of 3
     assert "3 sources in 2 collection(s)" in body
     # The upload is a KB source but never an artifact: it is not counted as one
     # of the written documents that are indexed (097 W3 — a join, not a ratio).
-    assert "10 registered (10 text, 10 knowledge), 2 indexed" in body
+    assert "10 registered (10 text, 10 knowledge), 2 in KB" in body
     assert "skills: 1 ever loaded" in body  # load_count > 0 only
 
 
@@ -131,7 +131,7 @@ def test_an_unreadable_store_says_so_and_raises_one_health_item(home):
     # the readable store still reports
     assert any("documents: 4 registered (4 text, 4 knowledge)" in ln for ln in sec.lines)
     # and the headline marks the unreadable one, never as zero
-    assert sec.lines[0].startswith("? recalled")
+    assert sec.lines[0].startswith("? memories")
 
 
 def test_the_distilled_store_being_empty_is_stated_not_implied(home):
@@ -164,7 +164,7 @@ def test_tenant_scoped(home):
     con.close()
 
     sec = knowledge_section("alice", home)
-    assert any("recall: 3 rows" in ln for ln in sec.lines)
+    assert any("memories: 3 rows" in ln for ln in sec.lines)
 
 
 def test_unindexed_documents_are_a_line_never_a_health_item(home):
@@ -176,7 +176,7 @@ def test_unindexed_documents_are_a_line_never_a_health_item(home):
     sec = knowledge_section("alice", home)
 
     assert [h.key for h in sec.health] == []
-    assert any("50 registered (50 text, 50 knowledge), 0 indexed" in ln
+    assert any("50 registered (50 text, 50 knowledge), 0 in KB" in ln
                for ln in sec.lines)
 
 
@@ -304,5 +304,5 @@ def test_the_indexed_count_counts_text_documents_not_screenshots(home):
     sec = knowledge_section("alice", home)
 
     body = "\n".join(sec.lines)
-    assert "100 registered (10 text, 10 knowledge), 9 indexed" in body
+    assert "100 registered (10 text, 10 knowledge), 9 in KB" in body
     assert [h.key for h in sec.health] == []

@@ -335,7 +335,8 @@ Script job — ``payload.script``::
     {"path": "jobs/collect.py",       # relative to the durable workspace; .py or .sh
      "args": ["--round", "S1"],       # optional, strings only
      "timeout_s": 120,                # optional, 1..MAX_TIMEOUT_S
-     "deliver_on": "alert"}           # "alert" (default) | "always" | "never"
+     "deliver_on": "alert",           # "alert" (default) | "always" | "never"
+     "sha256": "…"}                   # the file's content when the owner armed the job
 
 The script is the agent's own file in its workspace. The harness knows nothing about
 what it does: the runner starts it through the code-execution backend (the same
@@ -348,6 +349,10 @@ The job needs ONE durable workspace (``POLYROB_PROJECT_DIR``): a per-session
 workspace does not outlive the session that wrote the script. Where code execution is
 refused (``code_exec_execution_blocked_reason``), the job is refused at schedule time
 and fails with the same reason at run time; nothing runs on a host that refuses it.
+
+The job is the OWNER's act (the tool refuses ``script`` outside a genuine owner turn) and
+it pins the file's CONTENT: every container writes the workspace, so a run whose file no
+longer has the armed hash is refused and says so. Setting the script again re-arms it.
 """
 SCRIPT_KEY = "script"
 #: The launcher per file type. The file type is the only thing the harness reads.
@@ -360,6 +365,8 @@ SCRIPT_MAX_ARG_CHARS = 500
 SCRIPT_MAX_PATH_CHARS = 300
 #: Characters of output a delivery or a failure note carries (the tail).
 SCRIPT_TAIL_CHARS = 1500
+#: Top-level workspace directories a script never runs from: files other people sent.
+SCRIPT_REFUSED_ROOTS = ("inbound",)
 
 
 class ScriptJobError(ValueError):
@@ -370,7 +377,7 @@ def validate_script(spec: Any) -> Dict[str, Any]:
     """The normalized spec, or :class:`ScriptJobError`. Shape only: it reads no file."""
     if not isinstance(spec, dict):
         raise ScriptJobError("script must be an object {path, args, timeout_s, deliver_on}")
-    unknown = sorted(set(spec) - {"path", "args", "timeout_s", "deliver_on"})
+    unknown = sorted(set(spec) - {"path", "args", "timeout_s", "deliver_on", "sha256"})
     if unknown:
         raise ScriptJobError(f"script has unknown keys: {', '.join(unknown)}")
     path = spec.get("path")
@@ -382,6 +389,9 @@ def validate_script(spec: Any) -> Dict[str, Any]:
             or "\n" in path or any(p in ("", ".", "..") for p in parts)):
         raise ScriptJobError("script.path must be a plain relative path inside the workspace "
                              "(no '..', no absolute path)")
+    if parts[0].lower() in SCRIPT_REFUSED_ROOTS:
+        raise ScriptJobError(f"script.path must not be under {parts[0]}/ (received files); "
+                             "copy the script to your own directory first")
     if os.path.splitext(path)[1].lower() not in SCRIPT_LAUNCHERS:
         raise ScriptJobError("script.path must end in " + " or ".join(sorted(SCRIPT_LAUNCHERS)))
     args = spec.get("args") or []
@@ -396,8 +406,14 @@ def validate_script(spec: Any) -> Dict[str, Any]:
     deliver_on = str(spec.get("deliver_on") or "alert")
     if deliver_on not in DELIVER_ON:
         raise ScriptJobError(f"script.deliver_on must be one of {', '.join(DELIVER_ON)}")
-    return {"path": "/".join(parts), "args": [str(a) for a in args],
-            "timeout_s": int(timeout), "deliver_on": deliver_on}
+    out = {"path": "/".join(parts), "args": [str(a) for a in args],
+           "timeout_s": int(timeout), "deliver_on": deliver_on}
+    pin = spec.get("sha256")
+    if pin is not None:
+        if not isinstance(pin, str) or len(pin) != 64 or set(pin) - set("0123456789abcdef"):
+            raise ScriptJobError("script.sha256 is not a SHA-256 hex digest")
+        out["sha256"] = pin
+    return out
 
 
 def script_refusal() -> Optional[str]:
@@ -424,8 +440,30 @@ def checked_script(spec: Any) -> Dict[str, Any]:
     refusal = script_refusal()
     if refusal:
         raise ScriptJobError(refusal)
-    resolve_script(_script_workspace(), spec["path"])
+    real = resolve_script(_script_workspace(), spec["path"])
+    # A spec that already carries its pin keeps it: only setting the script arms it.
+    spec.setdefault("sha256", file_sha256(real))
     return spec
+
+
+def file_sha256(path: str) -> str:
+    import hashlib
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 16), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def script_changed_refusal(spec: Dict[str, Any], real: str) -> Optional[str]:
+    """None when the file still has the content the owner armed, else what to do."""
+    pin = spec.get("sha256")
+    if pin and file_sha256(real) == pin:
+        return None
+    why = "changed after the owner armed this job" if pin else "was never armed by the owner"
+    return (f"{spec['path']} {why}, so it did not run. If the change is yours and the owner "
+            "agrees, set the job's script again in the owner's turn (cronjob_edit script=…): "
+            "that arms the new content.")
 
 
 def _script_workspace() -> Optional[str]:
@@ -479,7 +517,9 @@ async def call_script(spec: Dict[str, Any], *, user_id: str = "",
         if refusal:
             return False, refusal
         workspace = _script_workspace()
-        resolve_script(workspace, spec["path"])
+        changed = script_changed_refusal(spec, resolve_script(workspace, spec["path"]))
+        if changed:
+            return False, f"script job refused: {changed}"
         from tools.code_exec import default_registry, get_backend_name
         from tools.code_exec.result import ExecutionRequest
         backend = (backend_factory or (lambda: default_registry.create(get_backend_name())))()
@@ -501,6 +541,16 @@ async def call_script(spec: Dict[str, Any], *, user_id: str = "",
     return False, f"{spec['path']}: {why}" + (f"\n{body}" if body else "")
 
 
+def script_output_text(spec: Any, text: str) -> str:
+    """What the owner reads: the output as literal text under a label that names the
+    script. The script wrote these words, the agent did not, and a link in them is
+    never a rendered link."""
+    path = str(spec.get("path") or "?") if isinstance(spec, dict) else "?"
+    fence = "`" * 3
+    body = (text or "").replace(fence, "'" * 3)
+    return f"script {path} printed:\n{fence}\n{body}\n{fence}"
+
+
 async def run_script_job(task_agent: Any, job: Any, *, backend_factory=None) -> Tuple[bool, str]:
     """Run the job's script and deliver per ``deliver_on``. Returns ``(ok,
     outcome_reason)``; never raises."""
@@ -511,6 +561,7 @@ async def run_script_job(task_agent: Any, job: Any, *, backend_factory=None) -> 
     deliver_on = str((spec if isinstance(spec, dict) else {}).get("deliver_on") or "alert")
     if not should_deliver(deliver_on, ok, text):
         return ok, "script"
+    text = script_output_text(spec, text)
     try:
         from cron.delivery import deliver_result
         sent = await deliver_result(task_agent, job, text,

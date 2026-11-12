@@ -148,16 +148,28 @@ def _ident(name: str) -> None:
         raise ValueError(f"not a plain SQL identifier: {name!r}")
 
 
-def execute_retry(db_path: str, sql: str, params: tuple = (), *, fetch: Optional[str] = None):
+def execute_retry(db_path: str, sql: str, params: tuple = (), *, fetch: Optional[str] = None,
+                  deadline_sec: Optional[float] = None):
     """Execute one statement with jittered retry on write contention.
 
     fetch: None -> rowcount; 'one' -> a Row or None; 'all' -> list[Row];
     'lastrowid' -> the INSERT's rowid (for sidecar tables keyed by it).
+
+    ``deadline_sec`` bounds the WHOLE call (connect wait included). Without it
+    a contended file costs up to 15 x (1 s busy wait + 0.15 s) = 17 s, and a
+    caller on the event loop holds every session for that long.
     """
     last_err: Optional[Exception] = None
+    end = None if deadline_sec is None else time.monotonic() + deadline_sec
     for _ in range(_MAX_RETRIES):
         try:
-            conn = wal_connect(db_path)
+            if end is None:
+                conn = wal_connect(db_path)
+            else:
+                left = end - time.monotonic()
+                if left <= 0 and last_err is not None:
+                    break
+                conn = wal_connect(db_path, timeout=max(0.05, min(_BUSY_TIMEOUT_S, left)))
             try:
                 cur = conn.execute(sql, params)
                 if fetch == "one":

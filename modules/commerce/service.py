@@ -430,6 +430,14 @@ async def deliver(order_id: str, proof: Dict[str, Any], *, user_id: str, contain
     if m.acceptance_days:
         text += (f" If something is wrong, reply /order {done.id} dispute <reason> within "
                  f"{m.acceptance_days} day(s).")
+    if not public:
+        # 115 W6 (E7): where to leave feedback ON CHAIN — the identity this agent speaks for (a
+        # held NFT account's, else its own), only when one is recorded; never a signature. Not
+        # on a public thread: a post stays short.
+        from core.wallet.held_identity import feedback_line, feedback_target
+        line = feedback_line(feedback_target())
+        if line:
+            text += " " + line
     await tell_buyer(container, done, text, media=proof.get("media_paths"))
     return done
 

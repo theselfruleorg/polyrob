@@ -1,6 +1,5 @@
-"""M21 (2026-07-15 wallet/crypto security review): `ReputationManager` and
-`ValidationManager` are process-volatile in-memory simulations — a restart
-wipes all "reputation" — yet their read endpoints are served even when
+"""M21 (2026-07-15 wallet/crypto security review): `ValidationManager` is a
+process-volatile in-memory simulation — a restart wipes it — yet its read endpoints are served even when
 `EIP8004_ENABLED` is off (M21's own fix direction: don't hard-gate the reads,
 label them honest instead). Every read response here must carry an explicit
 `simulated: true` marker so a consumer can't mistake local in-memory state for
@@ -16,13 +15,11 @@ from api.eip8004_endpoints import router
 
 @pytest.fixture(autouse=True)
 def _reset_manager_singletons():
-    """The reputation/validation managers are module-level singletons — reset
-    them so state (and EIP8004_AGENT_ID picked up at construction time) can't
+    """The validation manager is a module-level singleton — reset
+    it so state (and EIP8004_AGENT_ID picked up at construction time) can't
     leak between tests."""
-    eip8004_endpoints._reputation_manager = None
     eip8004_endpoints._validation_manager = None
     yield
-    eip8004_endpoints._reputation_manager = None
     eip8004_endpoints._validation_manager = None
 
 
@@ -30,24 +27,6 @@ def _client():
     app = FastAPI()
     app.include_router(router)
     return TestClient(app, raise_server_exceptions=False)
-
-
-def test_reputation_by_agent_id_marked_simulated_even_when_disabled(monkeypatch):
-    monkeypatch.setenv("EIP8004_ENABLED", "false")
-    c = _client()
-    r = c.get("/eip8004/reputation/42")
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert body["simulated"] is True
-    assert body["summary"]["simulated"] is True
-
-
-def test_reputation_query_marked_simulated(monkeypatch):
-    monkeypatch.setenv("EIP8004_ENABLED", "false")
-    c = _client()
-    r = c.post("/eip8004/reputation/query", json={"agentId": 42})
-    assert r.status_code == 200, r.text
-    assert r.json()["simulated"] is True
 
 
 def test_validation_summary_marked_simulated_even_when_disabled(monkeypatch):
@@ -108,8 +87,6 @@ def test_validation_status_marked_simulated_even_when_disabled(monkeypatch):
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[eip8004_endpoints.require_owner_or_admin] = lambda: True
-    # B20: /validation/request is authenticated-only now.
-    app.dependency_overrides[eip8004_endpoints.require_authenticated] = lambda: "u1"
     c = TestClient(app, raise_server_exceptions=False)
 
     req = c.post(

@@ -221,8 +221,10 @@ def test_size_gas_caps_the_margin_at_the_max_gas_limit(monkeypatch):
     """
     r, tx = _built_tx(monkeypatch)
     tx = {**tx, "maxFeePerGas": 24_000_000}          # 0.024 gwei, Robinhood-measured
-    just_under = rail.MAX_GAS_LIMIT - 1
-    assert r.size_gas(tx, just_under)["gas"] == rail.MAX_GAS_LIMIT
+    # the highest measurement the cap still holds with x1.2 (115 R1: a thinner cap refuses)
+    highest = rail.MAX_GAS_LIMIT * 5 // 6
+    assert highest * 3 // 2 > rail.MAX_GAS_LIMIT
+    assert r.size_gas(tx, highest)["gas"] == rail.MAX_GAS_LIMIT
 
 
 def test_the_FEE_ceiling_still_binds_before_the_raised_gas_ceiling(monkeypatch):

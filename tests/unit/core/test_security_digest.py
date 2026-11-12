@@ -202,3 +202,28 @@ def test_refused_counts_only_the_typed_gate_producer(tmp_path, monkeypatch):
     assert r.refused == 1, "one refusal must count once, not three times"
     assert r.top_refusal_reasons == [("correspondent_taint", 1)]
     el._INSTANCES.clear()
+
+
+def test_a_row_with_no_tenant_is_counted_but_never_named_as_a_sender(tmp_path, monkeypatch):
+    """116 W7.4: the perimeter stamps ``''`` while the owner is not resolved,
+    and a refusal or a flag with no context has no tenant. The counts and the
+    reason rankings read those rows (the snapshot's rule); the sender ranking
+    stays tenant-exact — it names counterparties, and a tenant-less row cannot
+    prove whose traffic it was."""
+    from core import event_kinds as ek
+    from core.security_digest import build_security_rollup
+    log = _fresh_log(tmp_path, monkeypatch)
+    log.record(ek.INBOUND_ROUTED, user_id="u1", source="perimeter", attrs={"sender": "42"})
+    log.record(ek.INBOUND_ROUTED, user_id="", source="perimeter", attrs={"sender": "77"})
+    log.record(ek.ACCESS_DENIED, user_id="", source="perimeter",
+               attrs={"sender": "77", "reason": "raw_allowlist"})
+    log.record(ek.TOOL_DENIED, user_id="", source="gate", attrs={"reason": "spend_cap"})
+    log.record(ek.INJECTION_FLAGGED, user_id="", source="threat_scan", attrs={"origin": "url"})
+    log.record(ek.INBOUND_ROUTED, user_id="u_other_deployment", source="perimeter",
+               attrs={"sender": "88"})
+    r = build_security_rollup("u1", data_dir=str(tmp_path),
+                              since_ts=time.time() - 3600, window_sec=3600)
+    assert (r.inbound, r.denied, r.refused, r.flagged) == (2, 1, 1, 1)
+    assert r.top_denial_reasons == [("raw_allowlist", 1)]
+    assert r.top_refusal_reasons == [("spend_cap", 1)]
+    assert r.top_senders == [("42", 1)]

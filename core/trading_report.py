@@ -34,9 +34,9 @@ PriceFn = Callable[[str, str], Optional[float]]
 
 
 def _hhmm(ts: Optional[float]) -> str:
-    if ts is None:
-        return "?"
-    return time.strftime("%m-%d %H:%MZ", time.gmtime(float(ts)))
+    from core.owner_time import stamp
+    from core.status_types import render_zone
+    return "?" if ts is None else stamp(ts, render_zone(), missing="00-00 00:00Z")
 
 
 def _usd(v: float) -> str:
@@ -117,7 +117,8 @@ def trading_view(user_id: str, *, now: Optional[float] = None, data_dir: Optiona
     ``present`` is False when there is no mandate and no open position (and
     nothing was unreadable). Never raises."""
     from core import runtime_paths as rp
-    from core.open_positions import open_positions_db_path, positions_for, realized_for
+    from core.open_positions import (held_count_text, held_positions, open_positions_db_path,
+                                     realized_for)
     from core.trading_mandate import db_path, get_active
     ts = time.time() if now is None else float(now)
     book_path = book_path or open_positions_db_path(data_dir)
@@ -135,10 +136,10 @@ def trading_view(user_id: str, *, now: Optional[float] = None, data_dir: Optiona
         lines.append(f"mandate: UNKNOWN — the trading store could not be read "
                      f"({type(exc).__name__}); not the same as none")
     try:
-        book = positions_for(user_id, db_path=book_path)
-        book = [r for r in book if r.qty > 0]
+        held, quarantined = held_positions(user_id, db_path=book_path)
+        book = held + quarantined
     except Exception as exc:
-        book = None
+        book, held, quarantined = None, [], []
         unknown.append("book")
         lines.append(f"positions: UNKNOWN — the position book could not be read "
                      f"({type(exc).__name__}); not the same as none")
@@ -166,9 +167,10 @@ def trading_view(user_id: str, *, now: Optional[float] = None, data_dir: Optiona
         if book is not None and others > 0:
             lines.append(f"other open positions (not this mandate's): {others}")
     elif book:
-        lines.append(f"open positions: {len(book)} in the book, no mandate — "
-                     f"{', '.join((r.symbol or r.address[:10]) for r in book[:5])}"
-                     f"{'…' if len(book) > 5 else ''}")
+        syms = ", ".join((r.symbol or r.address[:10]) for r in held[:5])
+        syms = f" — {syms}{'…' if len(held) > 5 else ''}" if held else ""
+        lines.append(f"open positions: {held_count_text(held, quarantined)} in the book, "
+                     f"no mandate{syms}")
 
     lines.append(_realized_line(user_id, m, book_path, realized_for, unknown))
     if m is not None:
@@ -268,12 +270,13 @@ def _realized_line(user_id: str, m, book_path: str, realized_for, unknown: List[
     unk = sum(r.unknown_legs for r in rows)
     reasons: Dict[str, int] = {}
     for r in rows:
-        reasons[r.close_reason or "unknown"] = reasons.get(r.close_reason or "unknown", 0) + 1
+        why = (r.close_reason or "").strip() or "unrecorded"
+        reasons[why] = reasons.get(why, 0) + 1
     why = ", ".join(f"{k} {v}" for k, v in sorted(reasons.items()))
     head = f"realized P&L: {_signed(gross)} gross"
     if unk:
         head += f" (known legs only; {unk} leg(s) of unknown value)"
-    return (f"{head} · {len(rows)} token(s) · last close by {why} · gas not recorded, "
+    return (f"{head} · {len(rows)} token(s) · closes by reason: {why} · gas not recorded, "
             f"so net of gas is unknown ({scope})")
 
 

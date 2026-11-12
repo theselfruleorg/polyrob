@@ -88,6 +88,119 @@ def run_verified(payload: Optional[dict], *, outcome: str, session_id: Optional[
         return None
 
 
+#: 116 W2.2: the ONE label for what a finished run did (no new stored outcome).
+EFFECT = "effect"
+IDLE = "idle"
+MISSED = "missed"
+UNVERIFIED = "unverified"
+FAILED_ALL_ERRORED = "failed:all_errored"
+RUN_EFFECTS = (EFFECT, IDLE, MISSED, UNVERIFIED, FAILED_ALL_ERRORED)
+
+
+def _verified_word(value: Any) -> Optional[bool]:
+    """``attrs["verified"]`` as one answer: a cron run's bool or a goal's word
+    (``"verified"``). ``None`` when nothing checked the run. The same reading as
+    ``episodic_digest.verified_state`` (core may not import agents)."""
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip()
+    return (text == "verified") if text else None
+
+
+def run_effect(attrs: Optional[dict]) -> str:
+    """What a finished run did, from the attrs of its terminal ``cron_run`` /
+    ``goal_run`` row. Reads exactly three keys:
+
+    - ``all_errored_verdict`` (bool, 116 W2.1; present only when True): the run
+      called done() after every substantive action errored → ``failed:all_errored``.
+      It wins over the rest, in the dry mode too (the outcome then still reads ``done``).
+    - ``verified`` (bool for cron — the job's ``expect`` check; the word
+      ``"verified"`` for a goal — a judge or an acceptance check): ``False`` →
+      ``missed``; ``True`` and not useful → ``idle`` (idle is allowed).
+    - ``useful`` (bool, ``did_something``): True → ``effect``.
+
+    Anything else → ``unverified`` (not useful and nothing checked it). The
+    outcome itself is not read: call this for a run that ended ``done`` (or
+    ``failed`` with the all-errored verdict). Never raises."""
+    a = attrs if isinstance(attrs, dict) else {}
+    if a.get("all_errored_verdict") is True:
+        return FAILED_ALL_ERRORED
+    verified = _verified_word(a.get("verified"))
+    if verified is False:
+        return MISSED
+    if a.get("useful") is True:
+        return EFFECT
+    return IDLE if verified is True else UNVERIFIED
+
+
+#: 116 W2.3: an open owner ask whose payload carries ``holds_rail`` true holds the
+#: cron job its ``rail_id`` (``cron:<job id>``) names: the job does not run until
+#: the ask is decided or expires. ``holds_rail_via`` says who set it: ``owner_ask``
+#: (the run asked with ``holds_this_job=true``) or ``auto`` (``cron/rail_hold.py``:
+#: idle runs in a row while the ask stayed open, owner decision D2).
+HOLDS_RAIL_KEY = "holds_rail"
+HOLD_VIA_KEY = "holds_rail_via"
+HOLD_VIA_ASK = "owner_ask"
+HOLD_VIA_AUTO = "auto"
+
+
+def _payload_of(row: Any) -> dict:
+    p = row.get("payload") if isinstance(row, dict) else getattr(row, "payload", None)
+    if isinstance(p, str):
+        import json
+        try:
+            p = json.loads(p or "{}")
+        except ValueError:
+            p = {}
+    return p if isinstance(p, dict) else {}
+
+
+def _field(row: Any, key: str) -> Any:
+    return row.get(key) if isinstance(row, dict) else getattr(row, key, None)
+
+
+def holding_ask(open_asks: Any, job_id: str, *, now: Optional[float] = None) -> Optional[dict]:
+    """The open ask that holds cron job *job_id*, or ``None``. *open_asks*: the
+    tenant's OPEN asks, oldest first — ``GoalBoard.asks`` rows or ``goals``
+    table rows (``id``, ``title``, ``payload`` as a dict or JSON text). An ask past
+    its ``payload.expires_at`` holds nothing. Returns ``{"ask_id", "question",
+    "via" ("owner_ask" | "auto"), "expires_at" (epoch or None)}``. Pure."""
+    now = time.time() if now is None else float(now)
+    rail = f"cron:{job_id}"
+    for row in open_asks or []:
+        p = _payload_of(row)
+        if p.get("rail_id") != rail or p.get(HOLDS_RAIL_KEY) is not True:
+            continue
+        exp = p.get("expires_at")
+        try:
+            if exp is not None and float(exp) <= now:
+                continue
+        except (TypeError, ValueError):
+            exp = None
+        return {"ask_id": str(_field(row, "id") or ""), "question": str(_field(row, "title") or ""),
+                "via": str(p.get(HOLD_VIA_KEY) or HOLD_VIA_ASK),
+                "expires_at": float(exp) if exp is not None else None}
+    return None
+
+
+def job_held_by(goals_db: str, user_id: str, job_id: str, *,
+                now: Optional[float] = None) -> Optional[dict]:
+    """:func:`holding_ask` read from ``goals.db``: the open question that holds
+    cron job *job_id* of *user_id*, or ``None`` (none, or no ``goals.db`` yet).
+    RAISES when the store exists and cannot be read — an unreadable board is not
+    "nothing holds it" (the scheduler then runs the job; status says it could not read)."""
+    import os
+    if not goals_db or not os.path.exists(goals_db):
+        return None
+    from core.goal_vocab import ASK_OPEN, KIND_ASK
+    from core.sqlite_util import execute_retry
+    rows = execute_retry(
+        goals_db, "SELECT id, title, payload FROM goals WHERE kind=? AND status=? "
+                  "AND user_id=? ORDER BY created_at",
+        (KIND_ASK, ASK_OPEN, str(user_id or "")), fetch="all") or []
+    return holding_ask([dict(r) for r in rows], job_id, now=now)
+
+
 def verified_attrs(job: Any, outcome: str, session_id: Optional[str]) -> Dict[str, bool]:
     """``{"verified": <bool>}`` for a run record or a ``cron_run`` row, or ``{}``."""
     if outcome == "started":

@@ -642,3 +642,15 @@ def test_a_batch_overspend_refuses_on_the_measured_outflow():
     d = _run(_batch_intent(), _batch_deltas(token_deltas={USDC: -250_001}), _batch_tx(_good_legs()),
              holder=TREASURY)
     assert d.allowed is False and "exceeds the declared amount" in d.reason
+
+
+def test_wl10_the_forwarder_read_covers_every_leg_of_a_batch():
+    """111 WL10: the live isTrustedForwarder read ran for the spend leg only; an approve leg's
+    target got the static list. Now every distinct inner target is read."""
+    rpc = AccountRpc()
+    d = _run(_batch_intent(), _batch_deltas(), _batch_tx(_good_legs()), holder=TREASURY, rpc=rpc)
+    assert d.allowed is True, d.reason
+    assert {who for _acct, who in rpc.forwarder_reads} == {USDC.lower(), ROUTER.lower()}
+    trusted = AccountRpc(forwarders=(USDC,))
+    d = _run(_batch_intent(), _batch_deltas(), _batch_tx(_good_legs()), holder=TREASURY, rpc=trusted)
+    assert d.allowed is False and "ERC-2771 forwarder" in d.reason and USDC.lower() in d.reason

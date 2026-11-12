@@ -138,7 +138,7 @@
     },
     {
       "name": "owner_ask",
-      "sha": "3de09cdb975b"
+      "sha": "826c4910f556"
     },
     {
       "name": "owner_doc_manage",
@@ -178,7 +178,7 @@
     },
     {
       "name": "cronjob_edit",
-      "sha": "54cc905c8f02"
+      "sha": "c4c4aebfe218"
     },
     {
       "name": "cronjob_list",
@@ -190,7 +190,7 @@
     },
     {
       "name": "cronjob_schedule",
-      "sha": "b0a448f8b150"
+      "sha": "99199c8bdb7f"
     },
     {
       "name": "cronjob_show",
@@ -206,7 +206,7 @@
     },
     {
       "name": "defi_trade_call",
-      "sha": "5f4dd4207765"
+      "sha": "49e2f83b3221"
     },
     {
       "name": "defi_trade_deploy_contract",
@@ -222,7 +222,7 @@
     },
     {
       "name": "defi_trade_lp_collect",
-      "sha": "224ade2dcaba"
+      "sha": "87f73f9fd104"
     },
     {
       "name": "defi_trade_lp_remove",
@@ -262,11 +262,11 @@
     },
     {
       "name": "defi_trade_swap",
-      "sha": "5d69639d97a0"
+      "sha": "894d2ffb1b05"
     },
     {
       "name": "defi_trade_transfer",
-      "sha": "20ff45c7579f"
+      "sha": "2d0ece22e302"
     },
     {
       "name": "defi_trade_unwrap",

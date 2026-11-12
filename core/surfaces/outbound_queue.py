@@ -52,6 +52,42 @@ INFLIGHT_LEASE_SEC = 300.0
 DELIVERED_RETENTION_SEC = 7 * 86400
 DEAD_RETENTION_SEC = 14 * 86400
 
+#: 116 W3.6: a ``pending`` row older than this ends. ``claim_due`` claims only
+#: the surfaces a process hosts, so a row for a surface no process hosts stayed
+#: ``pending`` forever; ``prune`` dead-letters it (a row an active owner pause
+#: holds is exempt — the pause, not the queue, decides when it goes).
+MAX_PENDING_AGE_SEC = 7 * 86400
+
+#: 031: session_key prefix of the PROACTIVE, agent-initiated rail (the
+#: ``message`` tool and cron delivery). Only these rows an owner pause holds.
+PROACTIVE_SESSION_PREFIX = "direct:"
+
+
+def owner_pause_hold():
+    """031: ``(reason, since)`` when the owner's pause holds the proactive
+    outbound rail, else None. RAISES when the pause record cannot be read — the
+    dispatcher reads that fail-open (send), ``prune`` reads it as "held".
+
+    The durable queue carries no turn origin, so this takes the CONSERVATIVE
+    reading of the two kinds the `message` send gate distinguishes: if EITHER
+    ``social_post`` (``/pause social``) or ``lifecycle_ping`` (``/pause pings``)
+    is denied, the proactive rail is held."""
+    from core.autonomy_control import allows, read_state
+    # Cheap gate for the hot path: ask the SSOT once before two `allows` calls.
+    if not read_state().paused:
+        return None
+    for kind in ("social_post", "lifecycle_ping"):
+        dec = allows(kind)
+        if not dec.allowed:
+            return dec.reason, getattr(dec.state, "since", None)
+    return None
+
+
+def _pending_age_reason() -> str:
+    days = MAX_PENDING_AGE_SEC / 86400
+    return (f"pending over {days:g} d: no host claimed this surface in {days:g} d "
+            f"(or every send was deferred)")
+
 
 def message_key(scope: str, text: str) -> str:
     """The idempotency key for ONE outbound message (OB2).
@@ -295,12 +331,73 @@ class OutboundDeliveryQueue:
             (older_than,),
         ) or 0
 
+    def pending_stats(self, now: Optional[float] = None) -> dict:
+        """``{"oldest_pending_ts", "delivered_7d"}`` for the status read (116 W3.6).
+
+        ``delivered_7d`` counts delivered rows by their close time over the
+        last ``DELIVERED_RETENTION_SEC`` — the window prune keeps — so the
+        figure is that window even on a seat whose GC tick never ran."""
+        ts = _time.time() if now is None else float(now)
+        row = execute_retry(
+            self.db_path,
+            "SELECT MIN(CASE WHEN state='pending' THEN created_at END) AS oldest, "
+            "SUM(CASE WHEN state='delivered' AND updated_at >= ? THEN 1 ELSE 0 END) "
+            "AS delivered FROM outbound_queue",
+            (ts - DELIVERED_RETENTION_SEC,), fetch="one")
+        oldest = row["oldest"] if row is not None else None
+        return {"oldest_pending_ts": None if oldest is None else float(oldest),
+                "delivered_7d": int((row["delivered"] if row is not None else 0) or 0)}
+
+    def expire_pending(self, now: Optional[float] = None, *,
+                       max_age: float = MAX_PENDING_AGE_SEC, hold=_UNSET) -> int:
+        """Dead-letter every ``pending`` row older than *max_age* (116 W3.6).
+
+        A row an active owner pause holds is exempt: a proactive row
+        (``PROACTIVE_SESSION_PREFIX``) queued at or before the pause began, the
+        same rule as the dispatcher's hold. *hold* is ``owner_pause_hold()``'s
+        answer (probed when not given); a pause record that cannot be read
+        exempts every proactive row — never dead-letter what a pause may hold.
+        Returns the number of rows dead-lettered."""
+        ts = _time.time() if now is None else float(now)
+        exempt_all_proactive = False
+        since = None
+        if hold is _UNSET:
+            try:
+                hold = owner_pause_hold()
+            except Exception:
+                logger.warning("outbound prune: owner pause record unreadable — "
+                               "proactive pending rows are kept", exc_info=True)
+                exempt_all_proactive = True
+                hold = None
+        if hold is not None:
+            since = hold[1]
+            exempt_all_proactive = exempt_all_proactive or since is None
+        sql = ("UPDATE outbound_queue SET state='dead', last_error=?, updated_at=?, "
+               "claim_token=NULL WHERE state='pending' AND created_at < ?")
+        params: list = [_pending_age_reason(), ts, ts - float(max_age)]
+        like = PROACTIVE_SESSION_PREFIX + "%"
+        if exempt_all_proactive:
+            sql += " AND session_key NOT LIKE ?"
+            params.append(like)
+        elif since is not None:
+            sql += " AND NOT (session_key LIKE ? AND created_at <= ?)"
+            params.extend([like, float(since)])
+        n = execute_retry(self.db_path, sql, tuple(params)) or 0
+        if n:
+            logger.warning("outbound: dead-lettered %d row(s) pending over %g d "
+                           "(no host claimed the surface)", n, max_age / 86400)
+        return n
+
     def prune(self, now: Optional[float] = None, *,
               delivered_retention: float = DELIVERED_RETENTION_SEC,
               dead_retention: float = DEAD_RETENTION_SEC) -> int:
-        """Delete terminal rows past their retention (OB15). Never touches a
-        ``pending``/``inflight`` row. Returns the number of rows removed."""
+        """Delete terminal rows past their retention (OB15), after
+        :meth:`expire_pending` dead-letters a ``pending`` row older than
+        ``MAX_PENDING_AGE_SEC`` (116 W3.6; a row an owner pause holds is
+        exempt). Never deletes a ``pending``/``inflight`` row. Returns the
+        number of rows removed."""
         ts = _time.time() if now is None else float(now)
+        self.expire_pending(ts)
         return execute_retry(
             self.db_path,
             "DELETE FROM outbound_queue WHERE "

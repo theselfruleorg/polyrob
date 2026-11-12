@@ -504,14 +504,10 @@ def credential_alert_lines(env: dict) -> list[str]:
     """:func:`_credential_alert_lines_from`, computing its inputs fresh via
     :func:`credential_status` (043 A13 fix round 1).
 
-    The default (non ``--full``) ``doctor`` view and the REPL ``/doctor``
-    verb call this to surface the SAME provider-credential remedy the full
-    transcript prints, for a case the leading status snapshot's own health
-    block cannot see: ``core/status_snapshot.py``'s ``_providers_section``
-    only raises a CRIT when ``live is None and usable`` (usable credentials
-    exist but none is live — all credit-dead); a box with ZERO provider
-    credentials at all has an empty ``usable`` set, so that branch never
-    fires and the snapshot alone reads a clean "Health: OK" lie."""
+    The default ``doctor`` view and the REPL ``/doctor`` fold it into the
+    snapshot's health list (``cli/commands/doctor_alerts.py``): under the
+    snapshot's own ``no_provider`` CRIT it adds only the reason a present key
+    is not usable; with no such item it becomes one."""
     status_by_provider = credential_status(env)
     present_providers = {n for n, s in status_by_provider.items() if s.present}
     usable_providers = {n for n, s in status_by_provider.items() if s.usable}
@@ -1094,17 +1090,17 @@ def _build_doctor_snapshot_uncached():
                 echo=lambda m: click.echo(click.style(m, fg="yellow"), err=True))
         except AmbiguousDataHome as exc:
             return None, f"status: unavailable ({exc})"
-        # 2026-09-21: the money section needs a db and this process has no DI
-        # container — build the ledger the way `polyrob finance` does (the live
-        # bot.db under the deployed home) and hand it in; with no bot.db the
-        # ledger's legs render unavailable instead of "could not verify: money".
-        ledger = None
+        # No DI container: the ledger over the deployed home's bot.db, READ-ONLY
+        # (116 W6.1 — `DatabaseConnection.connect` wrote on a status read).
         try:
             from cli._admin_home import admin_bot_db_path
-            from cli.ui.commands.h_finance import ledger_standalone
-            ledger = ledger_standalone(str(owner), days=1, db_path=admin_bot_db_path())
-        except Exception:
-            ledger = None
+            from core.async_bridge import run_coroutine_sync
+            from modules.credits.unified_ledger import ReadOnlyBotDb, build_ledger
+            path = admin_bot_db_path()
+            ledger = run_coroutine_sync(build_ledger(str(owner), days=1, data_dir=str(
+                data_home), db=ReadOnlyBotDb(path) if path else None))
+        except Exception as e:
+            ledger = e
         snap = build_status_snapshot(str(owner), data_dir=data_home, include_money=True,
                                      ledger=ledger)
         return snap, None
@@ -1122,6 +1118,8 @@ def _snapshot_json() -> dict:
     snap, error_line = build_doctor_snapshot()
     if snap is None:
         return {"available": False, "error": error_line}
+    from cli.commands.doctor_alerts import doctor_view
+    snap = doctor_view(snap)   # the health list and headline the text view prints
     out = {
         "available": True,
         "user_id": snap.user_id,
@@ -1153,18 +1151,11 @@ def status_snapshot_lines() -> list:
     (``include_money=True``, which `autonomy status` deliberately omits) since
     `doctor` is the one seat meant to show the whole picture at a glance.
 
-    043 A13 fix round 1 (Important 1): ``core/status_snapshot.py``'s own CRIT
-    (``_providers_section``, ``if live is None and usable``) only fires when
-    usable credentials exist but none is live (all credit-dead) — a box with
-    ZERO provider credentials at all has an empty ``usable`` set, so that
-    branch never fires and the snapshot alone renders a clean "Health: OK"
-    lie. When the snapshot's own providers section shows no live AND no
-    usable provider, this appends :func:`credential_alert_lines`' remedy —
-    the exact words `doctor --full`'s transcript prints — so the default
-    view never claims a clean bill of health over a box that cannot run at
-    all. (The "some credential, none usable" and "credit-dead" cases are
-    already surfaced by the snapshot's own health block, so this never
-    duplicates those.)
+    116 W5.10/W7.4: doctor's own credential and CRITICAL host alerts are folded
+    into the health list BEFORE the headline is rendered
+    (``cli/commands/doctor_alerts.py``): a fact the snapshot carries (its
+    ``no_provider`` CRIT) is not printed a second time, and no alert follows an
+    OK headline.
 
     Both this function and the CLI/REPL callers using
     :data:`DOCTOR_FULL_POINTER` are the ONE shared view both `polyrob doctor`
@@ -1173,23 +1164,10 @@ def status_snapshot_lines() -> list:
     snap, error_line = build_doctor_snapshot()
     if snap is None:
         return [error_line]
+    from cli.commands.doctor_alerts import doctor_view
     from core.status_render import render_status_lines
-    lines = render_status_lines(
-        snap,
-        resume_hint="`polyrob autonomy resume`",
-        pause_hint="`polyrob autonomy pause`",
-    )
-    try:
-        prov = snap.sections.get("providers")
-        data = prov.data if (prov is not None and prov.available) else {}
-    except Exception:
-        data = {}
-    if not data.get("live") and not data.get("usable"):
-        lines.extend(credential_alert_lines(dict(os.environ)))
-    # A CRITICAL host item (a split data home) is a headline, not --full detail.
-    from cli.commands.doctor_host import host_readiness_lines
-    lines.extend(l for l in host_readiness_lines(dict(os.environ)) if l.startswith("CRITICAL"))
-    return lines
+    return render_status_lines(doctor_view(snap), resume_hint="`polyrob autonomy resume`",
+                               pause_hint="`polyrob autonomy pause`")
 
 
 def _frozen_flag_truth() -> tuple:
@@ -1416,6 +1394,8 @@ def perms_report(*, strict: bool = False, as_json: bool = False) -> int:
               help="Audit the shared data home: every file/dir not group "
                    "`polyrob-data`, not group-writable (dirs: not setgid), or "
                    "root-owned under auto/, wallet/, locks/.")
+@click.option("--audit-status", "audit_status", is_flag=True,
+              help="Recount what /status prints from the stores; name each difference.")
 @click.option("--strict", "perms_strict", is_flag=True,
               help="With --perms: exit non-zero when the audit finds an "
                    "offender (CI / deploy gate).")
@@ -1425,15 +1405,12 @@ def perms_report(*, strict: bool = False, as_json: bool = False) -> int:
                    "emits {\"report\": [lines]} only.")
 def doctor(show_flags: bool, flag_all: bool, flag_group: str | None,
            flag_search: str | None, flag_changed: bool, show_full: bool,
-           show_perms: bool,
-           perms_strict: bool, as_json: bool):
+           show_perms: bool, audit_status: bool, perms_strict: bool, as_json: bool):
     """Health snapshot first (pause state, ranked issues, every status
     section) — the same view `polyrob autonomy status` renders. The full
     check transcript (resolved providers/model, memory backend, config
     footguns) prints under --full."""
-    # Load env the same way the REPL does (./.polyrob, ~/.polyrob, root .env, config/.env.*
-    # + the local-mode key backfill) so doctor reports the keys `polyrob` actually sees,
-    # not just the bare process environment.
+    # Load env the way the REPL does, so doctor reports the keys `polyrob` sees.
     from polyrob.app.bootstrap import load_env, setup_project_path, setup_sqlite_compat
     setup_project_path()
     setup_sqlite_compat()
@@ -1443,6 +1420,9 @@ def doctor(show_flags: bool, flag_all: bool, flag_group: str | None,
 
     if show_perms:
         raise SystemExit(perms_report(strict=perms_strict, as_json=as_json))
+    if audit_status:
+        from cli.commands.doctor_audit import audit_status_report
+        raise SystemExit(audit_status_report(as_json=as_json))
 
     if show_flags:
         report = flags_report(

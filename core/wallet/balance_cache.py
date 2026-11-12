@@ -66,6 +66,16 @@ class ChainBalance:
     usdc: Optional[float] = None
     #: Why the read failed, when it did. An unexplained blank teaches nothing.
     error: Optional[str] = None
+    #: The reader asked for USDC on this chain (every EVM row): a None ``usdc``
+    #: is then a FAILED read — "USDC unknown" — not a chain with no USDC read.
+    usdc_expected: bool = False
+
+    @property
+    def usdc_unknown(self) -> bool:
+        return self.usdc_expected and self.usdc is None and not self.error
+
+
+_FIELDS = frozenset(("chain", "symbol", "native", "usdc", "error", "usdc_expected"))
 
 
 @dataclass
@@ -98,7 +108,8 @@ def read(data_home: Optional[str] = None) -> Optional[BalanceSnapshot]:
         return BalanceSnapshot(
             address=raw.get("address"), solana_address=raw.get("solana_address"),
             taken_at=float(raw.get("taken_at") or 0.0),
-            chains=[ChainBalance(**row) for row in (raw.get("chains") or [])])
+            chains=[ChainBalance(**{k: v for k, v in row.items() if k in _FIELDS})
+                    for row in (raw.get("chains") or [])])
     except Exception:
         logger.debug("balance cache: unreadable (fail-open to no snapshot)",
                      exc_info=True)
@@ -149,7 +160,7 @@ def collect(wallet: Any, *, evm_reader=None, solana_reader=None,
             native, usdc = evm_reader(address, row.name)
             snap.chains.append(ChainBalance(
                 chain=row.name, symbol=row.native_symbol or "ETH",
-                native=native, usdc=usdc))
+                native=native, usdc=usdc, usdc_expected=True))
         except Exception as exc:
             snap.chains.append(ChainBalance(
                 chain=row.name, symbol=row.native_symbol or "ETH",
@@ -212,6 +223,8 @@ def render_lines(snapshot: Optional[BalanceSnapshot]) -> List[str]:
         part = f"  {row.chain}: {_amount(row.native, row.symbol)}"
         if row.usdc is not None:
             part += f" · {row.usdc:,.2f} USDC"
+        elif row.usdc_unknown:
+            part += " · USDC unknown"
         lines.append(part)
     return lines
 

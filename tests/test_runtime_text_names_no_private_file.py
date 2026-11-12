@@ -25,8 +25,6 @@ ALLOWED = {
     ("cli/commands/init.py", "scripts/tests"): "prose ('for scripts/tests'), not a path",
     ("core/lock_closure.py", "scripts/deploy_prod.sh"):
         "provenance line in the generated requirements.txt header",
-    ("surfaces/telegram/dev_rail.py", "scripts/dev_inject.sh"):
-        "the operator-only dev rail naming the script it did not find",
 }
 
 

@@ -101,3 +101,13 @@ def test_settings_module_is_pure():
             "raise SystemExit(1 if leaked else 0)")
     root = Path(__file__).resolve().parents[4]
     assert subprocess.run([sys.executable, "-c", code], cwd=root, timeout=60).returncode == 0
+
+
+def test_a_retired_row_is_named_retired_not_invalid(monkeypatch):
+    """116 W6.8: read_taint was removed; an env entry for it has no effect."""
+    from core.status_custody import custody_with_settings
+    monkeypatch.setenv(ss.ENV, "read_taint=off")
+    assert ss.invalid_entries() == [] and ss.retired_entries() == ["read_taint"]
+    sec = custody_with_settings()
+    assert f"{ss.ENV} read_taint: retired; remove the entry" in sec.lines
+    assert not any(h.key == "security_settings_invalid" for h in sec.health)

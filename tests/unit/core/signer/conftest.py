@@ -144,8 +144,7 @@ def make_rig(signer_home):
         nonces = {"next": 7}
         holder = {}
         rig = Rig(None, signer_home, nonces)
-        secrets = {"EIP8004_AGENT_PRIVATE_KEY": "0x" + "11" * 32,
-                   "PAYMENT_MASTER_SEED": "p" * 40}
+        secrets = {"PAYMENT_MASTER_SEED": "p" * 40}
         service = SignerService(
             cfg, wallet, store=SignerStore(str(signer_home)),
             simulate_fn=lambda **_: rig.deltas, price_fn=lambda chain, addr: ETH_PRICE,

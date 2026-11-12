@@ -138,7 +138,7 @@
     },
     {
       "name": "owner_ask",
-      "sha": "3de09cdb975b"
+      "sha": "826c4910f556"
     },
     {
       "name": "owner_doc_manage",
@@ -342,7 +342,7 @@
     },
     {
       "name": "cronjob_edit",
-      "sha": "54cc905c8f02"
+      "sha": "c4c4aebfe218"
     },
     {
       "name": "cronjob_list",
@@ -354,7 +354,7 @@
     },
     {
       "name": "cronjob_schedule",
-      "sha": "b0a448f8b150"
+      "sha": "99199c8bdb7f"
     },
     {
       "name": "cronjob_show",

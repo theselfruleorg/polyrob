@@ -99,6 +99,10 @@ FLOOR: Tuple[FloorRow, ...] = (
 
 _BY_NAME: Dict[str, Setting] = {s.name: s for s in SETTINGS}
 
+#: Rows that were removed from the table. An env entry that still names one has
+#: no effect: it is "retired; remove the entry", not an invalid entry (116 W6.8).
+RETIRED: Tuple[str, ...] = ("read_taint",)
+
 
 def _parse(raw) -> Tuple[Dict[str, str], List[str]]:
     values: Dict[str, str] = {}
@@ -109,6 +113,8 @@ def _parse(raw) -> Tuple[Dict[str, str], List[str]]:
             continue
         name, sep, val = part.partition("=")
         name, val = name.strip().lower(), val.strip().lower()
+        if name in RETIRED:
+            continue
         row = _BY_NAME.get(name)
         if not sep or row is None or val not in row.choices:
             invalid.append(part)
@@ -127,6 +133,16 @@ def value(name: str) -> str:
 def invalid_entries() -> List[str]:
     """The ``SECURITY_SETTINGS`` entries that were ignored (unknown name / bad value)."""
     return _parse(os.environ.get(ENV))[1]
+
+
+def retired_entries() -> List[str]:
+    """The ``SECURITY_SETTINGS`` names that a removed row still holds (no effect)."""
+    out: List[str] = []
+    for part in str(os.environ.get(ENV) or "").replace("\n", ",").split(","):
+        name = part.partition("=")[0].strip().lower()
+        if name in RETIRED and name not in out:
+            out.append(name)
+    return out
 
 
 def effective() -> List[dict]:
@@ -150,5 +166,6 @@ def refusal_note(name: str) -> str:
             f"(the owner changes it in the env file or with `polyrob config set {ENV} …`)")
 
 
-__all__ = ["ENV", "Setting", "FloorRow", "SETTINGS", "FLOOR", "value", "invalid_entries",
+__all__ = ["ENV", "Setting", "FloorRow", "SETTINGS", "FLOOR", "RETIRED", "value",
+           "invalid_entries", "retired_entries",
            "effective", "status_line", "refusal_note"]

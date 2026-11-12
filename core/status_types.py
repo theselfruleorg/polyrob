@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import json
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -135,9 +136,28 @@ def _guarded(name: str, fn, *args, **kwargs) -> Section:
 
 
 def _hhmm(ts: Optional[float]) -> str:
-    if not ts:
-        return "?"
-    return time.strftime("%m-%d %H:%MZ", time.gmtime(float(ts)))
+    """``11-11 18:03Z``, and ``(01:03 +07)`` beside it when the owner set a zone
+    (``core.owner_time.stamp``: the ONE stamp, 116 W8)."""
+    from core.owner_time import stamp
+    return stamp(ts, render_zone())
+
+
+_ZONE_CACHE: Dict[str, Any] = {}
+
+
+def render_zone() -> Optional[str]:
+    """The owner's zone for one render. A snapshot stamps a hundred times and
+    each ``owner_zone()`` reads the prefs file, so the answer is kept for two
+    seconds (per data home)."""
+    from core.owner_time import owner_zone
+    key = os.environ.get("POLYROB_DATA_DIR") or ""
+    hit = _ZONE_CACHE.get(key)
+    now = time.monotonic()
+    if hit and now - hit[0] < 2.0:
+        return hit[1]
+    zone = owner_zone()
+    _ZONE_CACHE[key] = (now, zone)
+    return zone
 
 
 def _age(ts: Optional[float], now: float) -> str:

@@ -61,7 +61,7 @@ from this list; never invent a verb that is not on it. Pack verbs (such as
 - `/deploy` — Deploy a fixed-supply token
 - `/lp` — Liquidity positions: inspect, quote, add, remove, or collect fees
 - `/claim` — Collect the creator fees a launchpad already owes me
-- `/nft` — Collectibles I hold: look, trust a collection, send one, or revoke an approval
+- `/nft` — Collectibles I hold: look, trust a collection, send one, make one ready for sale, or revoke an approval
 - `/dapp` — Web pages my wallet is connected to, and how to cut one off
 - `/paid` — Paid room actions: status, pricing, and offers
 - `/pay` — Pay for one x402 resource, up to a price you name
@@ -78,7 +78,6 @@ from this list; never invent a verb that is not on it. Pack verbs (such as
 - `/resume` — Lift the pause (not inside a group)
 - `/run` — Pause, resume or stop one background run (not inside a group)
 - `/mode` — What I may do without you, what I do when you are away, and how to change it
-- `/dev` — Pass a message to an operator-run maintenance script, if this host has one (not inside a group)
 - `/restart` — Restart me once my current work is done (not inside a group)
 - `/update` — Update me to the latest release, then report back (/update now: a waiting deploy stops waiting for your chat to go quiet) (not inside a group)
 - `/autonomy` — My background loops and what they hold; switch them on or off (only in the terminal REPL)

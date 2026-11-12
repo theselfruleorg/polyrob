@@ -72,7 +72,7 @@ CEILINGS = {
     # The catalog is DATA (one ModelConfig per model). A new row goes to
     # modules/llm/model_catalog_recent.py, so this row only falls.
     "modules/llm/model_catalog.py": 1289,
-    # S6 (2026-08-29): scan / notify / subscriptions / reputation extracted to settlement_*.py mixins.
+    # S6 (2026-08-29): scan / notify / subscriptions extracted to settlement_*.py mixins.
     "modules/x402/settlement_watcher.py": 330,
     "modules/llm/gemini_client.py": 958,
     # Raised 2026-09-15 (+16): the glm-5.3 / glm-5.3-flash ids on BOTH z.ai rows,
@@ -105,7 +105,7 @@ CEILINGS = {
     # the row in the commit that splits the file, delete it once <= the default.
     "surfaces/telegram/harness.py":     2898,  # W9: admin verbs -> admin_verbs.py + *_ops.py
     "core/wallet/tx_guard.py": 1579,  # W6: _authorize -> core/wallet/tx_guard_steps/
-    "packs/x/polyrob_x/twitter_tool.py": 2824,
+    "packs/x/polyrob_x/twitter_tool.py": 2759,
     "packs/markets/polyrob_markets/polymarket/service.py": 2184,
     "packs/markets/polyrob_markets/hyperliquid/service.py": 1907,
     "webview/pages_new.py": 1858,

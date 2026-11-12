@@ -78,6 +78,26 @@ def _treasury_chains():
     return path.read_text(encoding="utf-8")
 
 
+def test_the_chain_table_has_every_registry_row_with_its_true_money_state():
+    """The agent picks a chain from this table. A chain the registry reads and the
+    table does not name is a chain the agent does not know it has (BNB Chain shipped
+    with no row); a row that says "yes" on a read-only chain sends a trade to a refusal."""
+    from core.wallet import chains
+    rows = {}
+    for line in _treasury_chains().splitlines():
+        m = re.match(r"\| \*\*(\w+)\*\* \| ([^|]*)\|", line)
+        if m:
+            rows[m.group(1)] = m.group(2).lower()
+    # A row the table leaves out on purpose carries its reason here.
+    excused = {"robinhood-testnet": "a test network: no real value, never a chain to pick"}
+    assert set(rows) == {r.name for r in chains.all_rows()} - set(excused)
+    for row in chains.evm_rows():
+        if row.name in excused:
+            continue
+        says_money = rows[row.name].strip(" *").startswith("yes")
+        assert says_money == bool(row.money_enabled), row.name
+
+
 def test_someone_elses_wallet_is_wallet_holdings():
     texts = dict(_skill_texts())
     assert "defi_data.wallet_holdings" in _treasury_chains()

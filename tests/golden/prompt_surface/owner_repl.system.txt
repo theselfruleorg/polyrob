@@ -480,7 +480,7 @@ Health: DEGRADED — 2 issue(s); 1 source(s) unreadable
 - [warn] cron loop: no liveness heartbeat recorded in 24h (dead, or this process does not emit heartbeats)
 - [warn] goals loop: no liveness heartbeat recorded in 24h (dead, or this process does not emit heartbeats)
 - providers: live provider: openrouter; credentialed: openrouter
-- delivery: owner messages 24h: 0/30 cap used, 0 suppressed, 0 fallback, 0 no sink, 0 paused, 0 deduped, 0 rate-limited, 0 held (quiet hours)
+- delivery: owner messages 24h: 0/30 cap used, 0 suppressed, 0 queued to the outbox, 0 refused by a sink, 0 no sink, 0 paused, 0 deduped, 0 rate-limited, 0 held (quiet hours) [telemetry_events.db]
 - wallet: not enabled (AGENT_WALLET_ENABLED)
 If asked how things are going, state these facts first; do not claim a clean state that this note contradicts.
 </live-health>

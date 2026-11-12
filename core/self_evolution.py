@@ -402,13 +402,20 @@ def _curated_note_body(home_dir: "Path | str", user_id: str, item_id):
     return f"{title}\n\n{content}" if title else content
 
 def list_pending(user_id: str, *, home_dir: Path | str, instance_id: str,
-                 skill_manager=None) -> List[dict]:
+                 skill_manager=None, errors: Optional[List[str]] = None) -> List[dict]:
     """Aggregate a tenant's pending self-evolution proposals across both pipelines.
 
     Each item: ``{kind, id, preview, chars, path}`` — ``id`` is the tenant for a
     self-context draft (one per tenant) or the skill id for a skill draft.
     """
     items: List[dict] = []
+
+    def _failed(what: str, e: Exception) -> None:
+        # A store that cannot be read is not "no pending drafts" (116 W7.3): a
+        # caller that renders the list passes ``errors`` and names each one.
+        logger.warning("self_evolution: %s list failed: %s", what, e)
+        if errors is not None:
+            errors.append(f"{what}: {type(e).__name__}: {str(e)[:80]}")
 
     try:
         sc = _writer(home_dir, instance_id).list_pending(user_id)
@@ -424,7 +431,7 @@ def list_pending(user_id: str, *, home_dir: Path | str, instance_id: str,
                 "by": sc.get("by") or [],
             })
     except Exception as e:
-        logger.debug("self_evolution: self-context list failed: %s", e)
+        _failed("self-context", e)
 
     try:
         od = _owner_writer(home_dir, instance_id).list_pending(user_id)
@@ -441,7 +448,7 @@ def list_pending(user_id: str, *, home_dir: Path | str, instance_id: str,
                 "retires": list(od.get("retires") or []),
             })
     except Exception as e:
-        logger.debug("self_evolution: owner-doc list failed: %s", e)
+        _failed("owner-doc", e)
 
     try:
         cd = _contract_writer(home_dir, instance_id).list_pending(user_id)
@@ -456,7 +463,7 @@ def list_pending(user_id: str, *, home_dir: Path | str, instance_id: str,
                 "rev": cd.get("rev"),
             })
     except Exception as e:
-        logger.debug("self_evolution: contract list failed: %s", e)
+        _failed("contract", e)
 
     try:
         from core.prefs import list_pending_pref_changes
@@ -469,7 +476,7 @@ def list_pending(user_id: str, *, home_dir: Path | str, instance_id: str,
                 "path": pc["path"],
             })
     except Exception as e:
-        logger.debug("self_evolution: pref-change list failed: %s", e)
+        _failed("pref-change", e)
 
     mgr = _resolve_skill_manager(skill_manager)
     if mgr is not None and hasattr(mgr, "list_pending_skills"):
@@ -485,7 +492,7 @@ def list_pending(user_id: str, *, home_dir: Path | str, instance_id: str,
                     "change": _skill_change(mgr, s, user_id),
                 })
         except Exception as e:
-            logger.debug("self_evolution: skill list failed: %s", e)
+            _failed("skill", e)
 
     # A27: curated notes quarantined by a forged/autonomous turn — the
     # sixth pending pipeline, DB-backed (memory.db) not a file quarantine.

@@ -184,3 +184,26 @@ def test_the_refusal_result_carries_a_structured_fallback_field():
     assert r.metadata["rail"] == "x_api" and r.metadata["code"] == "402"
     ok = _tool().create_action_result(extracted_content="fine")
     assert ok.metadata is None
+
+
+@pytest.mark.asyncio
+async def test_a_402_is_one_verdict_per_account_not_per_endpoint():
+    """116 W6.3: one credit pool — two endpoints refused are ONE verdict, and a
+    success on any endpoint clears it (and the old endpoint-keyed rows)."""
+    t = _tool()
+    t.api_key = "consumer-key-fixture"
+
+    async def _402(func, *a, **kw):
+        raise _HTTPErr(402)
+    t._execute_request = _402
+    with pytest.raises(Exception):
+        await t._make_request(lambda: None, "post")
+    key = t._credit_verdict_key()
+    assert [v.key for v in cv.active("twitter_api")] == [key]
+    assert key.startswith("account#") and "consumer-key-fixture" not in key
+    # a success (what `_make_request` calls after a good answer) clears the
+    # account's verdict and, once per process, the old endpoint-keyed rows
+    cv.record_rejection("twitter_api", "users", code="402")
+    TwitterTool._legacy_402_keys_swept = False
+    t._clear_credit_402()
+    assert cv.active("twitter_api") == []

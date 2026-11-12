@@ -8,6 +8,8 @@ from cron import digest
 from cron.digest import compose_digest
 
 _REAL_FAILED_JOBS = digest._failed_jobs
+#: The snapshot readers as shipped (the autouse fixture replaces them).
+_REAL = {n: getattr(digest, n) for n in ("_open_asks", "_pending_items", "_missed")}
 
 
 @pytest.fixture(autouse=True)
@@ -22,6 +24,10 @@ def _hermetic_top_cost(monkeypatch):
     # 095 W12b: the curator proposals seam reads the home's event log.
     monkeypatch.setattr(digest, "_proposals", lambda uid, since, data_dir: [])
     monkeypatch.setattr(digest, "_mechanism_notes", lambda uid, since, data_dir: [])
+    # 116 W7.4: the open asks, /pending and the missed messages are snapshot
+    # sections; a test that does not set them reads none (and builds no snapshot).
+    monkeypatch.setattr(digest, "_pending_items", lambda uid, data_dir, *_: [])
+    monkeypatch.setattr(digest, "_missed", lambda uid, data_dir, *_: ([], 0, "in 24h"))
 
 
 def _split_ledger(**over):
@@ -58,7 +64,7 @@ async def test_compose_digest_includes_money_and_activity(monkeypatch):
                  "provider_balance_usd": None, "available": True}))
     monkeypatch.setattr(digest, "_event_aggregate", lambda uid, since: {
         "counts_by_kind": {"goal_run": 2, "self_modification": 1}, "total_events": 3})
-    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir: [{"title": "unblock me"}])
+    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir, *_: [{"title": "unblock me"}])
     monkeypatch.setattr(digest, "_episodes", lambda uid, since: [
         {"kind": "cron", "outcome": "done"}])
     text = await digest.compose_digest("u1", days=1)
@@ -81,7 +87,7 @@ async def test_compose_digest_all_empty_is_stable(monkeypatch):
     pair)."""
     monkeypatch.setattr(digest, "_ledger", lambda uid, days: {})
     monkeypatch.setattr(digest, "_event_aggregate", lambda uid, since: {})
-    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir: [])
+    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir, *_: [])
     monkeypatch.setattr(digest, "_episodes", lambda uid, since: [])
     text = await digest.compose_digest("u1", days=1)
     assert "Daily digest — last 24 h" in text
@@ -103,7 +109,7 @@ async def test_ledger_unreadable_no_fabricated_money_lines(monkeypatch):
     monkeypatch.setattr(digest, "_ledger", lambda uid, days: {})
     monkeypatch.setattr(digest, "_event_aggregate", lambda uid, since: {
         "counts_by_kind": {"goal_run": 1}})
-    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir: [])
+    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir, *_: [])
     monkeypatch.setattr(digest, "_episodes", lambda uid, since: [
         {"kind": "cron", "outcome": "done"}])
     text = await digest.compose_digest("u1", days=1)
@@ -129,7 +135,7 @@ async def test_genuinely_quiet_day_renders_real_zeros(monkeypatch):
                  "calls_window": 0, "calls_total": 0,
                  "provider_balance_usd": None, "available": True}))
     monkeypatch.setattr(digest, "_event_aggregate", lambda uid, since: {})
-    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir: [])
+    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir, *_: [])
     monkeypatch.setattr(digest, "_episodes", lambda uid, since: [])
     text = await digest.compose_digest("u1", days=1)
     assert "Treasury: income $0.00, spend $0.00, net $0.00" in text
@@ -146,7 +152,7 @@ async def test_degraded_ledger_appends_availability_note(monkeypatch):
     monkeypatch.setattr(digest, "_ledger", lambda uid, days: _split_ledger(
         costs_available=False))
     monkeypatch.setattr(digest, "_event_aggregate", lambda uid, since: {})
-    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir: [])
+    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir, *_: [])
     monkeypatch.setattr(digest, "_episodes", lambda uid, since: [])
     text = await digest.compose_digest("u1", days=1)
     assert "⚠" in text
@@ -162,7 +168,7 @@ async def test_digest_never_merges_treasury_and_runtime(monkeypatch):
     the owner's API bill as the agent's P&L while his wallet was untouched."""
     monkeypatch.setattr("cron.digest._ledger", lambda u, d: _split_ledger())
     monkeypatch.setattr("cron.digest._event_aggregate", lambda u, t: {"counts_by_kind": {}})
-    monkeypatch.setattr("cron.digest._open_asks", lambda u, d: [])
+    monkeypatch.setattr("cron.digest._open_asks", lambda u, d, *_: [])
     monkeypatch.setattr("cron.digest._episodes", lambda u, t: [])
 
     out = await compose_digest("alice", days=1)
@@ -181,7 +187,7 @@ async def test_runtime_balance_omitted_when_none(monkeypatch):
                  "calls_window": 100, "calls_total": 561,
                  "provider_balance_usd": None, "available": True}))
     monkeypatch.setattr(digest, "_event_aggregate", lambda uid, since: {})
-    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir: [])
+    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir, *_: [])
     monkeypatch.setattr(digest, "_episodes", lambda uid, since: [])
     text = await digest.compose_digest("u1", days=1)
     runtime_line = _line_starting(text, "• Runtime cost:")
@@ -193,7 +199,7 @@ async def test_runtime_balance_omitted_when_none(monkeypatch):
 async def test_runtime_balance_rendered_when_present(monkeypatch):
     monkeypatch.setattr(digest, "_ledger", lambda uid, days: _split_ledger())
     monkeypatch.setattr(digest, "_event_aggregate", lambda uid, since: {})
-    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir: [])
+    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir, *_: [])
     monkeypatch.setattr(digest, "_episodes", lambda uid, since: [])
     text = await digest.compose_digest("u1", days=1)
     runtime_line = _line_starting(text, "• Runtime cost:")
@@ -211,7 +217,7 @@ async def test_treasury_balance_omitted_when_none(monkeypatch):
                   "pending_count": 1, "balance_usd": None, "net_usd": 0.0,
                   "available": True}))
     monkeypatch.setattr(digest, "_event_aggregate", lambda uid, since: {})
-    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir: [])
+    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir, *_: [])
     monkeypatch.setattr(digest, "_episodes", lambda uid, since: [])
     text = await digest.compose_digest("u1", days=1)
     treasury_line = _line_starting(text, "• Treasury:")
@@ -226,7 +232,7 @@ async def test_treasury_balance_rendered_when_present(monkeypatch):
     $10 untouched while the digest only reported the (unrelated) runtime bill."""
     monkeypatch.setattr(digest, "_ledger", lambda uid, days: _split_ledger())
     monkeypatch.setattr(digest, "_event_aggregate", lambda uid, since: {})
-    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir: [])
+    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir, *_: [])
     monkeypatch.setattr(digest, "_episodes", lambda uid, since: [])
     text = await digest.compose_digest("u1", days=1)
     treasury_line = _line_starting(text, "• Treasury:")
@@ -353,34 +359,31 @@ async def test_digest_no_link_without_public_url(monkeypatch):
 def _quiet(monkeypatch):
     monkeypatch.setattr(digest, "_ledger", lambda uid, days: {})
     monkeypatch.setattr(digest, "_event_aggregate", lambda uid, since: {})
-    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir: [])
+    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir, *_: [])
     monkeypatch.setattr(digest, "_episodes", lambda uid, since: [])
 
 
 @pytest.mark.asyncio
 async def test_digest_rolls_up_missed_owner_messages(monkeypatch):
     """`user_delivery.py` suppresses a capped/paused owner message on the
-    promise that it is rolled into the digest; until now NEITHER digest path
-    read `missed_notices` (inbox 2026-09-20 04:37Z). The composed digest now
-    carries a 'Missed owner messages' section: window-bounded, kind-grouped,
+    promise that it is rolled into the digest. The section is the snapshot's
+    delivery data (116 W7.4): the /status count and window, kind-tagged,
     marker-stripped, capped, oldest first."""
     _quiet(monkeypatch)
     import time
     now = time.time()
-    notes = [
-        {"ts": now - 3600, "text": "self_evolution: skill draft X pending", "kind": "capped"},
-        {"ts": now - 1800, "text": "goal 1234 done — posted the thread", "kind": "capped"},
+    notes = [   # the snapshot's order: newest first
         {"ts": now - 600, "text": "settlement watcher held while paused", "kind": "paused"},
-        {"ts": now - 3 * 86400, "text": "ancient, outside the window", "kind": "capped"},
+        {"ts": now - 1800, "text": "goal 1234 done — posted the thread", "kind": "capped"},
+        {"ts": now - 3600, "text": "self_evolution: skill draft X pending", "kind": "capped"},
     ]
-    monkeypatch.setattr(digest, "_missed", lambda uid, data_dir, n: list(notes))
+    monkeypatch.setattr(digest, "_missed", lambda uid, data_dir, *_: (list(notes), 0, "in 24h"))
     text = await digest.compose_digest("u1", days=1)
-    assert "Missed owner messages (3)" in text
+    assert "Missed owner messages (3 in 24h)" in text
     assert "[capped] self_evolution: skill draft X pending" in text
     assert "[paused] settlement watcher held while paused" in text
     import re
     assert re.search(r"   - \d\d-\d\d \d\d:\d\dZ \[capped\]", text)   # day-stamped: the window spans midnight
-    assert "ancient" not in text                       # outside the 1-day window
     body = text.split("Missed owner messages")[1]
     assert body.index("skill draft X") < body.index("goal 1234")   # oldest first
 
@@ -390,10 +393,11 @@ async def test_digest_missed_section_caps_and_counts_the_rest(monkeypatch):
     _quiet(monkeypatch)
     import time
     now = time.time()
-    notes = [{"ts": now - i * 60, "text": f"notice {i}", "kind": "capped"} for i in range(12)]
-    monkeypatch.setattr(digest, "_missed", lambda uid, data_dir, n: list(notes))
+    notes = [{"ts": now - i * 60, "text": f"notice {i}", "kind": "capped"} for i in range(8)]
+    monkeypatch.setattr(digest, "_missed", lambda uid, data_dir, *_: (list(notes), 4,
+                                                                         "since your last /missed"))
     text = await digest.compose_digest("u1", days=1)
-    assert "Missed owner messages (12)" in text
+    assert "Missed owner messages (12 since your last /missed)" in text
     assert text.count("   - ") >= digest.MISSED_MAX_LINES
     assert f"… and {12 - digest.MISSED_MAX_LINES} more" in text
 
@@ -405,7 +409,7 @@ async def test_digest_missed_unreadable_is_named_never_silent(monkeypatch):
     section or nothing — 'nothing missed' must not come to mean 'could not tell'."""
     _quiet(monkeypatch)
 
-    def boom(uid, data_dir, n):
+    def boom(uid, data_dir, *_):
         raise FileNotFoundError("telemetry log not found at /x/telemetry_events.db")
     monkeypatch.setattr(digest, "_missed", boom)
     text = await digest.compose_digest("u1", days=1)
@@ -416,9 +420,78 @@ async def test_digest_missed_unreadable_is_named_never_silent(monkeypatch):
 @pytest.mark.asyncio
 async def test_digest_no_missed_messages_says_so(monkeypatch):
     _quiet(monkeypatch)
-    monkeypatch.setattr(digest, "_missed", lambda uid, data_dir, n: [])
+    monkeypatch.setattr(digest, "_missed", lambda uid, data_dir, *_: ([], 0, "in 24h"))
     text = await digest.compose_digest("u1", days=1)
-    assert "Missed owner messages: none" in text
+    assert "Missed owner messages: none in 24h" in text
+
+
+def _snap_with(**data):
+    """A snapshot holding only the sections the digest reads."""
+    from core.status_types import STATE_UNAVAILABLE, Section, StatusSnapshot
+    secs = {}
+    for name, d in data.items():
+        secs[name] = (Section(name=name, state=STATE_UNAVAILABLE, reason=d)
+                      if isinstance(d, str) else Section(name=name, data=d))
+    return StatusSnapshot(user_id="u1", generated_at=0.0, window_sec=86400, sections=secs,
+                          health=[], unavailable_sources=[])
+
+
+def test_the_digest_counts_are_the_snapshot_sections():
+    """116 W7.4: the open asks are ``work.data["open_asks"]`` (the /status
+    selection: no /pending kind, no expired ask), /pending is the approvals
+    section, and the missed list is the delivery section — one read, not three."""
+    snap = _snap_with(
+        work={"open_asks": [{"id": "a1", "title": "Pick a venue", "created_at": 1.0,
+                             "blocks": []}]},
+        approvals={"items": [{"kind": "tool_approval", "id": "tap-1", "preview": "spend"}]},
+        delivery={"missed": [{"ts": 5.0, "kind": "capped", "text": "hello"}],
+                  "missed_more": 2, "missed_unavailable": None,
+                  "missed_window": "since your last /missed"})
+    assert _REAL["_open_asks"]("u1", None, snap) == [
+        {"id": "a1", "title": "Pick a venue", "created_at": 1.0}]
+    assert _REAL["_pending_items"]("u1", None, snap)[0]["id"] == "tap-1"
+    assert _REAL["_missed"]("u1", None, snap) == (
+        [{"ts": 5.0, "kind": "capped", "text": "hello"}], 2, "since your last /missed")
+
+
+def test_an_unreadable_section_raises_never_reads_as_empty():
+    snap = _snap_with(work="DatabaseError: disk I/O error", approvals="x",
+                      delivery={"missed": [], "missed_more": 0,
+                                "missed_unavailable": "OperationalError: locked"})
+    for name in ("_open_asks", "_pending_items"):
+        with pytest.raises(RuntimeError, match="unavailable"):
+            _REAL[name]("u1", None, snap)
+    with pytest.raises(RuntimeError, match="locked"):
+        _REAL["_missed"]("u1", None, snap)
+
+
+@pytest.mark.asyncio
+async def test_the_snapshot_is_built_once_per_digest(monkeypatch):
+    _quiet(monkeypatch)
+    built = []
+    snap = _snap_with(work={"open_asks": []}, approvals={"items": []},
+                      delivery={"missed": [], "missed_more": 0, "missed_window": "in 24h"},
+                      loops={})
+    monkeypatch.setattr(digest, "_snapshot", lambda *a: built.append(a) or snap)
+    for name, fn in _REAL.items():
+        monkeypatch.setattr(digest, name, fn)
+    monkeypatch.setattr(digest, "_outward", lambda *a: "none")
+    text = await digest.compose_digest("u1", days=1)
+    assert len(built) == 1
+    assert "Pending approvals: none" in text and "Missed owner messages: none in 24h" in text
+    # The header names the owner's calendar day; the window stays a rolling 24 h.
+    import re
+    assert re.match(r"Daily digest — last 24 h, \d{4}-\d\d-\d\d:", text)
+    assert "Runtime cost" not in text or ", 20" not in _line_starting(text, "• Runtime cost")
+
+
+@pytest.mark.asyncio
+async def test_a_tool_approval_is_a_pending_approval_on_the_digest(monkeypatch):
+    _quiet(monkeypatch)
+    monkeypatch.setattr(digest, "_pending_items", lambda uid, data_dir, *_: [
+        {"kind": "tool_approval", "id": "tap-1", "preview": "defi_trade"}])
+    text = await digest.compose_digest("u1", days=1)
+    assert "• Pending approvals (1):" in text and "[tool_approval] defi_trade — /pending" in text
 
 
 @pytest.mark.asyncio
@@ -450,11 +523,11 @@ def test_top_cost_reads_the_spend_view(tmp_path, monkeypatch):
 
 # --- routines review 2026-10-29: failed jobs first; ask age ---------------------
 
-def _quiet(monkeypatch):
+def _quiet_jobs(monkeypatch):
     monkeypatch.setattr(digest, "_ledger", lambda uid, days: _split_ledger())
     monkeypatch.setattr(digest, "_event_aggregate", lambda uid, since: {})
     monkeypatch.setattr(digest, "_episodes", lambda uid, since: [])
-    monkeypatch.setattr(digest, "_health_lines", lambda uid, d: [
+    monkeypatch.setattr(digest, "_health_lines", lambda uid, d, *_: [
         "Health: DEGRADED — 6 issue(s)", "• ⚠ housekeeping item"])
 
 
@@ -462,8 +535,8 @@ def _quiet(monkeypatch):
 async def test_a_failed_owner_job_comes_before_the_health_block(monkeypatch):
     import time as _t
     from datetime import datetime
-    _quiet(monkeypatch)
-    monkeypatch.setattr(digest, "_open_asks", lambda uid, d: [])
+    _quiet_jobs(monkeypatch)
+    monkeypatch.setattr(digest, "_open_asks", lambda uid, d, *_: [])
     at = datetime.fromtimestamp(_t.time() - 3600).isoformat()
     job = SimpleNamespace(
         id="bbbe8d3e1cd2", task="BOUNTY ANNOUNCE v2", status="scheduled",
@@ -480,8 +553,8 @@ async def test_a_failed_owner_job_comes_before_the_health_block(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_a_failure_outside_the_window_is_not_repeated(monkeypatch):
-    _quiet(monkeypatch)
-    monkeypatch.setattr(digest, "_open_asks", lambda uid, d: [])
+    _quiet_jobs(monkeypatch)
+    monkeypatch.setattr(digest, "_open_asks", lambda uid, d, *_: [])
     job = SimpleNamespace(id="j1", task="x", status="scheduled", next_run_at=None,
                           last_run_at=None, schedule_spec="1h",
                           payload={"last_outcome": {"outcome": "failed",
@@ -493,8 +566,8 @@ async def test_a_failure_outside_the_window_is_not_repeated(monkeypatch):
 @pytest.mark.asyncio
 async def test_an_old_ask_shows_its_age_and_how_to_withdraw_it(monkeypatch):
     import time as _t
-    _quiet(monkeypatch)
-    monkeypatch.setattr(digest, "_open_asks", lambda uid, d: [
+    _quiet_jobs(monkeypatch)
+    monkeypatch.setattr(digest, "_open_asks", lambda uid, d, *_: [
         {"id": "bc5f02a4e9b2", "title": "confirm the USDG contract",
          "created_at": _t.time() - 12.8 * 86400},
         {"id": "a2", "title": "fresh ask", "created_at": _t.time() - 60}])
@@ -523,7 +596,7 @@ async def test_digest_quotes_curator_proposals_one_line_each(monkeypatch):
     """095 W12b: the curator's propose events reach the owner on the digest."""
     monkeypatch.setattr(digest, "_ledger", lambda uid, days: {})
     monkeypatch.setattr(digest, "_event_aggregate", lambda uid, since: {})
-    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir: [])
+    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir, *_: [])
     monkeypatch.setattr(digest, "_episodes", lambda uid, since: [])
     monkeypatch.setattr(digest, "_proposals", lambda uid, since, data_dir: [
         "proposal: my-skill: your skill has not been used for 40 days — keep or archive?"])
@@ -535,7 +608,7 @@ async def test_digest_quotes_curator_proposals_one_line_each(monkeypatch):
 async def test_digest_unreadable_proposals_are_named(monkeypatch):
     monkeypatch.setattr(digest, "_ledger", lambda uid, days: {})
     monkeypatch.setattr(digest, "_event_aggregate", lambda uid, since: {})
-    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir: [])
+    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir, *_: [])
     monkeypatch.setattr(digest, "_episodes", lambda uid, since: [])
 
     def _boom(*a):
@@ -551,7 +624,7 @@ async def test_a_reviewer_note_for_the_developer_is_one_digest_line(monkeypatch)
                         lambda uid, since, data_dir: ["the fetch tool times out"])
     monkeypatch.setattr(digest, "_ledger", lambda uid, days: {})
     monkeypatch.setattr(digest, "_event_aggregate", lambda uid, since: {})
-    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir: [])
+    monkeypatch.setattr(digest, "_open_asks", lambda uid, data_dir, *_: [])
     monkeypatch.setattr(digest, "_episodes", lambda uid, since: [])
     monkeypatch.setattr(digest, "_outward", lambda uid, since, data_dir: "none")
     text = await digest.compose_digest("u1", days=1)

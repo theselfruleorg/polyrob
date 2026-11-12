@@ -39,6 +39,20 @@ def test_read_never_creates_the_file(container, tmp_path):
     assert not os.path.exists(tmp_path / ot.DB_NAME)
 
 
+def test_thread_counts_raises_on_a_failed_read_not_none(container, tmp_path):
+    """116 W5.11: None is only "no store"; an unreadable store raises."""
+    (tmp_path / ot.DB_NAME).write_bytes(b"this is not a sqlite database" * 64)
+    with pytest.raises(Exception):
+        ot.thread_counts(container, "u1")
+
+    class _Broken:
+        def counts_since(self, *a, **k):
+            raise OSError("disk I/O error")
+    broken = _Container(tmp_path / "other", services={ot.SERVICE_NAME: _Broken()})
+    with pytest.raises(OSError):
+        ot.thread_counts(broken, "u1")
+
+
 def test_write_creates_and_read_sees_it(container, tmp_path):
     assert ot.record_owner_out(container, "u1", "Exit rail ran. Pick A or B.",
                                via="telegram", session_id="s-cron", source="agent_send",

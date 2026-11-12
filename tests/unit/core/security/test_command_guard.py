@@ -459,6 +459,6 @@ def test_state_db_names_derive_from_the_db_manifest():
     names = state_db_names()
     assert set(SIDECAR_DB_NAMES) <= names
     assert {"bot.db", "signer.sqlite", "submissions.sqlite"} <= names
-    for missing in ("feedback_replays.db", "telemetry_events.db", "skill_usage.db",
+    for missing in ("telemetry_events.db", "skill_usage.db",
                     "users.db", "messages.db"):
         assert classify(f"sqlite3 {missing} 'delete from x'").level == DANGEROUS, missing

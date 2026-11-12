@@ -18,19 +18,12 @@ import json
 import os
 from typing import Any, Dict, List, Optional
 
+from core.runtime_paths import bot_db_path  # noqa: F401 - the ONE rule; re-exported for callers
 from core.stop_reason import normalize_stop
 
 WINDOW_SEC_DEFAULT = 86400
 RUNWAY_CRIT_DAYS = 1.0
 RUNWAY_WARN_DAYS = 3.0
-
-
-def bot_db_path(data_dir: str) -> str:
-    """``DB_PATH`` wins (prod may anchor bot.db elsewhere); else the manifest layout."""
-    configured = os.getenv("DB_PATH")
-    if configured:
-        return configured
-    return os.path.join(data_dir, "database", "bot.db")
 
 
 def _pct(v: List[float], p: float) -> Optional[float]:

@@ -19,7 +19,7 @@ INVOICE_STATUSES = ("pending", "settling", "completed", "settled_no_tx",
                     "expired", "refund_due", "refunded")
 #: The statuses that count as INCOME (the ledger never sums a refund_due row).
 #: 098 MO-21: a ``settled_no_tx`` row has no on-chain proof — it is UNPROVEN
-#: (never income, never 8004 reputation) until a tx completes it.
+#: (never income) until a tx completes it.
 INCOME_STATUSES = ("completed",)
 UNPROVEN_STATUSES = ("settled_no_tx",)
 

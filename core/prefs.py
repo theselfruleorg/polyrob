@@ -92,13 +92,24 @@ def _digest_channels() -> tuple:
     return cron_target_ids()
 
 
+#: 116 D5: an old key name that reads and writes its new key; iteration (settings, docs)
+#: shows only the new name, and a file that holds the old name is read as the new one.
+PREF_ALIASES: dict[str, str] = {"digest.timezone": "owner.timezone"}
+
+
+class _AliasedSchema(dict):
+    def get(self, key, default=None): return super().get(PREF_ALIASES.get(key, key), default)  # noqa: E704
+    def __getitem__(self, key): return super().__getitem__(PREF_ALIASES.get(key, key))  # noqa: E301,E704
+    def __contains__(self, key): return super().__contains__(PREF_ALIASES.get(key, key))  # noqa: E301,E704
+
+
 def _spec(key: str, type: str, sensitivity: str, merge: str, applies: str,
           env_flag: str | None = None, **kw) -> tuple[str, PrefSpec]:
     return key, PrefSpec(key=key, type=type, sensitivity=sensitivity,
                          merge=merge, applies=applies, env_flag=env_flag, **kw)
 
 
-PREF_SCHEMA: dict[str, PrefSpec] = dict((
+PREF_SCHEMA: dict[str, PrefSpec] = _AliasedSchema((
     _spec("ui.theme", "enum", SENSITIVITY_SAFE, "override", "live",
           enum_values=("auto", "dark", "light"), default_display="auto",
           description="Console appearance: follow the system, dark, or light"),
@@ -199,10 +210,11 @@ PREF_SCHEMA: dict[str, PrefSpec] = dict((
                       "(local time), e.g. '23-08'. Enforced on the user-delivery "
                       "rail: sends inside the window are held and released at "
                       "window-end (018 P0.3)"),
-    _spec("digest.timezone", "str", SENSITIVITY_SAFE, "override", "live",
+    _spec("owner.timezone", "str", SENSITIVITY_SAFE, "override", "live",
           default_display="server clock",
-          description="Your IANA timezone, e.g. 'Europe/Berlin': quiet hours "
-                      "are read in this zone. Empty = the server clock (OB8)"),
+          description="Your IANA timezone, e.g. 'Europe/Berlin': quiet hours, the "
+                      "agent's clock and status times read it. Empty = the server "
+                      "clock (OB8; 116 W8; old name digest.timezone still works)"),
     _spec("delivery.rate_per_hour", "int", SENSITIVITY_SAFE, "min", "live",
           "USER_DELIVERY_RATE_PER_HOUR", min_value=1,
           description="Proactive messages/hour; the pref WINS unless the operator "
@@ -276,14 +288,9 @@ def _spec_for(key: str) -> PrefSpec | None:
 
 
 def _redacted_repr(value: object) -> str:
-    """``repr(value)`` for a validation-error message, but never echo a long
-    string verbatim (owner-UX P1 final review, item 6): ``find_invalid_preferences``/
-    ``/config check`` surface these error strings, and a hand-pasted secret
-    (mistakenly written to a str-typed pref key) would otherwise leak in full
-    via the ``got {value!r}`` mismatch errors. A str value longer than 12 chars
-    is truncated to a 4-char prefix; short values (and every non-str type)
-    render exactly as before — the full repr is genuinely useful feedback for
-    e.g. a mistyped boolean (`got 'yse'`)."""
+    """``repr(value)`` for a validation-error message that never echoes a long string
+    (a hand-pasted secret would leak via ``got {value!r}``): a str over 12 chars shows
+    a 4-char prefix; a short value or a non-str shows in full (`got 'yse'`)."""
     if isinstance(value, str) and len(value) > 12:
         return repr(value[:4] + "…")
     return repr(value)
@@ -351,8 +358,8 @@ def _coerce(spec: PrefSpec, value: object) -> tuple[bool, object, str]:
         m = _QUIET_HOURS_RE.fullmatch(s)
         if not m or not (0 <= int(m.group(1)) <= 23 and 0 <= int(m.group(2)) <= 23):
             return False, None, f"{spec.key}: expected HH-HH (0-23), e.g. 23-08"
-    if spec.key == "digest.timezone" and s and not _valid_timezone(s):
-        return False, None, (f"digest.timezone: unknown timezone {s[:64]!r} — "
+    if spec.key == "owner.timezone" and s and not _valid_timezone(s):
+        return False, None, (f"{spec.key}: unknown timezone {s[:64]!r} — "
                              "expected an IANA name, e.g. 'Europe/Berlin' "
                              "(empty = the server clock)")
     if spec.key in ("style.language", "chat.language") and not _LANGUAGE_RE.fullmatch(s):
@@ -489,7 +496,8 @@ def load_preferences(home_dir: Path | str, user_id: Optional[str],
         if cached or raw is None:
             return dict(cached[1]) if cached else {}
     prefs: dict[str, object] = {}
-    for dotted, value in _flatten(raw).items():
+    for dotted, value in sorted(_flatten(raw).items(), key=lambda kv: kv[0] in PREF_ALIASES):
+        dotted = PREF_ALIASES.get(dotted, dotted)  # 116 D5: the new name first, so it wins
         # 044 T17: a `chat.*` key is per-ROOM configuration. It validates through
         # the same machinery, but it belongs in a per-chat file that
         # core/surfaces/chat_policy.py reads — accepting one here would hand the
@@ -500,7 +508,7 @@ def load_preferences(home_dir: Path | str, user_id: Optional[str],
             continue
         ok, coerced, err = validate_pref(dotted, value)
         if ok:
-            prefs[dotted] = coerced
+            prefs.setdefault(dotted, coerced)
         else:
             logger.warning("preferences.toml: dropping %s (%s)", dotted, err)
     _CACHE[key] = (mtime, dict(prefs))
@@ -609,7 +617,7 @@ def write_preference(home_dir: Path | str, user_id: Optional[str], key: str,
 
     ``instance_id=None`` resolves via :func:`core.instance.resolve_instance_id`
     (owner-UX P2-4 final review, item 1)."""
-    instance_id = instance_id or resolve_instance_id()
+    instance_id, key = instance_id or resolve_instance_id(), PREF_ALIASES.get(key, key)
     path = preferences_path(home_dir, user_id, instance_id)
     if path is None:
         return False, "empty or unsafe user_id refused (tenant scope)"
@@ -690,18 +698,10 @@ def render_style_line(prefs: dict[str, object]) -> str:
     skipped (the line must never be a place errors surface).
 
     Load-side scan backstop (owner-UX P2-4 final review, item 2): a field in
-    ``_THREAT_SCANNED_PREF_KEYS`` (today only ``style.tone`` — ``session.persona``
-    is not a ``_STYLE_LINE_FIELDS`` member) is re-run through the SAME
-    fail-closed identity scanner used at write time
-    (:func:`_threat_scan_pref_value`) before being rendered. Unlike
-    :func:`display_effective` (which substitutes a ``"[BLOCKED: ...]"``
-    placeholder for the agent-facing get/list surface), a scan failure here
-    just OMITS the field — the style line is a compact rendering convenience,
-    not an error-reporting surface, and there is no natural place to show a
-    blocked-marker inline in a "verbosity terse · tone ..." summary. A
-    hand-edited ``preferences.toml`` (or a pre-scan value already on disk)
-    therefore can never smuggle injected prose into SELF_CONTEXT via the style
-    line, mirroring the ``session.persona`` load-side scan backstop.
+    ``_THREAT_SCANNED_PREF_KEYS`` (today only ``style.tone``) is re-run through the
+    SAME fail-closed scanner as the write (:func:`_threat_scan_pref_value`); a failure
+    OMITS the field (no blocked-marker in a compact line), so a hand-edited
+    ``preferences.toml`` can never smuggle injected prose into SELF_CONTEXT.
 
     Example: ``Style: verbosity terse · language en · tone friendly · quiet hours 23-08``.
     """
@@ -749,7 +749,7 @@ def resolve_with_source(key: str, user_id: Optional[str], home_dir: Path | str,
     caps, goal/budget caps, digest) honor a non-default
     ``POLYROB_INSTANCE_ID`` even though none of them thread an explicit
     instance id through."""
-    instance_id = instance_id or resolve_instance_id()
+    instance_id, key = instance_id or resolve_instance_id(), PREF_ALIASES.get(key, key)
     spec = PREF_SCHEMA.get(key)
     base, base_src = (env_value, "env") if env_value is not None else (default, "default")
     if spec is None or not prefs_enabled():
@@ -909,7 +909,7 @@ def display_effective(key: str, user_id: Optional[str], home_dir: Path | str,
     ``instance_id=None`` resolves via :func:`core.instance.resolve_instance_id`
     (owner-UX P2-4 final review, item 1).
     """
-    instance_id = instance_id or resolve_instance_id()
+    instance_id, key = instance_id or resolve_instance_id(), PREF_ALIASES.get(key, key)
     spec = PREF_SCHEMA.get(key)
     if spec is None:
         return None, "unknown"
@@ -1070,14 +1070,15 @@ def check_env_files(paths: list[Path]) -> list[str]:
         value = merged[key]
         hit = catalog_lookup(key)
         if hit is None:
+            from core.config_policy.retired_flags import RETIRED_FLAGS
             from core.key_suggest import suggest_keys
-            hint = suggest_keys(key, names, n=1)
-            if hint:
+            if key in RETIRED_FLAGS:  # a retired name is named as retired, never as a typo
+                findings.append(f"{key}: retired, not read — delete the line"
+                                + (f" (use {RETIRED_FLAGS[key]})" if RETIRED_FLAGS[key] else ""))
+            elif hint := suggest_keys(key, names, n=1):
                 findings.append(f"{key}: possible typo (did you mean {hint[0]}?)")
             else:
-                findings.append(
-                    f"{key}: unknown (not in catalog) — may be a provider key/secret"
-                )
+                findings.append(f"{key}: unknown (not in catalog) — may be a provider key/secret")
             continue
         _group, documented_default = hit
         # 026 P1.4: enum-shaped flags surface an invalid member with the valid

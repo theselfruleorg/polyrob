@@ -16,10 +16,7 @@ import os
 import re
 from dataclasses import dataclass
 
-_ALWAYS_SKIP_DIRS = {
-    ".git", "__pycache__", "node_modules", "venv", ".venv",
-    ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox",
-}
+from core.walk_skip import WALK_SKIP_DIRS as _ALWAYS_SKIP_DIRS
 
 
 @dataclass

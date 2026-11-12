@@ -111,8 +111,13 @@ def test_doctor_default_view_surfaces_missing_credential(tmp_path, monkeypatch):
 
     result = CliRunner().invoke(cli, ["doctor"])
     assert result.exit_code == 0, result.output
-    assert "no provider credential found" in result.output
-    assert "polyrob setup" in result.output
+    # 116 W5.10/W7.4: the snapshot's own CRIT carries the fact — once, inside the
+    # health list, under a DEGRADED headline; doctor does not print it again.
+    out = result.output
+    assert out.count("NO LLM provider is configured") == 1
+    assert "polyrob auth add" in out
+    assert "no provider credential found" not in out
+    assert out.index("Health: DEGRADED") < out.index("NO LLM provider is configured")
 
 
 def test_doctor_default_view_stays_quiet_with_a_usable_credential(tmp_path, monkeypatch):

@@ -28,16 +28,12 @@ def _watcher(agent, *, corr_active=False):
         def __init__(self):
             self.task_agent = agent
             self.owner_notices = []
-            self.feedback_offers = []
 
         def _correspondent_active(self, cref):
             return corr_active
 
         async def _push_owner_notice(self, user_id, text, source="", session_id=None):
             self.owner_notices.append(text)
-
-        async def _maybe_offer_payment_feedback(self, inv, session_id, cref):
-            self.feedback_offers.append(inv["request_id"])
 
     return _W()
 
@@ -68,20 +64,10 @@ async def test_f1_a_delivered_wake_keeps_the_plain_notice():
 
 
 @pytest.mark.asyncio
-async def test_f6_failed_correspondent_delivery_offers_no_feedback():
+async def test_f6_failed_correspondent_delivery_is_named():
     inv = dict(_INV, correspondent_ref={"surface": "email", "address": "x@y.z"})
     w = _watcher(_Agent(corr_ok=False), corr_active=True)
     assert await w._deliver_session_notice(inv, "t", "payment_settled") == "correspondent_dropped"
-    await w._notify(inv)
-    assert w.feedback_offers == []
-
-
-@pytest.mark.asyncio
-async def test_f6_delivered_correspondent_still_gets_the_feedback_offer():
-    inv = dict(_INV, correspondent_ref={"surface": "email", "address": "x@y.z"})
-    w = _watcher(_Agent(corr_ok=True), corr_active=True)
-    await w._notify(inv)
-    assert w.feedback_offers == ["inv_1"]
 
 
 @pytest.mark.asyncio

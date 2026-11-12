@@ -121,3 +121,45 @@ def test_a2a_message_not_framed_as_owner():
     assert "User sent you" not in text
     assert "PEER AGENT" in text and "NOT the owner" in text
     assert "please summarise" in text
+
+
+def test_a_large_tree_is_cut_and_claims_no_deletion(ws, monkeypatch):
+    """116 W1.1: the scan is bounded, prunes cache directories before it
+    descends, and a cut scan never invents a 'Removed:' line."""
+    (ws / "node_modules" / "pkg").mkdir(parents=True)
+    (ws / ".hidden").mkdir()
+    for i in range(50):
+        (ws / "node_modules" / "pkg" / f"m{i}.js").write_text("x")
+        (ws / ".hidden" / f"h{i}").write_text("x")
+    for i in range(30):
+        (ws / f"f{i:02d}.txt").write_text("x")
+
+    files, truncated = wc.scan_workspace(ws)
+    assert not truncated and len(files) == 30          # pruned before descent
+    files, truncated = wc.scan_workspace(ws, max_entries=10)
+    assert truncated and len(files) == 10
+
+    real = wc.scan_workspace
+    monkeypatch.setattr(wc, "scan_workspace", lambda d, **kw: real(d, max_entries=10))
+    ctx = wc.WorkspaceContext()
+    first = _scan(ctx)
+    assert first.truncated and not first.has_changes()
+    (ws / "f00.txt").unlink()                          # f10 moves into the cut window
+    (ws / "a_new.txt").write_text("new")
+    second = _scan(ctx)
+    assert second.deleted == []
+    assert [f.path for f in second.added] == ["a_new.txt"]
+    assert "scan was cut" in second.format_for_agent()
+
+
+def test_a_twenty_thousand_entry_tree_returns_under_the_cap(ws):
+    import time
+    for d in range(40):
+        sub = ws / f"d{d:02d}"
+        sub.mkdir()
+        for i in range(500):
+            (sub / f"f{i}").write_bytes(b"")
+    t0 = time.monotonic()
+    files, truncated = wc.scan_workspace(ws)
+    assert truncated and len(files) <= wc.SCAN_MAX_ENTRIES
+    assert time.monotonic() - t0 < wc.SCAN_MAX_SECONDS + 1.0

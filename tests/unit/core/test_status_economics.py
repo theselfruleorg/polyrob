@@ -160,6 +160,17 @@ def test_db_path_honours_DB_PATH(monkeypatch, tmp_path):
     assert bot_db_path("/d") == "/opt/x/bot.db"
 
 
+def test_a_relative_DB_PATH_is_anchored_at_the_data_home_not_the_cwd(monkeypatch, tmp_path):
+    """116 W6.1: the AgentConfig rule — a relative DB_PATH joins the data home."""
+    import core.runtime_paths as rp
+    monkeypatch.setattr(rp, "effective_data_home", lambda: tmp_path)
+    monkeypatch.setenv("DB_PATH", "database/other.db")
+    assert bot_db_path("/d") == os.path.join(str(tmp_path), "database", "other.db")
+    monkeypatch.delenv("DB_PATH")
+    assert bot_db_path(None) == os.path.join(str(tmp_path), "database", "bot.db")
+    assert bot_db_path("rel") == os.path.join(str(tmp_path), "rel", "database", "bot.db")
+
+
 def test_snapshot_carries_the_section_in_order(tmp_path, monkeypatch):
     monkeypatch.delenv("DB_PATH", raising=False)
     _usage_db(tmp_path, _rows())
@@ -188,7 +199,7 @@ def test_loops_section_renders_rail_verdicts_with_a_since_clock(tmp_path, monkey
     assert set(kinds) == {"smtp", "twitter_api", "missing_key"}
     assert kinds["twitter_api"].count == 2                       # aggregated by kind
     line, sev, key = _rail_verdict_line(kinds["twitter_api"])
-    assert sev == SEVERITY_WARN and key == "x_api_rejected" and "since" in line and "2 call(s)" in line
+    assert sev == SEVERITY_WARN and key == "x_api_rejected" and "since" in line and "2 402 response(s)" in line
     line, sev, key = _rail_verdict_line(kinds["missing_key"])
     assert sev is None and "perplexity" in line                  # a choice, not a fault
     snap = build_status_snapshot("alice", data_dir=str(tmp_path), include_money=False)

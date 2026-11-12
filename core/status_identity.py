@@ -78,26 +78,32 @@ def _security_section(user_id: str, data_dir: str, now: float,
             text=f"{r.flagged} threat-scan flag(s) in the window",
             remedy="review injection_flagged rows in telemetry_events"))
     # 057 WS-G: a shared data home the sibling identities cannot write is a
-    # security fact, not an ops chore — it is what turns a de-rooted unit into
-    # "attempt to write a readonly database". Bounded walk; a box with no
-    # `polyrob-data` group SKIPS and says so (a skipped audit is never `ok`).
+    # security fact — it is what turns a de-rooted unit into "attempt to write
+    # a readonly database". Bounded walk; a box with no `polyrob-data` group
+    # SKIPS and says so (a skipped audit is never `ok`). 116 W6.6: the health
+    # item is raised only for directories and db_manifest stores; a leaf file
+    # the agent wrote is counted on the line and named by `doctor --perms`.
     try:
         from core.data_perms import audit_data_perms
-        perms = audit_data_perms(data_dir, max_offenders=3, max_entries=2000)
+        from core.db_manifest import candidate_sqlite_dbs
+        perms = audit_data_perms(data_dir, max_offenders=3, max_entries=2000,
+                                 stores=candidate_sqlite_dbs(data_dir))
         sec.data["data_perms"] = {
             "skipped": perms.skipped, "reason": perms.skip_reason,
             "scanned": perms.scanned, "truncated": perms.truncated,
             "offenders": perms.offender_total, "counts": perms.counts,
+            "material": perms.material_total,
             "first": [o.render() for o in perms.offenders],
         }
         sec.lines.append(perms.headline)
-        if not perms.skipped and perms.offender_total:
+        if not perms.skipped and perms.material_total:
             sec.health.append(HealthItem(
                 key="data_perms", severity=SEVERITY_WARN,
-                text=(f"file permissions: {perms.offender_total} entr(ies) under {data_dir} "
-                      f"lack group write for sibling services (an ops chore; the agent's file "
-                      f"tools still work)" + (" (first 2000 checked)" if perms.truncated else "")
-                      + ": " + "; ".join(o.path for o in perms.offenders)),
+                text=(f"file permissions: {perms.material_total} director(ies) or store(s) "
+                      f"under {data_dir} lack group write for sibling services (the agent's "
+                      f"file tools still work)"
+                      + (f" (first {perms.scanned:,} checked)" if perms.truncated else "")
+                      + ": " + "; ".join(o.path for o in perms.material)),
                 remedy="re-run your deploy's data-ownership pass, or "
                        "`polyrob doctor --perms` to name them all"))
     except Exception as e:  # the walk must never take the security section down
@@ -121,7 +127,7 @@ def _identity_section(instance_id: str, data_dir: Optional[str]) -> Section:
     that writes is how an empty store becomes a real one.
     """
     from core.avatar import describe, load_avatar
-    from core.instance import load_erc8004_record
+    from core.instance import ERC8004_UNREADABLE, erc8004_record_path, read_erc8004_record
 
     sec = Section(name="identity")
     if not data_dir:
@@ -131,9 +137,22 @@ def _identity_section(instance_id: str, data_dir: Optional[str]) -> Section:
     # 046: the ERC-8004 on-chain identity, when one was actually registered.
     # Reported BEFORE the avatar branches below return, so an instance with no
     # avatar still shows its on-chain identity and vice versa.
-    record = load_erc8004_record(data_dir, instance_id)
+    rec_state, record, why = read_erc8004_record(data_dir, instance_id)
     sec.data["erc8004"] = record
-    if record:
+    sec.data["erc8004_state"] = rec_state
+    if rec_state == ERC8004_UNREADABLE:
+        # 116 W6.4: a broken record is NOT "not registered" — register() is not
+        # idempotent and a registration can land before its record is written.
+        path = erc8004_record_path(data_dir, instance_id)
+        sec.lines.append(f"erc-8004: record unreadable ({why}) at {path} — do NOT "
+                         f"register again")
+        sec.health.append(HealthItem(
+            key="erc8004_record_unreadable", severity=SEVERITY_WARN,
+            text=f"the ERC-8004 identity record is unreadable ({why}); a registration "
+                 f"may exist on chain",
+            remedy="find this wallet's agentId on the registry before any new "
+                   "registration (register() is not idempotent)"))
+    elif record:
         sec.lines.append(
             f"erc-8004: agentId {record.get('agent_id')} on "
             f"{record.get('chain')} ({record.get('registry')})")
@@ -241,7 +260,7 @@ def _identity_reach_lines(sec: Section, data_dir: Optional[str]) -> None:
     if len(present) == 4:
         sec.lines.append(
             f"x: api configured{' @' + handle if handle else ''} — writes "
-            f"{'ON' if writes else 'OFF (TWITTER_ENABLED)'}; X login session: ask x_login_check")
+            f"{'ON' if writes else 'OFF (TWITTER_ENABLED)'}{_x_api_refusal()}")
     elif present:
         missing = [k for k in api_keys if k not in present]
         sec.lines.append(f"x: api PARTIAL — missing {', '.join(missing)}")
@@ -255,6 +274,21 @@ def _identity_reach_lines(sec: Section, data_dir: Optional[str]) -> None:
     line, state = x_oauth2_line(data_dir)
     sec.data["x_oauth2"] = state
     sec.lines.append(line)
+
+
+def _x_api_refusal() -> str:
+    """`` — refused (402) since <time>`` while an X API verdict stands (the seam the
+    rails section reads), else nothing: configured keys are not working keys
+    (116 W6.3). An unreadable verdict store is named, never read as "working"."""
+    try:
+        from core.credential_verdicts import active, since_text
+        standing = active("twitter_api")
+    except Exception as e:
+        return f" — refusals unreadable ({type(e).__name__})"
+    if not standing:
+        return ""
+    v = min(standing, key=lambda x: x.first_seen)
+    return f" — refused ({v.code or '402'}) since {since_text(v)}"
 
 
 #: What the owner runs when the X OAuth 2.0 login is dead and the verdict

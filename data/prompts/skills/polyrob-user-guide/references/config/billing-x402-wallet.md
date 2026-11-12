@@ -53,9 +53,7 @@ One line per setting: NAME — default — meaning. Code anchors and full prose:
 - CREDIT_VALUE_USD — default: 0.01 — USD value of one credit.
 - WELCOME_BONUS — default: 0 — Optional new-wallet credit grant; default zero because wallet creation does not prove a unique person.
 - EIP8004_ENABLED — default: OFF ('false') — Enable EIP-8004 on-chain agent registration.
-- EIP8004_PAYMENT_FEEDBACK — default: OFF — the ERC-8004 ⇄ x402 compose seam: on settlement of an invoice with an identifiable payer (`correspondent_ref`, an ACTIVE correspondent channel) AND a verifiable on-chain transaction hash, offer that payer a signed ERC-8004 feedback authori…
 - EIP8004_ONCHAIN_ENABLED — default: OFF ('false') — **Operator ATTESTATION** that this agent is registered on an Identity Registry someone else transacted with: flips the publicly-served `/eip8004/registration.json` `trustMode` from `local` to `onchain`, and (only when `EIP8004_AGENT_ID`/`E…
-- EIP8004_AGENT_PRIVATE_KEY — default: unset — **SECRET, mask in logs/exports** — Signing key for ERC-8004 EIP-712 feedback authorizations (`ReputationManager`).
 - EIP8004_CHAIN_ID — default: 8453 (Base) — Chain id the ERC-8004 registries live on.
 - EIP8004_IDENTITY_REGISTRY / EIP8004_REPUTATION_REGISTRY / EIP8004_VALIDATION_REGISTRY — default: unset — Contract addresses of the three ERC-8004 registries; unset = that registry is unconfigured (local/simulation mode).
 - EIP8004_AGENT_ID — default: 0 (= none) — This agent's on-chain ERC-8004 agent id; `0`/unset = not registered.

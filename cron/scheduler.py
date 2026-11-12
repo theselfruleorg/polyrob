@@ -42,6 +42,9 @@ Runner = Callable[[CronJob], Awaitable[bool]]
 #: so its floor is higher. Floors only RAISE a cap; the hard ceiling holds.
 MODEL_RUN_FLOOR_SECONDS = 300
 MONEY_RUN_FLOOR_SECONDS = 900
+#: 116 W2.3: a ONE-SHOT job held by an open owner question looks again this often
+#: (a recurring job simply waits for its next slot). An approval re-arms it at once.
+HELD_ONE_SHOT_RECHECK_SECONDS = 900
 RUN_CAP_CEILING_SECONDS = 1800
 
 
@@ -418,7 +421,8 @@ class CronScheduler:
             # A job that gives up this slot must not cancel a goal for it.
             due = [j for j in self.store.due(now) if job_preempts(j)
                    and not (j.payload or {}).get("cut_run")
-                   and not _is_late_money_job(j, _seconds_past(now, j.next_run_at))]
+                   and not _is_late_money_job(j, _seconds_past(now, j.next_run_at))
+                   and self._held_by_question(j) is None]  # 116 W2.3: a held job runs nothing
             if not due:
                 return []
             job = due[0]
@@ -525,6 +529,9 @@ class CronScheduler:
             if job is None:
                 continue
             at = now + timedelta(seconds=int(time.monotonic() - tick_started))
+            if self._defer_held(job, now, at):
+                result.deferred.append(job.id)
+                continue
             late = _seconds_past(at, job.next_run_at)
             if await self._skip_late_money_job(job, at, late):
                 result.deferred.append(job.id)
@@ -647,6 +654,28 @@ class CronScheduler:
         t.cancel()
         return True
 
+    def _held_by_question(self, job: CronJob) -> Optional[dict]:
+        """116 W2.3: the open owner question that holds *job*, or None (fail-open)."""
+        from cron.rail_hold import held_by
+        return held_by(job, cron_db_path=getattr(self.store, "db_path", None))
+
+    def _defer_held(self, job: CronJob, now: datetime, at: datetime) -> bool:
+        """116 W2.3: a due job held by its own open question does not run: a
+        ``deferred`` row (reason ``owner_ask:<id>``, ``hold=<via>``), no session,
+        $0, no failure count. True when the slot was deferred."""
+        hold = self._held_by_question(job)
+        if hold is None:
+            return False
+        ask_id = hold["ask_id"]
+        logger.info("cron job %s: held by open owner ask %s (%s) — not run",
+                    job.id, ask_id, hold["via"])
+        self._terminal_ev(job, "deferred", f"owner_ask:{ask_id}", hold=hold["via"],
+                          held_by=ask_id)
+        self._record(job, now, False, deferred=True, ended=at,
+                     hold_until=(at + timedelta(seconds=HELD_ONE_SHOT_RECHECK_SECONDS)
+                                 if job.one_shot else None))
+        return True
+
     def _deferring_owner_ask(self, job: CronJob, started: float) -> Optional[str]:
         """FIX 3: the OPEN owner-approval ask this run raised, or None. Fail-open
         (any error answers None = record the timeout as a failure, as before)."""
@@ -690,9 +719,11 @@ class CronScheduler:
                          exc_info=True)
 
     def _record(self, job: CronJob, now: datetime, success: bool,
-                *, deferred: bool = False, ended: Optional[datetime] = None) -> int:
+                *, deferred: bool = False, ended: Optional[datetime] = None,
+                hold_until: Optional[datetime] = None) -> int:
         """*now* is the tick's start (an owner answer since then re-runs the job);
         *ended* is when this run ended, which the record and the next run count from.
+        *hold_until*: a deferred one-shot's next look (116 W2.3), else its slot stays.
         Returns the job's count of failed runs in a row."""
         started, now = now, ended or now
         # 080 WS-2: the last outcome lives on the job row (a recurring job is
@@ -718,7 +749,7 @@ class CronScheduler:
                 # pause or a pause window held (``run_note.hold``): a reminder is
                 # never spent on a pause. Other skips (quiet, no change) stay final.
                 self.store.update_after_run(
-                    job.id, last_run_at=now, next_run_at=job.next_run_at,
+                    job.id, last_run_at=now, next_run_at=hold_until or job.next_run_at,
                     status="scheduled", expected=job,
                 )
                 return streak

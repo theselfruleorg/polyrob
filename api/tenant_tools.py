@@ -1,27 +1,41 @@
-"""A REST or A2A tenant's own toolset carries no money tool (085 A6).
+"""A REST or A2A tenant's own toolset carries no money tool (085 A6) and no
+execution tool (M8: ``code_execution``, ``shell``, ``process``, ``coding``,
+``self_env`` — every row the capability table marks ``exec``).
 
 A tenant may name its own toolset on ``POST /api/task/sessions`` and on A2A
 ``message/send``. The wallet-authority hook (``tools/controller/wallet_authority.py``)
 refuses every money action for a non-owner session user anyway, so a money tool
 on a tenant session is only noise: drop it at the door. Every other tool passes
-unchanged, and the bound owner keeps the list as given.
+unchanged, and the bound owner keeps the list as given. An execution tool runs
+code or commands as the agent's identity, so a non-owner tenant never gets one.
 
 Lives in ``api/`` (the top tier): the owner check reads ``core.money.authority``,
 and that import from ``core.money.classify`` would close an import cycle.
 """
 from core.money.authority import owner_refusal
 from core.money.classify import money_tool
+from core.tool_capabilities import CATALOG_ALIASES, ids_with
+
+
+def _exec_tool(tool_id) -> bool:
+    """True when *tool_id* (an ``mcp:`` prefix or a catalog alias resolved) is
+    classified ``exec`` in ``core/tool_capabilities.py``."""
+    name = str(tool_id)
+    if name.startswith("mcp:"):
+        name = name[4:]
+    return CATALOG_ALIASES.get(name, name) in ids_with("exec")
 
 
 def tenant_toolset(tools, user_id):
-    """*tools* without the money tools unless *user_id* is the bound owner.
+    """*tools* without the money and execution tools unless *user_id* is the
+    bound owner.
 
     Not a list (None, a malformed body) → returned as is."""
     if not isinstance(tools, (list, tuple)):
         return tools
     if owner_refusal(user_id) is None:
         return list(tools)
-    return [t for t in tools if not money_tool(t)]
+    return [t for t in tools if not money_tool(t) and not _exec_tool(t)]
 
 
 def default_session_tools(user_id) -> list:

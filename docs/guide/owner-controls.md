@@ -159,6 +159,15 @@ whole story, and the shell and root equivalents:
   console all lead with the pause line: `⏸ PAUSED (everything) since 14:12 UTC
   by owner via telegram` or `▶ RUNNING — 0 goal run(s), 0 cron run(s), loops
   alive 3/3`.
+- A loop is alive when its ticks complete. For any other loop, `/status` prints
+  one word and the reason: `silent` (no heartbeat in 24 hours), `dead` (the
+  heartbeat stopped), `failing` (the last ticks failed) or `stuck` (one tick
+  does not end).
+- The run lines count a 24-hour window. They print the runs that ended apart
+  from the runs that started, and what a `done` run did: `effect`, `idle`,
+  `missed` or `unverified`. A skipped slot is not a run.
+- Times show UTC, and your own time beside it when you set `owner.timezone`
+  (`polyrob config set owner.timezone Europe/Berlin`).
 - A `pause_violation` CRITICAL health item names any autonomous activity
   recorded after the pause (goal runs, cron runs, self-wakes, wallet spend, and
   every outward write the pause covers — a post, a message, a publish, a money
@@ -210,6 +219,10 @@ already received, so there is nothing to recover. And framework run pings
 most of what this list shows. Both are still recorded in the telemetry
 event log (`<data home>/telemetry_events.db`), which `polyrob doctor --full`
 and `polyrob journey` read.
+
+`/status` counts the missed messages since you last ran `/missed`. A message
+that waits for a chat host which never comes back is given up after 7 days;
+`/status` names it in its delivery lines as `dead`.
 
 ### If you are missing too much
 

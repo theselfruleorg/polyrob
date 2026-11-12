@@ -49,6 +49,12 @@ CREATE INDEX IF NOT EXISTS idx_te_user ON telemetry_events(user_id);
 #: A string attr longer than this is shortened; attrs had no cap at all (102 D-7).
 _ATTR_STRING_MAX_CHARS = 16 * 1024
 
+#: The tenant rule of an owner-facing read of this log (116 W7.4): a row written
+#: with no tenant (``user_id = ''``: no execution context, an owner the perimeter
+#: could not resolve) is the instance's own and shows beside the tenant's rows —
+#: the rule the status snapshot reads by. ONE ``?``: the tenant id.
+TENANT_OR_INSTANCE_SQL = "(user_id = ? OR user_id = '')"
+
 
 def _shorten_strings(value: Any) -> Any:
     """Shorten long string VALUES only, so every key, number and list item stays.
@@ -89,21 +95,66 @@ def _migrate_effect_column(db_path: str) -> None:
         conn.close()
 
 
-class TelemetryEventLog:
-    """Append-only sink. Writes fail open; financial aggregation raises on bad reads."""
+#: A telemetry write never waits longer than this: ``emit`` runs on the event
+#: loop from async paths, and one contended insert held it for up to 17 s.
+WRITE_DEADLINE_SEC = 2.0
+#: A log whose init failed is tried again after this long (it was cached dead
+#: for the life of the process).
+INIT_RETRY_SEC = 60.0
 
-    def __init__(self, db_path: str):
+_drops = {"n": 0, "last_error": "", "warned_at": 0.0}
+
+
+def dropped_rows() -> Dict[str, Any]:
+    """``{"n", "last_error"}``: telemetry rows THIS process could not write
+    since it started. Zero is the normal state; a reader shows any other value."""
+    return {"n": int(_drops["n"]), "last_error": str(_drops["last_error"])}
+
+
+def _count_drop(reason: str) -> None:
+    _drops["n"] += 1
+    _drops["last_error"] = reason[:200]
+    now = time.time()
+    if now - _drops["warned_at"] >= 60.0:   # loud, but not once per row
+        _drops["warned_at"] = now
+        logger.warning("telemetry row dropped (%d in this process): %s",
+                       _drops["n"], reason)
+
+
+class TelemetryEventLog:
+    """Append-only sink. Writes fail open; financial aggregation raises on bad reads.
+
+    ``read_only=True`` is the handle of a status read: no ``CREATE``, no
+    ``ALTER``, no index build and no write — a read must not change the store
+    it reports on."""
+
+    def __init__(self, db_path: str, read_only: bool = False):
         self.db_path = db_path
+        self.read_only = bool(read_only)
         self._ready = False
+        self.init_failed_at: Optional[float] = None
         #: False only on a pre-033 file the migration could not alter (read-only
         #: mount); reads then synthesize ``effect=''`` instead of failing.
         self._has_effect = True
+        if self.read_only:
+            self._ready = True
+            try:
+                self._has_effect = any(
+                    r[1] == "effect" for r in self._run(
+                        "PRAGMA table_info(telemetry_events)", (), fetch="all") or [])
+            except Exception as e:
+                logger.warning("event_log: cannot read the schema of %s: %s", db_path, e)
+                self._has_effect = False
+            return
         try:
             init_schema(db_path, _SCHEMA, mkdir=True)
             self._ready = True
         except Exception as e:
-            # Fail-open: a broken telemetry DB must never break the agent.
-            logger.debug(f"event_log init failed ({db_path}): {e}")
+            # Fail-open: a broken telemetry DB must never break the agent — but
+            # a dead log is LOUD (it was a DEBUG line and a silent process).
+            self.init_failed_at = time.time()
+            logger.warning("event_log init failed (%s): %s — telemetry is OFF in this "
+                           "process until a retry succeeds", db_path, e)
             return
         try:
             _migrate_effect_column(db_path)
@@ -112,6 +163,29 @@ class TelemetryEventLog:
             # an effect-filtered read then fails open to "no rows".
             logger.debug(f"event_log effect column migration skipped ({db_path}): {e}")
             self._has_effect = False
+
+    def _run(self, sql: str, params: tuple = (), *, fetch: Optional[str] = None):
+        """One READ. A read-only handle uses a ``mode=ro`` connection; if the
+        file cannot be opened that way (a WAL store with no ``-shm`` yet) it
+        falls back to the shared connection path."""
+        if self.read_only:
+            import sqlite3
+            from core.sqlite_util import read_only_connect
+            try:
+                conn = read_only_connect(self.db_path)
+            except sqlite3.OperationalError:
+                conn = None
+            if conn is not None:
+                try:
+                    conn.row_factory = sqlite3.Row
+                    cur = conn.execute(sql, params)
+                    return cur.fetchone() if fetch == "one" else cur.fetchall()
+                except sqlite3.OperationalError as e:
+                    if "unable to open" not in str(e).lower():
+                        raise
+                finally:
+                    conn.close()
+        return execute_retry(self.db_path, sql, params, fetch=fetch)
 
     def record(self, kind: str, *, user_id: str = "", session_id: str = "",
                source: str = "", ts: Optional[float] = None,
@@ -126,7 +200,10 @@ class TelemetryEventLog:
         ``effect`` (033) is written to its own indexed column, never into
         ``attrs``; only ``external_write`` rows carry one.
         """
+        if self.read_only:
+            return
         if not self._ready:
+            _count_drop("the event log did not initialise")
             return
         merged = dict(kw)
         if attrs:
@@ -146,35 +223,55 @@ class TelemetryEventLog:
                     self.db_path,
                     "INSERT INTO telemetry_events (ts, kind, user_id, session_id, source, "
                     "attrs, effect) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    row + (str(effect),),
+                    row + (str(effect),), deadline_sec=WRITE_DEADLINE_SEC,
                 )
             else:
                 execute_retry(
                     self.db_path,
                     "INSERT INTO telemetry_events (ts, kind, user_id, session_id, source, attrs) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
-                    row,
+                    row, deadline_sec=WRITE_DEADLINE_SEC,
                 )
         except Exception as e:
-            logger.debug(f"event_log record failed: {e}")
+            _count_drop(f"{type(e).__name__}: {e}")
 
     def query(self, *, since_ts: Optional[float] = None, kind: Optional[str] = None,
               user_id: Optional[str] = None, limit: int = 500,
-              effect: Optional[str] = None) -> List[Dict[str, Any]]:
+              effect: Optional[str] = None, kinds: Optional[Any] = None,
+              not_kinds: Optional[Any] = None,
+              strict: bool = False,
+              instance_rows: bool = False) -> List[Dict[str, Any]]:
         """Return events most-recent-first, with optional filters.
 
         Every row carries ``effect`` (``''`` for a row that is not an
         ``external_write``, or one written before the column existed).
+
+        ``kinds`` keeps only those kinds and ``not_kinds`` drops some (so a
+        limit is spent on the rows the caller renders, not on every kind). A failed read returns ``[]`` unless
+        ``strict=True``, which RAISES: a reader a person sees must tell "no
+        rows" from "I could not look". ``instance_rows=True`` reads *user_id* by
+        :data:`TENANT_OR_INSTANCE_SQL` (the tenant's rows and the instance's own).
         """
         if not self._ready:
+            if strict:
+                raise RuntimeError("the event log is not readable")
             return []
         clauses, params = [], []
         if since_ts is not None:
             clauses.append("ts >= ?"); params.append(float(since_ts))
         if kind is not None:
             clauses.append("kind = ?"); params.append(str(kind))
+        if kinds is not None:
+            vals = [str(k) for k in kinds]
+            if not vals:
+                return []
+            clauses.append(f"kind IN ({', '.join('?' for _ in vals)})"); params.extend(vals)
+        if not_kinds:
+            vals = [str(k) for k in not_kinds]
+            clauses.append(f"kind NOT IN ({', '.join('?' for _ in vals)})"); params.extend(vals)
         if user_id is not None:
-            clauses.append("user_id = ?"); params.append(str(user_id))
+            clauses.append(TENANT_OR_INSTANCE_SQL if instance_rows else "user_id = ?")
+            params.append(str(user_id))
         if effect is not None:
             if not self._has_effect:
                 return []
@@ -185,8 +282,10 @@ class TelemetryEventLog:
                f"FROM telemetry_events{where} ORDER BY ts DESC, id DESC LIMIT ?")
         params.append(int(limit))
         try:
-            rows = execute_retry(self.db_path, sql, tuple(params), fetch="all") or []
+            rows = self._run(sql, tuple(params), fetch="all") or []
         except Exception as e:
+            if strict:
+                raise
             logger.debug(f"event_log query failed: {e}")
             return []
         out = []
@@ -231,7 +330,7 @@ class TelemetryEventLog:
         sql = (f"SELECT effect, COUNT(*) AS n FROM telemetry_events "
                f"WHERE {' AND '.join(clauses)} GROUP BY effect")
         try:
-            rows = execute_retry(self.db_path, sql, tuple(params), fetch="all") or []
+            rows = self._run(sql, tuple(params), fetch="all") or []
         except Exception as e:
             logger.warning("event_log count_by_effect failed: %s", e, exc_info=True)
             return None
@@ -299,8 +398,7 @@ class TelemetryEventLog:
             params.extend(vals)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         try:
-            row = execute_retry(
-                self.db_path,
+            row = self._run(
                 f"SELECT COUNT(*) AS n FROM telemetry_events{where}",
                 tuple(params), fetch="one")
         except Exception as e:
@@ -328,8 +426,7 @@ class TelemetryEventLog:
             clauses.append(f"json_extract(attrs, '$.{name}') = ?")
             params.append(str(value))
         try:
-            row = execute_retry(
-                self.db_path,
+            row = self._run(
                 f"SELECT ts, attrs FROM telemetry_events WHERE {' AND '.join(clauses)} "
                 "ORDER BY ts DESC, id DESC LIMIT 1", tuple(params), fetch="one")
             return {"ts": row["ts"], "attrs": json.loads(row["attrs"] or "{}")} if row else {}
@@ -356,8 +453,7 @@ class TelemetryEventLog:
             clauses.append(f"json_extract(attrs, '$.{name}') = ?")
             params.append(str(value))
         try:
-            rows = execute_retry(
-                self.db_path,
+            rows = self._run(
                 f"SELECT ts, effect, attrs FROM telemetry_events WHERE {' AND '.join(clauses)} "
                 "ORDER BY ts DESC, id DESC LIMIT ?", (*params, int(limit)), fetch="all") or []
             return [{"ts": r["ts"], "effect": r["effect"], "attrs": json.loads(r["attrs"] or "{}")}
@@ -393,7 +489,7 @@ class TelemetryEventLog:
         params = (WALLET_SPEND, TX_SETTLED, float(since_ts), *users, float(since_ts),
                   CRON_RUN, str(job_id), EXTERNAL_WRITE, str(job_id))
         try:
-            rows = execute_retry(self.db_path, sql, params, fetch="all") or []
+            rows = self._run(sql, params, fetch="all") or []
             return {str(r["kind"]): {"n": int(r["n"]), "usd": float(r["usd"] or 0),
                                      "unpriced": int(r["unpriced"] or 0)} for r in rows}
         except Exception as e:
@@ -403,7 +499,7 @@ class TelemetryEventLog:
     def prune(self, *, older_than_ts: float) -> int:
         """Delete events older than a cutoff. Returns rows removed (keeps the store
         bounded — the same retention discipline the audit demanded of feed/)."""
-        if not self._ready:
+        if not self._ready or self.read_only:
             return 0
         try:
             return int(execute_retry(
@@ -433,7 +529,7 @@ class TelemetryEventLog:
                 clauses.append(f"{column} {op} ?")
                 params.append(value)
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
-        rows = execute_retry(self.db_path, """
+        rows = self._run("""
             SELECT kind, COUNT(*) AS n,
               SUM(CASE WHEN kind = ? THEN json_extract(attrs, '$.amount_usd')
                   ELSE 0 END) AS spend,
@@ -485,7 +581,7 @@ def open_event_log(data_dir: Optional[str] = None) -> Optional[TelemetryEventLog
     path = telemetry_db_path(data_dir)
     if not path or not os.path.exists(path):
         return None
-    return TelemetryEventLog(path)
+    return TelemetryEventLog(path, read_only=True)
 
 
 def emit(kind: str, *, source: str, user_id: str = "", session_id: str = "",
@@ -528,6 +624,9 @@ def get_event_log(db_path: Optional[str] = None) -> TelemetryEventLog:
         from core.runtime_paths import sidecar_db_path
         db_path = str(sidecar_db_path("telemetry_events.db"))
     inst = _INSTANCES.get(db_path)
+    if (inst is not None and not inst._ready
+            and time.time() - (inst.init_failed_at or 0.0) >= INIT_RETRY_SEC):
+        inst = None      # a dead log is not cached for the life of the process
     if inst is None:
         inst = TelemetryEventLog(db_path)
         if _relocated:

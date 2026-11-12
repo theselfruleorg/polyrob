@@ -1,0 +1,2323 @@
+{
+ "about": "The shared vectors of the checked sale's buyer conditions: each case is a desk-shaped account snapshot and the list the desk reader (polyrob-desk web/checked-sale.js defaults, run by node) builds from it; core's core.wallet.sale_conditions.build must build the same. 'encodings' are the desk's own encoders (web/abi.js) on neutral inputs. Regenerate with the desk checkout: tests/unit/core/wallet/test_sale_conditions.py::test_the_desk_reader_still_builds_the_fixture.",
+ "cases": [
+  {
+   "name": "every holding, t=0",
+   "snapshot": {
+    "collection": "0x8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b",
+    "positionManager": "0x5858585858585858585858585858585858585858",
+    "identityRegistry": "0x8080808080808080808080808080808080808080",
+    "eth": "10000",
+    "positionId": "5",
+    "position": {
+     "liquidity": "777",
+     "hook": "0x0000000000000000000000000000000000000000"
+    },
+    "identity": {
+     "agentId": "9"
+    },
+    "holdings": [
+     {
+      "kind": "erc20",
+      "token": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "amount": "1000",
+      "decimals": 18,
+      "symbol": "TOK"
+     },
+     {
+      "kind": "erc20",
+      "token": "0x00000000000000000000000000000000000000aa",
+      "amount": "5",
+      "decimals": 0,
+      "symbol": "JUNK"
+     },
+     {
+      "kind": "erc20",
+      "token": "0xcccccccccccccccccccccccccccccccccccccccc",
+      "amount": "0",
+      "symbol": "ZERO"
+     },
+     {
+      "kind": "nft",
+      "token": "0x5858585858585858585858585858585858585858",
+      "id": "5",
+      "held": true
+     },
+     {
+      "kind": "nft",
+      "token": "0x5858585858585858585858585858585858585858",
+      "id": "6",
+      "held": true,
+      "position": {
+       "liquidity": "200",
+       "hook": "0x0000000000000000000000000000000000000000"
+      }
+     },
+     {
+      "kind": "nft",
+      "token": "0x5858585858585858585858585858585858585858",
+      "id": "7",
+      "held": true,
+      "position": {
+       "liquidity": "50",
+       "hook": "0x00000000000000000000000000000000000000aa"
+      }
+     },
+     {
+      "kind": "nft",
+      "token": "0x8080808080808080808080808080808080808080",
+      "id": "9",
+      "held": true
+     },
+     {
+      "kind": "nft",
+      "token": "0x00000000000000000000000000000000000000aa",
+      "id": "1",
+      "held": true,
+      "symbol": "ART"
+     }
+    ]
+   },
+   "opts": {
+    "reviewedErc20": [
+     "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ],
+    "reviewedHooks": [
+     "0x0000000000000000000000000000000000000000"
+    ],
+    "toleranceBps": 0
+   },
+   "expect": {
+    "conditions": [
+     [
+      4,
+      "0x5858585858585858585858585858585858585858",
+      "0",
+      "777",
+      "0x"
+     ],
+     [
+      7,
+      "0x8080808080808080808080808080808080808080",
+      "0",
+      "0",
+      "0x"
+     ],
+     [
+      0,
+      "0x0000000000000000000000000000000000000000",
+      "0",
+      "10000",
+      "0x"
+     ],
+     [
+      1,
+      "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "0",
+      "1000",
+      "0x"
+     ],
+     [
+      1,
+      "0x00000000000000000000000000000000000000aa",
+      "0",
+      "5",
+      "0x"
+     ],
+     [
+      5,
+      "0x5858585858585858585858585858585858585858",
+      "6",
+      "200",
+      "0x0000000000000000000000000000000000000000000000000000000000000000"
+     ],
+     [
+      5,
+      "0x5858585858585858585858585858585858585858",
+      "7",
+      "50",
+      "0x00000000000000000000000000000000000000000000000000000000000000aa"
+     ],
+     [
+      2,
+      "0x00000000000000000000000000000000000000aa",
+      "1",
+      "0",
+      "0x"
+     ]
+    ],
+    "rows": [
+     {
+      "label": "Pool position #5 (from the mint)",
+      "checked": true,
+      "cond": 0,
+      "why": "still in the account, no approval, no subscriber, liquidity at least as now",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "Agent identity #9 (ERC-8004)",
+      "checked": true,
+      "cond": 1,
+      "why": "still owned by the account, no approval, its wallet is the account",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "ETH",
+      "checked": true,
+      "cond": 2,
+      "why": "at least the minimum",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": "10000"
+     },
+     {
+      "label": "TOK",
+      "checked": true,
+      "cond": 3,
+      "why": "at least the minimum",
+      "key": "20:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "known": true,
+      "bad": false,
+      "acted": false,
+      "min": "1000"
+     },
+     {
+      "label": "JUNK",
+      "checked": true,
+      "cond": 4,
+      "why": "at least the minimum \u00b7 not a token we know: its value is not checked",
+      "key": "20:0x00000000000000000000000000000000000000aa",
+      "known": false,
+      "bad": false,
+      "acted": false,
+      "min": "5"
+     },
+     {
+      "label": "Pool position #6",
+      "checked": true,
+      "cond": 5,
+      "why": "still in the account, no approval, no subscriber, the pool hook as named",
+      "key": "v4:6",
+      "known": true,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "Pool position #7",
+      "checked": true,
+      "cond": 6,
+      "why": "still in the account, no approval, no subscriber, liquidity at least as now \u00b7 its pool has a hook we have not reviewed: its value is not checked",
+      "key": "v4:7",
+      "known": false,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "ART #1",
+      "checked": true,
+      "cond": 7,
+      "why": "still owned by the account, with no approval \u00b7 not a token we know: its value is not checked",
+      "key": "721:0x00000000000000000000000000000000000000aa:1",
+      "known": false,
+      "bad": false,
+      "acted": false,
+      "min": null
+     }
+    ]
+   }
+  },
+  {
+   "name": "every holding, t=50 bps",
+   "snapshot": {
+    "collection": "0x8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b",
+    "positionManager": "0x5858585858585858585858585858585858585858",
+    "identityRegistry": "0x8080808080808080808080808080808080808080",
+    "eth": "10000",
+    "positionId": "5",
+    "position": {
+     "liquidity": "777",
+     "hook": "0x0000000000000000000000000000000000000000"
+    },
+    "identity": {
+     "agentId": "9"
+    },
+    "holdings": [
+     {
+      "kind": "erc20",
+      "token": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "amount": "1000",
+      "decimals": 18,
+      "symbol": "TOK"
+     },
+     {
+      "kind": "erc20",
+      "token": "0x00000000000000000000000000000000000000aa",
+      "amount": "5",
+      "decimals": 0,
+      "symbol": "JUNK"
+     },
+     {
+      "kind": "erc20",
+      "token": "0xcccccccccccccccccccccccccccccccccccccccc",
+      "amount": "0",
+      "symbol": "ZERO"
+     },
+     {
+      "kind": "nft",
+      "token": "0x5858585858585858585858585858585858585858",
+      "id": "5",
+      "held": true
+     },
+     {
+      "kind": "nft",
+      "token": "0x5858585858585858585858585858585858585858",
+      "id": "6",
+      "held": true,
+      "position": {
+       "liquidity": "200",
+       "hook": "0x0000000000000000000000000000000000000000"
+      }
+     },
+     {
+      "kind": "nft",
+      "token": "0x5858585858585858585858585858585858585858",
+      "id": "7",
+      "held": true,
+      "position": {
+       "liquidity": "50",
+       "hook": "0x00000000000000000000000000000000000000aa"
+      }
+     },
+     {
+      "kind": "nft",
+      "token": "0x8080808080808080808080808080808080808080",
+      "id": "9",
+      "held": true
+     },
+     {
+      "kind": "nft",
+      "token": "0x00000000000000000000000000000000000000aa",
+      "id": "1",
+      "held": true,
+      "symbol": "ART"
+     }
+    ]
+   },
+   "opts": {
+    "reviewedErc20": [
+     "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ],
+    "reviewedHooks": [
+     "0x0000000000000000000000000000000000000000"
+    ],
+    "toleranceBps": 50
+   },
+   "expect": {
+    "conditions": [
+     [
+      4,
+      "0x5858585858585858585858585858585858585858",
+      "0",
+      "777",
+      "0x"
+     ],
+     [
+      7,
+      "0x8080808080808080808080808080808080808080",
+      "0",
+      "0",
+      "0x"
+     ],
+     [
+      0,
+      "0x0000000000000000000000000000000000000000",
+      "0",
+      "9950",
+      "0x"
+     ],
+     [
+      1,
+      "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "0",
+      "995",
+      "0x"
+     ],
+     [
+      1,
+      "0x00000000000000000000000000000000000000aa",
+      "0",
+      "5",
+      "0x"
+     ],
+     [
+      5,
+      "0x5858585858585858585858585858585858585858",
+      "6",
+      "199",
+      "0x0000000000000000000000000000000000000000000000000000000000000000"
+     ],
+     [
+      5,
+      "0x5858585858585858585858585858585858585858",
+      "7",
+      "50",
+      "0x00000000000000000000000000000000000000000000000000000000000000aa"
+     ],
+     [
+      2,
+      "0x00000000000000000000000000000000000000aa",
+      "1",
+      "0",
+      "0x"
+     ]
+    ],
+    "rows": [
+     {
+      "label": "Pool position #5 (from the mint)",
+      "checked": true,
+      "cond": 0,
+      "why": "still in the account, no approval, no subscriber, liquidity at least as now",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "Agent identity #9 (ERC-8004)",
+      "checked": true,
+      "cond": 1,
+      "why": "still owned by the account, no approval, its wallet is the account",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "ETH",
+      "checked": true,
+      "cond": 2,
+      "why": "at least the minimum",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": "9950"
+     },
+     {
+      "label": "TOK",
+      "checked": true,
+      "cond": 3,
+      "why": "at least the minimum",
+      "key": "20:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "known": true,
+      "bad": false,
+      "acted": false,
+      "min": "995"
+     },
+     {
+      "label": "JUNK",
+      "checked": true,
+      "cond": 4,
+      "why": "at least the minimum \u00b7 not a token we know: its value is not checked",
+      "key": "20:0x00000000000000000000000000000000000000aa",
+      "known": false,
+      "bad": false,
+      "acted": false,
+      "min": "5"
+     },
+     {
+      "label": "Pool position #6",
+      "checked": true,
+      "cond": 5,
+      "why": "still in the account, no approval, no subscriber, the pool hook as named",
+      "key": "v4:6",
+      "known": true,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "Pool position #7",
+      "checked": true,
+      "cond": 6,
+      "why": "still in the account, no approval, no subscriber, liquidity at least as now \u00b7 its pool has a hook we have not reviewed: its value is not checked",
+      "key": "v4:7",
+      "known": false,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "ART #1",
+      "checked": true,
+      "cond": 7,
+      "why": "still owned by the account, with no approval \u00b7 not a token we know: its value is not checked",
+      "key": "721:0x00000000000000000000000000000000000000aa:1",
+      "known": false,
+      "bad": false,
+      "acted": false,
+      "min": null
+     }
+    ]
+   }
+  },
+  {
+   "name": "erc1155 and erc6909",
+   "snapshot": {
+    "collection": "0x8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b",
+    "positionManager": "0x5858585858585858585858585858585858585858",
+    "identityRegistry": "0x8080808080808080808080808080808080808080",
+    "eth": "10000",
+    "positionId": "5",
+    "position": {
+     "liquidity": "777",
+     "hook": "0x0000000000000000000000000000000000000000"
+    },
+    "identity": {
+     "agentId": "9"
+    },
+    "holdings": [
+     {
+      "kind": "erc1155",
+      "token": "0x00000000000000000000000000000000000000aa",
+      "id": "3",
+      "amount": "4",
+      "symbol": "ITEM"
+     },
+     {
+      "kind": "erc6909",
+      "token": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "id": "8",
+      "amount": "9"
+     },
+     {
+      "kind": "erc1155",
+      "token": "0x00000000000000000000000000000000000000aa",
+      "id": "4",
+      "amount": "0"
+     }
+    ]
+   },
+   "opts": {
+    "reviewedErc20": [
+     "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ],
+    "reviewedHooks": [
+     "0x0000000000000000000000000000000000000000"
+    ],
+    "toleranceBps": 0
+   },
+   "expect": {
+    "conditions": [
+     [
+      4,
+      "0x5858585858585858585858585858585858585858",
+      "0",
+      "777",
+      "0x"
+     ],
+     [
+      7,
+      "0x8080808080808080808080808080808080808080",
+      "0",
+      "0",
+      "0x"
+     ],
+     [
+      0,
+      "0x0000000000000000000000000000000000000000",
+      "0",
+      "10000",
+      "0x"
+     ],
+     [
+      3,
+      "0x00000000000000000000000000000000000000aa",
+      "3",
+      "4",
+      "0x"
+     ],
+     [
+      6,
+      "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "8",
+      "9",
+      "0x"
+     ]
+    ],
+    "rows": [
+     {
+      "label": "Pool position #5 (from the mint)",
+      "checked": true,
+      "cond": 0,
+      "why": "still in the account, no approval, no subscriber, liquidity at least as now",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "Agent identity #9 (ERC-8004)",
+      "checked": true,
+      "cond": 1,
+      "why": "still owned by the account, no approval, its wallet is the account",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "ETH",
+      "checked": true,
+      "cond": 2,
+      "why": "at least the minimum",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": "10000"
+     },
+     {
+      "label": "ITEM #3",
+      "checked": true,
+      "cond": 3,
+      "why": "at least the minimum \u00b7 not a token we know: its value is not checked",
+      "key": "1155:0x00000000000000000000000000000000000000aa:3",
+      "known": false,
+      "bad": false,
+      "acted": false,
+      "min": "4"
+     },
+     {
+      "label": "Id #8",
+      "checked": true,
+      "cond": 4,
+      "why": "at least the minimum \u00b7 not a token we know: its value is not checked",
+      "key": "6909:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:8",
+      "known": false,
+      "bad": false,
+      "acted": false,
+      "min": "9"
+     }
+    ]
+   }
+  },
+  {
+   "name": "excluded and unreadable",
+   "snapshot": {
+    "collection": "0x8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b",
+    "positionManager": "0x5858585858585858585858585858585858585858",
+    "identityRegistry": "0x8080808080808080808080808080808080808080",
+    "eth": "10000",
+    "positionId": "5",
+    "position": {
+     "liquidity": "777",
+     "hook": "0x0000000000000000000000000000000000000000"
+    },
+    "identity": {
+     "agentId": "9"
+    },
+    "holdings": [
+     {
+      "kind": "erc20",
+      "token": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "amount": "1000",
+      "decimals": 18,
+      "symbol": "TOK"
+     },
+     {
+      "kind": "erc20",
+      "token": "0x00000000000000000000000000000000000000aa",
+      "amount": "5",
+      "decimals": 0,
+      "symbol": "JUNK"
+     },
+     {
+      "kind": "erc20",
+      "token": "0xcccccccccccccccccccccccccccccccccccccccc",
+      "amount": "0",
+      "symbol": "ZERO"
+     },
+     {
+      "kind": "nft",
+      "token": "0x5858585858585858585858585858585858585858",
+      "id": "5",
+      "held": true
+     },
+     {
+      "kind": "nft",
+      "token": "0x5858585858585858585858585858585858585858",
+      "id": "6",
+      "held": true,
+      "position": {
+       "liquidity": "200",
+       "hook": "0x0000000000000000000000000000000000000000"
+      }
+     },
+     {
+      "kind": "nft",
+      "token": "0x5858585858585858585858585858585858585858",
+      "id": "7",
+      "held": true,
+      "position": {
+       "liquidity": "50",
+       "hook": "0x00000000000000000000000000000000000000aa"
+      }
+     },
+     {
+      "kind": "nft",
+      "token": "0x8080808080808080808080808080808080808080",
+      "id": "9",
+      "held": true
+     },
+     {
+      "kind": "nft",
+      "token": "0x00000000000000000000000000000000000000aa",
+      "id": "1",
+      "held": true,
+      "symbol": "ART"
+     },
+     {
+      "kind": "erc20",
+      "token": "0xdddddddddddddddddddddddddddddddddddddddd",
+      "amount": null,
+      "symbol": "ODD"
+     },
+     {
+      "kind": "nft",
+      "token": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "id": "2",
+      "held": null,
+      "symbol": "LOST"
+     },
+     {
+      "kind": "erc1155",
+      "token": "0x00000000000000000000000000000000000000aa",
+      "id": "5",
+      "amount": null
+     }
+    ]
+   },
+   "opts": {
+    "reviewedErc20": [
+     "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ],
+    "reviewedHooks": [
+     "0x0000000000000000000000000000000000000000"
+    ],
+    "toleranceBps": 0,
+    "exclude": {
+     "20:0x00000000000000000000000000000000000000aa": "it gave another answer"
+    }
+   },
+   "expect": {
+    "conditions": [
+     [
+      4,
+      "0x5858585858585858585858585858585858585858",
+      "0",
+      "777",
+      "0x"
+     ],
+     [
+      7,
+      "0x8080808080808080808080808080808080808080",
+      "0",
+      "0",
+      "0x"
+     ],
+     [
+      0,
+      "0x0000000000000000000000000000000000000000",
+      "0",
+      "10000",
+      "0x"
+     ],
+     [
+      1,
+      "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "0",
+      "1000",
+      "0x"
+     ],
+     [
+      5,
+      "0x5858585858585858585858585858585858585858",
+      "6",
+      "200",
+      "0x0000000000000000000000000000000000000000000000000000000000000000"
+     ],
+     [
+      5,
+      "0x5858585858585858585858585858585858585858",
+      "7",
+      "50",
+      "0x00000000000000000000000000000000000000000000000000000000000000aa"
+     ],
+     [
+      2,
+      "0x00000000000000000000000000000000000000aa",
+      "1",
+      "0",
+      "0x"
+     ]
+    ],
+    "rows": [
+     {
+      "label": "Pool position #5 (from the mint)",
+      "checked": true,
+      "cond": 0,
+      "why": "still in the account, no approval, no subscriber, liquidity at least as now",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "Agent identity #9 (ERC-8004)",
+      "checked": true,
+      "cond": 1,
+      "why": "still owned by the account, no approval, its wallet is the account",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "ETH",
+      "checked": true,
+      "cond": 2,
+      "why": "at least the minimum",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": "10000"
+     },
+     {
+      "label": "TOK",
+      "checked": true,
+      "cond": 3,
+      "why": "at least the minimum",
+      "key": "20:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "known": true,
+      "bad": false,
+      "acted": false,
+      "min": "1000"
+     },
+     {
+      "label": "JUNK",
+      "checked": false,
+      "cond": null,
+      "why": "it gave another answer",
+      "key": "20:0x00000000000000000000000000000000000000aa",
+      "known": false,
+      "bad": true,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "Pool position #6",
+      "checked": true,
+      "cond": 4,
+      "why": "still in the account, no approval, no subscriber, the pool hook as named",
+      "key": "v4:6",
+      "known": true,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "Pool position #7",
+      "checked": true,
+      "cond": 5,
+      "why": "still in the account, no approval, no subscriber, liquidity at least as now \u00b7 its pool has a hook we have not reviewed: its value is not checked",
+      "key": "v4:7",
+      "known": false,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "ART #1",
+      "checked": true,
+      "cond": 6,
+      "why": "still owned by the account, with no approval \u00b7 not a token we know: its value is not checked",
+      "key": "721:0x00000000000000000000000000000000000000aa:1",
+      "known": false,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "ODD",
+      "checked": false,
+      "cond": null,
+      "why": "unreadable: it cannot be checked, count it as worth 0",
+      "key": "20:0xdddddddddddddddddddddddddddddddddddddddd",
+      "known": false,
+      "bad": true,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "LOST #2",
+      "checked": false,
+      "cond": null,
+      "why": "unreadable: it cannot be checked, count it as worth 0",
+      "key": "721:0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee:2",
+      "known": false,
+      "bad": true,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "? #5",
+      "checked": false,
+      "cond": null,
+      "why": "unreadable: it cannot be checked, count it as worth 0",
+      "key": "1155:0x00000000000000000000000000000000000000aa:5",
+      "known": false,
+      "bad": true,
+      "acted": false,
+      "min": null
+     }
+    ]
+   }
+  },
+  {
+   "name": "only reviewed (a seller's promise)",
+   "snapshot": {
+    "collection": "0x8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b",
+    "positionManager": "0x5858585858585858585858585858585858585858",
+    "identityRegistry": "0x8080808080808080808080808080808080808080",
+    "eth": "10000",
+    "positionId": "5",
+    "position": {
+     "liquidity": "777",
+     "hook": "0x0000000000000000000000000000000000000000"
+    },
+    "identity": {
+     "agentId": "9"
+    },
+    "holdings": [
+     {
+      "kind": "erc20",
+      "token": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "amount": "1000",
+      "decimals": 18,
+      "symbol": "TOK"
+     },
+     {
+      "kind": "erc20",
+      "token": "0x00000000000000000000000000000000000000aa",
+      "amount": "5",
+      "decimals": 0,
+      "symbol": "JUNK"
+     },
+     {
+      "kind": "erc20",
+      "token": "0xcccccccccccccccccccccccccccccccccccccccc",
+      "amount": "0",
+      "symbol": "ZERO"
+     },
+     {
+      "kind": "nft",
+      "token": "0x5858585858585858585858585858585858585858",
+      "id": "5",
+      "held": true
+     },
+     {
+      "kind": "nft",
+      "token": "0x5858585858585858585858585858585858585858",
+      "id": "6",
+      "held": true,
+      "position": {
+       "liquidity": "200",
+       "hook": "0x0000000000000000000000000000000000000000"
+      }
+     },
+     {
+      "kind": "nft",
+      "token": "0x5858585858585858585858585858585858585858",
+      "id": "7",
+      "held": true,
+      "position": {
+       "liquidity": "50",
+       "hook": "0x00000000000000000000000000000000000000aa"
+      }
+     },
+     {
+      "kind": "nft",
+      "token": "0x8080808080808080808080808080808080808080",
+      "id": "9",
+      "held": true
+     },
+     {
+      "kind": "nft",
+      "token": "0x00000000000000000000000000000000000000aa",
+      "id": "1",
+      "held": true,
+      "symbol": "ART"
+     }
+    ]
+   },
+   "opts": {
+    "reviewedErc20": [
+     "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ],
+    "reviewedHooks": [
+     "0x0000000000000000000000000000000000000000"
+    ],
+    "toleranceBps": 0,
+    "onlyReviewed": true
+   },
+   "expect": {
+    "conditions": [
+     [
+      4,
+      "0x5858585858585858585858585858585858585858",
+      "0",
+      "777",
+      "0x"
+     ],
+     [
+      7,
+      "0x8080808080808080808080808080808080808080",
+      "0",
+      "0",
+      "0x"
+     ],
+     [
+      0,
+      "0x0000000000000000000000000000000000000000",
+      "0",
+      "10000",
+      "0x"
+     ],
+     [
+      1,
+      "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "0",
+      "1000",
+      "0x"
+     ],
+     [
+      5,
+      "0x5858585858585858585858585858585858585858",
+      "6",
+      "200",
+      "0x0000000000000000000000000000000000000000000000000000000000000000"
+     ]
+    ],
+    "rows": [
+     {
+      "label": "Pool position #5 (from the mint)",
+      "checked": true,
+      "cond": 0,
+      "why": "still in the account, no approval, no subscriber, liquidity at least as now",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "Agent identity #9 (ERC-8004)",
+      "checked": true,
+      "cond": 1,
+      "why": "still owned by the account, no approval, its wallet is the account",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "ETH",
+      "checked": true,
+      "cond": 2,
+      "why": "at least the minimum",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": "10000"
+     },
+     {
+      "label": "TOK",
+      "checked": true,
+      "cond": 3,
+      "why": "at least the minimum",
+      "key": "20:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "known": true,
+      "bad": false,
+      "acted": false,
+      "min": "1000"
+     },
+     {
+      "label": "JUNK",
+      "checked": false,
+      "cond": null,
+      "why": "not on the reviewed list",
+      "key": "20:0x00000000000000000000000000000000000000aa",
+      "known": false,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "Pool position #6",
+      "checked": true,
+      "cond": 4,
+      "why": "still in the account, no approval, no subscriber, the pool hook as named",
+      "key": "v4:6",
+      "known": true,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "Pool position #7",
+      "checked": false,
+      "cond": null,
+      "why": "not on the reviewed list",
+      "key": "v4:7",
+      "known": false,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "ART #1",
+      "checked": false,
+      "cond": null,
+      "why": "not on the reviewed list",
+      "key": "721:0x00000000000000000000000000000000000000aa:1",
+      "known": false,
+      "bad": false,
+      "acted": false,
+      "min": null
+     }
+    ]
+   }
+  },
+  {
+   "name": "acted on",
+   "snapshot": {
+    "collection": "0x8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b",
+    "positionManager": "0x5858585858585858585858585858585858585858",
+    "identityRegistry": "0x8080808080808080808080808080808080808080",
+    "eth": "10000",
+    "positionId": "5",
+    "position": {
+     "liquidity": "777",
+     "hook": "0x0000000000000000000000000000000000000000"
+    },
+    "identity": {
+     "agentId": "9"
+    },
+    "holdings": [
+     {
+      "kind": "erc20",
+      "token": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "amount": "1000",
+      "decimals": 18,
+      "symbol": "TOK"
+     },
+     {
+      "kind": "erc20",
+      "token": "0x00000000000000000000000000000000000000aa",
+      "amount": "5",
+      "decimals": 0,
+      "symbol": "JUNK"
+     },
+     {
+      "kind": "erc20",
+      "token": "0xcccccccccccccccccccccccccccccccccccccccc",
+      "amount": "0",
+      "symbol": "ZERO"
+     },
+     {
+      "kind": "nft",
+      "token": "0x5858585858585858585858585858585858585858",
+      "id": "5",
+      "held": true
+     },
+     {
+      "kind": "nft",
+      "token": "0x5858585858585858585858585858585858585858",
+      "id": "6",
+      "held": true,
+      "position": {
+       "liquidity": "200",
+       "hook": "0x0000000000000000000000000000000000000000"
+      }
+     },
+     {
+      "kind": "nft",
+      "token": "0x5858585858585858585858585858585858585858",
+      "id": "7",
+      "held": true,
+      "position": {
+       "liquidity": "50",
+       "hook": "0x00000000000000000000000000000000000000aa"
+      }
+     },
+     {
+      "kind": "nft",
+      "token": "0x8080808080808080808080808080808080808080",
+      "id": "9",
+      "held": true
+     },
+     {
+      "kind": "nft",
+      "token": "0x00000000000000000000000000000000000000aa",
+      "id": "1",
+      "held": true,
+      "symbol": "ART"
+     }
+    ]
+   },
+   "opts": {
+    "reviewedErc20": [
+     "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ],
+    "reviewedHooks": [
+     "0x0000000000000000000000000000000000000000"
+    ],
+    "toleranceBps": 0,
+    "acted": [
+     "0x00000000000000000000000000000000000000aa"
+    ]
+   },
+   "expect": {
+    "conditions": [
+     [
+      4,
+      "0x5858585858585858585858585858585858585858",
+      "0",
+      "777",
+      "0x"
+     ],
+     [
+      7,
+      "0x8080808080808080808080808080808080808080",
+      "0",
+      "0",
+      "0x"
+     ],
+     [
+      0,
+      "0x0000000000000000000000000000000000000000",
+      "0",
+      "10000",
+      "0x"
+     ],
+     [
+      1,
+      "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "0",
+      "1000",
+      "0x"
+     ],
+     [
+      1,
+      "0x00000000000000000000000000000000000000aa",
+      "0",
+      "5",
+      "0x"
+     ],
+     [
+      5,
+      "0x5858585858585858585858585858585858585858",
+      "6",
+      "200",
+      "0x0000000000000000000000000000000000000000000000000000000000000000"
+     ],
+     [
+      5,
+      "0x5858585858585858585858585858585858585858",
+      "7",
+      "50",
+      "0x00000000000000000000000000000000000000000000000000000000000000aa"
+     ],
+     [
+      2,
+      "0x00000000000000000000000000000000000000aa",
+      "1",
+      "0",
+      "0x"
+     ]
+    ],
+    "rows": [
+     {
+      "label": "Pool position #5 (from the mint)",
+      "checked": true,
+      "cond": 0,
+      "why": "still in the account, no approval, no subscriber, liquidity at least as now",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "Agent identity #9 (ERC-8004)",
+      "checked": true,
+      "cond": 1,
+      "why": "still owned by the account, no approval, its wallet is the account",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "ETH",
+      "checked": true,
+      "cond": 2,
+      "why": "at least the minimum",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": "10000"
+     },
+     {
+      "label": "TOK",
+      "checked": true,
+      "cond": 3,
+      "why": "at least the minimum",
+      "key": "20:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "known": true,
+      "bad": false,
+      "acted": false,
+      "min": "1000"
+     },
+     {
+      "label": "JUNK",
+      "checked": true,
+      "cond": 4,
+      "why": "at least the minimum \u00b7 not a token we know: its value is not checked",
+      "key": "20:0x00000000000000000000000000000000000000aa",
+      "known": false,
+      "bad": false,
+      "acted": true,
+      "min": "5"
+     },
+     {
+      "label": "Pool position #6",
+      "checked": true,
+      "cond": 5,
+      "why": "still in the account, no approval, no subscriber, the pool hook as named",
+      "key": "v4:6",
+      "known": true,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "Pool position #7",
+      "checked": true,
+      "cond": 6,
+      "why": "still in the account, no approval, no subscriber, liquidity at least as now \u00b7 its pool has a hook we have not reviewed: its value is not checked",
+      "key": "v4:7",
+      "known": false,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "ART #1",
+      "checked": true,
+      "cond": 7,
+      "why": "still owned by the account, with no approval \u00b7 not a token we know: its value is not checked",
+      "key": "721:0x00000000000000000000000000000000000000aa:1",
+      "known": false,
+      "bad": false,
+      "acted": true,
+      "min": null
+     }
+    ]
+   }
+  },
+  {
+   "name": "any id offer",
+   "snapshot": {
+    "collection": "0x8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b",
+    "positionManager": "0x5858585858585858585858585858585858585858",
+    "identityRegistry": "0x8080808080808080808080808080808080808080",
+    "eth": "10000",
+    "positionId": "5",
+    "position": {
+     "liquidity": "777",
+     "hook": "0x0000000000000000000000000000000000000000"
+    },
+    "identity": {
+     "agentId": "9"
+    },
+    "holdings": [
+     {
+      "kind": "erc20",
+      "token": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "amount": "1000",
+      "decimals": 18,
+      "symbol": "TOK"
+     },
+     {
+      "kind": "erc20",
+      "token": "0x00000000000000000000000000000000000000aa",
+      "amount": "5",
+      "decimals": 0,
+      "symbol": "JUNK"
+     },
+     {
+      "kind": "erc20",
+      "token": "0xcccccccccccccccccccccccccccccccccccccccc",
+      "amount": "0",
+      "symbol": "ZERO"
+     },
+     {
+      "kind": "nft",
+      "token": "0x5858585858585858585858585858585858585858",
+      "id": "5",
+      "held": true
+     },
+     {
+      "kind": "nft",
+      "token": "0x5858585858585858585858585858585858585858",
+      "id": "6",
+      "held": true,
+      "position": {
+       "liquidity": "200",
+       "hook": "0x0000000000000000000000000000000000000000"
+      }
+     },
+     {
+      "kind": "nft",
+      "token": "0x5858585858585858585858585858585858585858",
+      "id": "7",
+      "held": true,
+      "position": {
+       "liquidity": "50",
+       "hook": "0x00000000000000000000000000000000000000aa"
+      }
+     },
+     {
+      "kind": "nft",
+      "token": "0x8080808080808080808080808080808080808080",
+      "id": "9",
+      "held": true
+     },
+     {
+      "kind": "nft",
+      "token": "0x00000000000000000000000000000000000000aa",
+      "id": "1",
+      "held": true,
+      "symbol": "ART"
+     }
+    ]
+   },
+   "opts": {
+    "reviewedErc20": [
+     "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ],
+    "reviewedHooks": [
+     "0x0000000000000000000000000000000000000000"
+    ],
+    "toleranceBps": 0,
+    "anyId": true
+   },
+   "expect": {
+    "conditions": [
+     [
+      4,
+      "0x5858585858585858585858585858585858585858",
+      "0",
+      "777",
+      "0x"
+     ],
+     [
+      7,
+      "0x8080808080808080808080808080808080808080",
+      "0",
+      "0",
+      "0x"
+     ],
+     [
+      0,
+      "0x0000000000000000000000000000000000000000",
+      "0",
+      "10000",
+      "0x"
+     ],
+     [
+      1,
+      "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "0",
+      "1000",
+      "0x"
+     ],
+     [
+      1,
+      "0x00000000000000000000000000000000000000aa",
+      "0",
+      "5",
+      "0x"
+     ]
+    ],
+    "rows": [
+     {
+      "label": "Pool position #5 (from the mint)",
+      "checked": true,
+      "cond": 0,
+      "why": "still in the account, no approval, no subscriber, liquidity at least as now",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "Agent identity #9 (ERC-8004)",
+      "checked": true,
+      "cond": 1,
+      "why": "still owned by the account, no approval, its wallet is the account",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "ETH",
+      "checked": true,
+      "cond": 2,
+      "why": "at least the minimum",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": "10000"
+     },
+     {
+      "label": "TOK",
+      "checked": true,
+      "cond": 3,
+      "why": "at least the minimum",
+      "key": "20:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "known": true,
+      "bad": false,
+      "acted": false,
+      "min": "1000"
+     },
+     {
+      "label": "JUNK",
+      "checked": true,
+      "cond": 4,
+      "why": "at least the minimum \u00b7 not a token we know: its value is not checked",
+      "key": "20:0x00000000000000000000000000000000000000aa",
+      "known": false,
+      "bad": false,
+      "acted": false,
+      "min": "5"
+     },
+     {
+      "label": "Pool position #6",
+      "checked": false,
+      "cond": null,
+      "why": "an offer for any id cannot name it",
+      "key": "v4:6",
+      "known": true,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "Pool position #7",
+      "checked": false,
+      "cond": null,
+      "why": "an offer for any id cannot name it",
+      "key": "v4:7",
+      "known": false,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "ART #1",
+      "checked": false,
+      "cond": null,
+      "why": "an offer for any id cannot name it",
+      "key": "721:0x00000000000000000000000000000000000000aa:1",
+      "known": false,
+      "bad": false,
+      "acted": false,
+      "min": null
+     }
+    ]
+   }
+  },
+  {
+   "name": "mint position and identity left",
+   "snapshot": {
+    "collection": "0x8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b",
+    "positionManager": "0x5858585858585858585858585858585858585858",
+    "identityRegistry": "0x8080808080808080808080808080808080808080",
+    "eth": "10000",
+    "positionId": "5",
+    "position": {
+     "liquidity": "777",
+     "hook": "0x0000000000000000000000000000000000000000",
+     "owner": "0x00000000000000000000000000000000000000aa",
+     "approved": "0x0000000000000000000000000000000000000000"
+    },
+    "identity": {
+     "agentId": "9",
+     "owner": "0x00000000000000000000000000000000000000cc",
+     "wallet": "0x00000000000000000000000000000000000000aa"
+    },
+    "holdings": [
+     {
+      "kind": "erc20",
+      "token": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "amount": "1000",
+      "decimals": 18,
+      "symbol": "TOK"
+     },
+     {
+      "kind": "erc20",
+      "token": "0x00000000000000000000000000000000000000aa",
+      "amount": "5",
+      "decimals": 0,
+      "symbol": "JUNK"
+     },
+     {
+      "kind": "erc20",
+      "token": "0xcccccccccccccccccccccccccccccccccccccccc",
+      "amount": "0",
+      "symbol": "ZERO"
+     },
+     {
+      "kind": "nft",
+      "token": "0x5858585858585858585858585858585858585858",
+      "id": "5",
+      "held": true
+     },
+     {
+      "kind": "nft",
+      "token": "0x5858585858585858585858585858585858585858",
+      "id": "6",
+      "held": true,
+      "position": {
+       "liquidity": "200",
+       "hook": "0x0000000000000000000000000000000000000000"
+      }
+     },
+     {
+      "kind": "nft",
+      "token": "0x5858585858585858585858585858585858585858",
+      "id": "7",
+      "held": true,
+      "position": {
+       "liquidity": "50",
+       "hook": "0x00000000000000000000000000000000000000aa"
+      }
+     },
+     {
+      "kind": "nft",
+      "token": "0x8080808080808080808080808080808080808080",
+      "id": "9",
+      "held": true
+     },
+     {
+      "kind": "nft",
+      "token": "0x00000000000000000000000000000000000000aa",
+      "id": "1",
+      "held": true,
+      "symbol": "ART"
+     }
+    ],
+    "account": "0x00000000000000000000000000000000000000cc"
+   },
+   "opts": {
+    "reviewedErc20": [
+     "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ],
+    "reviewedHooks": [
+     "0x0000000000000000000000000000000000000000"
+    ],
+    "toleranceBps": 0
+   },
+   "expect": {
+    "conditions": [
+     [
+      0,
+      "0x0000000000000000000000000000000000000000",
+      "0",
+      "10000",
+      "0x"
+     ],
+     [
+      1,
+      "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "0",
+      "1000",
+      "0x"
+     ],
+     [
+      1,
+      "0x00000000000000000000000000000000000000aa",
+      "0",
+      "5",
+      "0x"
+     ],
+     [
+      5,
+      "0x5858585858585858585858585858585858585858",
+      "6",
+      "200",
+      "0x0000000000000000000000000000000000000000000000000000000000000000"
+     ],
+     [
+      5,
+      "0x5858585858585858585858585858585858585858",
+      "7",
+      "50",
+      "0x00000000000000000000000000000000000000000000000000000000000000aa"
+     ],
+     [
+      2,
+      "0x00000000000000000000000000000000000000aa",
+      "1",
+      "0",
+      "0x"
+     ]
+    ],
+    "rows": [
+     {
+      "label": "Pool position #5 (from the mint)",
+      "checked": false,
+      "cond": null,
+      "why": "not in the account now",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "Agent identity #9 (ERC-8004)",
+      "checked": false,
+      "cond": null,
+      "why": "its wallet is not the account now",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "ETH",
+      "checked": true,
+      "cond": 0,
+      "why": "at least the minimum",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": "10000"
+     },
+     {
+      "label": "TOK",
+      "checked": true,
+      "cond": 1,
+      "why": "at least the minimum",
+      "key": "20:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "known": true,
+      "bad": false,
+      "acted": false,
+      "min": "1000"
+     },
+     {
+      "label": "JUNK",
+      "checked": true,
+      "cond": 2,
+      "why": "at least the minimum \u00b7 not a token we know: its value is not checked",
+      "key": "20:0x00000000000000000000000000000000000000aa",
+      "known": false,
+      "bad": false,
+      "acted": false,
+      "min": "5"
+     },
+     {
+      "label": "Pool position #6",
+      "checked": true,
+      "cond": 3,
+      "why": "still in the account, no approval, no subscriber, the pool hook as named",
+      "key": "v4:6",
+      "known": true,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "Pool position #7",
+      "checked": true,
+      "cond": 4,
+      "why": "still in the account, no approval, no subscriber, liquidity at least as now \u00b7 its pool has a hook we have not reviewed: its value is not checked",
+      "key": "v4:7",
+      "known": false,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "ART #1",
+      "checked": true,
+      "cond": 5,
+      "why": "still owned by the account, with no approval \u00b7 not a token we know: its value is not checked",
+      "key": "721:0x00000000000000000000000000000000000000aa:1",
+      "known": false,
+      "bad": false,
+      "acted": false,
+      "min": null
+     }
+    ]
+   }
+  },
+  {
+   "name": "an approved mint position",
+   "snapshot": {
+    "collection": "0x8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b",
+    "positionManager": "0x5858585858585858585858585858585858585858",
+    "identityRegistry": "0x8080808080808080808080808080808080808080",
+    "eth": "10000",
+    "positionId": "5",
+    "position": {
+     "liquidity": "777",
+     "hook": "0x0000000000000000000000000000000000000000",
+     "owner": "0x00000000000000000000000000000000000000cc",
+     "approved": "0x00000000000000000000000000000000000000aa"
+    },
+    "identity": {
+     "agentId": "9",
+     "owner": "0x00000000000000000000000000000000000000cc",
+     "wallet": "0x00000000000000000000000000000000000000cc"
+    },
+    "holdings": [
+     {
+      "kind": "erc20",
+      "token": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "amount": "1000",
+      "decimals": 18,
+      "symbol": "TOK"
+     },
+     {
+      "kind": "erc20",
+      "token": "0x00000000000000000000000000000000000000aa",
+      "amount": "5",
+      "decimals": 0,
+      "symbol": "JUNK"
+     },
+     {
+      "kind": "erc20",
+      "token": "0xcccccccccccccccccccccccccccccccccccccccc",
+      "amount": "0",
+      "symbol": "ZERO"
+     },
+     {
+      "kind": "nft",
+      "token": "0x5858585858585858585858585858585858585858",
+      "id": "5",
+      "held": true
+     },
+     {
+      "kind": "nft",
+      "token": "0x5858585858585858585858585858585858585858",
+      "id": "6",
+      "held": true,
+      "position": {
+       "liquidity": "200",
+       "hook": "0x0000000000000000000000000000000000000000"
+      }
+     },
+     {
+      "kind": "nft",
+      "token": "0x5858585858585858585858585858585858585858",
+      "id": "7",
+      "held": true,
+      "position": {
+       "liquidity": "50",
+       "hook": "0x00000000000000000000000000000000000000aa"
+      }
+     },
+     {
+      "kind": "nft",
+      "token": "0x8080808080808080808080808080808080808080",
+      "id": "9",
+      "held": true
+     },
+     {
+      "kind": "nft",
+      "token": "0x00000000000000000000000000000000000000aa",
+      "id": "1",
+      "held": true,
+      "symbol": "ART"
+     }
+    ],
+    "account": "0x00000000000000000000000000000000000000cc"
+   },
+   "opts": {
+    "reviewedErc20": [
+     "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ],
+    "reviewedHooks": [
+     "0x0000000000000000000000000000000000000000"
+    ],
+    "toleranceBps": 0
+   },
+   "expect": {
+    "conditions": [
+     [
+      7,
+      "0x8080808080808080808080808080808080808080",
+      "0",
+      "0",
+      "0x"
+     ],
+     [
+      0,
+      "0x0000000000000000000000000000000000000000",
+      "0",
+      "10000",
+      "0x"
+     ],
+     [
+      1,
+      "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "0",
+      "1000",
+      "0x"
+     ],
+     [
+      1,
+      "0x00000000000000000000000000000000000000aa",
+      "0",
+      "5",
+      "0x"
+     ],
+     [
+      5,
+      "0x5858585858585858585858585858585858585858",
+      "6",
+      "200",
+      "0x0000000000000000000000000000000000000000000000000000000000000000"
+     ],
+     [
+      5,
+      "0x5858585858585858585858585858585858585858",
+      "7",
+      "50",
+      "0x00000000000000000000000000000000000000000000000000000000000000aa"
+     ],
+     [
+      2,
+      "0x00000000000000000000000000000000000000aa",
+      "1",
+      "0",
+      "0x"
+     ]
+    ],
+    "rows": [
+     {
+      "label": "Pool position #5 (from the mint)",
+      "checked": false,
+      "cond": null,
+      "why": "an address may move it now",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "Agent identity #9 (ERC-8004)",
+      "checked": true,
+      "cond": 0,
+      "why": "still owned by the account, no approval, its wallet is the account",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "ETH",
+      "checked": true,
+      "cond": 1,
+      "why": "at least the minimum",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": "10000"
+     },
+     {
+      "label": "TOK",
+      "checked": true,
+      "cond": 2,
+      "why": "at least the minimum",
+      "key": "20:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "known": true,
+      "bad": false,
+      "acted": false,
+      "min": "1000"
+     },
+     {
+      "label": "JUNK",
+      "checked": true,
+      "cond": 3,
+      "why": "at least the minimum \u00b7 not a token we know: its value is not checked",
+      "key": "20:0x00000000000000000000000000000000000000aa",
+      "known": false,
+      "bad": false,
+      "acted": false,
+      "min": "5"
+     },
+     {
+      "label": "Pool position #6",
+      "checked": true,
+      "cond": 4,
+      "why": "still in the account, no approval, no subscriber, the pool hook as named",
+      "key": "v4:6",
+      "known": true,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "Pool position #7",
+      "checked": true,
+      "cond": 5,
+      "why": "still in the account, no approval, no subscriber, liquidity at least as now \u00b7 its pool has a hook we have not reviewed: its value is not checked",
+      "key": "v4:7",
+      "known": false,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "ART #1",
+      "checked": true,
+      "cond": 6,
+      "why": "still owned by the account, with no approval \u00b7 not a token we know: its value is not checked",
+      "key": "721:0x00000000000000000000000000000000000000aa:1",
+      "known": false,
+      "bad": false,
+      "acted": false,
+      "min": null
+     }
+    ]
+   }
+  },
+  {
+   "name": "nothing but ETH",
+   "snapshot": {
+    "positionManager": "0x5858585858585858585858585858585858585858",
+    "identityRegistry": "0x8080808080808080808080808080808080808080",
+    "eth": "0",
+    "positionId": "0",
+    "holdings": []
+   },
+   "opts": {
+    "reviewedErc20": [
+     "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ],
+    "reviewedHooks": [
+     "0x0000000000000000000000000000000000000000"
+    ]
+   },
+   "expect": {
+    "conditions": [
+     [
+      0,
+      "0x0000000000000000000000000000000000000000",
+      "0",
+      "0",
+      "0x"
+     ]
+    ],
+    "rows": [
+     {
+      "label": "ETH",
+      "checked": true,
+      "cond": 0,
+      "why": "at least the minimum",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": "0"
+     }
+    ]
+   }
+  },
+  {
+   "name": "dust with tolerance",
+   "snapshot": {
+    "collection": "0x8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b",
+    "positionManager": "0x5858585858585858585858585858585858585858",
+    "identityRegistry": "0x8080808080808080808080808080808080808080",
+    "eth": "1",
+    "positionId": "5",
+    "position": {
+     "liquidity": "777",
+     "hook": "0x0000000000000000000000000000000000000000"
+    },
+    "identity": {
+     "agentId": "9"
+    },
+    "holdings": [
+     {
+      "kind": "erc20",
+      "token": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "amount": "199",
+      "decimals": 18,
+      "symbol": "TOK"
+     },
+     {
+      "kind": "erc20",
+      "token": "0x00000000000000000000000000000000000000aa",
+      "amount": "1",
+      "decimals": 0,
+      "symbol": "JUNK"
+     }
+    ]
+   },
+   "opts": {
+    "reviewedErc20": [
+     "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ],
+    "reviewedHooks": [
+     "0x0000000000000000000000000000000000000000"
+    ],
+    "toleranceBps": 50
+   },
+   "expect": {
+    "conditions": [
+     [
+      4,
+      "0x5858585858585858585858585858585858585858",
+      "0",
+      "777",
+      "0x"
+     ],
+     [
+      7,
+      "0x8080808080808080808080808080808080808080",
+      "0",
+      "0",
+      "0x"
+     ],
+     [
+      0,
+      "0x0000000000000000000000000000000000000000",
+      "0",
+      "1",
+      "0x"
+     ],
+     [
+      1,
+      "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "0",
+      "199",
+      "0x"
+     ],
+     [
+      1,
+      "0x00000000000000000000000000000000000000aa",
+      "0",
+      "1",
+      "0x"
+     ]
+    ],
+    "rows": [
+     {
+      "label": "Pool position #5 (from the mint)",
+      "checked": true,
+      "cond": 0,
+      "why": "still in the account, no approval, no subscriber, liquidity at least as now",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "Agent identity #9 (ERC-8004)",
+      "checked": true,
+      "cond": 1,
+      "why": "still owned by the account, no approval, its wallet is the account",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": null
+     },
+     {
+      "label": "ETH",
+      "checked": true,
+      "cond": 2,
+      "why": "at least the minimum",
+      "key": null,
+      "known": null,
+      "bad": false,
+      "acted": false,
+      "min": "1"
+     },
+     {
+      "label": "TOK",
+      "checked": true,
+      "cond": 3,
+      "why": "at least the minimum",
+      "key": "20:0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "known": true,
+      "bad": false,
+      "acted": false,
+      "min": "199"
+     },
+     {
+      "label": "JUNK",
+      "checked": true,
+      "cond": 4,
+      "why": "at least the minimum \u00b7 not a token we know: its value is not checked",
+      "key": "20:0x00000000000000000000000000000000000000aa",
+      "known": false,
+      "bad": false,
+      "acted": false,
+      "min": "1"
+     }
+    ]
+   }
+  }
+ ],
+ "encodings": {
+  "inputs": {
+   "pm": "0x5858585858585858585858585858585858585858",
+   "nft": "0x8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b",
+   "seller": "0x1111111111111111111111111111111111111111",
+   "recipient": "0x3333333333333333333333333333333333333333",
+   "market": "0x6666666666666666666666666666666666666666",
+   "chainId": 46630
+  },
+  "conditions_in": [
+   {
+    "kind": 4,
+    "target": "0x5858585858585858585858585858585858585858",
+    "id": 0,
+    "min": 1000,
+    "data": "0x"
+   },
+   {
+    "kind": 5,
+    "target": "0x5858585858585858585858585858585858585858",
+    "id": 77,
+    "min": 5,
+    "data": "0x0000000000000000000000000000000000000000000000000000000000000000"
+   },
+   {
+    "kind": 0,
+    "target": "0x0000000000000000000000000000000000000000",
+    "id": 0,
+    "min": "1000000000000000",
+    "data": "0x"
+   }
+  ],
+  "promise_in": [
+   {
+    "kind": 1,
+    "target": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "id": 0,
+    "min": 5,
+    "data": "0x"
+   }
+  ],
+  "listing_in": {
+   "collection": "0x8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b",
+   "id": 7,
+   "transferCount": 2,
+   "seller": "0x1111111111111111111111111111111111111111",
+   "currency": "0x0000000000000000000000000000000000000000",
+   "price": "33000000000000000",
+   "maxRoyalty": "1650000000000000",
+   "expiry": 1800000000,
+   "salt": 99,
+   "promiseHash": "0x4a4ae98d9214af240bffd3d62e73351ee979d2236196e8a5e56305aa138818b5",
+   "nonce": 3
+  },
+  "sig": "0xabcdef",
+  "conditions": "0x0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000120000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000040000000000000000000000005858585858585858585858585858585858585858000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003e800000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000050000000000000000000000005858585858585858585858585858585858585858000000000000000000000000000000000000000000000000000000000000004d000000000000000000000000000000000000000000000000000000000000000500000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000038d7ea4c6800000000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000000",
+  "conditionsHash": "0xacf6f39ffa4bde13a2fc88b3a262c2d35134a26ebfe9af2c079f5e34aafc1312",
+  "emptyHash": "0x569e75fc77c1a856f6daaf9e69d8a9566ca34aa47f9133711ce065a571af0cfd",
+  "buy": "0xe9c3b8150000000000000000000000008b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b000000000000000000000000000000000000000000000000000000000000000700000000000000000000000000000000000000000000000000000000000000020000000000000000000000001111111111111111111111111111111111111111000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000753d533d9680000000000000000000000000000000000000000000000000000005dcaa8fe12000000000000000000000000000000000000000000000000000000000006b49d20000000000000000000000000000000000000000000000000000000000000000634a4ae98d9214af240bffd3d62e73351ee979d2236196e8a5e56305aa138818b5000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000000000000000000000000000000001e00000000000000000000000000000000000000000000000000000000000000220000000000000000000000000000000000000000000000000000000000000032000000000000000000000000033333333333333333333333333333333333333330000000000000000000000000000000000000000000000000000000000000003abcdef0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000001000000000000000000000000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000500000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000120000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000040000000000000000000000005858585858585858585858585858585858585858000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003e800000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000050000000000000000000000005858585858585858585858585858585858585858000000000000000000000000000000000000000000000000000000000000004d000000000000000000000000000000000000000000000000000000000000000500000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000038d7ea4c6800000000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000000",
+  "claim": "0x1e83409a0000000000000000000000003333333333333333333333333333333333333333",
+  "domainSeparator": "0xfe6758cf28377863aab21393bdc94aac7fcdeb2c5e02a059672860ac1639fc80",
+  "listingDigest": "0xb1cb0af492edb1beb9a2ad5990eae00909bd30f23fe9bb1cf3dd0fd3c2f80bcc",
+  "marketDomain": {
+   "name": "PolyrobMarket",
+   "version": "1"
+  },
+  "listingType": "Listing(address collection,uint256 id,uint256 transferCount,address seller,address currency,uint256 price,uint256 maxRoyalty,uint256 expiry,uint256 salt,bytes32 promiseHash,uint256 nonce)",
+  "link_payload": {
+   "v": 1,
+   "k": "m",
+   "chainId": 46630,
+   "market": "0x6666666666666666666666666666666666666666",
+   "collection": "0x8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b",
+   "listing": {
+    "collection": "0x8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b",
+    "id": 7,
+    "transferCount": 2,
+    "seller": "0x1111111111111111111111111111111111111111",
+    "currency": "0x0000000000000000000000000000000000000000",
+    "price": "33000000000000000",
+    "maxRoyalty": "1650000000000000",
+    "expiry": 1800000000,
+    "salt": 99,
+    "promiseHash": "0x4a4ae98d9214af240bffd3d62e73351ee979d2236196e8a5e56305aa138818b5",
+    "nonce": 3
+   },
+   "sig": "0xabcdef",
+   "promise": [
+    {
+     "kind": 1,
+     "target": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+     "id": 0,
+     "min": 5,
+     "data": "0x"
+    }
+   ]
+  },
+  "link_code": "eyJ2IjoxLCJrIjoibSIsImNoYWluSWQiOjQ2NjMwLCJtYXJrZXQiOiIweDY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjYiLCJjb2xsZWN0aW9uIjoiMHg4YjhiOGI4YjhiOGI4YjhiOGI4YjhiOGI4YjhiOGI4YjhiOGI4YjhiIiwibGlzdGluZyI6eyJjb2xsZWN0aW9uIjoiMHg4YjhiOGI4YjhiOGI4YjhiOGI4YjhiOGI4YjhiOGI4YjhiOGI4YjhiIiwiaWQiOjcsInRyYW5zZmVyQ291bnQiOjIsInNlbGxlciI6IjB4MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMSIsImN1cnJlbmN5IjoiMHgwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwIiwicHJpY2UiOiIzMzAwMDAwMDAwMDAwMDAwMCIsIm1heFJveWFsdHkiOiIxNjUwMDAwMDAwMDAwMDAwIiwiZXhwaXJ5IjoxODAwMDAwMDAwLCJzYWx0Ijo5OSwicHJvbWlzZUhhc2giOiIweDRhNGFlOThkOTIxNGFmMjQwYmZmZDNkNjJlNzMzNTFlZTk3OWQyMjM2MTk2ZThhNWU1NjMwNWFhMTM4ODE4YjUiLCJub25jZSI6M30sInNpZyI6IjB4YWJjZGVmIiwicHJvbWlzZSI6W3sia2luZCI6MSwidGFyZ2V0IjoiMHhiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwiaWQiOjAsIm1pbiI6NSwiZGF0YSI6IjB4In1dfQ"
+ }
+}

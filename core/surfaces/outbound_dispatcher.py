@@ -10,7 +10,9 @@ from typing import Any, Callable, Iterable, Optional
 from core.config_policy import dead_target_registry_enabled
 from core.surfaces.dead_targets import classify_dead_error
 from core.surfaces.envelopes import OutboundMessage
-from core.surfaces.outbound_queue import INFLIGHT_LEASE_SEC, OutboundDeliveryQueue
+from core.surfaces.outbound_queue import (
+    INFLIGHT_LEASE_SEC, PROACTIVE_SESSION_PREFIX, OutboundDeliveryQueue, owner_pause_hold,
+)
 from core.rate_limit import TokenBucket
 
 logger = logging.getLogger(__name__)
@@ -30,7 +32,7 @@ _NOT_HOSTED_SEC = 15.0
 #: and cron delivery). An interactive, session-bound reply (the owner's own chat,
 #: enqueued by ``publish()``) carries a real session_key and is NEVER held: R5
 #: says owner chat keeps working while paused.
-_PROACTIVE_SESSION_PREFIX = "direct:"
+_PROACTIVE_SESSION_PREFIX = PROACTIVE_SESSION_PREFIX
 
 #: 098 CO-15: how often a send in progress renews its lease. Well under
 #: ``INFLIGHT_LEASE_SEC``, so a long send (a big document, a slow API) is never
@@ -118,26 +120,12 @@ class OutboundDispatcher:
 
     def _pause_hold(self):
         """031: ``(reason, since)`` when the owner's pause covers proactive
-        outbound, else None.
-
-        The durable queue carries no turn origin — a row is just text, a surface
-        and a destination — so the dispatcher takes the CONSERVATIVE reading of
-        the two kinds the `message` send gate distinguishes: if EITHER
-        ``social_post`` (``/pause social``) or ``lifecycle_ping`` (``/pause
-        pings``) is denied, the proactive rail is held. Fail-OPEN on a probe
-        error; ``allows`` itself already fails CLOSED on an unreadable record.
+        outbound, else None — ``core.surfaces.outbound_queue.owner_pause_hold``,
+        the ONE rule ``prune`` also reads. Fail-OPEN on a probe error; ``allows``
+        itself already fails CLOSED on an unreadable record.
         """
         try:
-            from core.autonomy_control import allows, read_state
-            # Cheap gate for the hot path: `run()` ticks once a second and the
-            # record is a file probe, so ask the SAME SSOT once before spending
-            # two `allows` calls on the (overwhelmingly common) running state.
-            if not read_state().paused:
-                return None
-            for kind in ("social_post", "lifecycle_ping"):
-                dec = allows(kind)
-                if not dec.allowed:
-                    return dec.reason, getattr(dec.state, "since", None)
+            return owner_pause_hold()
         except Exception:
             logger.debug("outbound pause probe failed (fail-open)", exc_info=True)
         return None

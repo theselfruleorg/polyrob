@@ -151,3 +151,51 @@ async def test_agent_nft_collection_reveal(monkeypatch, capsys):
     assert [r["action"] for r in log] == ["agent_nft_collection_reveal"], log
     assert log[-1]["amount_usd"] == pytest.approx(0.02)   # the worst-case fee: never under
     _said_so(capsys, "0x" + "ab" * 32)
+
+
+@pytest.mark.asyncio
+async def test_agent_nft_sale_claim(monkeypatch, capsys):
+    # 115 W8: the sale verbs ride guarded_call — a cancel mid-receipt still books the send.
+    from tests.collection_pins import pin
+    from tests.unit.tools import test_agent_nft_sale as sv
+    from tools.agent_nft.tool import SaleClaimParams
+
+    monkeypatch.setenv("AGENT_NFT_ENABLED", "true")
+    pin(monkeypatch, sv.COLLECTION)
+    monkeypatch.setattr(sv.FakeRail, "await_receipt", _blocking_receipt)
+    sv.FakeRail.sent = []
+    tool, _ = sv._tool(sv.Chain(owed=5))
+    await _cancel_mid_receipt(tool.agent_nft_sale_claim(SaleClaimParams(chain="robinhood", dry_run=False)))
+    log = tool._get_wallet().policy.audit_log
+    assert [r["action"] for r in log] == ["agent_nft_sale_claim"], log
+    _said_so(capsys, "0x" + "ab" * 32)
+
+
+@pytest.mark.asyncio
+async def test_agent_nft_sale_unready(monkeypatch, capsys, tmp_path):
+    # 115 W7: the seller's sale acts ride guarded_call — a cancel mid-receipt still books the send.
+    import hashlib
+    import os
+    from core.wallet import erc6551
+    from core.wallet.signer import LocalEoaSigner
+    from tests.collection_pins import pin, polyrob_profile
+    from tests.unit.tools import test_agent_nft_polyrob_view as pv
+    from tests.unit.tools import test_agent_nft_withdraw as wv
+    from tools.agent_nft.tool import SaleReadyParams
+
+    monkeypatch.setenv("AGENT_NFT_ENABLED", "true")
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("POLYROB_INSTANCE_ID", raising=False)
+    pin(monkeypatch, polyrob_profile(pv.PINNED, implementation=pv.IMPL, journal_prefix="POLYROB"))
+    h = hashlib.sha256(bytes.fromhex(pv.REG_CODE[2:])).hexdigest()
+    monkeypatch.setattr(erc6551, "CODE_SHA256", {erc6551.REGISTRY.lower(): h,
+                                                 erc6551.ACCOUNT_V3_IMPL.lower(): "f" * 64})
+    monkeypatch.setattr(wv.FakeRail, "await_receipt", _blocking_receipt)
+    wv.FakeRail.sent = []
+    signer = LocalEoaSigner(os.urandom(32))
+    tool, _seen = wv._tool(signer, pv.PolyrobChain(signer.address, ready=True))
+    await _cancel_mid_receipt(tool.agent_nft_sale_unready(
+        SaleReadyParams(chain="robinhood", nft="3", dry_run=False)))
+    log = tool._get_wallet().policy.audit_log
+    assert [r["action"] for r in log] == ["agent_nft_sale_unready"], log
+    _said_so(capsys, "0x" + "ef" * 32)

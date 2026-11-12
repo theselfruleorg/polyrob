@@ -55,6 +55,23 @@ OWN_SURFACE_ASK_KINDS = frozenset({ASK_KIND_TOOL_APPROVAL, ASK_KIND_TOKEN_IDENTI
 ASK_KIND_CONFIG_CHANGE = "config_change"
 
 
+#: SQL: ``payload.expires_at`` is unset, or later than the bound ``now``. The ONE
+#: expiry rule (116 W5.13): the board's open-ask reads and the status sections
+#: both use it, so an ask past its time is not "open" on a seat whose goal loop
+#: (which closes it) is off.
+ASK_NOT_EXPIRED_SQL = ("(json_extract(payload, '$.expires_at') IS NULL "
+                       "OR json_extract(payload, '$.expires_at') > ?)")
+
+
+def ask_expired(payload, now: float) -> bool:
+    """The Python form of :data:`ASK_NOT_EXPIRED_SQL` (negated)."""
+    exp = payload.get("expires_at") if isinstance(payload, dict) else None
+    try:
+        return exp is not None and float(exp) <= float(now)
+    except (TypeError, ValueError):
+        return False
+
+
 def has_own_surface(payload) -> bool:
     """True when an ask with this payload is decided on /pending, not /fulfill."""
     return isinstance(payload, dict) and payload.get("ask_kind") in OWN_SURFACE_ASK_KINDS

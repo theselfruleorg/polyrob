@@ -35,7 +35,8 @@ one case read without it.
 Gated `DEFI_DATA_ENABLED` (default ON). Read-only actions, **multichain**: the chain registry (`core/wallet/chains.py`)
 is the one table of supported chains — Base, Ethereum, Arbitrum, Polygon, Robinhood
 Chain, **Optimism** and **BNB Chain** (read only: no money moves there until the owner arms it), and
-**Solana** (reads; base58 addresses, no checksum). **No signer is
+**Solana** (reads; base58 addresses, no checksum). On BNB, USDC has 18 decimals,
+not 6; every balance and amount there is read with the right number. **No signer is
 constructed and nothing is broadcast**, so this tool cannot move value:
 
 | Action | What it does | Chains |
@@ -654,7 +655,7 @@ state) and `lp_quote` (the liquidity a deposit would mint and the exact paired a
 `DEFI_LIQUIDITY_ENABLED=true` arms `defi_trade.lp_add`, `lp_remove` and `lp_collect`; all
 default to a dry run. The owner runs the same guarded actions with `polyrob wallet lp`
 (`positions`, `pool`, `quote`, `add`, `remove`, `collect`, each with `--chain`) in the
-terminal and `/lp` in chat. A short allowance refuses with the exact approval to make.
+terminal and `/lp` in chat (Uniswap v3; a v4 collect is an agent action). A short allowance refuses with the exact approval to make.
 
 - **Uniswap v3** on Robinhood, Base, Ethereum, Arbitrum and Polygon: add (a new deposit, or more to an
   existing one), remove (a percentage, optionally burning the empty deposit NFT) and
@@ -666,7 +667,11 @@ terminal and `/lp` in chat. A short allowance refuses with the exact approval to
   pinned v4 manager contract that expires in 15 minutes. A v4 deposit is held to
   `LP_ETH_CAP` (the program total in ETH, default `0` — every v4 deposit refuses until
   the owner sets it), `LP_ETH_DAILY_CAP` and `LP_ETH_FLOOR` (the ETH the wallet keeps).
-  v4 remove and collect are not built.
+  `lp_collect(protocol='v4', token_id=…)` takes the fees of a v4 deposit and leaves its
+  liquidity unchanged; no approval is needed. With `account=` or `nft=` it collects for a
+  deposit that an NFT's account owns, and the fees land in that account. A v4 collect
+  declares no minimum (the fees owed are not read first), so a collect that returns nothing
+  still costs gas, and the owner's entry pause holds it. v4 remove is not built.
 
 The guard checks both asset legs, the pinned code and destination, who owns the deposit,
 and the mint, hold or burn of its NFT. Collect minimums use the actual read-only collect
@@ -688,28 +693,94 @@ own wallet address** — a person transfers it in, mints it to that address, or 
 it. There are no grants, bindings or operator keys.
 
 `AGENT_NFT_ENABLED` arms `agent_nft` (`agent_nft_snapshot`, `_inspect`, `_journal`,
-`_bind_identity`, `_revoke_all`, `_withdraw_token`, `_collection_reveal`, `_adopt`,
-`_collection_mint`) and the `account=` / `nft=` argument on `defi_trade.transfer`,
-`defi_trade.swap`, `launchpad_claim` and `defi_data.portfolio`. That argument makes the
-call from the NFT's account: the agent's key signs and the account holds, through the same
-`tx_guard` (`TxIntent.via_account`), recorded against the account. Account-admin calls
-(such as `lock`) refuse, and every pre-flight read — the pinned code, the lock state
-(Tokenbound AccountV3 only), that the signing wallet IS the NFT's owner — fails closed. A
-collection may ship its own account (the POLYROB collection's `PolyrobAccount`): `/nft trust`
-pins it by its code hash. Such an account has no lock, signs nothing and refuses standing
-approvals.
+`_bind_identity`, `_revoke_all`, `_withdraw_token`, `_collection_reveal`,
+`_collection_mint`, `_sale_ready`, `_sale_unready`, `_sale_cancel_listing`, `_sale_list`,
+`_sale_accept`, `_sale_settle`, `_sale_claim`, `_buy`, `_market_claim`) and the `account=` / `nft=` argument on `defi_trade.transfer`,
+`defi_trade.swap`, `defi_trade.lp_collect` (v4), `defi_trade.call`, `launchpad_claim` and
+`defi_data.portfolio`. That argument makes the call from the NFT's account: the agent's key
+signs and the account holds, through the same `tx_guard` (`TxIntent.via_account`), recorded
+against the account. Every other money verb refuses the argument with "this verb does not act
+from an NFT account". A call from an account grants no allowance and does not address the
+account's own collection, sale or sale rails. Account-admin calls (such as `lock`) refuse, and
+every pre-flight read — the pinned code, the lock state (a kind with a lock), that the signing
+wallet IS the NFT's owner — fails closed. A refused simulation names the contract's own error
+with its arguments (for example `NotListed()` from the sale, or `Refused(target, selector)`
+from the account).
+
+Two account kinds are supported, each a standard:
+
+- **Tokenbound AccountV3** — the canonical ERC-6551 account. It has a lock, trusts an
+  ERC-2771 forwarder, may hold standing approvals, and accepts the owner's signature as its own.
+- **ERC-6551P account** — a draft extension of ERC-6551 that a collection can ship as its own
+  account. It has no lock and no forwarder, signs nothing, and refuses standing approvals.
+  `/nft trust` pins one only when the collection and the account prove the kind by ERC-165,
+  and pins its code by hash.
 
 - **Collections are pinned, none by default.** The owner pins one from chat with
   `/nft trust <collection> on <chain> [go]` (a read-only fact check first): the agent may then
   watch it and act from its accounts, never mint or reveal. Only the system
   administrator's root-owned `/etc/polyrob/agent_nft_collections.json` can grant `mint`
-  or `reveal`. A malformed or writable registry refuses as a whole.
+  or `reveal`. A malformed or writable registry refuses as a whole. The file uses the
+  collection pin schema `agent-nft-profile/2`; a file in schema 1 still loads.
+  `polyrob nft profile upgrade` prints the new form and the difference; `… go` (as root)
+  writes it and keeps the old file.
+- **A mint pays the collection's pinned sale**, never the collection. A pin with `mint`
+  must pin its `sale` (address, code hash, the most one token may cost). The whitelist mint
+  takes `allowance` and `proof` and pays the base price exactly; a public mint pays between
+  the base price and the pinned maximum, and the sale returns an excess at its settlement.
+- **The sale pays the wallet back.** After the sale is settled, `agent_nft_sale_settle` settles
+  the wallet's own auction records, and the sale returns what each paid above the clearing
+  price. `agent_nft_sale_claim` takes what the sale holds for the wallet (`owed`). Both send
+  nothing and cost gas only; the simulation must show the money arrive. `agent_nft_snapshot`
+  shows the sale's phase, whether it is settled, and what it owes.
+- **Ready for sale.** `agent_nft_sale_ready` makes an agent NFT of an ERC-6551P collection
+  ready for sale: its own account calls `readyToSell`, with the journal entry in the same
+  transaction. From the next block a plain marketplace fill can move the NFT and everything
+  its account holds. Any act through the account ends the readiness, so while the NFT is
+  ready the agent refuses its own acts through the account; an act you ask for goes through
+  and ends it. `agent_nft_sale_unready` ends the readiness. `agent_nft_sale_cancel_listing`
+  withdraws the wallet's orders on the collection's pinned market: one order by its salt, or
+  every order, and then revokes the market's approval of the NFTs whose orders it ended.
+  Your verbs: `/nft ready <id|collection#id> on <chain> [go]` and
+  `/nft unready <id|collection#id> on <chain> [go]`.
+  The holdings watch says when an NFT becomes ready, when its readiness ends, and when an NFT
+  leaves while it is ready (with the transaction; the price only when the pinned market
+  recorded the sale).
+- **Buy from a pinned market.** `agent_nft_buy` buys an agent NFT that its seller listed on
+  the collection's pinned market: you give it the listing link the seller shared (an ETH
+  price only). The quote shows what the NFT's account holds, what the market will check, and
+  what it cannot check (count that as worth 0). The market checks those holdings after the
+  transfer, in the same transaction, so a seller who empties the account first gets nothing
+  and you pay nothing. The buy names the quote's `conditions_hash` and refuses if the account
+  changed since. It is always owner-approved. `agent_nft_market_claim` takes back what the
+  market owes the wallet. A Seaport listing, a token price and an offer are not supported.
+- **List on a pinned market.** `agent_nft_sale_list` lists an agent NFT the wallet owns on
+  its collection's pinned market: you name the price (ETH, or a token on the reviewed list)
+  and 1 to 30 days. The wallet signs ONE market listing; core builds every field and the
+  seller's promise (what the account holds now) and checks each against the network before the
+  key is used. The market first gets the approval of that one NFT (one transaction; never an
+  approval of the whole collection). The result is the link a buyer opens. A listing does not
+  stop the agent: it ends when the NFT moves, when it is cancelled or when it expires, and an
+  act that takes a promised holding below its minimum makes the purchase fail. `/nft` shows
+  the open listings; the holdings watch says when one is sold (with the price) or expires.
+  A Seaport or OpenSea listing is not supported.
+- **Accept an offer.** `agent_nft_sale_accept` accepts a buyer's signed offer (the link the
+  buyer shared, priced in a reviewed token) on the pinned market: the approval of that one
+  NFT when needed, then the sale. The guard checks that exactly that NFT leaves to the buyer
+  and that the price less the royalty arrives. The agent makes no offers of its own.
 - **Always owner-approved:** `agent_nft_collection_mint`, `agent_nft_withdraw_token` (the
-  owner's `/nft send <id> <to> on <chain>`), `agent_nft_adopt` and `agent_nft_bind_identity`.
+  owner's `/nft send <id> <to> on <chain>`), `agent_nft_sale_ready`, `agent_nft_sale_list`,
+  `agent_nft_sale_accept`, `agent_nft_buy` and
+  `agent_nft_bind_identity` (it puts the agent's card on the account's own ERC-8004
+  identity: `setAgentURI` on the identity an ERC-6551P NFT has from its mint, or a
+  `register()` when there is none; the agent's own registration file then names that
+  identity, so the two entries link). There is no
+  "adopt" step: an NFT that arrives is the agent's to act from at once, and the tokens its
+  account already holds are recorded as inherited positions.
 - A holdings watch (every 300 s, no model turn) tells the owner once when an NFT of a
   pinned collection arrives in or leaves the agent's wallet; `/nft` lists them with their
   accounts.
-- The collection mint and the `adopt` picture, holdings and brief live in a separately
+- The collection mint and the picture, holdings and brief live in a separately
   installed agent-NFT package; without it those verbs refuse and name the remedy.
 - `AGENT_NFT_REVEAL_MAX_GAS_USD` (default `$1.00`) bounds the gas fee of one reveal.
 

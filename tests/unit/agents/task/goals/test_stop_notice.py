@@ -293,3 +293,14 @@ def test_a_run_that_told_the_owner_without_a_block_marks_nothing(board, told):
     g = board.create(user_id="alice", title="Draft the post", force=True)
     escalation.mark_stop_told(board, g.id)
     assert "stop_told" not in (board.get(g.id).payload or {})
+
+
+@pytest.mark.parametrize("told_at", [1763550934.4730399, 1763407435.7331893, 1763477102.9486175])
+def test_the_claim_holds_when_sqlite_parses_the_told_time_one_ulp_apart(board, told, told_at):
+    """A told time whose JSON text SQLite and Python parse to different doubles: the
+    compare-and-set must still claim the next stop (``IS ?`` on the float did not)."""
+    from agents.task.goals.payload_keys import patch
+    g = _block(board)
+    patch(board.db_path, g.id, set_keys={"stop_told": told_at})
+    execute_retry(board.db_path, "UPDATE goals SET completed_at=? WHERE id=?", (told_at + 60, g.id))
+    assert escalation._claim_stop(board, board.get(g.id)) is True

@@ -89,3 +89,21 @@ def test_section_is_in_order_and_titled(home):
     snap = build_status_snapshot("u1", data_dir=home, include_money=False)
     assert tuple(snap.sections) == SECTION_ORDER
     assert any("Tools:" in l for l in render_status_lines(snap))
+
+
+def test_the_headline_and_the_rows_count_the_same_set(home):
+    """116 W5.2: '17 of 30 tools' sat above rows that also listed `core` and
+    `unknown`; they are not tools and get their own lines, `core` by action."""
+    log = _log(home)
+    now = time.time()
+    log.record("tool_invoked", user_id="u1", ts=now, attrs={"tool": "filesystem", "action": "read_file", "ok": True})
+    for action in ("done", "done", "send_message"):
+        log.record("tool_invoked", user_id="u1", ts=now, attrs={"tool": "core", "action": action, "ok": True})
+    log.record("tool_invoked", user_id="u1", ts=now, attrs={"action": "x", "ok": True})
+    sec = tools_section("u1", home, now=now)
+    assert sec.lines[0].startswith("1 of ")
+    rows = [ln for ln in sec.lines if " × " in ln or ln.endswith("×")]
+    assert [ln.split(":")[0] for ln in rows if "last" in ln] == ["filesystem"]
+    text = "\n".join(sec.lines)
+    assert "core actions (not a tool): 3 × — done 2, send_message 1" in text
+    assert "not in the tool table: 1 call(s)" in text

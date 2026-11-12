@@ -77,6 +77,16 @@ def test_a_service_entry_keeps_the_endpoint_shape():
     assert "name" in first and "endpoint" in first
 
 
+def test_no_local_reputation_endpoint_is_advertised(monkeypatch):
+    """115 E7: the off-chain feedback API is gone, so the file must not name it
+    (an advertised endpoint that 404s is the same lie as a broken image)."""
+    monkeypatch.setenv("EIP8004_ENABLED", "true")
+    reg = build_registration_file("https://example.test")
+    names = [s.name for s in reg.services]
+    assert "EIP8004-reputation" not in names
+    assert not any("/eip8004/reputation" in s.endpoint for s in reg.services)
+
+
 # --- I6: this agent's own identity -----------------------------------------
 
 def test_the_name_is_not_a_framework_literal(monkeypatch):

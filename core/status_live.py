@@ -21,6 +21,31 @@ def _iso_ts(raw) -> "float | None":
         return None
 
 
+def _run_started_at(data_dir: str, job_id: str) -> "float | None":
+    """When the job's CURRENT run started: its newest ``cron_run`` ``started``
+    event. None when the log is absent or does not hold one (a seat then shows
+    no time, never the previous run's end)."""
+    if not job_id:
+        return None
+    try:
+        from core.event_kinds import CRON_RUN
+        from core.event_log import open_event_log
+        log = open_event_log(data_dir)
+        if log is None:
+            return None
+        row = log._run(
+            "SELECT MAX(ts) AS ts FROM telemetry_events WHERE kind = ? "
+            "AND json_extract(attrs, '$.job_id') = ? "
+            "AND json_extract(attrs, '$.outcome') = 'started'",
+            (CRON_RUN, job_id), fetch="one")
+        return float(row["ts"]) if row and row["ts"] is not None else None
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning(
+            "live status: cannot read the start of job %s", job_id, exc_info=True)
+        return None
+
+
 def _first_line(text, limit: int = 160) -> str:
     line = str(text or "").strip().splitlines()
     head = line[0].strip() if line else ""
@@ -51,8 +76,11 @@ def build_live_status(user_id: str, data_dir: str, sessions_root: str) -> dict:
         rows = _rows(cron_db_path(data_dir),
                      "SELECT id, task, last_run_at FROM cron_jobs "
                      "WHERE status='running' AND user_id=?", (user_id,))
+        # `last_run_at` is the PREVIOUS run's end (the claim does not touch
+        # it): "since" is this run's own `started` event, or unknown.
         out["cron"] = [{"id": r.get("id"), "task": _first_line(r.get("task")),
-                        "since": _iso_ts(r.get("last_run_at"))} for r in rows]
+                        "since": _run_started_at(data_dir, str(r.get("id") or ""))}
+                       for r in rows]
     except Exception as exc:
         unreadable["cron"] = f"{type(exc).__name__}: {exc}"[:200]
     try:

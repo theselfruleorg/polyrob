@@ -19,14 +19,46 @@ from __future__ import annotations
 import dataclasses
 from typing import Any, Optional, Tuple
 
+from pydantic import BaseModel, model_validator
+
+from core.wallet.account_kinds import limits_text as _kind_limits_text
+
 ACCOUNT_DESC = (
     "Optional — work FROM the token-bound (ERC-6551) account of an NFT this treasury OWNS, "
     "instead of from the treasury: the account's assets move, the treasury signs as the NFT's "
     "owner. A 0x account address. Only accounts of a collection the owner pinned. Needs "
     "AGENT_NFT_ENABLED.")
+#: The kinds' limits render ONCE, on ``defi_trade.transfer`` (every verb of the family ships in
+#: the same ``tools[]``); the other ``account`` fields point at it (the 095 P0.1 pattern).
+ACCOUNT_DESC_FULL = ACCOUNT_DESC + " What each account kind can do: " + _kind_limits_text()
+ACCOUNT_DESC_SHORT = ACCOUNT_DESC + " What each account kind can do: the `account` parameter of " \
+    "defi_trade.transfer."
 NFT_DESC = (
     "Optional — the same as `account`, naming the NFT instead: '<collection>#<id>', or just "
     "'<id>' when one collection is pinned on the chain.")
+
+#: The money verbs that DO act from an NFT account (``account=`` / ``nft=``).
+ACCOUNT_VERBS = ("defi_trade transfer", "swap", "lp_collect (v4)", "call", "the agent_nft verbs")
+#: WL1: what a verb that cannot act from an account says when it is asked to.
+NO_ACCOUNT_TEXT = "this verb does not act from an NFT account"
+
+
+class NoAccountMode(BaseModel):
+    """A money verb's params that do NOT act from an NFT account (WL1): ``account=`` / ``nft=``
+    refuse BY NAME instead of being dropped (a dropped ``account=`` ran the call from the
+    treasury). A subclass that declares ``account`` is an account verb and is not checked."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _refuse_account_mode(cls, data):
+        if isinstance(data, dict) and "account" not in cls.model_fields:
+            named = [k for k in ("account", "nft") if data.get(k) not in (None, "")]
+            if named:
+                raise ValueError(
+                    f"{NO_ACCOUNT_TEXT} ({'/'.join(named)} given): it runs from the treasury "
+                    f"only. From an NFT account use one of: {', '.join(ACCOUNT_VERBS)}. Nothing "
+                    f"was broadcast.")
+        return data
 
 
 def requested(params) -> bool:

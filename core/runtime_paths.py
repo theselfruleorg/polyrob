@@ -472,6 +472,43 @@ def bot_db_default_path(data_dir: str) -> str:
     return os.path.join(data_dir, "database", "bot.db")
 
 
+def bot_db_path(data_dir: Optional[str] = None) -> str:
+    """The ONE ``bot.db`` path a reader with no container opens — the
+    ``AgentConfig`` rule (``core/config.py``): ``DB_PATH`` wins, a relative one
+    anchored at the data home (never the cwd); else
+    ``<data_dir>/database/bot.db``, a relative or empty *data_dir* anchored the
+    same way. A pure join: it never creates or checks the file (116 W6.1)."""
+    configured = (os.getenv("DB_PATH") or "").strip()
+    if configured:
+        if os.path.isabs(configured):
+            return configured
+        return os.path.join(str(effective_data_home()), configured)
+    home = str(data_dir or "")
+    if not os.path.isabs(home):
+        home = os.path.join(str(effective_data_home()), home) if home else str(effective_data_home())
+    return bot_db_default_path(home)
+
+
+def persistent_workspace_root() -> Optional[str]:
+    """The ONE persistent workspace folder — the folder every session, goal and
+    cron run of this process shares — or None when each session has its own
+    (116 W5.4; the rule ``polyrob/app/bootstrap._resolve_cli_data_home`` applies):
+
+    - ``POLYROB_PROJECT_DIR`` set: that folder, resolved;
+    - else ``POLYROB_DATA_DIR`` set (a server): None — per-session workspaces;
+    - else (the local CLI): the cwd.
+
+    Pure: it never creates the folder. The CLI container, the command guard and
+    the doctrine readers (status, rules sweep) all call it; the readers used to
+    read ``<data_dir>/workspace``, a path nothing creates."""
+    project = (os.environ.get("POLYROB_PROJECT_DIR") or "").strip()
+    if project:
+        return str(Path(project).expanduser().resolve())
+    if (os.environ.get("POLYROB_DATA_DIR") or "").strip():
+        return None
+    return str(Path.cwd())
+
+
 def goals_db_path(data_dir: Optional[str] = None) -> str:
     """Absolute path to the goal-board DB (``goals.db``). Pass an explicit
     *data_dir* (e.g. a container's ``config.data_dir``) to pin it; omit it to use

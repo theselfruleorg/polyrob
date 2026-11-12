@@ -10,9 +10,9 @@ import os
 
 import pytest
 
-from core.wallet import account_journal, collection_registry as CR, erc6551
-from tests.collection_pins import (MARKET, POLYROB_IMPL, RUNTIME_SHA256, pin, polyrob_profile,
-                                   profile, transfer_safe)
+from core.wallet import account_journal, account_kinds as AK, collection_registry as CR, erc6551
+from tests.collection_pins import (MARKET, MAX_PRICE_WEI, POLYROB_IMPL, RUNTIME_SHA256, pin,
+                                   polyrob_profile, profile, sale, sale_address, transfer_safe)
 
 ADDR = "0xC011000000000000000000000000000000000001"
 
@@ -59,7 +59,7 @@ def test_an_unreadable_file_is_not_an_empty_one(tmp_path):
 
 
 @pytest.mark.parametrize("mutate, needle", [
-    (lambda d: d["profiles"][0].update(spec="agent-nft-profile/2"), "spec"),
+    (lambda d: d["profiles"][0].update(spec="agent-nft-profile/3"), "spec"),
     (lambda d: d["profiles"][0].update(capabilities=["mint", "airdrop"]), "capability"),
     (lambda d: d["profiles"][0].update(call_shapes={"mint": "mint(address,uint256)"}), "call shape"),
     (lambda d: d["profiles"][0].update(call_shapes={"reveal": "reveal(uint256[])"},
@@ -126,29 +126,29 @@ def test_an_untrusted_registry_leaves_only_the_default_prefix(monkeypatch):
     assert account_journal.allowed_journal_prefixes() == ("agent",)
 
 
-# ------------------------------------------------------------------ PolyrobAccount (transfer_safe)
+# ------------------------------------------------------------------ spec 1 transfer_safe → erc6551p
 def test_without_transfer_safe_only_account_v3_is_accepted():
     (p,) = CR.parse(_doc())
-    assert p.transfer_safe is None
-    assert p.accounts[0].kind == CR.KIND_ACCOUNT_V3 and not p.accounts[0].is_polyrob
+    assert p.erc6551p is None
+    assert p.accounts[0].kind is AK.TOKENBOUND_V3
     assert p.accounts[0].runtime_sha256 is None
 
 
-def test_with_transfer_safe_accounts0_is_the_pinned_polyrob_account():
+def test_with_transfer_safe_accounts0_is_the_pinned_erc6551p_account():
     (p,) = CR.parse({"profiles": [polyrob_profile(ADDR, journal_log="0x" + "ee" * 20)]})
     v = p.accounts[0]
-    assert (v.implementation, v.kind, v.runtime_sha256) == (POLYROB_IMPL, CR.KIND_POLYROB, RUNTIME_SHA256)
-    assert v.is_polyrob and p.account_version(POLYROB_IMPL.upper().replace("0X", "0x")) == v
-    assert p.transfer_safe.market == MARKET and p.transfer_safe.zone_runtime_sha256 == RUNTIME_SHA256
+    assert (v.implementation, v.kind, v.runtime_sha256) == (POLYROB_IMPL, AK.ERC6551P, RUNTIME_SHA256)
+    assert p.account_version(POLYROB_IMPL.upper().replace("0X", "0x")) == v
+    assert p.erc6551p.market == MARKET and p.erc6551p.zone_runtime_sha256 == RUNTIME_SHA256
     assert p.account_version(erc6551.ACCOUNT_V3_IMPL) is None
 
 
-def test_a_later_account_version_beside_a_polyrob_account_must_be_account_v3():
+def test_a_later_account_version_beside_an_erc6551p_account_must_be_account_v3():
     raw = polyrob_profile(ADDR)
     raw["accounts"].append({"registry": erc6551.REGISTRY, "implementation": erc6551.ACCOUNT_V3_IMPL,
                             "salt": 0})
     (p,) = CR.parse({"profiles": [raw]})
-    assert [v.kind for v in p.accounts] == [CR.KIND_POLYROB, CR.KIND_ACCOUNT_V3]
+    assert [v.kind for v in p.accounts] == [AK.ERC6551P, AK.TOKENBOUND_V3]
     raw["accounts"][1]["implementation"] = "0x" + "a2" * 20
     with pytest.raises(CR.CollectionRegistryError, match="account version"):
         CR.parse({"profiles": [raw]})
@@ -186,4 +186,161 @@ def test_the_desk_pin_writer_profile_is_accepted():
            "journal_prefix": "POLYROB", "call_shapes": {"reveal": "reveal(uint256[])"},
            "journal_log": "0x" + "ee" * 20, "transfer_safe": transfer_safe()}
     (p,) = CR.parse({"profiles": [raw]})
-    assert p.accounts[0].is_polyrob and p.journal_log == "0x" + "ee" * 20
+    assert p.accounts[0].kind is AK.ERC6551P and p.journal_log == "0x" + "ee" * 20
+
+
+# ------------------------------------------------------------------ the sale (115 W8, M5)
+SALE = sale_address(ADDR)
+
+
+def test_a_profile_with_the_mint_capability_carries_its_sale():
+    (p,) = CR.parse(_doc())
+    assert p.sale == CR.Sale(SALE.lower(), RUNTIME_SHA256, MAX_PRICE_WEI)
+
+
+def test_a_reveal_only_profile_without_a_sale_is_what_it_was():
+    (p,) = CR.parse({"profiles": [profile(ADDR, capabilities=("reveal",))]})
+    assert p.sale is None and p.capabilities == ("reveal",)
+
+
+@pytest.mark.parametrize("mutate, needle", [
+    (lambda r: r.pop("sale"), "mint capability without a sale"),
+    (lambda r: r.update(capabilities=["reveal"]), "sale without the mint capability"),
+    (lambda r: r["sale"].update(extra=1), "exactly"),
+    (lambda r: r["sale"].pop("max_price_wei"), "exactly"),
+    (lambda r: r["sale"].pop("runtime_sha256"), "exactly"),
+    (lambda r: r["sale"].pop("address"), "exactly"),
+    (lambda r: r.update(sale=None), "exactly"),
+    (lambda r: r.update(sale=[]), "exactly"),
+    (lambda r: r["sale"].update(address="0x12"), "sale.address"),
+    (lambda r: r["sale"].update(runtime_sha256="0x" + "11" * 32), "sale.runtime_sha256"),
+    (lambda r: r["sale"].update(runtime_sha256="AB" * 32), "sale.runtime_sha256"),
+    (lambda r: r["sale"].update(max_price_wei=0), "max_price_wei"),
+    (lambda r: r["sale"].update(max_price_wei=-1), "max_price_wei"),
+    (lambda r: r["sale"].update(max_price_wei=True), "max_price_wei"),
+    (lambda r: r["sale"].update(max_price_wei="99"), "max_price_wei"),
+    (lambda r: r["sale"].update(max_price_wei=9.9e16), "max_price_wei"),
+    (lambda r: r["sale"].update(address=ADDR), "also a pinned collection"),
+    (lambda r: r.update(call_shapes={"mint_wl": "mintWL(address,uint256)"}), "call shape"),
+    (lambda r: r.update(call_shapes={"settle": "settle(uint256[])"}), "unknown"),
+    (lambda r: r.update(capabilities=["mint_wl", "mint"]), "capability"),
+])
+def test_an_off_schema_sale_refuses_the_registry(mutate, needle):
+    raw = profile(ADDR)
+    mutate(raw)
+    with pytest.raises(CR.CollectionRegistryError, match=needle):
+        CR.parse({"profiles": [raw]})
+
+
+def test_the_mint_wl_call_shape_belongs_to_the_mint_capability():
+    assert CR.KNOWN_CALL_SHAPES["mint_wl"] == "mintWL(address,uint256,uint256,uint256,bytes32[])"
+    raw = profile(ADDR)
+    raw["call_shapes"] = {"mint": CR.KNOWN_CALL_SHAPES["mint"],
+                          "mint_wl": CR.KNOWN_CALL_SHAPES["mint_wl"]}
+    assert CR.parse({"profiles": [raw]})[0].sale.address == SALE.lower()
+    raw = profile(ADDR, capabilities=("reveal",))
+    raw["call_shapes"] = {"mint_wl": CR.KNOWN_CALL_SHAPES["mint_wl"]}
+    with pytest.raises(CR.CollectionRegistryError, match="not one of its capabilities"):
+        CR.parse({"profiles": [raw]})
+
+
+def test_the_known_call_shapes_match_the_mint_module():
+    from core.wallet import collection_mint, collection_reveal
+    assert CR.KNOWN_CALL_SHAPES == {"mint": collection_mint.MINT_SIGNATURE,
+                                    "mint_wl": collection_mint.MINT_WL_SIGNATURE,
+                                    "reveal": collection_reveal.REVEAL_SIGNATURE}
+
+
+def test_a_sale_is_unique_on_its_chain():
+    other = "0xC011000000000000000000000000000000000002"
+    both = [profile(ADDR), profile(other, sale_pin=sale(other, address=SALE))]
+    with pytest.raises(CR.CollectionRegistryError, match="two profiles"):
+        CR.parse({"profiles": both})
+    # a sale equal to ANOTHER profile's collection
+    both = [profile(ADDR), profile(other, sale_pin=sale(other, address=ADDR))]
+    with pytest.raises(CR.CollectionRegistryError, match="also a pinned collection"):
+        CR.parse({"profiles": both})
+    # the same CREATE address on two chains is two contracts
+    assert len(CR.parse({"profiles": [profile(ADDR), profile(other, chain_id=46630,
+                                                             sale_pin=sale(other, address=SALE))]})) == 2
+
+
+def test_lookup_by_sale_address(monkeypatch):
+    pin(monkeypatch, profile(ADDR), profile("0xC011000000000000000000000000000000000002",
+                                            capabilities=("reveal",)))
+    assert CR.profile_for_sale(4663, SALE.upper().replace("0X", "0x")).address == ADDR.lower()
+    assert CR.profile_for_sale(4663, ADDR) is None
+    assert CR.profile_for_sale(46630, SALE) is None
+
+
+def test_the_sale_has_its_own_code_pin():
+    code = {ADDR.lower(): "0x6000", SALE.lower(): "0x6001"}
+    rpc = lambda m, a: code[a[0].lower()]  # noqa: E731
+    import hashlib
+    sha = lambda c: hashlib.sha256(bytes.fromhex(c[2:])).hexdigest()  # noqa: E731
+    (p,) = CR.parse({"profiles": [profile(ADDR, runtime_sha256=sha("0x6000"),
+                                          sale_pin=sale(ADDR, runtime_sha256=sha("0x6001")))]})
+    assert CR.runtime_refusal(rpc, p) is None and CR.sale_runtime_refusal(rpc, p) is None
+    code[SALE.lower()] = "0x6002"
+    assert "pinned sale" in CR.sale_runtime_refusal(rpc, p) and CR.runtime_refusal(rpc, p) is None
+    (bare,) = CR.parse({"profiles": [profile(ADDR, capabilities=("reveal",))]})
+    assert "pins no sale" in CR.sale_runtime_refusal(rpc, bare)
+
+
+def test_an_owner_pin_may_not_carry_a_sale(tmp_path):
+    raw = profile(ADDR, capabilities=(), sale_pin=None)
+    raw["sale"] = sale(ADDR)
+    path = tmp_path / "collection_pins.json"
+    path.write_text(json.dumps({"profiles": [raw]}))
+    with pytest.raises(CR.CollectionRegistryError):
+        CR.load_owner_pins(str(path))
+
+
+def test_the_desk_pin_writer_with_sale_profile_is_accepted():
+    """The exact shape ``polyrob-desk/contracts/script/pin.py::profile_of(..., sale=…)`` writes
+    (with and without ``transfer_safe``)."""
+    base = {"spec": "agent-nft-profile/1", "capabilities": ["mint", "reveal"], "chain_id": 4663,
+            "address": ADDR.lower(), "runtime_sha256": "11" * 32, "deploy_block": 123,
+            "max_supply": 6551,
+            "accounts": [{"registry": erc6551.REGISTRY, "implementation": erc6551.ACCOUNT_V3_IMPL,
+                          "salt": 0}],
+            "journal_prefix": "POLYROB",
+            "call_shapes": {"mint": "mint(address,uint256,uint256)", "reveal": "reveal(uint256[])"},
+            "journal_log": "0x" + "ee" * 20,
+            "sale": {"address": SALE.lower(), "runtime_sha256": "22" * 32,
+                     "max_price_wei": 99000000000000000}}
+    (p,) = CR.parse({"profiles": [base]})
+    assert p.sale == CR.Sale(SALE.lower(), "22" * 32, 99 * 10 ** 15)
+    ts = dict(base, accounts=[{"registry": erc6551.REGISTRY, "implementation": POLYROB_IMPL,
+                               "salt": 0}], transfer_safe=transfer_safe())
+    (p,) = CR.parse({"profiles": [ts]})
+    assert p.sale.address == SALE.lower() and p.accounts[0].kind is AK.ERC6551P
+
+
+_DESK_PIN = os.path.join(os.path.dirname(__file__), *[".."] * 4, "..", "polyrob-desk", "contracts",
+                         "script", "pin.py")
+
+
+@pytest.mark.skipif(not os.path.exists(_DESK_PIN), reason="../polyrob-desk is not beside this repo")
+@pytest.mark.parametrize("with_sale", [False, True])
+@pytest.mark.parametrize("with_transfer_safe", [False, True])
+def test_the_desk_pin_writer_round_trips(with_sale, with_transfer_safe):
+    """Import ``pin.py``'s own ``profile_of`` (placeholder inputs) and parse what it writes."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_desk_pin", _DESK_PIN)
+    pin_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pin_mod)
+    sha = "0x" + "11" * 32
+    sale_pin = ({"address": SALE, "runtime_sha256": "0x" + "22" * 32,
+                 "max_price_wei": pin_mod.START_PRICE_WEI} if with_sale else None)
+    ts = ({"account_impl_runtime_sha256": sha, "market": MARKET, "market_runtime_sha256": sha,
+           "zone": "0x" + "c1" * 20, "zone_runtime_sha256": sha} if with_transfer_safe else None)
+    impl = POLYROB_IMPL if with_transfer_safe else erc6551.ACCOUNT_V3_IMPL
+    raw = pin_mod.profile_of(4663, ADDR.lower(), sha, 123, impl, "0x" + "ee" * 20, sale_pin, ts)
+    (p,) = CR.parse({"profiles": [raw]})
+    assert p.capabilities == (("mint", "reveal") if with_sale else ("reveal",))
+    assert (p.sale is not None) == with_sale
+    if with_sale:
+        assert p.sale == CR.Sale(SALE.lower(), "22" * 32, 99 * 10 ** 15)
+    # 111 W1: its spec-2 twin parses to the EQUAL profile
+    assert CR.parse(CR.upgrade_document({"profiles": [raw]})) == (p,)

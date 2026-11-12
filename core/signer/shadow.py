@@ -181,6 +181,22 @@ class ShadowEvmSigner:
         comparison, then sign locally — whatever the signer said."""
         return shadow_sign_classified(self._get_client, self._local, req, verdict)
 
+    def sign_order(self, req, chain: str) -> str:
+        """111 §8.3: ask the signer for a ``verdict_only`` on the same class-O order (it re-reads
+        its own facts), log the comparison, then sign locally — whatever the signer said."""
+        try:
+            self._get_client().call("sign.order", {"chain": str(chain), "payload": req.payload,
+                                                   "verdict_only": True})
+            log_comparison("agree", digest=None, op="sign.order", cls="O")
+        except Exception as exc:  # noqa: BLE001 — shadow never blocks a signature
+            from core.signer.client import SignerRefused
+            log_comparison("disagree" if isinstance(exc, SignerRefused) else "unreachable",
+                           digest=None, op="sign.order", code=getattr(exc, "code", None),
+                           reason=getattr(exc, "reason", None) or f"{type(exc).__name__}: {exc}")
+        typed = req.payload
+        types = {k: v for k, v in typed["types"].items() if k != "EIP712Domain"}
+        return self._local.sign_typed_data(typed["domain"], types, typed["message"])
+
     def compare(self, tx: Dict[str, Any]) -> str:
         """Ask for a verdict on *tx* and record the comparison. Returns the kind."""
         from core.signer import attest, protocol
@@ -257,6 +273,10 @@ def shadow_wallet_class():
 #: 066 §5.5: remote only after a week of shadow with agreements and no
 #: disagreement. 6.5 days of data, so a week that started mid-day counts.
 CUTOVER_MIN_DAYS = 6.5
+#: The signer-side criterion needs this many agreed verdicts on DISTINCT
+#: transactions (by digest), not one agreement of any kind: the agent UID can
+#: send ``evm.verdict`` itself, so one chosen verdict must not open the cut-over.
+CUTOVER_MIN_AGREED_SENDS = 5
 
 
 def cutover_ready(*, now: Optional[float] = None):
@@ -301,6 +321,11 @@ def signer_verdict_summary(state_dir: str, days: float = 7.0, *,
                 "SELECT allowed, code, COUNT(*), MIN(ts) FROM decisions "
                 "WHERE op = 'evm.verdict' AND ts >= ? GROUP BY allowed, code",
                 (cutoff,)).fetchall()
+            # Agreed verdicts on DISTINCT transactions: one digest sent N times is one send.
+            agreed_sends = int(db.execute(
+                "SELECT COUNT(DISTINCT digest) FROM decisions WHERE op = 'evm.verdict' "
+                "AND allowed = 1 AND digest IS NOT NULL AND ts >= ?",
+                (cutoff,)).fetchone()[0] or 0)
         finally:
             db.close()
     except sqlite3.Error as exc:
@@ -312,7 +337,8 @@ def signer_verdict_summary(state_dir: str, days: float = 7.0, *,
                else "disagree"] += int(n)
         if first is not None:
             first_ts = float(first) if first_ts is None else min(first_ts, float(first))
-    return {"readable": True, "counts": counts, "since": first_ts, "days": days}
+    return {"readable": True, "counts": counts, "since": first_ts, "days": days,
+            "agreed_sends": agreed_sends}
 
 
 def signer_cutover_ready(state_dir: str, *, now: Optional[float] = None):
@@ -320,7 +346,13 @@ def signer_cutover_ready(state_dir: str, *, now: Optional[float] = None):
 
     The install script requires BOTH this and :func:`cutover_ready`: the agent
     log alone sees ``no_intent`` sends (they never reach the signer), but only
-    the signer's log cannot be forged by the agent UID."""
+    the signer's log cannot be forged by the agent UID.
+
+    The agent UID can still SEND ``evm.verdict`` rows into that log, so one
+    agreement is not enough: it needs :data:`CUTOVER_MIN_AGREED_SENDS` agreed
+    verdicts on distinct transaction digests. A ``needs_approval`` row is
+    expected by design (the guard passed; the policy asks the owner) and does
+    not block."""
     now = time.time() if now is None else now
     st = signer_verdict_summary(state_dir, 7.0, now=now)
     counts = st.get("counts") or {}
@@ -328,8 +360,10 @@ def signer_cutover_ready(state_dir: str, *, now: Optional[float] = None):
         return False, f"signer decision log unreadable ({st.get('error')})", counts
     if counts.get("disagree"):
         return False, "the signer refused a shadow verdict in the last 7 days", counts
-    if not counts.get("agree"):
-        return False, "the signer recorded no agreed verdict in the last 7 days", counts
+    agreed = int(st.get("agreed_sends") or 0)
+    if agreed < CUTOVER_MIN_AGREED_SENDS:
+        return False, (f"the signer agreed on {agreed} distinct send(s) in the last 7 days; "
+                       f"the cut-over needs {CUTOVER_MIN_AGREED_SENDS}"), counts
     since = st.get("since")
     if since is None or since > now - CUTOVER_MIN_DAYS * 86400:
         return False, f"less than {CUTOVER_MIN_DAYS} days of signer-side shadow data", counts

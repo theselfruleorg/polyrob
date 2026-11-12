@@ -199,3 +199,31 @@ def test_the_tool_refuses_a_bad_expect_and_a_job_with_no_model_run(tmp_path):
     res = asyncio.run(tool.cronjob_edit(CronEditAction(job_id=job.id, expect={"idle_ok": True}),
                                         execution_context=TURN))
     assert "needs a model run" in res.error
+
+
+# --- 116 W2.2: run_effect, the one label for what a finished run did ---------
+
+def test_run_effect_labels():
+    from core.cron_expect import run_effect
+    assert run_effect({"useful": True}) == "effect"
+    assert run_effect({"useful": True, "verified": True}) == "effect"
+    assert run_effect({"useful": False, "verified": True}) == "idle"
+    assert run_effect({"useful": True, "verified": False}) == "missed"
+    assert run_effect({"useful": False}) == "unverified"
+    assert run_effect({}) == "unverified"
+    assert run_effect(None) == "unverified"
+    assert run_effect({"useful": True, "all_errored_verdict": True}) == "failed:all_errored"
+
+
+def test_run_effect_reads_a_goal_word():
+    from core.cron_expect import run_effect
+    assert run_effect({"verified": "verified"}) == "idle"
+    assert run_effect({"verified": "unverified"}) == "missed"
+    assert run_effect({"verified": ""}) == "unverified"
+
+
+def test_run_effect_returns_only_the_five_labels():
+    from core.cron_expect import RUN_EFFECTS, run_effect
+    cases = [{}, {"useful": True}, {"verified": False}, {"verified": True},
+             {"all_errored_verdict": True}, {"useful": "yes"}, {"verified": 1}]
+    assert {run_effect(c) for c in cases} <= set(RUN_EFFECTS)

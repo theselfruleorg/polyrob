@@ -64,7 +64,7 @@ def test_backup_set_is_derived_from_registry():
 
 def test_state_db_names_covers_every_store():
     names = m.state_db_names()
-    for n in ("feedback_replays.db", "telemetry_events.db", "skill_usage.db",
+    for n in ("telemetry_events.db", "skill_usage.db",
               "users.db", "messages.db", "tg_dedup.db", "signer.sqlite",
               "control.sqlite3", "token_pins.db", "bot.db"):
         assert n in names

@@ -53,7 +53,7 @@ later run, which sees only what you wrote, can finish it.
 - `schedule`: the slowest cadence that still catches the change. Every tick that
   runs the model costs a model run.
 - Clock: `every day 09:00`, a 5-field cron and an ISO time with no zone use the
-  server clock; an ISO time with `Z` is UTC. The owner's `digest.timezone` does not
+  server clock; an ISO time with `Z` is UTC. The owner's `owner.timezone` does not
   move a schedule: convert an hour the owner gives in a local zone, and name both
   times.
 - Floor: a job that runs the model repeats every 5 minutes at most.

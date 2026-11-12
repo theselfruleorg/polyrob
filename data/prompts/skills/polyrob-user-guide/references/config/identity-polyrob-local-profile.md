@@ -70,7 +70,6 @@ One line per setting: NAME — default — meaning. Code anchors and full prose:
 - TWITTER_BOT_USERNAME — default: unset — The bot's own X handle (without `@`), shown beside the X API line of the identity status section; unset = the handle is omitted.
 - WEBHOOK_PATH — default: /telegram/webhook — URL path for the Telegram webhook mode (explicitly not the old bot's hardcoded `/mvpbot`).
 - TELEGRAM_BOT_USERNAME — default: unset — the bot's @username without '@', used for room mention detection when getMe is unavailable at boot; getMe still wins when it succeeds.
-- DEV_RAIL_SCRIPT — default: unset (a default path in the install tree) — Absolute path to the Telegram `/dev` rail's inject script.
 - CHAT_INTENT_CLASSIFIER — default: OFF — Enable the chat-surface intent classifier (pre-routing intent detection on inbound chat messages).
 - OUTBOUND_QUEUE_ENABLED — default: OFF — Durable outbound send queue (retry + dead-letter) behind `publish()`'s PRIMARY reply routing (direct-send vs. queued-with-retry for a locally-subscribed surface); OFF = direct legacy sends.
 - VOICE_TRANSCRIPTION_REQUIRED — default: OFF — Make a missing faster-whisper engine a startup ERROR instead of a WARN (most deploys degrade gracefully: voice refused with a notice).

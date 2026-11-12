@@ -54,6 +54,9 @@ def _with_note(text: str) -> str:
 
 def _head(job) -> str:
     text = " ".join((job.task or "").split())
+    script = (job.payload or {}).get("script")
+    if isinstance(script, dict):   # the list names the file a script job runs
+        text = f"[script {script.get('path') or '?'}] {text}"
     return text if len(text) <= _HEAD else text[:_HEAD - 1] + "…"
 
 

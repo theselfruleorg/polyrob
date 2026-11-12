@@ -12,7 +12,7 @@ import THIS module now.
 
 ⚠️ The executor's body still lives in ``surfaces/telegram/harness.py`` — it
 pulls in some twenty ``surfaces/telegram/*_ops`` modules (owner verbs, rooms,
-groups, dev rail). Moving that body is a separate, mechanical change; this seam
+groups). Moving that body is a separate, mechanical change; this seam
 means no surface has to change when it moves. The lookup is by ATTRIBUTE at
 call time, so a test that patches ``surfaces.telegram.harness.act_on_inbound``
 still intercepts every surface.

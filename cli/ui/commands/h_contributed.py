@@ -32,6 +32,10 @@ def register(reg, Command) -> None:
         ref = handler_ref("repl", verb.name)
         if ref is None or reg.lookup(name) is not None:
             continue
-        reg.register(Command(name, _resolve(ref), verb.help,
+        handler = _resolve(ref)
+        # A handler that takes free text says so (``handler.raw_arguments = True``):
+        # the line is then split on spaces, never shell-split.
+        reg.register(Command(name, handler, verb.help,
                              aliases=tuple(a.lstrip("/") for a in verb.aliases),
-                             group=verb.group))
+                             group=verb.group,
+                             raw_arguments=bool(getattr(handler, "raw_arguments", False))))

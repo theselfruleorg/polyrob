@@ -75,6 +75,7 @@ _LAZY_SUBCOMMANDS = {
     "approvals": "cli.commands.approvals:approvals",
     "browser": "cli.commands.browser:browser",  # 049: the isolated browser service (custody)
     "pack": "cli.commands.pack:pack",  # 067 P2: installed packs
+    "nft": "cli.commands.nft:nft",  # 111 D6: the agent-NFT pin file (profile upgrade)
 }
 
 
@@ -126,7 +127,7 @@ _HELP_GROUPS = [
      ["goals", "job", "session", "subagents", "workers", "skills", "surface", "todos",
       "apps", "autonomy", "tools", "kb", "browser"]),
     ("Money",
-     ["wallet", "finance", "journey"]),
+     ["wallet", "nft", "finance", "journey"]),
     ("Owner",
      ["owner", "identity", "profile", "pack"]),
 ]

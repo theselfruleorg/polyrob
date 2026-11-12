@@ -359,12 +359,6 @@ CORE_VERB_ROWS = {
             effect="money", lane="owner_always", side="spend", approval_owner="hook",
             correspondent_blocked=True,
         ),
-        # C3: adopting writes the pfp, inherited positions and a handover entry (a fee-only
-        # account call); the owner's act by design, like take.
-        "agent_nft_adopt": dict(
-            effect="money", lane="owner_always", side="spend", approval_owner="hook",
-            correspondent_blocked=True,
-        ),
         # Permanent public writes through an NFT account.
         "agent_nft_bind_identity": dict(
             effect="money", lane="owner_always", side="spend", simulatable=True, approval_owner="hook",
@@ -385,6 +379,55 @@ CORE_VERB_ROWS = {
         # Revealed/Recommitted per id). Capped lane: the revealer runs every minute, unattended.
         "agent_nft_collection_reveal": dict(
             effect="money", lane="defi", side="spend", simulatable=True, approval_owner="hook",
+            correspondent_blocked=True,
+        ),
+        # 115 W8: the pinned sale pays the treasury back — claim(treasury) and settle(own
+        # records). The launchpad_claim reasoning: the CLAIM shape (nothing leaves, the native
+        # receipt is measured), bounded by its fee, the money moves TOWARD the treasury.
+        "agent_nft_sale_claim": dict(
+            effect="money", lane="defi", side="spend", simulatable=True, approval_owner="hook",
+            correspondent_blocked=True,
+        ),
+        "agent_nft_sale_settle": dict(
+            effect="money", lane="defi", side="spend", simulatable=True, approval_owner="hook",
+            correspondent_blocked=True,
+        ),
+        # 115 W7: readyToSell through the account. It moves nothing, but from the next block a
+        # plain marketplace fill may take the NFT and its account — the owner's act, like a send.
+        "agent_nft_sale_ready": dict(
+            effect="money", lane="owner_always", side="spend", approval_owner="hook",
+            correspondent_blocked=True,
+        ),
+        # 115 W7: cancelReady and a market cancel / incrementNonce only END a way out: fee only.
+        "agent_nft_sale_unready": dict(
+            effect="money", lane="defi", side="spend", simulatable=True, approval_owner="hook",
+            correspondent_blocked=True,
+        ),
+        "agent_nft_sale_cancel_listing": dict(
+            effect="money", lane="defi", side="spend", simulatable=True, approval_owner="hook",
+            correspondent_blocked=True,
+        ),
+        # 115 W9: buy a pinned market's listing — the price leaves for an NFT and an account no
+        # cap can price (the collection_mint reasoning): the owner's act, always.
+        "agent_nft_buy": dict(
+            effect="money", lane="owner_always", side="spend", approval_owner="hook",
+            correspondent_blocked=True,
+        ),
+        # 115 W9: claim(treasury) on the pinned market — the claim shape, money TOWARD the
+        # treasury, bounded by its fee (the agent_nft_sale_claim reasoning).
+        "agent_nft_market_claim": dict(
+            effect="money", lane="defi", side="spend", simulatable=True, approval_owner="hook",
+            correspondent_blocked=True,
+        ),
+        # 111 W9a (D8, D9): a market listing SIGNED by the treasury (class O) — an obligation to
+        # sell the NFT and its account that outlives the turn; and an accept, where the NFT and
+        # its account leave for an offer's price. Both the owner's act, one card each.
+        "agent_nft_sale_list": dict(
+            effect="money", lane="owner_always", side="spend", approval_owner="hook",
+            correspondent_blocked=True,
+        ),
+        "agent_nft_sale_accept": dict(
+            effect="money", lane="owner_always", side="spend", approval_owner="hook",
             correspondent_blocked=True,
         ),
     },

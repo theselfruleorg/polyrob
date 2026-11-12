@@ -41,7 +41,7 @@ def test_an_allowed_room_is_reported_with_its_name_and_mode(tmp_path, monkeypatc
     assert rooms == [
         {"surface": "telegram", "chat_id": "-1", "name": "The Lobby",
          "mode": "active", "admins": [], "admin_bundles": [], "settings_unreadable": False, "room_tools": [],
-         "admin_turns_today": 0, "replies_today": 0, "ledger_rows": 0, "last_write": None,
+         "admin_turns_today": 0, "replies_24h": 0, "ledger_rows": 0, "last_write": None,
          "note": "surfaces.db absent"},
     ]
     assert any("The Lobby" in ln and "mode=active" in ln
@@ -102,7 +102,7 @@ def test_reading_the_section_never_creates_surfaces_db(tmp_path):
     assert not os.path.exists(surfaces_db)
     assert sec.data["rooms"][0]["note"] == "surfaces.db absent"
     assert sec.data["rooms"][0]["ledger_rows"] == 0
-    assert sec.data["rooms"][0]["replies_today"] == 0
+    assert sec.data["rooms"][0]["replies_24h"] == 0
 
 
 def test_surfaces_db_present_reports_real_counts_with_no_note(tmp_path):
@@ -130,3 +130,15 @@ def test_unreadable_allowlist_renders_unavailable_with_a_reason(tmp_path):
     assert sec.state == STATE_UNAVAILABLE
     assert sec.reason
     assert sec.name == "groups"  # the section is still PRESENT, just unavailable
+
+
+def test_a_room_renders_through_the_one_room_line_with_a_60_char_cut(tmp_path):
+    """116 W6.8: one line shape, a rolling-24h count named as such, a long note cut."""
+    from core.surfaces.group_allowlist import GroupAllowlist
+    GroupAllowlist(os.path.join(str(tmp_path), "group_allowlist.db")).allow(
+        "telegram", "-1", note="N" * 200)
+    sec = _groups_section("owner", str(tmp_path))
+    line = sec.lines[1]
+    assert line.startswith('telegram:-1 "telegram:-1" — label: "' + "N" * 59 + "…\"")
+    assert "N" * 60 not in line
+    assert " — mode=" in line and "replies_24h=0" in line and "replies_today" not in line

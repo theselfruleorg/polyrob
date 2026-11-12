@@ -105,7 +105,8 @@ def _done_goals(user_id: str, since_ts: Optional[float],
                 data_home: Optional[str] = None) -> List[Dict[str, Any]]:
     """Goals the board marked done in the window (what I did, from the board —
     not only the memory episodes). No board yet = nothing done; a board that
-    exists and fails to read raises."""
+    exists and fails to read raises. Tenant-EXACT, like the snapshot's work
+    section: every goal row has a tenant (no instance-wide goal exists)."""
     import os
     from core.runtime_paths import goals_db_path
     from core.status_snapshot import _rows
@@ -116,6 +117,18 @@ def _done_goals(user_id: str, since_ts: Optional[float],
                      "AND status='done' AND user_id=? AND COALESCE(completed_at, 0) >= ? "
                      "ORDER BY completed_at DESC LIMIT 50",
                  (str(user_id), float(since_ts or 0)))
+
+
+#: The event read is the newest N rows. These kinds are machine bookkeeping
+#: (one row per tool call, per loop tick, per memory read): on a busy day they
+#: were most of the 200 rows, so a "7d" recap showed the last hour (116 W3.5).
+_EVENT_LIMIT = 200
+_MACHINE_KINDS = (
+    "tool_invoked", "autonomy_tick", "memory_write", "memory_recall",
+    "memory_recall_empty", "inbound_routed", "access_denied", "prompt_manifest",
+    "model_call_quality", "model_routed", "rail_probe",
+    "owner_command",  # one row per owner verb: the owner's own reads, not work
+)
 
 
 def _events(user_id: str, since_ts: Optional[float],
@@ -136,7 +149,9 @@ def _events(user_id: str, since_ts: Optional[float],
     log = open_event_log(data_home)
     if log is None:
         return []
-    return log.query(user_id=user_id, since_ts=since_ts, limit=200) or []
+    # 116 W7.4: a row with no tenant is the instance's own (the snapshot's rule).
+    return log.query(user_id=user_id, since_ts=since_ts, limit=_EVENT_LIMIT,
+                     not_kinds=_MACHINE_KINDS, strict=True, instance_rows=True) or []
 
 
 def _authored(user_id: str, data_home: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -199,7 +214,7 @@ def curator_proposals(user_id: str, since_ts: Optional[float],
         return []
     out: List[str] = []
     for ev in log.query(kind=SELF_MODIFICATION, user_id=user_id, since_ts=since_ts,
-                        limit=200) or []:
+                        limit=200, instance_rows=True) or []:
         attrs = ev.get("attrs") or {}
         owner_line = (attrs.get("note") and (
             attrs.get("action") == "propose"
@@ -226,7 +241,7 @@ def mechanism_notes(user_id: str, since_ts: Optional[float],
         return []
     out: List[str] = []
     for ev in log.query(kind=REVIEW_MECHANISM_NOTE, user_id=user_id, since_ts=since_ts,
-                        limit=50) or []:
+                        limit=50, instance_rows=True) or []:
         note = str((ev.get("attrs") or {}).get("note") or "").strip()
         if note and note not in out:
             out.append(note)
@@ -278,7 +293,13 @@ def build_recap(user_id: str, data_home: Optional[str] = None,
         entries.append(RecapEntry(ts=float(g.get("completed_at") or now), kind=KIND_GOAL_DONE,
                                   text=f"goal done: {str(g.get('title') or g.get('id'))[:100]}"))
 
-    for ev in _guard("event log", failures, now, _events, user_id, since_ts, data_home) or []:
+    events = _guard("event log", failures, now, _events, user_id, since_ts, data_home) or []
+    if len(events) >= _EVENT_LIMIT:
+        failures.append(RecapEntry(
+            ts=now, kind="cut",
+            text=f"the event list holds the newest {_EVENT_LIMIT} events only; "
+                 f"ask for a narrower window to see the earlier ones"))
+    for ev in events:
         attrs = ev.get("attrs") or {}
         raw_kind = ev.get("kind") or "event"
         if raw_kind == "self_modification":

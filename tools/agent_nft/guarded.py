@@ -36,8 +36,9 @@ async def guarded_call(tool, *, execution_context, verb: str, intent, inner_to: 
                        inner_data: str, inner_value: int = 0, held=None, dry_run: bool,
                        header: str = "", rpc=None, hint: Any = None, asset: Optional[str] = None,
                        journal_kind: Optional[str] = None, journal_text: str = "",
-                       counterparty: Optional[str] = None) -> Any:
-    """Build → authorize → (maybe) send → confirm → record (→ journal). Returns an ActionResult."""
+                       counterparty: Optional[str] = None, fee_only: bool = False) -> Any:
+    """Build → authorize → (maybe) send → confirm → record (→ journal). Returns an ActionResult.
+    ``fee_only``: a claim — the guard's amount is the gas fee, never the value received."""
     from core.wallet import erc6551
     from core.wallet.broadcast.evm import EvmRail
 
@@ -81,11 +82,14 @@ async def guarded_call(tool, *, execution_context, verb: str, intent, inner_to: 
             execution_context=execution_context, tool_self=tool, price_fn=_price,
             forged_fn=_is_forged_or_autonomous_turn, autonomous_ok_fn=_is_autonomous_goal_turn,
             account_rpc=rpc)
-        header += (f"  value:    {'unknown' if decision.amount_usd is None else f'${decision.amount_usd:.4f}'}\n"
-                   f"  guard:    {decision.reason}\n  lane:     {decision.lane}\n")
+        usd = 'unknown' if decision.amount_usd is None else f'${decision.amount_usd:.4f}'
+        header += ((f"  cost:     {usd} — the gas fee, NOT the value received\n" if fee_only
+                    else f"  value:    {usd}\n")
+                   + f"  guard:    {decision.reason}\n  lane:     {decision.lane}\n")
         if not decision.allowed:
             return tool._ar(content=header + "  RESULT: NOT SENT — nothing was broadcast.")
-        if decision.sim_gas_used:
+        from core.wallet.broadcast.evm import is_account_call
+        if decision.sim_gas_used or is_account_call(tx):
             try:
                 tx = rail.size_gas(tx, decision.sim_gas_used)
             except Exception as exc:  # noqa: BLE001

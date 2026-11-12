@@ -26,7 +26,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, FrozenSet, List, Mapping, Optional
+from typing import Dict, FrozenSet, List, Mapping, Optional, Tuple
 
 # The single-user local tenant + the anon-bucket predicate, for
 # ``resolve_owner_user_id``. ``core.identity`` imports nothing from this module at
@@ -867,29 +867,52 @@ def erc8004_record_path(home_dir: Path | str,
     return Path(home_dir) / _SELF_CONTEXT_SUBDIR / safe_instance / _ERC8004_RECORD
 
 
+ERC8004_ABSENT = "absent"
+ERC8004_OK = "ok"
+ERC8004_UNREADABLE = "unreadable"
+
+
+def read_erc8004_record(home_dir: Path | str, instance_id: str = DEFAULT_INSTANCE_ID,
+                        ) -> Tuple[str, Optional[dict], str]:
+    """``(state, record, why)`` — the tri-state reader (116 W6.4). Never raises.
+
+    - ``absent``: no file — this instance never recorded a registration;
+    - ``ok``: a record with both ``agent_id`` and ``tx_hash``;
+    - ``unreadable``: a file that is corrupt, not an object, or incomplete
+      (``why`` names which). ⚠️ NOT "not registered": ``register()`` is not
+      idempotent, and a registration can land on chain while its record write
+      fails, so a broken record must never invite a second registration.
+    """
+    p = erc8004_record_path(home_dir, instance_id)
+    try:
+        if not p.is_file():
+            return ERC8004_ABSENT, None, ""
+        rec = json.loads(p.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return ERC8004_ABSENT, None, ""
+    except Exception as e:
+        logger.debug("erc8004 record unreadable at %s", p, exc_info=True)
+        return ERC8004_UNREADABLE, None, type(e).__name__
+    if not isinstance(rec, dict):
+        return ERC8004_UNREADABLE, None, "not a JSON object"
+    # Both are required for the record to MEAN anything: an id with no
+    # transaction is an assertion, and there is already a field for those.
+    missing = [k for k in ("agent_id", "tx_hash") if not rec.get(k)]
+    if missing:
+        return ERC8004_UNREADABLE, None, f"incomplete (no {', '.join(missing)})"
+    return ERC8004_OK, rec, ""
+
+
 def load_erc8004_record(home_dir: Path | str,
                         instance_id: str = DEFAULT_INSTANCE_ID) -> Optional[dict]:
     """The on-chain registration record, or None. Never raises.
 
     ⚠️ A corrupt or incomplete record reads as None. An unreadable file is not
     evidence of a registration, and claiming one on the strength of a broken
-    file is the worst of the three outcomes.
+    file is the worst of the three outcomes. A reader that must tell "absent"
+    from "unreadable" (a status line) uses :func:`read_erc8004_record`.
     """
-    p = erc8004_record_path(home_dir, instance_id)
-    try:
-        if not p.is_file():
-            return None
-        rec = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        logger.debug("erc8004 record unreadable at %s", p, exc_info=True)
-        return None
-    if not isinstance(rec, dict):
-        return None
-    # Both are required for the record to MEAN anything: an id with no
-    # transaction is an assertion, and there is already a field for those.
-    if not rec.get("agent_id") or not rec.get("tx_hash"):
-        return None
-    return rec
+    return read_erc8004_record(home_dir, instance_id)[1]
 
 
 def save_erc8004_record(home_dir: Path | str,

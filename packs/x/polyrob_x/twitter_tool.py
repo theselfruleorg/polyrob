@@ -648,11 +648,7 @@ class TwitterTool(BaseTool):
                 # Fallback to direct execution if rate limiter is not available
                 self.logger.warning("Rate limiter not available, executing request directly")
                 result = await self._execute_request(func, *args, **kwargs)
-            try:
-                from core.credential_verdicts import clear_rejection
-                clear_rejection("twitter_api", str(endpoint_type or ""))
-            except Exception:
-                pass
+            self._clear_credit_402()
             return result
         except RateLimitError:
             if getattr(self.rate_limiter, '_initialization_mode', False):
@@ -664,16 +660,45 @@ class TwitterTool(BaseTool):
                 self._record_credit_402(str(endpoint_type or ""))
             raise APIError(f"Twitter request failed: {str(e)}")
 
+    def _credit_verdict_key(self) -> str:
+        """The 402 verdict key: the ACCOUNT (one credit pool per developer app,
+        keyed by a digest of its consumer key), never the endpoint type — keyed
+        by endpoint, one outage was N verdicts and a success on one endpoint
+        left the others standing (116 W6.3)."""
+        try:
+            from core.credential_verdicts import credential_digest
+            return "account#" + credential_digest(self.api_key) if self.api_key else "account"
+        except Exception:
+            return "account"
+
+    _legacy_402_keys_swept = False
+
+    def _clear_credit_402(self) -> None:
+        """A success proves the credit pool is not empty: forget the account's
+        verdict, and once per process the endpoint-keyed rows of the old scheme."""
+        try:
+            from core.credential_verdicts import active, clear_rejection
+            clear_rejection("twitter_api", self._credit_verdict_key())
+            if not TwitterTool._legacy_402_keys_swept:
+                TwitterTool._legacy_402_keys_swept = True
+                for v in active("twitter_api"):
+                    if "#" not in v.key and v.key != "account":
+                        clear_rejection("twitter_api", v.key)
+        except Exception:
+            pass
+
     def _record_credit_402(self, endpoint_type: str) -> None:
         """Remember a 402 durably and say so ONCE per outage.
 
         Prod logged 317 "402" lines in 24 h and emitted NO durable event, so the
         status snapshot could not show the rail was dead (057 R5). The event is
         emitted per FRESH verdict, not per refused call; the log line likewise.
+        The verdict is the account's; the endpoint rides only in the event.
         """
+        key = self._credit_verdict_key()
         try:
             from core.credential_verdicts import record_rejection, warn_once
-            v = record_rejection("twitter_api", endpoint_type, code="402",
+            v = record_rejection("twitter_api", key, code="402",
                                  remedy=self._CREDIT_402_REMEDY)
         except Exception:
             return
@@ -684,7 +709,7 @@ class TwitterTool(BaseTool):
                 "endpoint": endpoint_type,
                 "remedy": self._CREDIT_402_REMEDY,
                 "fallback": self.CREDIT_402_FALLBACK})
-        if warn_once("twitter_api", endpoint_type, episode=v.first_seen):
+        if warn_once("twitter_api", key, episode=v.first_seen):
             self.logger.warning(
                 "X API 402 Payment Required (credits depleted) on %s — remembering "
                 "for %ss; further calls refuse locally. Remedy: %s. Fallback rail: %s",
@@ -1442,90 +1467,6 @@ class TwitterTool(BaseTool):
                 raise
             self.logger.error(f"Twitter search error: {str(e)}")
             raise APIError(f"Twitter search failed: {str(e)}")
-
-    async def get_user(self, username: str) -> Dict[str, Any]:
-        """Get user information.
-        
-        Args:
-            username: Twitter username
-            
-        Returns:
-            User information dictionary
-            
-        Raises:
-            APIError: If user lookup fails
-        """
-        await self._ensure_initialized()
-        
-        try:
-            response = self.client.get_user(
-                username=username,
-                user_fields=['description', 'public_metrics', 'profile_image_url']
-            )
-            
-            if not response.data:
-                raise APIError(f"User {username} not found")
-                
-            user = response.data
-            return {
-                'id': user.id,
-                'username': user.username,
-                'name': user.name,
-                'description': user.description,
-                'metrics': user.public_metrics,
-                'profile_image_url': user.profile_image_url
-            }
-            
-        except tweepy.TweepyException as e:
-            raise APIError(f"Twitter user lookup failed: {str(e)}")
-        except Exception as e:
-            raise APIError(f"Error during Twitter user lookup: {str(e)}")
-            
-    async def get_tweets(
-        self,
-        user_id: str,
-        max_results: int = 10,
-        **kwargs
-    ) -> List[Dict[str, Any]]:
-        """Get tweets from a user.
-        
-        Args:
-            user_id: Twitter user ID
-            max_results: Maximum number of tweets to return
-            **kwargs: Additional parameters
-            
-        Returns:
-            List of tweet dictionaries
-            
-        Raises:
-            APIError: If tweet lookup fails
-        """
-        await self._ensure_initialized()
-        
-        try:
-            response = self.client.get_users_tweets(
-                id=user_id,
-                max_results=max_results,
-                tweet_fields=['created_at', 'public_metrics', 'entities'],
-                **kwargs
-            )
-            
-            tweets = []
-            for tweet in response.data or []:
-                tweets.append({
-                    'id': tweet.id,
-                    'text': tweet.text,
-                    'created_at': tweet.created_at.isoformat(),
-                    'metrics': with_repost_total(tweet.public_metrics),
-                    'entities': tweet.entities
-                })
-                
-            return tweets
-            
-        except tweepy.TweepyException as e:
-            raise APIError(f"Twitter tweets lookup failed: {str(e)}")
-        except Exception as e:
-            raise APIError(f"Error during Twitter tweets lookup: {str(e)}")
 
     # =====================================================================
     # G1 — FULL write surface: v1.1 client, helpers, gating, actions

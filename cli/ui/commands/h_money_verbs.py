@@ -1,7 +1,7 @@
-"""h_money_verbs.py — ``/wallet`` ``/trade`` ``/bridge`` ``/dev`` in the REPL (043 A23).
+"""h_money_verbs.py — ``/wallet`` ``/trade`` ``/bridge`` in the REPL (043 A23).
 
 Thin consumers of the SAME primitives the Telegram owner seat calls
-(``surfaces.telegram.owner_ops`` and ``surfaces.telegram.dev_rail``), so the
+(``surfaces.telegram.owner_ops``), so the
 terminal and the phone can never drift into different answers about a cap, a
 quote, or what a bridge guarantees. This is the ``h_token.py`` / ``h_inbox.py``
 pattern: a registrar beside its handlers, out of the size-ratcheted
@@ -75,17 +75,6 @@ async def h_bridge(ctx) -> None:
     )
 
 
-async def h_dev(ctx) -> None:
-    """Owner ↔ on-host dev-loop rail (027). Raw free text, not re-joined args —
-    the loop sees exactly what was typed. Async: ``perform_dev_command`` is a
-    coroutine and the registry awaits an awaitable handler."""
-    from surfaces.telegram.dev_rail import perform_dev_command, strip_dev_prefix
-    # ctx.raw is the body without the leading slash (e.g. "dev pull main"); put
-    # the slash back so strip_dev_prefix trims exactly "/dev".
-    text = strip_dev_prefix("/" + (getattr(ctx, "raw", "") or "dev"))
-    ctx.emit(await perform_dev_command(text), title="dev")
-
-
 HELP_WALLET = (
     "  The agent wallet: addresses, active network, and the spend caps that\n"
     "  bound autonomous money. On-chain balances are a network read, so they\n"
@@ -132,19 +121,8 @@ HELP_BRIDGE = (
     "`/bridge` on Telegram and `polyrob wallet bridge`.",
 )
 
-HELP_DEV = (
-    "  Pass a message to an operator-run maintenance script on the host\n"
-    "  (DEV_RAIL_SCRIPT). Everything after /dev is passed through verbatim,\n"
-    "  including newlines.\n"
-    "\n"
-    "  Gated by the dev rail's own flags; with it off you get an honest note,\n"
-    "  never a stack trace.",
-    "`/dev` on Telegram.",
-)
-
-
 def register(reg, Command) -> None:
-    """Register the four money/dev verbs. Called from ``h_a23.register``."""
+    """Register the money verbs. Called from ``h_a23.register``."""
     reg.register(Command(
         "wallet", h_wallet,
         "Wallet addresses, network, caps — and the one cap you may set from chat",
@@ -167,10 +145,4 @@ def register(reg, Command) -> None:
         "Move value between chains (quotes unless you add 'go')",
         usage="<from> <to> <amount> [from usdc] [as <asset>] [go]", group="money",
         help_long=HELP_BRIDGE[0], elsewhere=HELP_BRIDGE[1],
-    ))
-    reg.register(Command(
-        "dev", h_dev,
-        "Pass a message to an operator-run maintenance script",
-        usage="<free text>", group="control", raw_arguments=True,
-        help_long=HELP_DEV[0], elsewhere=HELP_DEV[1],
     ))

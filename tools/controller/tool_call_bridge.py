@@ -122,6 +122,14 @@ def _param_shape(param_model) -> str:
     return ("Parameters:\n" + "\n".join(lines) + "\n") if lines else ""
 
 
+#: A call the bridge answered itself: nothing was dispatched, so the outer
+#: ``tool_call`` is the only ``tool_invoked`` row, and it is ``ok=False``. A
+#: dispatched call is recorded by the inner dispatch under the TARGET's name
+#: (the outer row counted every bridged call twice, as a "core" success).
+BRIDGE_REFUSED_KEY = "tool_call_refused"
+_REFUSED = {BRIDGE_REFUSED_KEY: True}
+
+
 async def perform_tool_call(controller, name: str, arguments, execution_context=None):
     """Resolve *name*, validate *arguments*, then dispatch through the ONE path.
 
@@ -137,13 +145,13 @@ async def perform_tool_call(controller, name: str, arguments, execution_context=
         return ActionResult(
             extracted_content=("tool_call refused: `name` is required — pass the exact "
                                "action name from tool_describe / tool_search."),
-            include_in_memory=True)
+            include_in_memory=True, metadata=_REFUSED)
 
     if target == TOOL_CALL_ACTION:
         return ActionResult(
             extracted_content=("tool_call refused: tool_call cannot call itself. Name the "
                                "real action instead."),
-            include_in_memory=True)
+            include_in_memory=True, metadata=_REFUSED)
 
     action = controller.registry.get_action(target)
     if action is None:
@@ -154,7 +162,7 @@ async def perform_tool_call(controller, name: str, arguments, execution_context=
             extracted_content="tool_call refused: " + not_loaded_text(
                 target, controller,
                 is_leaf=bool(getattr(execution_context, "is_sub_agent", False))),
-            include_in_memory=True)
+            include_in_memory=True, metadata=_REFUSED)
 
     # Native schema validation is what a late tool LOSES under the freeze; this is
     # where it is paid back. The error is a result, not an exception.
@@ -169,7 +177,7 @@ async def perform_tool_call(controller, name: str, arguments, execution_context=
                     f"tool_call: '{target}' rejected these arguments — {e}\n{empty}"
                     f"{_param_shape(param_model)}"
                     f"Call again with these inside `arguments` (tool_describe has the full schema)."),
-                include_in_memory=True)
+                include_in_memory=True, metadata=_REFUSED)
 
     try:
         ActionModel = controller.create_action_model()
@@ -178,7 +186,7 @@ async def perform_tool_call(controller, name: str, arguments, execution_context=
         return ActionResult(
             extracted_content=(
                 f"tool_call: could not build a call to '{target}' — {e}"),
-            include_in_memory=True)
+            include_in_memory=True, metadata=_REFUSED)
 
     # THE dispatch. multi_act runs the pre-tool-call hooks (denylist, wallet
     # authority, every approval lane) against the TARGET name, then act() ->

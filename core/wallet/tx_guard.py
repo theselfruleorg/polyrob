@@ -236,7 +236,7 @@ class TxIntent:
     #: execute(inner_to, value, inner_data, 0)}`` and EVERY other field of this
     #: intent describes the INNER call; the guard measures the account as the
     #: holder and the treasury as the sender. Not a seventh shape: every shape
-    #: except deploy and liquidity may ride it.
+    #: except deploy and liquidity (a v4 fee collect only, 115 W4) may ride it.
     via_account: Optional[str] = None
     #: The account's ``state()`` the verb read when it built this intent. A
     #: pre-flight re-read that differs refuses (the account changed under us —
@@ -827,12 +827,12 @@ def _via_account_inner(intent: TxIntent, tx: dict) -> Tuple[Optional[dict], Opti
     ``execute(inner_to, value, data, 0)``, and the inner call is not aimed back
     at the account itself.
     """
-    from core.wallet import erc6551
+    from core.wallet import erc6551, liquidity_guard
     via = str(intent.via_account).lower()
-    if intent.is_deploy or intent.is_liquidity_op:
-        return None, ("a token-bound account cannot deploy or change liquidity (v1): "
-                      "`execute` with operation != 0 is an account-admin call, and LP is "
-                      "out of scope")
+    if intent.is_deploy or (intent.is_liquidity_op and not liquidity_guard.may_ride_account(intent)):
+        return None, ("a token-bound account cannot deploy, and changes liquidity only to "
+                      "collect the fees of a v4 position (115 W4): `execute` with operation "
+                      "!= 0 is an account-admin call")
     if intent.via_account_state is None:
         return None, ("an account call must declare the account `state()` it read "
                       "(`via_account_state`) — without it a sale, lock or nested "
@@ -973,11 +973,11 @@ def _account_call_refusal(tx: dict, *, deep: bool = True) -> Optional[str]:
 
 def _via_account_preflight(intent: TxIntent, sender: str, rpc, *,
                            inner_to: Optional[str] = None,
-                           journal_to: Optional[str] = None) -> Optional[str]:
-    """Rule 5: the account pre-flight reads (``core/wallet/tx_guard_account.py``)."""
+                           journal_to: Optional[str] = None, **kw) -> Optional[str]:
+    """Rule 5 + the sale hold: the account pre-flight reads (``core/wallet/tx_guard_account.py``)."""
     from core.wallet import tx_guard_account
     return tx_guard_account.via_account_preflight(intent, sender, rpc, inner_to=inner_to,
-                                                  journal_to=journal_to)
+                                                  journal_to=journal_to, **kw)
 
 
 def _treasury_side_refusal(intent: TxIntent, deltas, *, holder: str, sender: str) -> Optional[str]:
@@ -1130,13 +1130,13 @@ def _strip_journal_leg(intent: TxIntent, tx: dict, *, signer: str
 
 
 def _pinned_collection_accounts(chain: str):
-    """``(chain_id, {pinned collection address}, frozenset of every account address of every
+    """``(chain_id, {pinned collection + sale address}, frozenset of every account address of every
     pinned collection's ids 0..max_supply)`` from the owner's collection registry. Raises when
     the registry cannot be trusted (the callers refuse)."""
     from core.wallet import collection_registry, erc6551
     chain_id = collection_registry.chain_id_of(chain)
     profiles = collection_registry.profiles_on(chain_id)
-    pinned = {p.address for p in profiles}
+    pinned = {a for p in profiles for a in (p.address, p.sale and p.sale.address) if a}
     accounts = frozenset().union(*(
         erc6551.collection_account_addresses(chain_id, p.address, p.max_supply,
                                              implementation=v.implementation, salt=v.salt)

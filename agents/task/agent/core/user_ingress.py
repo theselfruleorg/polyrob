@@ -8,6 +8,7 @@ loop's ``_drain_user_messages`` / ``_check_todo_completion``) are unchanged.
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, List, Optional
 
 from agents.task.telemetry.views import (
@@ -359,7 +360,10 @@ class UserIngressMixin:
             # NEW: Get workspace changes
             workspace_changes = None
             try:
-                workspace_changes = self.workspace_context.get_workspace_changes(
+                # Off the loop: the scan walks the workspace tree (a project
+                # root held the loop for up to 26 s on prod).
+                workspace_changes = await asyncio.to_thread(
+                    self.workspace_context.get_workspace_changes,
                     session_id=self.session_id,
                     user_id=self.user_id,
                     since_last_check=True

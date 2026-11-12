@@ -106,11 +106,17 @@ def _claim_stop(board: Any, goal: Any) -> bool:
     from core.sqlite_util import execute_retry
     from agents.task.goals.payload_keys import payload_expr
     expr, params = payload_expr({_TOLD_KEY: _stop_time(goal)})
+    prev = (goal.payload or {}).get(_TOLD_KEY)
+    # ⚠️ Never `IS ?` on the float: SQLite's JSON parse and Python's can differ by one
+    # ulp for the same text (about 1 time stamp in 8 on SQLite 3.40), and then a later
+    # stop of the goal was never told. Compare like ``_already_told`` does.
+    if prev is None:
+        cond, cparams = f"json_extract(payload,'$.{_TOLD_KEY}') IS NULL", ()
+    else:
+        cond, cparams = f"abs(json_extract(payload,'$.{_TOLD_KEY}') - ?) < 0.001", (float(prev),)
     return execute_retry(
-        board.db_path,
-        f"UPDATE goals SET payload={expr} WHERE id=? "
-        f"AND json_extract(payload,'$.{_TOLD_KEY}') IS ?",
-        (*params, goal.id, (goal.payload or {}).get(_TOLD_KEY))) == 1
+        board.db_path, f"UPDATE goals SET payload={expr} WHERE id=? AND {cond}",
+        (*params, goal.id, *cparams)) == 1
 
 
 def _release_stop(board: Any, goal: Any) -> None:

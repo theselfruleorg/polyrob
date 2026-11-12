@@ -39,6 +39,9 @@ USAGE = (
     "/nft untrust <collection|all> on <chain> [go]\n"
     "/nft send <id|collection#id> <to> on <chain> [go] — give one away (its account goes "
     "with it; its approvals must be cleared first)\n"
+    "/nft ready <id|collection#id> on <chain> [go] — make it ready for sale (a plain "
+    "marketplace fill may then take it and its account; I hold my own acts through it)\n"
+    "/nft unready <id|collection#id> on <chain> [go] — end its sale readiness\n"
     "/nft list on <chain> [address <0x…>]\n"
     "/nft account [<id>] on <chain> — one agent NFT's account: approvals, owner, lock, "
     "balance, journal\n"
@@ -96,7 +99,7 @@ async def nft_reply(user_id: Optional[str], args: List[str]) -> str:
     if verb in ("ls", "holdings"):
         verb = "list"
     if verb not in ("list", "info", "transfer", "revoke", "send", "trust", "untrust",
-                    "account"):
+                    "account", "ready", "unready"):
         return f"Unknown /nft verb {verb!r}.\n{USAGE}"
 
     execute = False
@@ -137,6 +140,11 @@ async def nft_reply(user_id: Optional[str], args: List[str]) -> str:
             except Exception as exc:
                 return f"❌ {exc}"
             return _render(await AgentNftTool().agent_nft_snapshot(params, ctx))
+
+        if verb in ("ready", "unready"):
+            if len(tokens) != 1:
+                return f"Usage: /nft {verb} <id|collection#id> on <chain> [go]"
+            return await _agent_nft_sale(ctx, verb, tokens[0], chain=chain, execute=execute)
 
         if verb == "send":
             if len(tokens) < 2:
@@ -235,6 +243,27 @@ async def _agent_nft_send(ctx, target: str, to: str, *, chain: str, execute: boo
     if not execute and not body.startswith("❌"):
         body = with_go_hint(body, f"\n\nAdd `go` to send it: /nft send {target} {to} on {chain} go\n"
                             "⚠️ It is irreversible: the NFT and its account leave this treasury.")
+    return body
+
+
+async def _agent_nft_sale(ctx, verb: str, target: str, *, chain: str, execute: bool) -> str:
+    """``/nft ready|unready <id> [go]`` — ``agent_nft_sale_ready`` / ``agent_nft_sale_unready``
+    from the owner's seat (115 W7). The owner asking IS the owner's act: the guard's sale hold
+    and the ready lane (``owner_always``) see an owner turn."""
+    from tools.agent_nft.tool import AgentNftTool, SaleReadyParams
+    try:
+        params = SaleReadyParams(nft=target, chain=chain, dry_run=not execute)
+    except Exception as exc:
+        return f"❌ {exc}"
+    tool = AgentNftTool()
+    fn = tool.agent_nft_sale_ready if verb == "ready" else tool.agent_nft_sale_unready
+    body = _render(await fn(params, ctx))
+    if not execute and not body.startswith("❌") and "no transaction" not in body:
+        hint = (f"\n\nAdd `go` to make it ready: /nft ready {target} on {chain} go\n"
+                "⚠️ Once ready, a plain marketplace fill can take the NFT and everything its "
+                "account holds, with no check for the buyer." if verb == "ready" else
+                f"\n\nAdd `go` to end it: /nft unready {target} on {chain} go")
+        body = with_go_hint(body, hint)
     return body
 
 

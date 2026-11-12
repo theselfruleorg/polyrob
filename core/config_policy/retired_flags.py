@@ -45,6 +45,9 @@ RETIRED_FLAGS: dict[str, str] = {
     # no reader: a write from the owner's clean turn applies, any other is a draft
     "SELF_CONTEXT_REQUIRE_REVIEW": "",
     "OWNER_DOC_REQUIRE_REVIEW": "",
+    # the local ERC-8004 feedback API is gone: feedback is given and read on chain
+    "EIP8004_PAYMENT_FEEDBACK": "",
+    "EIP8004_AGENT_PRIVATE_KEY": "",
     # legacy aliases — set the canonical name instead
     "WEBGATE_MULTITENANT": "POLYROB_POSTURE=multitenant",
     "OWNER_SURFACES": "OWNER_SURFACE",

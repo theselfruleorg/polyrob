@@ -56,6 +56,7 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+from core.event_log import TENANT_OR_INSTANCE_SQL
 from core.status_types import (  # noqa: E402,F401
     ASK_KIND_TOKEN_IDENTITY, HealthItem, MISSED_IN_SNAPSHOT, MISSED_TEXT_CHARS,
     OVERALL_DEGRADED, OVERALL_OK, OVERALL_PARTIAL, SECTION_ORDER, SEVERITY_CRIT,
@@ -96,9 +97,10 @@ def _read_telemetry(user_id: str, data_dir: str, since_ts: float) -> Section:
         path,
         "SELECT ts, kind, user_id, session_id, source, attrs FROM telemetry_events "
         "WHERE ts >= ? AND kind NOT IN "
-        "('memory_write','memory_recall','memory_recall_empty','inbound_routed','access_denied') "
-        "AND (user_id = ? OR user_id = '') ORDER BY ts DESC LIMIT 20000",
-        (float(since_ts), str(user_id)))
+        "('memory_write','memory_recall','memory_recall_empty','inbound_routed','access_denied',"
+        "'tool_invoked') "
+        "AND " + TENANT_OR_INSTANCE_SQL + " ORDER BY ts DESC LIMIT ?",
+        (float(since_ts), str(user_id), TELEMETRY_READ_LIMIT))
     for r in rows:
         try:
             r["attrs"] = json.loads(r.get("attrs") or "{}") or {}
@@ -107,7 +109,40 @@ def _read_telemetry(user_id: str, data_dir: str, since_ts: float) -> Section:
     counts: Dict[str, int] = {}
     for r in rows:
         counts[r["kind"]] = counts.get(r["kind"], 0) + 1
-    return Section(name="telemetry", data={"rows": rows, "counts": counts, "path": path})
+    sec = Section(name="telemetry", data={"rows": rows, "counts": counts, "path": path,
+                                          "since_ts": float(since_ts)})
+    # A read that hit its limit holds the NEWEST rows only: every 24 h count
+    # built on it is a lower bound, and the page says so (116 W3.4).
+    truncated = len(rows) >= TELEMETRY_READ_LIMIT
+    sec.data["truncated"] = truncated
+    if truncated:
+        oldest = rows[-1]["ts"] if rows else since_ts
+        sec.health.append(HealthItem(
+            key="telemetry_truncated", severity=SEVERITY_WARN,
+            text=(f"the 24h telemetry read was cut at {TELEMETRY_READ_LIMIT:,} rows "
+                  f"(it reaches back to {_hhmm(oldest)} only): the 24h counts on this "
+                  f"page are lower bounds"),
+            remedy="look for a kind that floods the log: `polyrob doctor --audit-status`"))
+    # Rows THIS process could not write (116 W3.1). Zero is the normal state.
+    try:
+        from core.event_log import dropped_rows
+        drops = dropped_rows()
+    except Exception as e:
+        drops = {"n": 0, "last_error": f"{type(e).__name__}"}
+    sec.data["dropped_rows"] = drops
+    if drops.get("n"):
+        sec.lines.append(f"{drops['n']} telemetry row(s) not written by this process "
+                         f"({drops.get('last_error') or '?'})")
+        sec.health.append(HealthItem(
+            key="telemetry_dropped", severity=SEVERITY_WARN,
+            text=(f"{drops['n']} telemetry row(s) could not be written by this process "
+                  f"({drops.get('last_error') or '?'}): status counts miss them"),
+            remedy="check the data home is writable and not full (`polyrob doctor --perms`)"))
+    return sec
+
+
+#: The most rows one snapshot reads from the event log for its window.
+TELEMETRY_READ_LIMIT = 20000
 
 
 # W9 (2026-10-10): the types, literals and section builders live in their own
@@ -143,6 +178,21 @@ from core.status_identity import (  # noqa: E402,F401
 
 # --- assembly ----------------------------------------------------------------
 
+#: 116 W5.12: inside one severity, "can the agent run and reach you" comes
+#: before "what waits on you". A chat seat shows the first few items only, and
+#: nine open questions pushed a dead loop off the screen.
+_HEALTH_FIRST = ("no_provider", "no_live_provider", "provider", "credit", "loop", "autonomy", "telemetry",
+                 "delivery", "outbound", "dead_letter", "surface", "cron_store")
+_HEALTH_LAST = ("open_asks", "pending_approvals", "pending_contacts", "blocked:",
+                "goals_in_triage")
+
+
+def _health_rank(h: HealthItem) -> tuple:
+    key = str(h.key or "")
+    rank = 0 if key.startswith(_HEALTH_FIRST) else 2 if key.startswith(_HEALTH_LAST) else 1
+    return (0 if h.severity == SEVERITY_CRIT else 1, rank)
+
+
 def _assemble(user_id: str, now: float, window_sec: int, sections: Dict[str, Section]) -> StatusSnapshot:
     health: List[HealthItem] = []
     unavailable: List[str] = []
@@ -151,7 +201,7 @@ def _assemble(user_id: str, now: float, window_sec: int, sections: Dict[str, Sec
         if not sec.available:
             unavailable.append(f"{name} ({sec.reason})")
         health.extend(sec.health)
-    health.sort(key=lambda h: 0 if h.severity == SEVERITY_CRIT else 1)
+    health.sort(key=_health_rank)
     return StatusSnapshot(user_id=user_id, generated_at=now, window_sec=window_sec,
                           sections=sections, health=health, unavailable_sources=unavailable)
 
@@ -174,6 +224,14 @@ def _build_core(user_id: str, *, data_dir: Optional[str], task_agent: Any,
     goals_db, cron_db = goals_db_path(data_dir), cron_db_path(data_dir)
     if container is None:
         container = getattr(task_agent, "container", None)
+    if task_agent is None and container is not None:
+        # A seat with a container has an agent (116 W7.1): `agent_status` passed
+        # the container and its session id but no agent, so the agent read
+        # "idle (not resident)" about the session it was running in.
+        try:
+            task_agent = container.get_agent("task_agent")
+        except Exception:
+            task_agent = None    # no agent here: the session section says so
     sections: Dict[str, Section] = {
         "session": _guarded("session", _session_section, task_agent, session_id),
         "providers": _guarded("providers", _providers_section, tele, now),
@@ -197,6 +255,11 @@ def _build_core(user_id: str, *, data_dir: Optional[str], task_agent: Any,
         # 067 P2: installed / loaded / disabled / refused packs, with reasons.
         "packs": _guarded("packs", packs_section),
     }
+    # The telemetry read is not a rendered section: what it found about ITSELF
+    # (a cut read, rows this process could not write) rides the loops section.
+    if tele.available and sections["loops"].available:
+        sections["loops"].lines.extend(tele.lines)
+        sections["loops"].health.extend(tele.health)
     if not uid:
         for name in ("work", "approvals", "loops", "tools", "knowledge", "delivery", "rules",
                      "apps", "security"):

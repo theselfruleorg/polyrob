@@ -60,9 +60,9 @@ STRINGS = {
     # every screen, so it is the one line that may never be confidently wrong.
     "shell.logout": "Log out",
     "shell.state.running": "The agent is running.",
-    # The in-progress count (running goals + cron runs + live sessions, from the
-    # ONE live reader). Absent when nothing is measured as running — never a 0.
-    "shell.state.running_busy": "The agent is running, {count} in progress.",
+    # The in-progress counts: the status snapshot's running goals and cron runs
+    # (the numbers /status prints). Absent when nothing is measured as running.
+    "shell.state.running_busy": "The agent is running: {goals} goal run(s), {cron} job run(s).",
     # 080: not paused, nothing running, and the scheduler and the goal loop
     # are both off — "running" would promise work that nothing will start.
     "shell.state.idle": "The agent is idle: {why}.",

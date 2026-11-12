@@ -80,6 +80,37 @@ _UUID_RE = re.compile(
 )
 
 
+#: M12: a private key has the SAME shape as a transaction hash (``0x`` + 64 hex),
+#: so the bare shape stays readable (the owner reads tx hashes in logs) but a value
+#: assigned to a key-like NAME is redacted: ``key=0x…``, ``pk: 0x…``,
+#: ``"signer_key": "0x…"``. A name that says it is a hash (``tx_hash``, ``txid``,
+#: ``block``, ``topic0``, ``key_hash``…) or a public value keeps the value.
+_KEYED_HEX64_RE = re.compile(
+    r"(?<![\w-])([A-Za-z][\w-]{0,40})"
+    r"(\s*[\"']?\s*[:=]\s*[\"']?\s*|\s+)"
+    r"(0x[0-9a-fA-F]{64})(?![0-9a-fA-F])")
+_KEY_NAME_RE = re.compile(r"(?i)(?:^|[_-])(?:private|priv|secret|seed|mnemonic|key|pk)(?:$|[_-])"
+                          r"|privkey|privatekey|secretkey|signingkey|signerkey|walletkey")
+_HASH_NAME_RE = re.compile(r"(?i)tx|hash|transaction|block|topic|digest|pub|idempotency|slot")
+#: An explorer link: ``…/tx/0x<64 hex>`` — the hash IS the link's subject.
+_EXPLORER_HASH_PATH_RE = re.compile(
+    r"(?:^|/)(?:tx|txs|transaction|block|blocks)/0x[0-9a-fA-F]{64}$")
+
+
+def _redact_keyed_hex64(text: str) -> str:
+    """Redact a ``0x`` + 64-hex value that a key-like name assigns (M12)."""
+    if "0x" not in text and "0X" not in text:
+        return text
+
+    def _sub(m):
+        name = m.group(1)
+        if _HASH_NAME_RE.search(name) or not _KEY_NAME_RE.search(name):
+            return m.group(0)
+        return f"{name}{m.group(2)}{_REDACTED}"
+
+    return _KEYED_HEX64_RE.sub(_sub, text)
+
+
 def _is_public_identifier(token: str) -> bool:
     """True when *token* is a PUBLIC identifier rather than a credential shape.
 
@@ -93,6 +124,7 @@ def _is_public_identifier(token: str) -> bool:
         _PUBLIC_ADDRESS_RE.match(token)
         or _TX_HASH_RE.match(token)
         or _UUID_RE.match(token)
+        or _EXPLORER_HASH_PATH_RE.search(token)
     )
 
 
@@ -311,6 +343,7 @@ class SecretScrubbingFilter(logging.Filter):
         # CR-M08: the LOADED wallet seed (and runs of its words) first — a
         # library error that echoes a mistyped mnemonic carries no marker word.
         scrubbed = self._scrub_ssot_shapes(scrub_loaded_seed(message, redacted=_REDACTED))
+        scrubbed = _redact_keyed_hex64(scrubbed)
 
         # Apply the remaining legacy patterns
         for pattern in self.LEGACY_PATTERNS:

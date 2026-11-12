@@ -49,8 +49,6 @@ ALLOWED = {
         "deposit-address sweep to the destination pinned in signer.toml"),
     ("core/signer/server.py", "SignerService._op_x402_authorize", "sign_typed_data"): (
         "EIP-3009 authorization under the signer's x402 caps"),
-    ("core/signer/server.py", "SignerService._op_eip8004_feedback_auth", "sign_message"): (
-        "signs ONLY the EIP-8004 FeedbackAuth typed shape; not a payment"),
     ("core/signer/server.py", "SignerService._op_journal_sign", "sign_message"): (
         "EIP-191 over ONLY the account journal template (is_journal_template); a _MONEY_OPS op, "
         "so refused under the signer's pause; not a payment"),
@@ -60,6 +58,12 @@ ALLOWED = {
         "090: re-classifies the wire text itself (sign_policy.classify); class A only"),
     ("core/signer/shadow.py", "shadow_sign_classified", "sign_message"): (
         "090: reached only from sign_policy.sign_classified after a class-A verdict"),
+    ("core/signer/sign_ops.py", "op_sign_order", "sign_typed_data"): (
+        "111 §8.3: sign.order re-reads the listing's facts itself (sale_orders.read_listing_facts, "
+        "its own RPC + the root-owned registry) and signs only class O; a _MONEY_OPS op (pause, "
+        "lock), SIGN_ORDER_DAILY_CAP, the signature must recover over the market's digest"),
+    ("core/signer/shadow.py", "ShadowEvmSigner.sign_order", "sign_typed_data"): (
+        "111 §8.3: reached only from sign_policy.sign_market_order after a class-O verdict"),
     ("core/signer/shadow.py", "ShadowEvmSigner.sign_message", "sign_message"): _SIGNER,
     ("core/signer/shadow.py", "ShadowEvmSigner.sign_transaction", "sign_transaction"): _SIGNER,
     ("core/signer/shadow.py", "ShadowEvmSigner.sign_typed_data", "sign_typed_data"): _SIGNER,
@@ -80,14 +84,16 @@ ALLOWED = {
         "the EVM rail broadcast"),
     ("core/wallet/solana_rail.py", "SolanaRail.send_raw", "sendTransaction"): (
         "the SVM rail broadcast: refuses unsigned/durable-nonce bytes; journals first"),
+    ("core/wallet/sign_policy.py", "sign_market_order", "sign_typed_data"): (
+        "111 §8.3: signs only a class-O pinned market Listing (sale_orders.classify_listing on "
+        "facts this process read); reached only from agent_nft_sale_list after the owner's turn "
+        "or card (owner_always lane); the signature must recover over the market's digest"),
     ("core/wallet/sign_policy.py", "sign_classified", "sign_message"): (
         "090: signs only a class-A login/challenge text; the wallet_sign tool runs the "
         "turn bars, the replay log and the autonomous rate first"),
     ("core/wallet/nft_account.py", "sign_entry", "sign_message"): (
         "EIP-191 journal attestation with a fixed prefix; not a transaction or permit"),
     # -- modules -------------------------------------------------------------
-    ("modules/eip8004/reputation.py", "ReputationManager.create_feedback_auth", "sign_message"): (
-        "off-chain EIP-8004 feedback signature, not a payment"),
     ("modules/payments/treasury_sweeper.py", "TreasurySweeper._submit_sweep", "sign_transaction"): (
         "deposit-address sweeps to TREASURY_ADDRESS; TREASURY_SWEEPER_ENABLED (default off)"),
     ("modules/payments/treasury_sweeper.py", "TreasurySweeper._submit_sweep", "send_raw_transaction"): (

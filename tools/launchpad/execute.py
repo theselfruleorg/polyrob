@@ -131,7 +131,9 @@ async def guarded_send(tool, *, execution_context, verb: str, chain: str,
         if not decision.allowed:
             return tool._ar(content=header + "  RESULT: NOT SENT — nothing was broadcast.")
 
-        if decision.sim_gas_used:
+        from core.wallet.broadcast.evm import is_account_call
+
+        if decision.sim_gas_used or is_account_call(tx):
             try:
                 tx = rail.size_gas(tx, decision.sim_gas_used)
             except Exception as exc:

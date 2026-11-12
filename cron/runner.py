@@ -71,16 +71,10 @@ def _delivery_ev(job, outcome: str, target: str, session_id: Optional[str] = Non
 
     2026-10-14 review A-9: the run's ``session_id`` rides on the row (its own
     column) beside ``job_id``, so "did this run deliver?" joins to its cost."""
-    try:
-        from core.event_log import get_event_log, event_log_enabled
-        if event_log_enabled():
-            get_event_log().record(
-                "cron_delivery", user_id=getattr(job, "user_id", ""),
-                session_id=str(session_id or ""),
-                source="cron", job_id=getattr(job, "id", None),
-                outcome=outcome, target=target)
-    except Exception:
-        pass
+    from core.event_log import emit
+    emit("cron_delivery", source="cron", user_id=getattr(job, "user_id", ""),
+         session_id=str(session_id or ""),
+         attrs={"job_id": getattr(job, "id", None), "outcome": outcome, "target": target})
 
 
 def _cron_ev(job, outcome: str, reason: Optional[str] = None, *,
@@ -89,18 +83,19 @@ def _cron_ev(job, outcome: str, reason: Optional[str] = None, *,
     lifecycle queryable in the uniform autonomy/governance stream, not just the
     episodes table (telemetry audit 2026-07-04). A run that started a session
     carries its ``session_id`` in the row's own column (2026-10-14 review D-4)."""
+    from core.event_log import emit, event_log_enabled
+    if not event_log_enabled():
+        return
     try:
-        from core.event_log import get_event_log, event_log_enabled
-        if event_log_enabled():
-            from core.cron_expect import verified_attrs  # 108 W5
-            extra.update(verified_attrs(job, outcome, session_id))
-            get_event_log().record(
-                "cron_run", user_id=getattr(job, "user_id", ""),
-                session_id=str(session_id or ""),
-                source="cron", job_id=getattr(job, "id", None),
-                outcome=outcome, reason=reason, **extra)
+        from core.cron_expect import verified_attrs  # 108 W5
+        extra.update(verified_attrs(job, outcome, session_id))
     except Exception:
-        pass
+        logger.debug("cron_run verified attrs skipped (job %s)",
+                     getattr(job, "id", None), exc_info=True)
+    emit("cron_run", source="cron", user_id=getattr(job, "user_id", ""),
+         session_id=str(session_id or ""),
+         attrs={"job_id": getattr(job, "id", None), "outcome": outcome, "reason": reason,
+                **extra})
 
 
 def run_ev_attrs(run: Any, session_id: Optional[str], data_dir: Optional[str]) -> dict:
@@ -140,6 +135,22 @@ _SKIPPED_RE = __import__("re").compile(r"^\s*(?:OUTCOME:\s*)?SKIP(?:PED)?\b")
 #: 2026-11-04: "C1 content round blocked: ..." read "done" while nothing was posted.
 _SAYS_BLOCKED_RE = __import__("re").compile(
     r"^.{0,80}?(?<!no longer )(?<!not )\b(?:blocked|not posted)\b", __import__("re").IGNORECASE)
+
+
+#: 116 W2.1: a run that called done() after EVERY substantive action errored
+#: (``RunOutcome.all_actions_errored``, the goal rule in ``goal_run.py``). The
+#: terminal ``cron_run`` row always carries ``all_errored_verdict=True`` for such
+#: a run. DRY MODE: ``False`` records the verdict only and the outcome stays
+#: ``done``. After the one dry day (owner decision D6) set this to ``True``: the
+#: outcome becomes ``failed`` with :data:`ALL_ERRORED_REASON`, counts toward the
+#: failure limit and tells the owner. A one-line switch; deliberately not an env flag.
+ALL_ERRORED_FAILS = False
+ALL_ERRORED_REASON = "done() after every action errored — nothing executed successfully"
+
+
+def all_errored_verdict(run: Any, declared: str) -> bool:
+    """True when a run that declared ``done`` did so on top of nothing but errors."""
+    return declared == "done" and bool(getattr(run, "all_actions_errored", False))
 
 
 def declared_outcome(run: Any) -> tuple:
@@ -855,6 +866,14 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
             # C-11: a run that closed by declaring BLOCKED or SKIPPED did not
             # do the job; its record and its event say so instead of "done".
             _declared, _why = declared_outcome(run)
+            # 116 W2.1: done() on top of nothing but errors (recorded; the
+            # outcome changes only once ALL_ERRORED_FAILS is switched on).
+            _all_errored = all_errored_verdict(run, _declared)
+            if _all_errored:
+                logger.warning("cron job %s: done() after every action errored%s", job.id,
+                               "" if ALL_ERRORED_FAILS else " (dry mode: recorded only)")
+                if ALL_ERRORED_FAILS:
+                    _declared, _why = "failed", ALL_ERRORED_REASON
             job.run_note = {"outcome": _declared, "reason": _why, "report": final or ""}
             try:
                 # Provenance was collected into the envelope while the
@@ -864,6 +883,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                 _cron_ev(job, _declared, _why or None, session_id=session_id,
                          duration_s=round(time.time() - _t0, 3),
                          spend_usd=run.spend_usd, steps=run.steps, model=model,
+                         **({"all_errored_verdict": True} if _all_errored else {}),
                          **run_ev_attrs(run, session_id, data_dir))
             except Exception:
                 logger.warning("cron episodic write failed", exc_info=True)
@@ -877,6 +897,21 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                                          container=getattr(task_agent, "container", None))
             except Exception:
                 logger.debug("cron %s: remedy streak skipped", job.id, exc_info=True)
+            # 116 W2.3 (D2): idle runs in a row against the job's own open ask hold
+            # the job until the answer (cron/rail_hold.py). Fail-open.
+            try:
+                from core.cron_expect import run_effect, verified_attrs
+                from cron.rail_hold import observe_and_notify as _hold_observe
+                _effect = None
+                if _declared == "done" or _all_errored:
+                    _effect = run_effect({
+                        "useful": run_ev_attrs(run, None, None).get("useful"),
+                        "all_errored_verdict": _all_errored or None,
+                        **verified_attrs(job, _declared, session_id)})
+                await _hold_observe(job, _effect, data_dir=data_dir,
+                                    container=getattr(task_agent, "container", None))
+            except Exception:
+                logger.debug("cron %s: rail hold skipped", job.id, exc_info=True)
 
             # Out-of-band delivery (gated CRON_DELIVERY_ENABLED, default OFF). Runs
             # inside the scheduler's wait_for budget; fail-open — never fails the job.
@@ -918,7 +953,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                 except Exception as e:  # belt-and-suspenders; delivery is best-effort
                     logger.error("cron job %s delivery error: %s", job.id, e, exc_info=True)
 
-            return True
+            return _declared != "failed"
         except Exception as e:
             logger.error("cron job %s session failed: %s", job.id, e, exc_info=True)
             from cron.scheduler import provider_down

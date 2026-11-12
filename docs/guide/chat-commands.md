@@ -88,7 +88,7 @@ column is a summary, and `/help <verb>` on your seat is the full form.
 | `/deploy <SYMBOL> <supply> <name…> [on <chain>] [decimals <n>] [go]` | Deploy a fixed-supply token | every seat |
 | `/lp positions\|pool\|quote\|add\|remove\|collect` | Liquidity positions: inspect, quote, add, remove, or collect fees | every seat |
 | `/claim <token> [go]` | Collect the creator fees a launchpad already owes me | every seat |
-| `/nft [send <id> <to> [go]]\|list\|info <contract> <id>\|account [<id>]\|transfer <contract> <id> <to> [go]\|revoke <contract> <operator> [go]` | Collectibles I hold: look, trust a collection, send one, or revoke an approval | every seat |
+| `/nft [send <id> <to> [go]]\|list\|info <contract> <id>\|account [<id>]\|transfer <contract> <id> <to> [go]\|revoke <contract> <operator> [go]\|trust <collection>\|untrust <collection>\|ready <id>\|unready <id>` | Collectibles I hold: look, trust a collection, send one, make one ready for sale, or revoke an approval | every seat |
 | `/dapp list\|revoke <id>` | Web pages my wallet is connected to, and how to cut one off | every seat |
 | `/paid <status\|enable\|disable\|price <verb> <usd>\|asset <id>\|offers\|cancel <id>>` | Paid room actions: status, pricing, and offers | every seat |
 | `/pay <url> [max_usd] [go] [id=<name>]` | Pay for one x402 resource, up to a price you name | every seat |
@@ -107,7 +107,6 @@ column is a summary, and `/help <verb>` on your seat is the full form.
 | `/resume [word…]` | Lift the pause | every seat, not in a room |
 | `/run [pause\|resume\|stop <n>]` | Pause, resume or stop one background run | every seat, not in a room |
 | `/mode` | What I may do without you, what I do when you are away, and how to change it | every seat |
-| `/dev [message]` | Pass a message to an operator-run maintenance script, if this host has one | every seat, not in a room |
 | `/restart [now]` | Restart me once my current work is done | every seat, not in a room |
 | `/update [pre]` | Update me to the latest release, then report back (/update now: a waiting deploy stops waiting for your chat to go quiet) | every seat, not in a room |
 | `/autonomy [on\|off] [--global]` | My background loops and what they hold; switch them on or off | terminal |

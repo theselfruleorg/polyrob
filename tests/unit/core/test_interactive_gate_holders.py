@@ -98,3 +98,13 @@ async def test_asyncio_interleaved_turns(gate):
 
 def test_turn_gate_machine_well_formed(gate):
     assert gate.TURN_GATE.validate() == []
+
+
+def test_an_owner_turn_does_not_wait_for_a_held_workspace_lock():
+    """116 W1.3: the acquire runs on the event loop and the turn proceeds
+    without the lock either way — a wait only stalls every session."""
+    import inspect
+    from core import interactive_gate as ig
+    from core.surfaces import owner_turn as ot
+    assert inspect.signature(ig.owner_turn).parameters["lock_timeout"].default == 0.0
+    assert inspect.signature(ot.surface_owner_turn).parameters["lock_timeout"].default == 0.0

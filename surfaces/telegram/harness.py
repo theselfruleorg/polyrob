@@ -204,7 +204,7 @@ _USAGE = {
     "/swap": "<amount> <native|token> to <token> on <chain> [slippage <bps>] [max <usd>] [go]",
     "/cards": "[<id> [ok|no|re|1-6]]",
     "/nft": "[send <id> <to> [go]]|list|info <contract> <id>|account [<id>]|transfer <contract> <id> <to> [go]|"
-            "revoke <contract> <operator> [go]",
+            "revoke <contract> <operator> [go]|trust <collection>|untrust <collection>|ready <id>|unready <id>",
     "/dapp": "list|revoke <id>",
     "/contacts": "[<surface> <address>]",
     "/why": "[n]",
@@ -226,7 +226,6 @@ _USAGE = {
     "/usage": "[days]",
     "/kb": "[list [collection] | search <query> | <words>]",
     "/files": "[n]",
-    "/dev": "[message]",
     "/help": "[verb]",
 }
 
@@ -254,7 +253,6 @@ _DETAIL = {
     "/pay": ("   price only without `go`; pays in USDC on Base, never above max_usd",),
     "/identity": ("   mints THIS instance's ERC-8004 identity from my own "
                   "wallet; refuses if one already exists",),
-    "/dev": ("   bare /dev = rail status",),
 }
 
 #: verb -> extra full command lines for its SUBVERBS. A subverb is not a
@@ -403,7 +401,7 @@ _OWNER_ADMIN_COMMANDS = ("/inbox", "/book",
                          "/avatar", "/cwd",
                          "/missed", "/apps", "/mcp",
                          "/more", "/rules",  # 096 W5: reads (the rest of a cut; owner rules)
-                         "/kb", "/files", "/dev", "/self", "/memory",  # 113 G-6
+                         "/kb", "/files", "/self", "/memory",  # 113 G-6
                          "/model", "/skills",  # 080 D8
                          "/usage",  # 2026-10-14 D6: the owner spend view
                          "/restart", "/update",  # 077: drained restart / update
@@ -411,7 +409,7 @@ _OWNER_ADMIN_COMMANDS = ("/inbox", "/book",
 
 #: 044 I10 (spec §6.1 P9/P10): owner verbs that may NOT execute from inside a
 #: room, whoever is watching. Money (`/trade /wallet /bridge /deploy /launch
-#: /invoices /settle`), host and self-modification (`/dev`), autonomy control
+#: /invoices /settle`), autonomy control
 #: (`/pause /halt /resume /approve /reject`), and access/configuration (`/allow
 #: /deny /config /prefs /mcp /apps`). Redirecting the REPLY to the owner's DM was
 #: never enough: the ACTION ran, so a member who talked the owner into typing one
@@ -1373,6 +1371,7 @@ async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver
                 text = await _handle_owner_admin(task_agent, result, cmd)
             except Exception as e:
                 logger.error("owner admin command %s failed: %s", cmd, e, exc_info=True)
+                card_ops.record_verb(task_agent, result, cmd, failed=True)
                 text = f"Command failed: {str(e)[:200]} (details in the server log)"
             card_ops.record_out(task_agent, result, cmd, text)   # 079 R5
             if text:
@@ -1404,6 +1403,7 @@ async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver
                 await _handle_owner_admin(task_agent, result, cmd)))
         except Exception as e:
             logger.error("owner admin command %s failed: %s", cmd, e, exc_info=True)
+            card_ops.record_verb(task_agent, result, cmd, failed=True)
             # 030 C-14: cap + soften — raw exception text can carry absolute
             # paths/DB errors/provider bodies, and it is unbounded.
             return f"Command failed: {str(e)[:200]} (details in the server log)"

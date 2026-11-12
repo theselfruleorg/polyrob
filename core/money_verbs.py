@@ -32,7 +32,7 @@ MONEY_VERBS: tuple = (
          background="Liquidity move"),
     Verb("/claim", "money", "Collect the creator fees a launchpad already owes me",
          background="Claim"),
-    Verb("/nft", "money", "Collectibles I hold: look, trust a collection, send one, or revoke an approval",
+    Verb("/nft", "money", "Collectibles I hold: look, trust a collection, send one, make one ready for sale, or revoke an approval",
          background="NFT transaction"),
     Verb("/dapp", "money", "Web pages my wallet is connected to, and how to cut one off"),
     Verb("/paid", "money", "Paid room actions: status, pricing, and offers"),

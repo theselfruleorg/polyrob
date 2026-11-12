@@ -112,8 +112,12 @@ def _bot_db_path(*, write: "bool | None" = None) -> Path:
     the manifest layout wins over the canonical path so a legacy install is not
     forked into a second file.
     """
+    import os
     from cli._admin_home import admin_data_dir
+    from core.runtime_paths import bot_db_path
     home = admin_data_dir(write=write)
+    if os.getenv("DB_PATH"):  # the operator's pin, the AgentConfig rule (116 W6.1)
+        return Path(bot_db_path(str(home)))
     try:
         from core.db_manifest import candidate_sqlite_dbs
         for candidate in candidate_sqlite_dbs(home):
@@ -121,7 +125,7 @@ def _bot_db_path(*, write: "bool | None" = None) -> Path:
                 return Path(candidate)
     except Exception:
         pass
-    return Path(home) / "database" / "bot.db"
+    return Path(bot_db_path(str(home)))
 
 
 def _owner_user_id() -> str:

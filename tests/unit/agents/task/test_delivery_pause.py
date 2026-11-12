@@ -21,7 +21,10 @@ def _capture_events(monkeypatch):
 
     class _Log:
         def record(self, kind, **kw):
-            outcomes.append((kind, kw.get("outcome"), kw.get("reason")))
+            # 116 W3.2: the emitters pass their facts through `attrs` (the
+            # `core.event_log.emit` seam); the store merges kwargs and attrs alike.
+            a = {**kw, **(kw.get("attrs") or {})}
+            outcomes.append((kind, a.get("outcome"), a.get("reason")))
 
     monkeypatch.setattr("core.event_log.event_log_enabled", lambda: True)
     monkeypatch.setattr("core.event_log.get_event_log", lambda *a, **k: _Log())

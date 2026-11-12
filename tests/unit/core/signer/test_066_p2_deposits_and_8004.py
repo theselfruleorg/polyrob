@@ -1,6 +1,5 @@
-"""066 §5.5 + P3: the deposit seed, the sweeper and EIP-8004 signing move into
+"""066 §5.5: the deposit seed and the sweeper move into
 the signer under ``WALLET_SIGNER=remote`` — and nothing changes under local."""
-import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -100,22 +99,3 @@ async def test_the_sweeper_asks_the_signer_in_remote_mode(signer_home, monkeypat
     # so the sweep is swept_unproven (never booked on the balance mark).
     assert db.execute.await_count == 2
     assert db.execute.await_args.args[1][0] == "swept_unproven"
-
-
-@pytest.mark.asyncio
-async def test_eip8004_feedback_is_signed_by_the_signer_in_remote_mode(rig, monkeypatch):
-    from eth_account import Account
-    from eth_account.messages import encode_typed_data
-    import core.signer.client as client_mod
-    from modules.eip8004 import reputation
-    monkeypatch.setenv("WALLET_SIGNER", "remote")
-    monkeypatch.delenv("EIP8004_AGENT_PRIVATE_KEY", raising=False)
-    monkeypatch.setattr(client_mod, "SignerClient", lambda *a, **k: LoopbackClient(rig.service))
-    mgr = reputation.ReputationManager()
-    mgr.config = SimpleNamespace(agent_id=7, agent_wallet="0x" + "c" * 40, chain_id=8453,
-                                 reputation_registry_address=None)
-    auth = await mgr.create_feedback_auth("0x" + "d" * 40, expires_in_seconds=3600)
-    typed = mgr._build_typed_data(7, "0x" + "d" * 40, auth.expiresAt, auth.nonce)
-    who = Account.recover_message(encode_typed_data(full_message=typed), signature=auth.signature)
-    assert who == Account.from_key(rig.secrets["EIP8004_AGENT_PRIVATE_KEY"]).address
-    assert auth.expiresAt > time.time()

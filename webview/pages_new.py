@@ -367,25 +367,22 @@ def _wordmark() -> str:
 
 
 def _live_count(request: Request) -> tuple:
-    """``(count, partial)`` — things IN PROGRESS for the shell's tenant.
-
-    ``count`` is running goals + running cron jobs + live sessions
-    (``_live_body``). ``partial`` is 043 A37: when a whole store could not be
-    read the number is a FLOOR, and the head line must say ``N+`` rather than
-    ``N``. ``(0, True)`` when the tenant cannot be named or the probe itself
-    fails — the head line then says only "running", which is true, and never
-    claims a count it did not measure.
-    """
+    """``(goal runs, cron runs)`` in progress: the snapshot's ``live_actors``
+    (``core.status_loops._live_actor_lines``), the numbers /status prints (116 W7.4).
+    ``None`` = not measured ("?"), never 0; no tenant or a failed probe = ``(None, None)``."""
     try:
         user_id, _refusal = _tenant(request)
         if not user_id:
-            return (0, True)
-        body = _live_body(str(user_id), webgate.data_dir(), _sessions_root())
-        raw = body.get("count")
-        return (int(raw or 0), bool(body.get("partial")) or raw is None)
+            return (None, None)
+        from core.runtime_paths import cron_db_path, goals_db_path
+        from core.status_loops import Section, _live_actor_lines
+        sec, home = Section(name="loops"), webgate.data_dir()
+        _live_actor_lines(sec, str(user_id), cron_db_path(home), goals_db_path(home))
+        return (sec.data["live_actors"].get("running_goals"),
+                sec.data["live_actors"].get("running_cron"))
     except Exception:
         logger.debug("live count probe failed", exc_info=True)
-        return (0, True)
+        return (None, None)
 
 
 def _headline(request: Request) -> str:
@@ -396,10 +393,10 @@ def _headline(request: Request) -> str:
     headline = _pause_headline()
     if headline != t("shell.state.running"):
         return headline
-    busy, partial = _live_count(request)
-    if busy > 0:
-        # ``N+`` when a store refused: the count is a floor, never a confident figure.
-        return t("shell.state.running_busy", count=(f"{busy}+" if partial else busy))
+    goals, cron = _live_count(request)
+    if goals or cron:   # "?" for the store that refused, as on every other seat
+        return t("shell.state.running_busy", goals="?" if goals is None else goals,
+                 cron="?" if cron is None else cron)
     from core.status_loops import autonomy_idle_reason
     idle = autonomy_idle_reason()
     return t("shell.state.idle", why=idle) if idle else headline
@@ -963,20 +960,23 @@ def _tool_risk(tool_id: str) -> str:
     return "low"
 
 
-def _tools_section() -> dict:
-    """Every classified tool: what / on / source / capabilities / risk.
-
+def _tools_section(user_id: str = "") -> dict:
+    """Every classified tool: what / on / source / capabilities / risk / last used.
     ``on`` is whether the tool CLASS is wired on THIS deploy — a gate-conditional
     tool (``defi_trade``, ``cronjob``, …) only enters ``TOOL_DESCRIPTORS`` when
     its flag is on, so an absent class is an honest "off", never a per-session
-    grant. Per-tool "last used" is not tracked anywhere, so it is ``None`` (a
-    confident timestamp would be invented)."""
+    grant. ``last_used``: the newest ``tool_invoked`` row in 30 d (``core.status_tools``,
+    116 W7.4) or ``None``; a failed read is ``usage_error``, never "never used"."""
+    try:
+        from core.status_tools import tools_section
+        usage, usage_error = tools_section(str(user_id), webgate.data_dir()).data["tools"], None
+    except Exception as exc:
+        usage, usage_error = {}, _reason(exc)
     try:
         from core.tool_capabilities import TOOL_CAPABILITIES
-        from tools.descriptors import (
-            TOOL_DESCRIPTORS, get_default_tools, get_tool_display_name)
+        from tools.descriptors import TOOL_DESCRIPTORS, get_default_tools, get_tool_display_name
     except Exception as exc:
-        return {"items": [], "error": _reason(exc)}
+        return {"items": [], "error": _reason(exc), "usage_error": usage_error}
     default = set(get_default_tools())
     by_display = {get_tool_display_name(name): desc
                   for name, desc in TOOL_DESCRIPTORS.items()}
@@ -997,9 +997,9 @@ def _tools_section() -> dict:
             "source": source,
             "capabilities": caps,
             "risk": _tool_risk(cap_id),
-            "last_used": None,   # per-tool usage is not tracked — never faked
+            "last_used": (usage.get(cap_id) or {}).get("last"),
         })
-    return {"items": items, "error": None}
+    return {"items": items, "error": None, "usage_error": usage_error}
 
 
 def _skills_section(user_id: str) -> dict:
@@ -1127,7 +1127,7 @@ def _capabilities_body(user_id: str, *, owner: bool = True,
     withheld, never listed (WEB-3)."""
     withheld = {"items": None, "error": "owner console only", "withheld": True}
     return {
-        "tools": _tools_section(),
+        "tools": _tools_section(str(user_id)),
         "skills": _skills_section(str(user_id)),
         "mcp": _mcp_section(str(user_id), mcp_tenant) if owner else dict(withheld, enabled=False),
         "helpers": _profiles_section() if owner else dict(withheld),

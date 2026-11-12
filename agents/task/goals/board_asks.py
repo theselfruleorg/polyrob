@@ -31,9 +31,8 @@ from agents.task.goals.payload_keys import (
 #: refreshed — a decided ask's payload belongs to its decision.
 _OPEN_ASK = f"kind='{KIND_ASK}' AND status='{ASK_OPEN}'"
 
-#: ``payload.expires_at`` is unset, or later than the bound ``now``.
-_NOT_EXPIRED = ("(json_extract(payload, '$.expires_at') IS NULL "
-                "OR json_extract(payload, '$.expires_at') > ?)")
+#: ``payload.expires_at`` is unset, or later than the bound ``now`` (the one rule).
+from core.goal_vocab import ASK_NOT_EXPIRED_SQL as _NOT_EXPIRED  # noqa: E402
 
 
 def _widen(blocks):

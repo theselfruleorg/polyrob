@@ -251,9 +251,14 @@ def h_missed(ctx) -> None:
     suppressed by the daily cap, held by an owner pause, or undelivered (no
     live sink / send failed). The chat seat's own reply
     (``surfaces.telegram.status_ops._missed_reply``): one verb, one text."""
+    from core.surfaces.owner_verb_log import record_owner_command
     from surfaces.telegram.status_ops import _missed_reply
-    ctx.emit(_missed_reply(_tenant(ctx), _admin_data_dir(write=False),
-                           list(getattr(ctx, "args", []) or [])), title="missed")
+    text = _missed_reply(_tenant(ctx), _admin_data_dir(write=False),
+                         list(getattr(ctx, "args", []) or []))
+    # The status seats list what came "since your last /missed" (116 W5.6).
+    record_owner_command(_tenant(ctx), "/missed", "repl", text,
+                         data_dir=_admin_data_dir(write=False))
+    ctx.emit(text, title="missed")
 
 
 # ---------------------------------------------------------------------------
