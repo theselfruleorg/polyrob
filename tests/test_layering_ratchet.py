@@ -384,7 +384,14 @@ def test_upward_string_refs_only_shrink():
 # to modules/skills (tools and core no longer import agents-tier skill modules).
 # +1: core/wallet/tx_guard_account.py, the rule-5 account pre-flight split out of
 # core/wallet/tx_guard.py (a module already inside the component).
-LARGEST_CROSS_PACKAGE_SCC_CEILING = 144
+# +2: core/wallet/collection_sale.py (the pinned-sale claim shape) and
+# core/wallet/collection_errors.py (the revert names), guard helpers split out beside
+# core/wallet/collection_mint.py (modules already inside the component).
+# +1 (116 W8): core/owner_time.py, the owner-zone reader split out of
+# core/surfaces/quiet_hours.py (a module already inside the component).
+# +1 (115 W6): core/wallet/identity_card.py, the guard's rule for a registration through an
+# NFT account, beside core/wallet/tx_guard_account.py (reached from tx_guard_steps).
+LARGEST_CROSS_PACKAGE_SCC_CEILING = 148
 _SCC_TIGHTNESS_SLACK = 10
 
 

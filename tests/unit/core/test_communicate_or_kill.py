@@ -80,19 +80,6 @@ async def test_the_update_check_kills_a_stuck_child(monkeypatch):
     payload, why = await lifecycle_ops._update_check("stable")
     assert payload is None and "did not answer" in why
     assert proc.killed
-
-
-@pytest.mark.asyncio
-async def test_the_dev_rail_reaps_a_stuck_child(monkeypatch):
-    from surfaces.telegram import dev_rail
-    proc = _StuckProc()
-    _spawns(monkeypatch, proc)
-    monkeypatch.setattr(dev_rail, "_TIMEOUT_SEC", 0.01)
-    monkeypatch.setattr(dev_rail, "_inject_script", lambda: "/bin/true")
-    assert "timed out" in await dev_rail.perform_dev_command("")
-    assert proc.killed
-
-
 @pytest.mark.asyncio
 async def test_a_cancelled_anysite_run_kills_the_child(monkeypatch):
     client = pytest.importorskip("polyrob_discovery.anysite.client")

@@ -102,11 +102,20 @@ def _query(db_path: str, sql: str, params: tuple):
     return [dict(r) for r in (execute_retry(db_path, sql, params, fetch="all") or [])]
 
 
+#: 116 W7.4: every count and reason ranking here reads the tenant's rows AND the
+#: instance's own (``user_id = ''``): the perimeter stamps the deployment tenant,
+#: or ``''`` when the owner is not resolved yet ("a tenant-less row is
+#: recoverable"), and a refusal or a flag with no execution context has no
+#: tenant. ``_top_senders`` stays tenant-EXACT: it names counterparties, and a
+#: row with no tenant cannot prove whose traffic it was.
+from core.event_log import TENANT_OR_INSTANCE_SQL as _TENANT  # noqa: E402
+
+
 def _counts_by_kind(db_path: str, user_id: str, since_ts: float) -> dict:
     rows = _query(
         db_path,
         "SELECT kind, COUNT(*) AS n FROM telemetry_events "
-        "WHERE ts >= ? AND user_id = ? GROUP BY kind",
+        f"WHERE ts >= ? AND {_TENANT} GROUP BY kind",
         (float(since_ts), str(user_id)))
     return {r["kind"]: int(r["n"]) for r in rows}
 
@@ -117,7 +126,7 @@ def _count_kind(db_path: str, user_id: str, since_ts: float, kind: str,
     rows = _query(
         db_path,
         "SELECT COUNT(*) AS n FROM telemetry_events "
-        "WHERE ts >= ? AND user_id = ? AND kind = ? AND source = ?",
+        f"WHERE ts >= ? AND {_TENANT} AND kind = ? AND source = ?",
         (float(since_ts), str(user_id), kind, source))
     return int(rows[0]["n"]) if rows else 0
 
@@ -136,7 +145,7 @@ def _top_attr(db_path: str, user_id: str, since_ts: float, kind: str,
     rows = _query(
         db_path,
         "SELECT json_extract(attrs, ?) AS v, COUNT(*) AS n FROM telemetry_events "
-        "WHERE ts >= ? AND user_id = ? AND kind = ? AND v IS NOT NULL" + extra +
+        f"WHERE ts >= ? AND {_TENANT} AND kind = ? AND v IS NOT NULL" + extra +
         " GROUP BY v ORDER BY n DESC, v ASC LIMIT ?",
         params + (_TOP_N,))
     return [(str(r["v"]), int(r["n"])) for r in rows]
@@ -226,7 +235,7 @@ def recent_gate_refusals(user_id: str, *, data_dir: str, limit: int = 5) -> List
     rows = _query(
         _db_path(data_dir),
         "SELECT ts, session_id, attrs FROM telemetry_events "
-        "WHERE kind = ? AND source = ? AND user_id IN (?, '') "
+        f"WHERE kind = ? AND source = ? AND {_TENANT} "
         "ORDER BY ts DESC, id DESC LIMIT ?",
         (TOOL_DENIED, GATE_SOURCE, str(user_id or ""), max(1, int(limit))))
     out = []

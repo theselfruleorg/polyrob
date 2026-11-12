@@ -56,7 +56,16 @@ def _stores(tmp_path, *, pid=None):
 
 def test_live_body_names_every_running_actor_for_the_tenant(tmp_path, monkeypatch):
     data, root = _stores(tmp_path)
+    monkeypatch.delenv("TELEMETRY_EVENT_LOG_PATH", raising=False)
+    monkeypatch.setenv("POLYROB_DATA_DIR", data)
+    # 116 W4.5: with no `started` event the time is unknown — never the
+    # previous run's end (`last_run_at`).
+    assert mod._live_body("alice", data, root)["cron"][0]["since"] is None
+    from core.event_log import TelemetryEventLog
+    TelemetryEventLog(os.path.join(data, "telemetry_events.db")).record(
+        "cron_run", ts=2000.0, attrs={"job_id": "c1", "outcome": "started"})
     body = mod._live_body("alice", data, root)
+    assert body["cron"][0]["since"] == 2000.0
     assert [g["id"] for g in body["goals"]] == ["g1"]
     assert body["goals"][0]["title"] == "Engage the forum" and body["goals"][0]["since"] == 1000.0
     assert [c["id"] for c in body["cron"]] == ["c1"]
@@ -104,15 +113,29 @@ def test_live_route_scopes_to_the_effective_tenant(tmp_path, monkeypatch):
 
 
 def test_live_count_feeds_the_head_line(tmp_path, monkeypatch):
+    """116 W7.4: the head counts are the snapshot's live actors (running goals,
+    running cron jobs) — the numbers /status prints; a live session is not a run."""
     data, root = _stores(tmp_path)
     monkeypatch.setattr(mod.webgate, "data_dir", lambda: data)
     monkeypatch.setattr(mod, "_sessions_root", lambda: root)
     monkeypatch.setattr(mod, "_tenant", lambda request: ("alice", None))
-    assert mod._live_count(object()) == (3, False)
-    # A tenant the shell cannot name is 0 in-progress and PARTIAL (the zero is
-    # "I could not look", not "nothing is running"), never a crash.
+    assert mod._live_count(object()) == (1, 1)
+    from core.status_snapshot import build_operations_sections
+    live = build_operations_sections("alice", data_dir=data)["loops"].data["live_actors"]
+    assert mod._live_count(object()) == (live["running_goals"], live["running_cron"])
+    # A tenant the shell cannot name is NOT MEASURED (None), never 0, never a crash.
     monkeypatch.setattr(mod, "_tenant", lambda request: (None, "unbound"))
-    assert mod._live_count(object()) == (0, True)
+    assert mod._live_count(object()) == (None, None)
+
+
+def test_a_store_that_refused_is_a_question_mark(tmp_path, monkeypatch):
+    data, root = _stores(tmp_path)
+    os.remove(os.path.join(data, "cron.db"))
+    monkeypatch.setattr(mod.webgate, "data_dir", lambda: data)
+    monkeypatch.setattr(mod, "_tenant", lambda request: ("alice", None))
+    monkeypatch.setattr(mod, "_pause_headline", lambda: mod.t("shell.state.running"))
+    assert mod._live_count(object()) == (1, None)
+    assert mod._headline(object()) == "The agent is running: 1 goal run(s), ? job run(s)."
 
 
 def test_head_line_says_how_many_things_are_in_progress(monkeypatch):
@@ -120,12 +143,12 @@ def test_head_line_says_how_many_things_are_in_progress(monkeypatch):
     from webview.copy import t
     monkeypatch.setattr(mod, "_pause_headline", lambda: t("shell.state.running"))
     monkeypatch.setattr(mod, "_inbox_summary", lambda request: compose([], {"asks": "ok"}))
-    monkeypatch.setattr(mod, "_live_count", lambda request: (2, False))
+    monkeypatch.setattr(mod, "_live_count", lambda request: (2, 0))
     app = FastAPI()
     app.include_router(mod.router)
     html = TestClient(app).get("/work").text
-    assert "The agent is running, 2 in progress." in html
-    monkeypatch.setattr(mod, "_live_count", lambda request: (0, False))
+    assert "The agent is running: 2 goal run(s), 0 job run(s)." in html
+    monkeypatch.setattr(mod, "_live_count", lambda request: (0, 0))
     import core.status_loops as loops
     monkeypatch.setattr(loops, "autonomy_idle_reason", lambda: None)
     assert "The agent is running. Nothing needs you." in TestClient(app).get("/work").text
@@ -135,15 +158,15 @@ def test_head_line_says_how_many_things_are_in_progress(monkeypatch):
 
 
 def test_head_line_says_the_count_is_a_floor_when_a_store_refused(monkeypatch):
-    """043 A37: ``2+``, not ``2``, when one of the three stores did not answer."""
+    """043 A37 / 116 W7.4: a store that did not answer is "?", never 0."""
     from core.surfaces.inbox import compose
     from webview.copy import t
     monkeypatch.setattr(mod, "_pause_headline", lambda: t("shell.state.running"))
     monkeypatch.setattr(mod, "_inbox_summary", lambda request: compose([], {"asks": "ok"}))
-    monkeypatch.setattr(mod, "_live_count", lambda request: (2, True))
+    monkeypatch.setattr(mod, "_live_count", lambda request: (2, None))
     app = FastAPI()
     app.include_router(mod.router)
-    assert "The agent is running, 2+ in progress." in TestClient(app).get("/work").text
+    assert "The agent is running: 2 goal run(s), ? job run(s)." in TestClient(app).get("/work").text
 
 
 def test_head_route_renders_the_same_two_lines_as_the_shell(monkeypatch):
@@ -151,11 +174,11 @@ def test_head_route_renders_the_same_two_lines_as_the_shell(monkeypatch):
     from webview.copy import t
     monkeypatch.setattr(mod, "_pause_headline", lambda: t("shell.state.running"))
     monkeypatch.setattr(mod, "_inbox_summary", lambda request: compose([], {"asks": "ok"}))
-    monkeypatch.setattr(mod, "_live_count", lambda request: (1, False))
+    monkeypatch.setattr(mod, "_live_count", lambda request: (0, 1))
     app = FastAPI()
     app.include_router(mod.api_router)
     body = TestClient(app).get("/api/webgate/head").json()
-    assert body == {"headline": "The agent is running, 1 in progress.",
+    assert body == {"headline": "The agent is running: 0 goal run(s), 1 job run(s).",
                     "waiting_line": "Nothing needs you.",
                     "badge": "", "aria": "", "partial": False}
 
@@ -164,7 +187,7 @@ def test_shell_loads_the_live_module(monkeypatch):
     from core.surfaces.inbox import compose
     monkeypatch.setattr(mod, "_pause_headline", lambda: "")
     monkeypatch.setattr(mod, "_inbox_summary", lambda request: compose([], {"asks": "ok"}))
-    monkeypatch.setattr(mod, "_live_count", lambda request: (0, False))
+    monkeypatch.setattr(mod, "_live_count", lambda request: (0, 0))
     app = FastAPI()
     app.include_router(mod.router)
     html = TestClient(app).get("/inbox").text
@@ -175,7 +198,7 @@ def test_shell_offers_logout_only_where_a_login_exists(monkeypatch):
     from core.surfaces.inbox import compose
     monkeypatch.setattr(mod, "_pause_headline", lambda: "")
     monkeypatch.setattr(mod, "_inbox_summary", lambda request: compose([], {"asks": "ok"}))
-    monkeypatch.setattr(mod, "_live_count", lambda request: (0, False))
+    monkeypatch.setattr(mod, "_live_count", lambda request: (0, 0))
     app = FastAPI()
     app.include_router(mod.router)
     monkeypatch.setattr(mod, "_show_logout", lambda: True)

@@ -21,7 +21,7 @@ its write twin, and it is deliberately narrow:
 Payload — ``payload.write_verb``::
 
     {"verb": "agent_nft.agent_nft_collection_reveal",
-     "params": {"chain": "robinhood", "max_ids": 10, "dry_run": false},
+     "params": {"chain": "robinhood", "dry_run": false},
      "deliver_on": "alert"}          # "alert" (default) | "always" | "never"
 
 ⚠️ The verb's ``dry_run`` defaults to TRUE: a job that omits ``"dry_run": false`` only

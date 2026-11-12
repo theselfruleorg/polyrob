@@ -1,5 +1,6 @@
 """v4 liquidity on a Pons PoolKey: the lp_add plan, the LP program caps, and the
-one Permit2 grant (048 phase 3; core handoff W6; 090 R2/R4).
+one Permit2 grant (048 phase 3; core handoff W6; 090 R2/R4). And the lp_collect
+plan of any v4 position the wallet or one of its NFT accounts owns (115 W4).
 
 How the ERC-20 leg moves (v4 PositionManager settles ERC-20 only through
 Permit2; a signature permit is refused in this tree, so the grant is a
@@ -140,6 +141,41 @@ def prepare_add_v4(p, rpc, holder, npm, price_fn=None):
                 f"v4 pool: {pid} (Pons PoolKey, hooks {key['hooks']}); ticks [{lo}, {hi}] full range\n"
                 f"liquidity: {liq}; outflows (raw maxima): {out}\n"
                 "LP fee 0: the hook takes the pool fee; this position earns none\n" + note)
+
+
+def prepare_collect_v4(p, rpc, holder, npm):
+    """The v4 lp_collect plan (115 W4): DECREASE_LIQUIDITY(token_id, 0) +
+    TAKE_PAIR(currency0, currency1 → holder). *holder* is the address that owns
+    the position and receives the fees: the NFT's account when the verb acts
+    through one, the wallet otherwise. The PoolKey is read from the pinned
+    PositionManager; no approval and no Permit2 (nothing is settled in).
+
+    The declared receipt minimum is 0 for each currency: no fees-owed read
+    exists for v4 here, so the guard measures that nothing LEAVES the holder
+    and no NFT moves, and the result shows what arrived."""
+    from tools.defi.lp_verbs import Plan
+    if str(R.view(rpc, npm, A.NPM_OWNER_OF, [p.token_id])).lower() != holder.lower():
+        raise ValueError(f"{holder} does not own v4 position #{p.token_id}")
+    key = V.position_pool_key(rpc, p.chain, p.token_id)
+    if not dex_registry.hook_pinned(p.chain, key["hooks"]):
+        raise ValueError(f"v4 hook {key['hooks']} has no pinned code hash; it runs inside the collect")
+    dex_registry.verify_hook(rpc, p.chain, key["hooks"])
+    c0, c1 = key["currency0"], key["currency1"]
+    native0 = c0 == V.ZERO
+    dec0 = chains.get(p.chain).native_decimals if native0 else int(R.view(rpc, c0, A.ERC20_DECIMALS))
+    dec1 = int(R.view(rpc, c1, A.ERC20_DECIMALS))
+    unlock = V.encode_collect_unlock(p.token_id, c0, c1, holder)
+    data = V.encode_modify_liquidities(unlock, int(time.time()) + DEADLINE_S)
+    inflows = tuple((None if cur == V.ZERO else cur, 0) for cur in (c0, c1))
+    intent = tx_guard.TxIntent(
+        chain=p.chain, token=None, to=npm, amount_raw=0, max_spend_usd=p.max_spend_usd,
+        is_liquidity_op=True, lp_inflows=inflows, lp_position=(npm, p.token_id),
+        lp_position_effect="hold", idempotency_key=None)
+    from tools.defi.lp_reads import pool_id
+    pid = pool_id(key)
+    return Plan(intent, data, 0, pid, (c0, c1), (dec0, dec1),
+                f"v4 pool: {pid} (fee {key['fee']}, hooks {key['hooks']}); position: {p.token_id}\n"
+                f"collect: the fees owed in {c0} and {c1}, paid to {holder}; liquidity unchanged\n")
 
 
 async def perform_permit2_approve(tool, params, execution_context=None):

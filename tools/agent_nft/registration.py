@@ -23,7 +23,11 @@ def register_agent_nft_tool(force: bool = False) -> bool:
                          "agent_nft_inspect / agent_nft_journal / agent_nft_bind_identity / "
                          "agent_nft_revoke_all / agent_nft_collection_mint / "
                          "agent_nft_withdraw_token / agent_nft_collection_reveal / "
-                         "agent_nft_adopt."),
+                         "agent_nft_sale_claim / agent_nft_sale_settle / "
+                         "agent_nft_sale_ready / agent_nft_sale_unready / "
+                         "agent_nft_sale_cancel_listing / agent_nft_sale_list / "
+                         "agent_nft_sale_accept / agent_nft_buy / "
+                         "agent_nft_market_claim."),
             category=ToolCategory.INTEGRATION,
             required_config=[],
             init_priority=47,

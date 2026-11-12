@@ -513,7 +513,7 @@ MINT_DELTAS = dict(ok=True, native_delta=-(ETH // 1000), token_deltas={}, gas_us
                    holder_nft_in=((NFT, "erc721", ZERO, 1, 1),))
 MINT_OK = {"core.wallet.collection_mint.structural": _NONE,
            "core.wallet.collection_mint.assert_simulation": _NONE,
-           _TG + "_collection_runtime_refusal": _NONE}
+           "core.wallet.collection_mint.runtime_refusal": _NONE}
 
 REVEAL_INTENT = dict(chain="base", token=None, to=NFT, amount_raw=0, max_spend_usd=50.0,
                      is_collection_reveal=True, reveal_ids=(1,), idempotency_key="kv")
@@ -588,7 +588,7 @@ SCENARIOS.update({
     # -- collection mint / reveal ----------------------------------------------
     "mint_allowed": S(MINT_INTENT, MINT_TX, MINT_DELTAS, price=2000.0, patches=MINT_OK),
     "mint_runtime_drift": S(MINT_INTENT, MINT_TX, MINT_DELTAS, price=2000.0, patches={
-        **MINT_OK, _TG + "_collection_runtime_refusal": lambda *a, **k: "code drift"}),
+        **MINT_OK, "core.wallet.collection_mint.runtime_refusal": lambda *a, **k: "code drift"}),
     "mint_simulation_refused": S(MINT_INTENT, MINT_TX, MINT_DELTAS, price=2000.0, patches={
         **MINT_OK, "core.wallet.collection_mint.assert_simulation": lambda *a, **k: "bad"}),
     "mint_no_proxy": S(MINT_INTENT, MINT_TX, MINT_DELTAS, price=2000.0,

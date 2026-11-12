@@ -11,7 +11,8 @@ Two layers:
 What the signer enforces, whatever the agent says:
 
 1. **Known shapes only.** An unknown op, field or version is ``unknown_shape``.
-   There is no generic message, typed-data or raw-hash signing: ``sign.classified``
+   There is no generic message, typed-data or raw-hash signing: ``sign.order`` signs
+   only a class-O pinned market Listing whose facts it re-reads itself; ``sign.classified``
    re-classifies a text itself and signs only a class-A login/challenge (090).
 2. **The guard runs here.** ``evm.send`` re-runs
    :func:`core.wallet.tx_guard.authorize` — the same module the agent runs —
@@ -49,7 +50,7 @@ logger = logging.getLogger(__name__)
 #: Ops that move money or consume a nonce run one at a time.
 _MONEY_OPS = frozenset({
     "evm.send", "x402.authorize", "deposit.sweep", "evm.verdict",
-    "venue.sign", "eip8004.feedback_auth", "journal.sign",
+    "venue.sign", "journal.sign", "sign.order",
 })
 #: A grant covers the approved amount plus this slack (prices move between the
 #: refusal and the retry). Above it the owner is asked again.
@@ -59,9 +60,6 @@ _EIP3009_FIELDS = [
     {"name": "from", "type": "address"}, {"name": "to", "type": "address"},
     {"name": "value", "type": "uint256"}, {"name": "validAfter", "type": "uint256"},
     {"name": "validBefore", "type": "uint256"}, {"name": "nonce", "type": "bytes32"}]
-_FEEDBACK_FIELDS = [
-    {"name": "agentId", "type": "uint256"}, {"name": "clientAddress", "type": "address"},
-    {"name": "expiresAt", "type": "uint256"}, {"name": "nonce", "type": "string"}]
 _DOMAIN_FIELDS = [
     {"name": "name", "type": "string"}, {"name": "version", "type": "string"},
     {"name": "chainId", "type": "uint256"}, {"name": "verifyingContract", "type": "address"}]
@@ -70,7 +68,6 @@ _DOMAIN_FIELDS = [
 #: Caller-authored prices, sizes and leverage are never a substitute for caps.
 HL_ORDER_ACTIONS = frozenset({"cancel", "cancelByCloid", "scheduleCancel"})
 _ZERO = "0x0000000000000000000000000000000000000000"
-_FEEDBACK_MAX_TTL_SEC = 7 * 86400
 
 
 class _Refuse(Exception):
@@ -97,6 +94,7 @@ class SignerService:
                  rpc_is_pinned_fn: Optional[Callable] = None,
                  rail_factory: Optional[Callable] = None,
                  pending_nonce_fn: Optional[Callable] = None,
+                 balance_fn: Optional[Callable] = None,
                  shadow_gate=None,
                  secret_fn: Optional[Callable[[str], Optional[str]]] = None,
                  clock: Callable[[], float] = time.time):
@@ -109,6 +107,7 @@ class SignerService:
         self._rpc_is_pinned_fn = rpc_is_pinned_fn
         self._rail_factory = rail_factory
         self._pending_nonce_fn = pending_nonce_fn
+        self._balance_fn = balance_fn
         self._secret_fn = secret_fn
         self._now = clock
         self._money_lock = threading.Lock()
@@ -302,6 +301,46 @@ class SignerService:
             approve_above_usd=self.config.approve_above_usd,
             unverified_within_caps=self.config.unverified_sends == "caps")
 
+    def _own_view(self, intent, tx):
+        """The request fields the signer answers itself, because the agent wrote them.
+
+        * A resource call is a zero-value call the guard charges the fee only. The
+          order that bounds it lives in the agent's store, so here it is bound by
+          ``signer.toml [policy] resource_calls``: the contract and the function.
+        * ``held_balance_raw`` waives the spend-grade price bar for an exit within the
+          held balance. The signer reads the balance; an unread one waives nothing.
+        """
+        if intent.is_resource_call:
+            call = (str(intent.chain or "").lower(), str(tx.get("to") or "").lower(),
+                    str(tx.get("data") or tx.get("input") or "")[:10].lower())
+            if call not in self.config.resource_calls:
+                raise _Refuse(protocol.GUARD_REFUSED,
+                              "refused: this resource call is not in signer.toml [policy] "
+                              f'resource_calls (add "{":".join(call)}" on the box to allow it)')
+        if intent.held_balance_raw is None:
+            return intent
+        import dataclasses
+        return dataclasses.replace(intent, held_balance_raw=self._held_balance(intent))
+
+    def _held_balance(self, intent) -> Optional[int]:
+        """The holder's own balance of ``intent.token`` as the chain reports it, or None."""
+        holder = intent.via_account or self.wallet.operational_signer().address
+        if not intent.token:
+            return None
+        try:
+            if self._balance_fn is not None:
+                held = self._balance_fn(intent.chain, holder, intent.token)
+            else:
+                from core.wallet.onchain import token_balances
+                from core.wallet.tokens import normalize_address
+                held = token_balances(holder, intent.chain, [intent.token]).get(
+                    normalize_address(intent.token))
+        except Exception:
+            logger.warning("signer: the held balance of %s on %s was not read",
+                           intent.token, intent.chain, exc_info=True)
+            return None
+        return int(held) if isinstance(held, int) and not isinstance(held, bool) else None
+
     @staticmethod
     def _passes(decision) -> bool:
         # Structural guard success, possibly requiring independent approval.
@@ -327,6 +366,7 @@ class SignerService:
             intent = dataclasses.replace(intent, payout_shape=False)
         tx = protocol.tx_from_wire(body["tx"])
         row = self._chain_row(intent.chain)
+        intent = self._own_view(intent, tx)
         if int(tx["chainId"]) != int(row.chain_id):
             raise _Refuse(protocol.CHAIN_NOT_ALLOWED,
                           f"transaction chainId {tx['chainId']} is not {intent.chain} ({row.chain_id})")
@@ -671,6 +711,11 @@ class SignerService:
         from core.signer.sign_ops import op_sign_classified
         return op_sign_classified(self, body, peer_uid)
 
+    def _op_sign_order(self, body, peer_uid):
+        """A class-O market Listing only; the facts and the class are computed HERE."""
+        from core.signer.sign_ops import op_sign_order
+        return op_sign_order(self, body, peer_uid)
+
     # -- C1: the account journal entry ---------------------------------------
 
     def _op_journal_sign(self, body, peer_uid):
@@ -690,52 +735,6 @@ class SignerService:
         self.store.log_decision(op="journal.sign", digest=None, allowed=True, peer_uid=peer_uid,
                                 reason=f"journal {account}")
         return {"signature": sig, "address": signer.address}
-
-    # -- 066 P3: EIP-8004 feedback authorization ---------------------------
-
-    def _op_eip8004_feedback_auth(self, body, peer_uid):
-        protocol.check_keys(body, required=("typed",))
-        typed = body["typed"]
-        protocol.check_keys(typed, required=("types", "primaryType", "domain", "message"))
-        if typed["primaryType"] != "FeedbackAuth" or typed["types"] != {
-                "EIP712Domain": _DOMAIN_FIELDS, "FeedbackAuth": _FEEDBACK_FIELDS}:
-            raise protocol.ProtocolError("typed data is not the EIP-8004 FeedbackAuth shape")
-        protocol.check_keys(typed["domain"], required=("name", "version", "chainId",
-                                                       "verifyingContract"))
-        if typed["domain"]["name"] != "EIP8004ReputationRegistry" or \
-                typed["domain"]["version"] != "1":
-            raise protocol.ProtocolError("domain is not EIP8004ReputationRegistry v1")
-        # The domain must name a PINNED reputation registry on its own chain, or the
-        # signature authorizes feedback on whatever contract/chain the caller chose.
-        from core.wallet import erc8004
-        try:
-            _chain_id = int(typed["domain"]["chainId"])
-        except (TypeError, ValueError):
-            raise protocol.ProtocolError("domain chainId is not an integer")
-        _verifier = str(typed["domain"]["verifyingContract"]).lower()
-        # The zero address (an unconfigured registry) verifies nowhere, so it is inert.
-        if _verifier != "0x" + "0" * 40 and not any(
-                row.chain_id == _chain_id and str(row.reputation).lower() == _verifier
-                for row in (erc8004.registry_for(c) for c in erc8004.supported_chains())):
-            raise _Refuse(protocol.UNKNOWN_SHAPE,
-                          "domain is not a pinned ERC-8004 reputation registry on its chain")
-        msg = typed["message"]
-        protocol.check_keys(msg, required=("agentId", "clientAddress", "expiresAt", "nonce"))
-        expires = int(msg["expiresAt"])
-        if not (self._now() < expires <= self._now() + _FEEDBACK_MAX_TTL_SEC):
-            raise _Refuse(protocol.UNKNOWN_SHAPE,
-                          f"expiresAt must be within {_FEEDBACK_MAX_TTL_SEC // 86400} days")
-        key = (self._secret_fn or (lambda n: None))("EIP8004_AGENT_PRIVATE_KEY")
-        if not key:
-            raise _Refuse(protocol.NOT_CONFIGURED,
-                          "EIP8004_AGENT_PRIVATE_KEY is not in the signer's env")
-        from eth_account import Account
-        from eth_account.messages import encode_typed_data
-        signed = Account.sign_message(encode_typed_data(full_message=typed), key)
-        sig = signed.signature.hex()
-        self.store.log_decision(op="eip8004.feedback_auth", digest=None, allowed=True,
-                                peer_uid=peer_uid, ref=str(msg["clientAddress"]))
-        return {"signature": sig if sig.startswith("0x") else "0x" + sig}
 
     # -- deposits + sweeper (066 §5.5) --------------------------------------
 

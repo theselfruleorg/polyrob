@@ -77,6 +77,21 @@ def _room_grants_row(caps, surfaces_db: str, surface: str, chat_id: str, pol, no
             "admin_turns_today": caps.admin_turns_since(surface, chat_id, now - 86400) if caps else 0}
 
 
+_ROOM_TEXT_MAX = 60
+
+
+def _cut(text) -> str:
+    text = str(text or "")
+    return text if len(text) <= _ROOM_TEXT_MAX else text[:_ROOM_TEXT_MAX - 1] + "…"
+
+
+class _NamedPolicy:
+    """The one attribute ``render_room_line`` reads from a policy: the name."""
+
+    def __init__(self, name: str):
+        self.name = name
+
+
 def _groups_section(user_id: str, data_dir: str) -> Section:
     """044 T18: rooms this instance is present in — allowlist + mode + traffic.
 
@@ -88,7 +103,7 @@ def _groups_section(user_id: str, data_dir: str) -> Section:
     is guarded the SAME way (044 T18 fix round 1, Important 2) — constructing
     ``GroupLedger``/``RoomCaps`` runs their DDL, which would create the file on
     a plain status read; when it is absent every room reports
-    ``ledger_rows=0``/``replies_today=0`` with ``note="surfaces.db absent"``
+    ``ledger_rows=0``/``replies_24h=0`` with ``note="surfaces.db absent"``
     instead.
     """
     sec = Section(name="groups")
@@ -98,7 +113,7 @@ def _groups_section(user_id: str, data_dir: str) -> Section:
         sec.data["rooms"] = []
         return sec
     from core.surfaces.chat_policy import load_for_chat
-    from core.surfaces.room_label import render_room_label, room_name
+    from core.surfaces.room_label import render_room_label, render_room_line, room_name
     from core.surfaces.group_allowlist import GroupAllowlist
     rows = GroupAllowlist(allow_db).list_all()
     active = [r for r in rows if r.get("status") == "active"]
@@ -129,12 +144,12 @@ def _groups_section(user_id: str, data_dir: str) -> Section:
         pol = load_for_chat(data_dir, surface, chat_id)
         if ledger is not None and caps is not None:
             last = ledger.tail(surface, chat_id, limit=1)
-            replies_today = caps.replies_since(surface, chat_id, now - 86400)
+            replies_24h = caps.replies_since(surface, chat_id, now - 86400)
             ledger_rows = ledger.count(surface, chat_id)
             last_write = last[0].ts if last else None
             note = ""
         else:
-            replies_today = 0
+            replies_24h = 0
             ledger_rows = 0
             last_write = None
             note = "surfaces.db absent"
@@ -146,19 +161,21 @@ def _groups_section(user_id: str, data_dir: str) -> Section:
             "label": render_room_label(r),
             "mode": pol.mode,
             **_room_grants_row(caps, surfaces_db if caps is not None else "", surface, chat_id, pol, now),
-            "replies_today": replies_today,
+            # 116 W6.8: a rolling 24 h count, so it is not called "today".
+            "replies_24h": replies_24h,
             "ledger_rows": ledger_rows,
             "last_write": last_write,
             "note": note,
         })
     sec.data["rooms"] = out_rows
     sec.lines.append(f"{len(out_rows)} room(s)")
-    for row in out_rows:
-        line = (f"{row['surface']}:{row['chat_id']} \"{row['name']}\" mode={row['mode']} "
-                f"replies_today={row['replies_today']} ledger={row['ledger_rows']} "
-                f"last={_hhmm(row['last_write'])}")
-        if row.get("label"):
-            line += f" {row['label']}"
+    for r, row in zip(active, out_rows):
+        # 116 W6.8: the ONE room line (core.surfaces.room_label), the name and
+        # the owner's note cut at 60 characters so one long note cannot flood it.
+        line = render_room_line(
+            {**r, "note": _cut(r.get("note"))}, _NamedPolicy(_cut(row["name"])),
+            f"mode={row['mode']} replies_24h={row['replies_24h']} "
+            f"ledger={row['ledger_rows']} last={_hhmm(row['last_write'])}")
         if row["admins"] or row["admin_bundles"] or row["room_tools"] or row["settings_unreadable"]:
             line += (f" admins={','.join(row['admins']) or '-'} "
                      f"bundles={'UNKNOWN' if row['settings_unreadable'] else ','.join(row['admin_bundles']) or '-'} "

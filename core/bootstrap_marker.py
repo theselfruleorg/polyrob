@@ -128,6 +128,15 @@ def describe(data_home: Optional[Path | str] = None) -> str:
     """One honest line for a status surface."""
     status, data = read_marker(data_home)
     if status == ABSENT:
+        # 116 W6.4: a box a deploy stamped was installed from git, not by
+        # `polyrob setup` — telling its owner to run setup is the wrong remedy.
+        try:
+            from core.version import deployed_sha
+            sha = deployed_sha()
+        except Exception:
+            sha = None
+        if sha:
+            return f"bootstrap: deployed from git ({sha[:12]}); no install record"
         return "bootstrap: not recorded (run `polyrob setup`)"
     if status == UNREADABLE:
         return f"bootstrap: unreadable ({marker_path(data_home)})"

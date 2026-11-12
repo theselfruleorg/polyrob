@@ -212,26 +212,6 @@ def room_action_card_enabled() -> bool:
     return _bool_env("ROOM_ACTION_CARD_ENABLED", room_actions_enabled())
 
 
-def eip8004_payment_feedback_enabled() -> bool:
-    """Task 15 (Phase 4): settlement -> ERC-8004 payment-backed reputation
-    hook (`SettlementWatcher._maybe_offer_payment_feedback`) — on settlement
-    of an invoice with an identifiable payer (`correspondent_ref`) and a
-    verifiable on-chain transaction, offer the payer a signed
-    FeedbackAuthorization + ProofOfPayment they can redeem later. Never
-    auto-submits feedback on the payer's behalf (that would be fake
-    reputation) — this only gates the OFFER.
-
-    Rides `EIP8004_ENABLED` — checked the SAME way `get_eip8004_config()` /
-    `require_eip8004_enabled()` do (strict `'true'` string match, not the
-    broader `bool_env` falsey-set) so this flag can never disagree with the
-    rest of the EIP-8004 module about whether ERC-8004 itself is on. Default
-    OFF (both must be explicitly enabled).
-    """
-    if not _bool_env("EIP8004_ENABLED", False):
-        return False
-    return _bool_env("EIP8004_PAYMENT_FEEDBACK", False)
-
-
 def task_personality_block_enabled() -> bool:
     """Whether the persona/<identity> block is injected into the task agent.
 

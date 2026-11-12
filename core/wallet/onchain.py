@@ -37,7 +37,8 @@ VENUE_CHAIN = {"treasury": "base", "x402": "base",
 
 
 def _read_table():
-    """chain → (rpc, USDC erc20 contract [6 decimals], native symbol).
+    """chain → (rpc, USDC erc20 contract, native symbol). The USDC decimals are the
+    row's ``usdc_decimals`` (:func:`balances` reads them; BNB Chain's are 18).
 
     DERIVED from `core.wallet.chains`, which is the one chain table. This module
     used to carry its own, so a chain could be readable here and unknown there
@@ -243,6 +244,12 @@ def venue_chain(venue: str):
     return VENUE_CHAIN.get(venue)
 
 
+def _usdc_decimals(chain: str) -> int:
+    from core.wallet import chains
+    row = chains.get(chain)
+    return int(row.usdc_decimals) if row is not None else 6
+
+
 def balances(address: str, chain: str, timeout: float = 4.0):
     """(native, usdc) as floats, or (None, None) on any failure. Best-effort/fail-open.
 
@@ -265,7 +272,7 @@ def balances(address: str, chain: str, timeout: float = 4.0):
     try:
         data = _ERC20_BALANCEOF + address[2:].lower()
         raw = _hex_int(_rpc(rpc, "eth_call", [{"to": usdc, "data": data}, "latest"], timeout))
-        usdc_bal = None if raw is None else raw / 1e6
+        usdc_bal = None if raw is None else raw / 10 ** _usdc_decimals(chain)
     except Exception:
         pass
     return native, usdc_bal

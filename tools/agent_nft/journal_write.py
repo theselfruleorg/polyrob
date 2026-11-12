@@ -3,8 +3,8 @@
 * :func:`write_entry` — with a pinned ``journal_log`` the entry is signed, then written ON CHAIN
   as the account's single call ``JournalLog.log(entry)`` (``TxIntent.is_journal_entry``: the
   guard checks the entry and that nothing of the account moves), and kept in the local cache once
-  it landed. Without one, it is appended to the local journal. ``agent_nft_adopt``'s handover
-  entry and the agent-NFT package's ``journal`` verb (thesis / note) go through here.
+  it landed. Without one, it is appended to the local journal. The ``journal`` verb
+  (thesis / note) goes through here.
 * :func:`history` — the account's verified chain: its ``Entry`` events (a sold account keeps its
   seller's entries), or the local file without a ``journal_log``. An unreadable history RAISES.
 """

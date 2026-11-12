@@ -12,7 +12,13 @@ request is CLASSIFIED first, and the class decides the gate:
 * **C — authority** (permits, allowances, agent approvals, delegations, and a
   text that does not name the site it is for). Needs the owner (090 P1).
 * **D — blind.** A digest or opaque blob, control bytes, a malformed sign-in
-  message, typed data before P1. Refused, always.
+  message, any other typed data. Refused, always.
+* **O — a pinned market order** (111 §8.3, D8). EIP-712 typed data that is EXACTLY
+  a ``Listing`` of the pinned market of a pinned collection, every field bound to a
+  fact the classifier's process read itself (``core.wallet.sale_orders``). Only with
+  those facts in the context (``SignContext.order_facts``); without them every typed
+  data stays D. Never signed by :func:`sign_classified` (the login rail): only by
+  :func:`sign_market_order`, after the owner's card for that one order.
 
 The SAME function runs in the agent process and in ``polyrob-signer``
 (``sign.classified``), which re-classifies the wire payload and refuses a class
@@ -33,7 +39,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, FrozenSet, Optional, Tuple
 from urllib.parse import urlsplit
 
-A, B, C, D = "A", "B", "C", "D"
+A, B, C, D, O = "A", "B", "C", "D", "O"
 SCHEMES = frozenset({"eip191", "solana_message", "eip712"})
 
 #: A login text longer than this is not a login.
@@ -172,6 +178,9 @@ class SignContext:
     #: Whether ``SignRequest.fetch_bound`` can be believed. The agent process
     #: made the fetch itself; ``polyrob-signer`` cannot prove it and passes False.
     trust_fetch_bound: bool = True
+    #: Class O only: what THIS process read for the order
+    #: (``core.wallet.sale_orders.read_listing_facts``). None = typed data is D.
+    order_facts: Optional[Any] = None
 
 
 @dataclass(frozen=True)
@@ -482,8 +491,14 @@ def _classify(req: SignRequest, ctx: SignContext) -> SignVerdict:
     if scheme not in SCHEMES:
         return _d(f"unknown signing scheme {scheme!r}", scheme)
     if scheme == "eip712":
-        return _d("typed data (EIP-712) is not signable yet: permits and orders need the "
-                  "owner card or the spend gate (proposal 090 P1/P2)", scheme)
+        if ctx.order_facts is None:
+            return _d("typed data (EIP-712) is not signable here: permits and orders need the "
+                      "owner card or the spend gate (proposal 090 P1/P2); a pinned market "
+                      "listing signs only through its own verb (class O)", scheme)
+        import core.wallet.sale_orders as _orders   # a leaf: no edge back to this module
+        cls, reason, decoded, digest = _orders.classify_listing(req.payload, ctx.holder,
+                                                                ctx.order_facts)
+        return SignVerdict(cls, reason, scheme, decoded, digest)
     if not isinstance(req.payload, str):
         return _d("the message must be text", scheme)
     if not str(ctx.holder or "").strip():
@@ -570,6 +585,30 @@ def sign_classified(signer, req: SignRequest, *, now: Optional[float] = None,
     else:
         raw = signer.sign_message(req.payload.encode("utf-8"))
         signature = _render_signature(req.scheme, raw)
+    return signature, verdict
+
+
+def sign_market_order(signer, req: SignRequest, *, facts, chain: str) -> Tuple[str, SignVerdict]:
+    """Sign a class-O order (a pinned market ``Listing``) for *signer*'s address, or raise
+    :class:`SignRefused`. *facts* are what this process read (``sale_orders.read_listing_facts``).
+    A signer that carries the key in another process (``sign_order`` on the signer object)
+    re-reads its own facts and re-classifies there. The returned signature must recover to the
+    signer over the digest the pinned market itself computes."""
+    import core.wallet.sale_orders as _orders
+    verdict = classify(req, SignContext(holder=signer.address, order_facts=facts))
+    if verdict.cls != O:
+        raise SignRefused(verdict)
+    remote = getattr(signer, "sign_order", None)
+    if callable(remote):
+        signature = remote(req, chain)
+    else:
+        typed = req.payload
+        types = {k: v for k, v in typed["types"].items() if k != "EIP712Domain"}
+        signature = signer.sign_typed_data(typed["domain"], types, typed["message"])
+    signature = signature if str(signature).startswith("0x") else "0x" + str(signature)
+    if not _orders.recovers(verdict.digest, signature, signer.address):
+        raise SignRefused(SignVerdict(D, "the signature does not recover to this wallet over "
+                                         "the market's digest", req.scheme, verdict.decoded))
     return signature, verdict
 
 

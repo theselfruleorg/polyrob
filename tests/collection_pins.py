@@ -36,8 +36,30 @@ def code_rpc(inner=None, *, code=CODE, block=0x100):
     return rpc
 
 
+#: The public mint's cap per token in a test profile (the sale's ``START_PRICE``, 0.099 ETH).
+MAX_PRICE_WEI = 99 * 10 ** 15
+
+
+def sale_address(collection):
+    """A neutral stand-in for the pinned SALE of *collection*: the bitwise complement of its
+    address (distinct from it and from the sale of any other test collection)."""
+    return "0x" + format((1 << 160) - 1 - int(collection, 16), "040x")
+
+
+def sale(collection, *, runtime_sha256=RUNTIME_SHA256, max_price_wei=MAX_PRICE_WEI, address=None):
+    """The ``sale`` key ``polyrob-desk/contracts/script/pin.py --with-sale`` writes."""
+    return {"address": address or sale_address(collection), "runtime_sha256": runtime_sha256,
+            "max_price_wei": max_price_wei}
+
+
+_AUTO = object()
+
+
 def profile(address, *, chain_id=4663, max_supply=SUPPLY, capabilities=("mint", "reveal"),
-            journal_prefix=None, runtime_sha256=RUNTIME_SHA256, deploy_block=1):
+            journal_prefix=None, runtime_sha256=RUNTIME_SHA256, deploy_block=1, sale_pin=_AUTO):
+    """A raw profile. A profile with the ``mint`` capability carries a ``sale`` (the parser
+    refuses ``mint`` without one): by default :func:`sale` of *address*; ``sale_pin=None``
+    leaves it out, a dict replaces it."""
     raw = {
         "spec": collection_registry.SPEC_V1,
         "capabilities": list(capabilities),
@@ -51,6 +73,10 @@ def profile(address, *, chain_id=4663, max_supply=SUPPLY, capabilities=("mint", 
     }
     if journal_prefix:
         raw["journal_prefix"] = journal_prefix
+    if sale_pin is _AUTO:
+        sale_pin = sale(address) if "mint" in capabilities else None
+    if sale_pin is not None:
+        raw["sale"] = sale_pin
     return raw
 
 

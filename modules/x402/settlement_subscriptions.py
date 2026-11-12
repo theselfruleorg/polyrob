@@ -2,7 +2,7 @@
 
 Split out of ``modules/x402/settlement_watcher.py`` (S6, 2026-08-29). A mixin over
 ``SettlementWatcher`` — it relies on the host for ``task_agent``, ``_db``, the injection
-seams (``_rpc_call``/``_usdc_addr``/``_goal_board_override``/``_reputation_manager_override``)
+seams (``_rpc_call``/``_usdc_addr``/``_goal_board_override``)
 and the module ``logger``; behaviour is byte-identical to the pre-split class.
 """
 import logging

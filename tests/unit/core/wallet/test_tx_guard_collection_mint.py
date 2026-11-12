@@ -1,11 +1,14 @@
 """tx_guard's collection paid-mint shape: ``mint(address to, uint256 qty, uint256 minPnlOutPerToken)``
-on a collection pinned in the owner's collection registry with the ``mint`` capability
-(testnet-run 2026-09-29 F2; 050 §7.3).
+or ``mintWL(…, allowance, proof)`` on the pinned SALE of a collection pinned in the owner's
+collection registry with the ``mint`` capability (testnet-run 2026-09-29 F2; 050 §7.3; 115 W8).
 
 ⚠️ The one shape where native value LEAVES and NFTs ARRIVE. Before it existed ``agent_nft_collection_mint``
 declared ``is_nft_op`` and the NFT branch refused the payment ("an NFT transfer moved
 -42000000000000000 wei") on every chain.
-⚠️ The destination is PINNED (``core.wallet.collection_registry``); the price is a pinned constant.
+⚠️ The destination is the PINNED sale (``core.wallet.collection_registry``), never the collection;
+the base price is a pinned constant, the public cap the profile's ``sale.max_price_wei``.
+⚠️ The receipt per id is ``Transfer(0x0 → collection)`` then ``Transfer(collection → signer)``
+(polyrob-desk ``AgentIdentity._mintWithAccountAndIdentity``): the ids arrive FROM the collection.
 """
 import pytest
 
@@ -13,9 +16,10 @@ from core.wallet import collection_mint as M
 from core.wallet import collection_registry, erc6551, tx_guard
 from core.wallet.policy import PolicyGate
 from core.wallet.simulation import Deltas
-from tests.collection_pins import code_rpc, SUPPLY, pin, profile
+from tests.collection_pins import MAX_PRICE_WEI, SUPPLY, code_rpc, pin, profile, sale, sale_address
 
 COLLECTION = "0xc011000000000000000000000000000000000001"
+SALE = sale_address(COLLECTION)
 OTHER = "0x3333333333333333333333333333333333333333"
 HOLDER = "0x2222222222222222222222222222222222222222"
 USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
@@ -29,14 +33,14 @@ def _pinned(monkeypatch):
     pin(monkeypatch, COLLECTION)
 
 
-def _tx(to=COLLECTION, recipient=HOLDER, qty=3, value=None, data=None, min_out=0):
+def _tx(to=SALE, recipient=HOLDER, qty=3, value=None, data=None, min_out=0):
     return {"to": to, "data": data if data is not None else M.encode_mint(recipient, qty, min_out),
             "value": 3 * PRICE if value is None else value,
             "chainId": 4663, "nonce": 1, "gas": 3_000_000, "maxFeePerGas": 10 ** 8}
 
 
 def _intent(**kw):
-    base = dict(chain="robinhood", token=None, to=COLLECTION, amount_raw=3 * PRICE, max_spend_usd=600.0,
+    base = dict(chain="robinhood", token=None, to=SALE, amount_raw=3 * PRICE, max_spend_usd=600.0,
                 idempotency_key="k", is_collection_mint=True, mint_ids=IDS)
     base.update(kw)
     return tx_guard.TxIntent(**base)
@@ -55,9 +59,11 @@ def _log(topic, *rest, address=COLLECTION):
 
 
 def _mint_logs(ids=IDS, to=HOLDER):
+    """The real receipt: per id the collection mints to ITSELF, then moves the token to `to`."""
     out = []
     for i in ids:
-        out += [_log(M.TOPIC_TRANSFER, _word(0), _addr_word(to), _word(i)),
+        out += [_log(M.TOPIC_TRANSFER, _word(0), _addr_word(COLLECTION), _word(i)),
+                _log(M.TOPIC_TRANSFER, _addr_word(COLLECTION), _addr_word(to), _word(i)),
                 _log(M.TOPIC_MINTED, _word(i), _addr_word(to))]
     # the rest of a real mint: account creation, the TKN buy — none names the signer
     out.append(_log("0x" + "ab" * 32, _word(1), address=OTHER))
@@ -67,7 +73,7 @@ def _mint_logs(ids=IDS, to=HOLDER):
 def _deltas(ids=IDS, **kw):
     base = dict(ok=True, native_delta=-len(ids) * PRICE, token_deltas={}, allowance_deltas={},
                 gas_used=1_000_000, logs=_mint_logs(ids),
-                holder_nft_in=tuple((COLLECTION, "erc721", ZERO, i, 1) for i in ids))
+                holder_nft_in=tuple((COLLECTION, "erc721", COLLECTION, i, 1) for i in ids))
     base.update(kw)
     return Deltas(**base)
 
@@ -112,7 +118,7 @@ def test_the_old_nft_op_shape_still_refuses_the_payment():
     intent = tx_guard.TxIntent(chain="robinhood", token=None, to=COLLECTION, amount_raw=3 * PRICE,
                                max_spend_usd=600.0, idempotency_key="k", is_nft_op=True,
                                expected_nft_in=tuple((COLLECTION, "erc721", i, 1) for i in IDS))
-    d = _authorize(intent, _deltas())
+    d = _authorize(intent, _deltas(), tx=_tx(to=COLLECTION))
     assert d.allowed is False and "NFT transfer moved" in d.reason
 
 
@@ -176,7 +182,13 @@ def test_the_ids_are_held_to_the_profiles_max_supply(monkeypatch):
 
 def test_an_intent_to_an_unpinned_contract_refuses():
     d = _authorize(_intent(to=OTHER), _deltas(), tx=_tx(to=OTHER))
-    assert d.allowed is False and "not a pinned collection" in d.reason
+    assert d.allowed is False and "not the pinned sale" in d.reason
+
+
+def test_a_mint_addressed_to_the_collection_itself_refuses():
+    """M1: the collection has no public mint (mintFromSale accepts only its SALE())."""
+    d = _authorize(_intent(to=COLLECTION), _deltas(), tx=_tx(to=COLLECTION))
+    assert d.allowed is False and "no public mint" in d.reason and SALE in d.reason
 
 
 def test_a_transaction_to_another_contract_refuses():
@@ -194,7 +206,7 @@ def test_a_mint_to_a_third_party_refuses():
 def test_another_selector_refuses():
     data = "0x42842e0e" + "0" * 192
     d = _authorize(_intent(), _deltas(), tx=_tx(data=data))
-    assert d.allowed is False and "not mint(address,uint256,uint256)" in d.reason
+    assert d.allowed is False and "neither mint(address,uint256,uint256)" in d.reason
 
 
 def test_trailing_bytes_refuse():
@@ -224,13 +236,31 @@ def test_bad_id_declarations_refuse(ids):
     assert d.allowed is False
 
 
-@pytest.mark.parametrize("value", [3 * PRICE - 1, 3 * PRICE + 1, 0, PRICE])
-def test_a_value_other_than_qty_times_price_refuses(value):
-    d = _authorize(_intent(), _deltas(), tx=_tx(value=value))
-    assert d.allowed is False and "exactly" in d.reason
+@pytest.mark.parametrize("value", [3 * PRICE - 1, 1, PRICE, 3 * MAX_PRICE_WEI + 1])
+def test_a_public_value_outside_base_and_the_pinned_cap_refuses(value):
+    d = _authorize(_intent(amount_raw=value), _deltas(), tx=_tx(value=value))
+    assert d.allowed is False and "at least" in d.reason and "max_price_wei" in d.reason
 
 
-def test_a_declared_amount_other_than_the_price_refuses():
+@pytest.mark.parametrize("value", [3 * PRICE, 3 * PRICE + 1, 3 * 66 * 10 ** 15, 3 * MAX_PRICE_WEI])
+def test_a_public_value_from_base_to_the_pinned_cap_is_authorized(value):
+    """M3: the auction takes qty × priceNow() .. qty × START_PRICE; the guard bounds it by the
+    base and the profile's cap, and the sale keeps all of it inside the transaction."""
+    d = _authorize(_intent(amount_raw=value), _deltas(native_delta=-value), tx=_tx(value=value),
+                   price=50.0)
+    assert d.allowed is True, d.reason
+
+
+def test_the_public_cap_is_the_profiles_max_price(monkeypatch):
+    pin(monkeypatch, profile(COLLECTION, sale_pin=sale(COLLECTION, max_price_wei=PRICE)))
+    d = _authorize(_intent(amount_raw=3 * PRICE + 1), _deltas(native_delta=-3 * PRICE - 1),
+                   tx=_tx(value=3 * PRICE + 1))
+    assert d.allowed is False and "max_price_wei" in d.reason
+    d = _authorize(_intent(), _deltas(), price=100.0)
+    assert d.allowed is True, d.reason
+
+
+def test_a_declared_amount_other_than_the_value_refuses():
     d = _authorize(_intent(amount_raw=3 * PRICE - 1), _deltas())
     assert d.allowed is False and "amount_raw" in d.reason
 
@@ -290,18 +320,18 @@ def test_any_other_movement_or_approval_refuses(field, value):
 
 def test_fewer_ids_than_declared_arrive_refuses():
     d = _authorize(_intent(), _deltas(holder_nft_in=tuple(
-        (COLLECTION, "erc721", ZERO, i, 1) for i in (5, 6))))
+        (COLLECTION, "erc721", COLLECTION, i, 1) for i in (5, 6))))
     assert d.allowed is False and "exactly ids" in d.reason
 
 
 def test_other_ids_arrive_refuses():
     d = _authorize(_intent(), _deltas(holder_nft_in=tuple(
-        (COLLECTION, "erc721", ZERO, i, 1) for i in (6, 7, 8))))
+        (COLLECTION, "erc721", COLLECTION, i, 1) for i in (6, 7, 8))))
     assert d.allowed is False
 
 
 def test_an_extra_nft_from_another_contract_refuses():
-    extra = tuple((COLLECTION, "erc721", ZERO, i, 1) for i in IDS) + ((OTHER, "erc721", ZERO, 1, 1),)
+    extra = tuple((COLLECTION, "erc721", COLLECTION, i, 1) for i in IDS) + ((OTHER, "erc721", ZERO, 1, 1),)
     d = _authorize(_intent(), _deltas(holder_nft_in=extra))
     assert d.allowed is False
 
@@ -339,10 +369,11 @@ def test_a_missing_transfer_log_refuses():
 
 
 def test_the_codec_round_trips_and_pins_the_selector_and_price():
-    assert M.MINT_SELECTOR == "0x156e29f6"          # the collection ABI's methodIdentifiers
+    assert M.MINT_SELECTOR == "0x156e29f6"          # the sale ABI's methodIdentifiers
+    assert M.MINT_WL_SELECTOR == "0x1e29517f"
     to, qty, min_out = M.decode_mint(M.encode_mint(HOLDER, 3, 7))
     assert to.lower() == HOLDER and (qty, min_out) == (3, 7)
-    assert M.MINT_PRICE_WEI == PRICE and M.MAX_MINT_QTY == 10
+    assert M.BASE_WEI == PRICE and M.MAX_MINT_QTY == 10 and M.MAX_PROOF_WORDS == 32
 
 
 def test_a_changed_collection_runtime_refuses():
@@ -351,3 +382,187 @@ def test_a_changed_collection_runtime_refuses():
     assert d.allowed is False and "not the pinned" in d.reason, d.reason
     d = _authorize(_intent(), _deltas(), rpc=code_rpc(code="0x"))
     assert d.allowed is False and "could not be read" in d.reason, d.reason
+
+
+def _code_at(address, code):
+    """A fake RPC whose eth_getCode of *address* is *code* (every other read: code_rpc)."""
+    def inner(method, params):
+        if method == "eth_getCode" and str(params[0]).lower() == address.lower():
+            return code
+        return NotImplemented
+    return code_rpc(inner)
+
+
+def test_the_collection_and_the_sale_are_each_hashed_against_their_own_pin():
+    d = _authorize(_intent(), _deltas(), rpc=_code_at(SALE, "0x6080deadbeef"))
+    assert d.allowed is False and "pinned sale" in d.reason and "not the pinned" in d.reason, d.reason
+    d = _authorize(_intent(), _deltas(), rpc=_code_at(SALE, "0x"))
+    assert d.allowed is False and "pinned sale" in d.reason and "could not be read" in d.reason
+    d = _authorize(_intent(), _deltas(), rpc=_code_at(COLLECTION, "0x6080deadbeef"))
+    assert d.allowed is False and "pinned collection" in d.reason, d.reason
+
+
+def test_a_sale_pinned_with_another_hash_refuses(monkeypatch):
+    pin(monkeypatch, profile(COLLECTION, sale_pin=sale(COLLECTION, runtime_sha256="00" * 32)))
+    d = _authorize(_intent(), _deltas())
+    assert d.allowed is False and "pinned sale" in d.reason and "not the pinned" in d.reason
+
+
+# --- the real receipt: two Transfers per id (115 M2) ---------------------------
+
+def test_the_real_two_transfer_receipt_is_accepted():
+    """The blocker of 2026-10-22: the contract mints each id to ITSELF, then moves it to the
+    signer. The guard that expected Transfer(0x0 → signer) refused every real mint."""
+    assert M.assert_simulation(_intent(), _deltas(), HOLDER) is None
+    d = _authorize(_intent(), _deltas(), price=100.0)
+    assert d.allowed is True, d.reason
+
+
+def test_the_old_one_transfer_receipt_is_not_a_mint():
+    logs = tuple(l for i in IDS for l in (
+        _log(M.TOPIC_TRANSFER, _word(0), _addr_word(HOLDER), _word(i)),
+        _log(M.TOPIC_MINTED, _word(i), _addr_word(HOLDER))))
+    d = _authorize(_intent(), _deltas(logs=logs, holder_nft_in=tuple(
+        (COLLECTION, "erc721", ZERO, i, 1) for i in IDS)))
+    assert d.allowed is False
+
+
+def test_ids_that_arrive_from_another_address_refuse():
+    d = _authorize(_intent(), _deltas(holder_nft_in=tuple(
+        (COLLECTION, "erc721", OTHER, i, 1) for i in IDS)))
+    assert d.allowed is False and "exactly ids" in d.reason
+
+
+def test_a_transfer_to_the_signer_from_another_address_refuses():
+    logs = _mint_logs()[:-1] + (_log(M.TOPIC_TRANSFER, _addr_word(OTHER), _addr_word(HOLDER), _word(9)),)
+    d = _authorize(_intent(), _deltas(logs=logs))
+    assert d.allowed is False and "not part of a mint" in d.reason
+
+
+def test_the_two_transfers_from_another_emitter_refuse():
+    logs = tuple(dict(l, address=OTHER) if l["topics"][0] == M.TOPIC_TRANSFER else l
+                 for l in _mint_logs())
+    d = _authorize(_intent(), _deltas(logs=logs))
+    assert d.allowed is False and "names the signer" in d.reason
+
+
+def test_an_id_the_collection_did_not_mint_in_the_transaction_refuses():
+    """The collection→signer move without the 0x0→collection mint is an existing token."""
+    logs = tuple(l for l in _mint_logs() if not (l["topics"][0] == M.TOPIC_TRANSFER
+                                                  and l["topics"][1] == _word(0)
+                                                  and l["topics"][3] == _word(6)))
+    d = _authorize(_intent(), _deltas(logs=logs))
+    assert d.allowed is False and "Transfer(0x0 → collection)" in d.reason
+
+
+def test_the_mint_to_the_collection_must_come_before_the_move():
+    logs = list(_mint_logs())
+    logs[0], logs[1] = logs[1], logs[0]          # id 5: moved, then minted
+    d = _authorize(_intent(), _deltas(logs=tuple(logs)))
+    assert d.allowed is False and "before the move" in d.reason
+
+
+def test_a_repeated_transfer_to_the_signer_refuses():
+    logs = _mint_logs() + (_log(M.TOPIC_TRANSFER, _addr_word(COLLECTION), _addr_word(HOLDER), _word(5)),)
+    d = _authorize(_intent(), _deltas(logs=logs))
+    assert d.allowed is False and "Transfer(collection → signer)" in d.reason
+
+
+def test_the_sales_own_events_name_the_buyer_in_data_only_and_pass():
+    """No sale event indexes an address (PolyrobSale: WLMinted, Bid, Owed, … all plain): the
+    buyer is in the data, so nothing of the sale is allowlisted."""
+    bid = "0x76b552d768564e2bf5325e2d83fe7184b2838e6e58fc33173aef30980e0269c8"
+    owed = "0x7393c924ac30f9256e6cebcfb78841b1e7ef11bf8b09d87c2257b32b8063c979"
+    logs = _mint_logs() + ({"address": SALE, "topics": [bid], "data": "0x" + _addr_word(HOLDER)[2:]},
+                           {"address": SALE, "topics": [owed], "data": "0x" + _addr_word(HOLDER)[2:]})
+    d = _authorize(_intent(), _deltas(logs=logs), price=100.0)
+    assert d.allowed is True, d.reason
+    forged = _mint_logs() + (_log(bid, _addr_word(HOLDER), address=SALE),)
+    d = _authorize(_intent(), _deltas(logs=forged))
+    assert d.allowed is False and "names the signer" in d.reason
+
+
+def test_a_refund_inside_the_mint_refuses():
+    """PolyrobSale.mint keeps all of msg.value (the excess comes back at settle; the dust is
+    booked in owed): ETH back to the signer inside the mint is not this transaction."""
+    d = _authorize(_intent(), _deltas(native_delta=-3 * PRICE + 10 ** 15))
+    assert d.allowed is False and "wei" in d.reason
+
+
+# --- the whitelist mint (115 M4) -----------------------------------------------
+
+PROOF = ("0x" + "ab" * 32, "0x" + "cd" * 32)
+
+
+def _wl_tx(qty=3, allowance=3, proof=PROOF, value=None, recipient=HOLDER):
+    return _tx(data=M.encode_mint_wl(recipient, qty, 0, allowance, proof),
+               value=qty * PRICE if value is None else value)
+
+
+def test_a_whitelist_mint_at_exactly_qty_times_base_is_authorized():
+    d = _authorize(_intent(), _deltas(), tx=_wl_tx(), price=100.0)
+    assert d.allowed is True, d.reason
+
+
+@pytest.mark.parametrize("value", [3 * PRICE - 1, 3 * PRICE + 1, 3 * MAX_PRICE_WEI])
+def test_a_whitelist_value_other_than_qty_times_base_refuses(value):
+    d = _authorize(_intent(amount_raw=value), _deltas(native_delta=-value), tx=_wl_tx(value=value))
+    assert d.allowed is False and "whitelist mint of 3 is exactly" in d.reason
+
+
+def test_a_whitelist_mint_above_its_allowance_refuses():
+    d = _authorize(_intent(), _deltas(), tx=_wl_tx(allowance=2))
+    assert d.allowed is False and "OverAllowance" in d.reason
+
+
+def test_a_large_allowance_is_the_contracts_business():
+    """PolyrobSale bounds the allowance only by wlMinted + qty <= allowance (any uint256 leaf)."""
+    d = _authorize(_intent(), _deltas(), tx=_wl_tx(allowance=1000), price=100.0)
+    assert d.allowed is True, d.reason
+
+
+def test_a_whitelist_mint_to_a_third_party_refuses():
+    d = _authorize(_intent(), _deltas(), tx=_wl_tx(recipient=OTHER))
+    assert d.allowed is False and "not to the signing treasury" in d.reason
+
+
+def test_a_proof_of_more_than_32_words_refuses():
+    ok = M.encode_mint_wl(HOLDER, 3, 0, 3, ["0x" + "11" * 32] * 32)
+    assert M.decode_mint_wl(ok)[4] == ("0x" + "11" * 32,) * 32
+    d = _authorize(_intent(), _deltas(), tx=_tx(data=M.encode_mint_wl(
+        HOLDER, 3, 0, 3, ["0x" + "11" * 32] * 33)))
+    assert d.allowed is False and "at most 32" in d.reason
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda d: d + "00" * 32,                                          # trailing bytes
+    lambda d: d[:10 + 256] + format(0xc0, "064x") + d[10 + 320:],     # proof offset moved
+    lambda d: d[:10 + 320] + format(10 ** 9, "064x") + d[10 + 384:],  # forged proof length
+    lambda d: d[:-64],                                                # truncated
+])
+def test_a_non_canonical_whitelist_calldata_refuses(mutate):
+    data = mutate(M.encode_mint_wl(HOLDER, 3, 0, 3, PROOF))
+    with pytest.raises(ValueError):
+        M.decode_mint_wl(data)
+    d = _authorize(_intent(), _deltas(), tx=_tx(data=data))
+    assert d.allowed is False
+
+
+# --- the sale is paid only by the mint -----------------------------------------
+
+def test_a_native_send_to_the_pinned_sale_outside_the_mint_refuses():
+    intent = tx_guard.TxIntent(chain="robinhood", token=None, to=SALE, amount_raw=PRICE,
+                               max_spend_usd=600.0, idempotency_key="k")
+    d = _authorize(intent, _deltas(holder_nft_in=(), logs=()),
+                   tx={"to": SALE, "data": "0x", "value": PRICE, "chainId": 4663, "nonce": 1,
+                       "gas": 21_000, "maxFeePerGas": 10 ** 8})
+    assert d.allowed is False and "paid only by the guarded mint" in d.reason
+
+
+def test_a_zero_value_call_to_the_sale_is_not_a_payment():
+    intent = tx_guard.TxIntent(chain="robinhood", token=None, to=SALE, amount_raw=0,
+                               max_spend_usd=1.0, idempotency_key="k", is_claim=True)
+    assert M.sale_payment_refusal(intent, {"to": SALE, "value": 0}) is None
+    paying = tx_guard.TxIntent(chain="robinhood", token=USDC, to=SALE, amount_raw=5,
+                               max_spend_usd=1.0, idempotency_key="k")
+    assert "pinned sale" in M.sale_payment_refusal(paying, {"to": USDC, "value": 0})

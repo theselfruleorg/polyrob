@@ -40,7 +40,7 @@ async def _status_reply(task_agent: Any, user_id: str, session_id: Optional[str]
 
 #: Health lines one chat `/status` renders before rolling the rest into a count
 #: (a phone screen; the console/CLI keep the full list).
-_STATUS_HEALTH_LIMIT = 8
+from core.status_render import SEAT_HEALTH_LIMIT as _STATUS_HEALTH_LIMIT  # noqa: E402
 
 
 async def _health_header(user_id: str, data_dir: str, task_agent: Any = None,

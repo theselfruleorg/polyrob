@@ -494,10 +494,10 @@ the master and per-venue trade flags are on and the order is within its cap. See
 ## ERC-8004 (Trustless Agents)
 
 Always mounted; discovery-only until `EIP8004_ENABLED`. The READ routes stay
-open (and label themselves `simulated`), but the two that WRITE —
-`POST /eip8004/reputation/feedback` and `POST /eip8004/validation/request` —
-require an authenticated caller, and the two that SIGN or adjudicate
-(`/reputation/authorize`, `/validation/respond`) require an admin role.
+open (and label themselves `simulated`); the two validation writes
+(`/validation/request`, `/validation/respond`) require an admin role. There is
+no `/eip8004/reputation/*` route: feedback lives on the network's Reputation
+Registry, and the agent reads it there.
 
 `trustMode` in `/eip8004/registration.json` is `onchain` only when there is
 something a reader can look up: a confirmed on-chain record, or an operator
@@ -507,15 +507,13 @@ claim carrying BOTH an agent id and a registry address. Otherwise it is
 ```
 GET  /eip8004/registration.json                   # this agent's registration file
 GET  /eip8004/config                              # what is configured, and what is not
-POST /eip8004/reputation/{authorize,feedback,query}
-GET  /eip8004/reputation/{agent_id}
 POST /eip8004/validation/{request,respond}
 GET  /eip8004/validation/{status/{hash},summary/{agent_id},pending,validators}
 ```
 
 ERC-8004 is a trust and discovery layer, not a payment rail — it composes with
 x402 rather than replacing it. See
-[payments.md](payments.md#6-on-chain-identity-and-payment-backed-reputation--erc-8004-moduleseip8004).
+[payments.md](payments.md#6-on-chain-identity-and-reputation--erc-8004-moduleseip8004).
 
 ---
 

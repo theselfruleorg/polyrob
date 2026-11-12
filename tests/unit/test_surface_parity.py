@@ -98,7 +98,6 @@ CAPABILITY_MATRIX = {
     "autonomy-status":    ("autonomy", "autonomy",  "/api/webgate/pause",       "/mode"),
     "missed":             ("owner",    "missed",    None,                       "/missed"),
     "files":              ("session",  "files",     "/api/webgate/artifacts",   "/files"),
-    "dev-rail":           (None,       "dev",       None,                       "/dev"),
     "telemetry":          (None,       "telemetry", "/api/webgate/log",         None),
     # WS-K deleted /activity; the classified stream is now Work › Log (page
     # /work in pages_new, reader /api/webgate/log). The scanned routers include
@@ -180,7 +179,7 @@ CAPABILITY_HOME = {
     "token-deploy": "Money › Moves", "book-positions": "Money › Book",
     "mcp-admin": "Agent › Capabilities", "config": "Agent › Settings › Advanced",
     "skills": "Agent › Capabilities", "autonomy-status": "Agent › Overview",
-    "missed": "Work › Log", "files": "Work › Apps", "dev-rail": "Work › Log",
+    "missed": "Work › Log", "files": "Work › Apps",
     "telemetry": "Work › Log", "activity-log": "Work › Log",
     "session-admin": "Chat", "subagents": "Agent › Capabilities", "todos": "Work › Now & next",
     "tools-catalog": "Agent › Capabilities", "profile-home": "CLI › Owner", "x-account": "CLI › Surfaces",

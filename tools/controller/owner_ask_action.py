@@ -234,6 +234,10 @@ def register_owner_ask_action(controller) -> None:
         blocks_goal_ids: Optional[List[str]] = Field(
             None, description=("RAISE: goals to HOLD until the owner answers, then re-arm. A "
                                "run may hold only its own goal. Never waits in this turn."))
+        holds_this_job: bool = Field(
+            False, description=("RAISE, in a scheduled job's run only: True HOLDS this job "
+                                "(no run) until the owner answers or the ask expires. Use it "
+                                "when every run is pointless until the answer."))
         answer: Optional[str] = Field(
             None, max_length=2000,
             description=("ANSWER (owner turn only): the owner's decision, QUOTED from their "
@@ -315,6 +319,9 @@ def register_owner_ask_action(controller) -> None:
                 if picked is not None:
                     return picked
             rail_id, rail_kind = _rail(sid)
+            if params.holds_this_job and rail_kind != "cron":
+                return ActionResult(error="Refused: holds_this_job holds a scheduled job, so only "
+                                          "that job's own run can set it.", include_in_memory=True)
             from core.goal_vocab import ASK_OPEN
             before = {a.id for a in board.asks(user_id=user_id, status=ASK_OPEN)}
             options = _lettered(params.options) if params.options else ask_options(question)
@@ -329,11 +336,19 @@ def register_owner_ask_action(controller) -> None:
                 user_id=user_id, what=question, why=(params.why or "").strip(),
                 blocks_goal_ids=holds, extra_payload=extra)
             short = str(ask.id)[:12]
+            job_held = ""
+            if params.holds_this_job and (ask.payload or {}).get("rail_id") == rail_id:
+                # 116 W2.3: the cron twin of blocks_goal_ids; a refreshed ask gets it too.
+                from core.cron_expect import HOLD_VIA_ASK
+                from agents.task.goals.rail_answers import mark_holds_rail
+                if mark_holds_rail(board.db_path, ask.id, via=HOLD_VIA_ASK):
+                    job_held = ("This job is HELD (no run) until the owner answers or the ask "
+                                "expires. ")
             if ask.id in before:
                 return ActionResult(
                     extracted_content=(f"Ask `{ask.id}` is ALREADY OPEN (refreshed, not duplicated). "
                                        f"The owner sees it on every seat; {_answer_route(rail_kind)} "
-                                       f"Apply the conservative reading now and log the skip "
+                                       f"{job_held}Apply the conservative reading now and log the skip "
                                        f"against ask {short}."),
                     include_in_memory=True)
             # Tell the owner ONCE through the one rail; the thread line carries the ask id.
@@ -361,6 +376,7 @@ def register_owner_ask_action(controller) -> None:
                 extracted_content=(f"Raised owner ask `{ask.id}` ({rail_kind or 'session'} rail). It stays "
                                    f"visible on every owner seat until answered; {_answer_route(rail_kind)} "
                                    + (f"Held until the answer: {', '.join(holds)}. " if holds else "")
+                                   + job_held
                                    + f"Do NOT also message the owner about it; "
                                    f"continue with the conservative reading and log skips against ask {short}."),
                 include_in_memory=True)

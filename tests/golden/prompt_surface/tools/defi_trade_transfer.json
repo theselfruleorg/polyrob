@@ -7,7 +7,7 @@
       "properties": {
         "account": {
           "default": null,
-          "description": "Optional — work FROM the token-bound (ERC-6551) account of an NFT this treasury OWNS, instead of from the treasury: the account's assets move, the treasury signs as the NFT's owner. A 0x account address. Only accounts of a collection the owner pinned. Needs AGENT_NFT_ENABLED.",
+          "description": "Optional — work FROM the token-bound (ERC-6551) account of an NFT this treasury OWNS, instead of from the treasury: the account's assets move, the treasury signs as the NFT's owner. A 0x account address. Only accounts of a collection the owner pinned. Needs AGENT_NFT_ENABLED. What each account kind can do: Tokenbound AccountV3: the NFT's owner drives it with CALL only (no DELEGATECALL, no admin call); it has a lock and an ERC-2771 forwarder, may hold standing approvals, and accepts the owner's signature as its own (ERC-1271). ERC-6551P account: the NFT's owner drives it with CALL only (no DELEGATECALL, no admin call); it has no lock and no forwarder, signs nothing, refuses a standing approval (an ERC-20 spend approves, spends and resets in one batch), and its NFT cannot be sold while an ERC-6551 account owns it.",
           "nullable": true,
           "type": "string"
         },

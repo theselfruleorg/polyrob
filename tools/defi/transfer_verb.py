@@ -162,7 +162,8 @@ async def perform_transfer(tool, params, execution_context=None):
 
         # Same gas sizing as _run_guarded (§3a) — a transfer fits the
         # default, but the sized limit is uniformly more honest.
-        if decision.sim_gas_used:
+        from core.wallet.broadcast.evm import is_account_call
+        if decision.sim_gas_used or is_account_call(tx):
             try:
                 tx = rail.size_gas(tx, decision.sim_gas_used)
             except Exception as exc:

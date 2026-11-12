@@ -50,17 +50,34 @@ def step_5_simulate(c: GuardContext) -> Optional[Decision]:
             return Decision(False, (
                 f"refused: the address an endowed deployment lands at cannot be "
                 f"predicted ({exc}), so the endowment cannot be measured there"))
+    if c.sale_act:
+        # 115 W7: a sale act moves nothing — its effect is a view read before and after it.
+        from core.wallet import tx_guard_account as _tga
+        watch_kw["views"] = _tga.sale_act_views(c.sale_act, sender or holder)
+    if c.sale_buyer:
+        # 115 W9: a buyer call — ownerOf / the salt / owed() before and after, and the market's
+        # own native balance (it holds nothing after but what it books owed).
+        from core.wallet import tx_guard_sale as _tgs
+        watch_kw["views"] = _tgs.views(c.sale_buyer, holder)
+        watch_kw["watch_native"] = _tgs.watch_native(c.sale_buyer)
     try:
         if sender:
             deltas = simulate_fn(tx=outer_tx, holder=holder, chain=intent.chain,
-                                 tokens=tokens, spenders=spenders, sender=sender)
+                                 tokens=tokens, spenders=spenders, sender=sender, **watch_kw)
         else:
             deltas = simulate_fn(tx=tx, holder=holder, chain=intent.chain,
                                  tokens=tokens, spenders=spenders, **watch_kw)
     except Exception as exc:
         return Decision(False, f"refused: simulation raised ({exc})")
     if not deltas.ok:
-        return Decision(False, f"refused: simulation not trustworthy — {deltas.error}")
+        named = None
+        if getattr(deltas, "revert_data", None):
+            # N5: the revert's custom error, read only against the contracts the call reaches.
+            from core.wallet import collection_errors
+            named = collection_errors.revert_name(intent, tx, deltas.revert_data,
+                                                  rpc=c.account_rpc)
+        return Decision(False, f"refused: simulation not trustworthy — {deltas.error}"
+                               + (f" — {named}" if named else ""))
 
     if intent.is_journal_entry:
         from core.wallet import journal_log as _jl
@@ -76,7 +93,11 @@ def step_5_simulate(c: GuardContext) -> Optional[Decision]:
                                     "entry"))
 
     if intent.via_account and sender:
-        _treasury_why = _tg._treasury_side_refusal(intent, deltas, holder=holder, sender=sender)
+        _side = deltas
+        if c.sale_act:   # 115 W7: SaleReady names the treasury as the owner — expected
+            from core.wallet import tx_guard_account as _tga
+            _side = _tga.sale_act_treasury_deltas(c.sale_act, deltas, sender)
+        _treasury_why = _tg._treasury_side_refusal(intent, _side, holder=holder, sender=sender)
         if _treasury_why:
             _tg._record_money_refusal("money_gate", tool_self, execution_context,
                                       detail=f"account: {_treasury_why}")
@@ -213,10 +234,18 @@ def step_6_assert_deltas(c: GuardContext) -> Optional[Decision]:
                 return Decision(False, (
                     f"refused: the claim returns {got} of {intent.inflow_token}, "
                     f"below the declared minimum {intent.min_inflow_raw}"))
+        if c.sale_call:
+            # A claim from a pinned sale: its receipt event, and nothing else of the signer's.
+            from core.wallet import collection_sale as _collection_sale
+            _sale_err = _collection_sale.assert_simulation(c.sale_call, intent, tx, deltas, holder)
+            if _sale_err:
+                _tg._record_money_refusal("money_gate", tool_self, execution_context,
+                                          detail=f"collection_sale: {_sale_err}")
+                return Decision(False, f"refused: {_sale_err}")
     elif intent.is_collection_mint:
-        # The collection paid mint (F2): exactly the price leaves, exactly
-        # the declared ids arrive from 0x0, and nothing else of the signer's moves or is
-        # named (core.wallet.collection_mint). The value is what the caps are charged below.
+        # The collection paid mint through its sale (F2, 115 W8): exactly the value leaves,
+        # exactly the declared ids arrive from the pinned collection, and nothing else of the
+        # signer's moves or is named (core.wallet.collection_mint). The value is what the caps are charged below.
         from core.wallet import collection_mint as _collection_mint
         _mint_err = _collection_mint.assert_simulation(intent, deltas, holder)
         if _mint_err:
@@ -272,6 +301,15 @@ def step_6_assert_deltas(c: GuardContext) -> Optional[Decision]:
                 f"native value — the intent declares a collectible move and "
                 f"nothing else, so unexplained native movement is not this "
                 f"transaction"))
+        if c.sale_act:
+            # 115 W7: the seller's sale act — its event and its view, nothing else.
+            from core.wallet import tx_guard_account as _tga
+            _act_err = _tga.sale_act_assert(c.sale_act, intent, deltas, holder, c.sender,
+                                            c.journal_to)
+            if _act_err:
+                _tg._record_money_refusal("money_gate", tool_self, execution_context,
+                                          detail=f"sale_act: {_act_err}")
+                return Decision(False, f"refused: {_act_err}")
     elif intent.is_allowance_op:
         # An allowance is a claim on a TOKEN. A native asset has no allowance to
         # grant or revoke, so this combination is a caller bug, not a shape to
@@ -322,6 +360,16 @@ def step_6_assert_deltas(c: GuardContext) -> Optional[Decision]:
             return Decision(False, (
                 f"refused: simulated native outflow {outflow_raw} exceeds the declared "
                 f"amount {intent.amount_raw} by more than fee dust"))
+
+    if c.sale_buyer:
+        # 115 W9: a buy / a claim from the pinned market — its receipt, nothing else of the
+        # treasury (core.wallet.tx_guard_sale).
+        from core.wallet import tx_guard_sale as _tgs
+        _buy_err = _tgs.assert_simulation(c.sale_buyer, intent, deltas, holder)
+        if _buy_err:
+            _tg._record_money_refusal("money_gate", tool_self, execution_context,
+                                      detail=f"sale_buyer: {_buy_err}")
+            return Decision(False, f"refused: {_buy_err}")
 
     declared = {(t.lower(), s.lower()): a for (t, s, a) in intent.expected_allowance_grants}
     for (token, spender), change in deltas.allowance_deltas.items():
@@ -481,6 +529,7 @@ def step_6cde_non_fungibles(c: GuardContext) -> Optional[Decision]:
     """6c/6d/6e. Non-fungible cross-check."""
     intent = c.intent
     deltas = c.deltas
+    sale_act = c.sale_act
     # -- 6c/6d/6e. NON-FUNGIBLE cross-check (2026-09-15) -------------------
     # ⚠️ These run on EVERY transaction, not only the NFT verbs. Until the
     # simulation learned the 4-topic shapes, `defi_trade.call` / `dapp_connect`
@@ -564,6 +613,9 @@ def step_6cde_non_fungibles(c: GuardContext) -> Optional[Decision]:
                 f"be declared"))
     _declared_nft_approvals = {(c.lower(), str(o).lower())
                                for (c, o, _v) in intent.nft_operator_ops}
+    if sale_act and sale_act[0] == "approve_market":
+        # 111 W9a: the seller's approve(pinned market, id); sale_act_assert measured exactly it.
+        _declared_nft_approvals.add((sale_act[2], str(sale_act[1][0]).lower()))
     for (l_c, l_to, l_id) in deltas.holder_nft_approvals:
         if (intent.is_liquidity_op and intent.lp_position_effect == "burn"
                 and l_c.lower() == intent.lp_position[0].lower()
@@ -593,7 +645,7 @@ def step_6g_account_nesting(c: GuardContext) -> Optional[Decision]:
     # -- 6g. No token inside an account of its own collection (W2) ---------
     # contracts/SPEC.md §7.2: `transferFrom(alice, accountOf(id), id)` bricks a
     # token and its account forever (AccountV3 refuses its own token only in
-    # onERC721Received, which transferFrom never calls; a PolyrobAccount reverts
+    # onERC721Received, which transferFrom never calls; an ERC-6551P account reverts
     # OwnershipCycle there, and its collection refuses it in `_update`), and two tokens can own
     # each other. The contract refuses it in `_update`; this is the mirror for
     # every NFT the guarded wallet moves — measured moves, any verb, any shape.
@@ -682,6 +734,13 @@ def step_6f_registration_receipt(c: GuardContext) -> Optional[Decision]:
                 return Decision(False, (
                     "refused: this transaction receives an agent token while "
                     "claiming only to update the registration file"))
+            # 115 W6: a card through the account — one URIUpdated by the account, nothing moved.
+            from core.wallet import identity_card as _card
+            _card_err = _card.assert_simulation(intent, c.tx, deltas, c.holder)
+            if _card_err:
+                _tg._record_money_refusal("money_gate", c.tool_self, c.execution_context,
+                                          detail=f"identity_card: {_card_err}")
+                return Decision(False, f"refused: {_card_err}")
         elif not minted:
             from_other = [e for e in deltas.holder_nft_in if e[0].lower() == want]
             if from_other:

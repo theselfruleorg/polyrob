@@ -225,3 +225,41 @@ def test_root_sensitive_dirs_are_the_documented_three():
     assert DEFAULT_DATA_GROUP == "polyrob-data"
     assert REASON_ROOT_OWNED == "root_owned"
     assert stat.S_ISGID  # sanity: the flag the dir rule reads
+
+
+def test_only_directories_and_manifest_stores_are_material(home):
+    """116 W6.6: a leaf file the agent wrote is counted, not raised; a directory
+    or a db_manifest store (and its -wal) is what blocks a sibling service."""
+    _clean_tree(home)
+    leaf = home / "auto" / "note.txt"
+    leaf.write_text("x")
+    os.chmod(leaf, 0o600)
+    r = audit_data_perms(str(home), group=_own_group())
+    assert r.offender_total == 1 and r.material_total == 0 and r.material == []
+    db = home / "database"
+    db.mkdir()
+    os.chmod(db, 0o2770)
+    for name in ("bot.db", "bot.db-wal"):
+        (db / name).write_text("x")
+        os.chmod(db / name, 0o600)
+    d = home / "auto" / "sub"
+    d.mkdir()
+    os.chmod(d, 0o700)
+    from core.db_manifest import candidate_sqlite_dbs
+    r = audit_data_perms(str(home), group=_own_group())
+    assert r.offender_total == 4 and r.material_total == 1  # no stores given: dirs only
+    r = audit_data_perms(str(home), group=_own_group(), stores=candidate_sqlite_dbs(str(home)))
+    assert r.offender_total == 4 and r.material_total == 3
+    assert {o.path for o in r.material} == {str(db / "bot.db"), str(db / "bot.db-wal"), str(d)}
+
+
+def test_headline_labels_the_breakdown_and_the_budget(home):
+    _clean_tree(home)
+    for i in range(4):
+        f = home / "auto" / f"bad{i}"
+        f.write_text("x")
+        os.chmod(f, 0o600)
+    r = audit_data_perms(str(home), group=_own_group())
+    assert "(by reason: not_group_writable=4)" in r.headline
+    r = audit_data_perms(str(home), group=_own_group(), max_entries=3)
+    assert r.truncated and "first 3 checked" in r.headline

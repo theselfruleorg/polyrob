@@ -123,7 +123,7 @@ def _pinned_dollar_rows() -> List[PaymentAsset]:
     for row in all_rows():
         if row.family != "evm" or not row.money_enabled:
             continue
-        pins = ([(row.usdc, "USDC", 6)] if row.usdc else []) + [
+        pins = ([(row.usdc, "USDC", int(row.usdc_decimals))] if row.usdc else []) + [
             (addr, sym, int(dec)) for addr, sym, _name, dec in row.stables]
         for addr, sym, dec in pins:
             if addr:

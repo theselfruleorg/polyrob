@@ -383,3 +383,62 @@ def test_generic_exception_keeps_plain_error(monkeypatch):
     assert not board.failures[0][1].startswith(LLM_EXHAUSTED_MARKER)
 
 
+
+
+# --- 116 W2.2: `verified` is written only when something checked the run ------
+
+def _done_events(monkeypatch):
+    seen = []
+
+    def _ev(goal, outcome, reason=None, **extra):
+        seen.append((outcome, extra))
+    monkeypatch.setattr("agents.task.goals.dispatcher._goal_ev", _ev)
+    return seen
+
+
+def _judge(monkeypatch, on, verdict=None):
+    from core.config_policy import AutonomyConfig
+    monkeypatch.setattr(AutonomyConfig, "goal_completion_judge", staticmethod(lambda: on))
+    if verdict is not None:
+        async def _j(*a, **k):
+            return verdict, "the evidence says so"
+        monkeypatch.setattr("agents.task.goals.completion_judge.judge_run_outcome", _j)
+
+
+def _done_extra(seen):
+    done = [extra for outcome, extra in seen if outcome == "done"]
+    assert done, seen
+    return done[0]
+
+
+def test_a_goal_nothing_checked_carries_no_verified(monkeypatch):
+    board, disp = _dispatcher()
+    _judge(monkeypatch, False)
+    _patch_run(monkeypatch, _outcome(done_called=True, done_text="wrote the report"))
+    _capture_finalize(monkeypatch)
+    seen = _done_events(monkeypatch)
+    asyncio.run(disp._run_goal(Goal(id="g-nv", user_id="u1", title="t")))
+    assert board.successes
+    assert "verified" not in _done_extra(seen)
+
+
+def test_a_goal_the_judge_passed_is_verified(monkeypatch):
+    import agents.task.goals.completion_judge as cj
+    board, disp = _dispatcher()
+    _judge(monkeypatch, True, cj.VERDICT_MET)
+    _patch_run(monkeypatch, _outcome(done_called=True, done_text="wrote the report"))
+    _capture_finalize(monkeypatch)
+    seen = _done_events(monkeypatch)
+    asyncio.run(disp._run_goal(Goal(id="g-jm", user_id="u1", title="t")))
+    assert _done_extra(seen)["verified"] == "verified"
+
+
+def test_an_unclear_judge_writes_no_verified(monkeypatch):
+    import agents.task.goals.completion_judge as cj
+    board, disp = _dispatcher()
+    _judge(monkeypatch, True, cj.VERDICT_UNCLEAR)
+    _patch_run(monkeypatch, _outcome(done_called=True, done_text="wrote the report"))
+    _capture_finalize(monkeypatch)
+    seen = _done_events(monkeypatch)
+    asyncio.run(disp._run_goal(Goal(id="g-ju", user_id="u1", title="t")))
+    assert board.successes and "verified" not in _done_extra(seen)

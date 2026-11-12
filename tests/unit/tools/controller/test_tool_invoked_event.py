@@ -145,3 +145,15 @@ def test_a_write_timeout_says_the_effect_may_have_happened(monkeypatch):
 def test_the_timeout_error_carries_the_write_note():
     body = (_REPO / "tools/controller/execution.py").read_text()
     assert "_write_timeout_note(self, action_type)" in body
+
+
+def test_the_bridge_is_not_counted_twice_and_a_refusal_is_a_failure(monkeypatch):
+    """116 W5.2: the inner dispatch records the target; the outer `tool_call`
+    row counted every bridged call again as a `core` success."""
+    from tools.controller.tool_call_bridge import BRIDGE_REFUSED_KEY
+    seen = _capture(monkeypatch)
+    c = _Ctrl(tool="")
+    c._record_invocation("tool_call", SimpleNamespace(error=None, metadata=None))
+    assert seen == []
+    c._record_invocation("tool_call", SimpleNamespace(error=None, metadata={BRIDGE_REFUSED_KEY: True}))
+    assert seen[0][1]["attrs"]["ok"] is False and seen[0][1]["attrs"]["error_class"] == "refused"

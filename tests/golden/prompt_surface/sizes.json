@@ -57,8 +57,8 @@
         "tokens": 1797
       },
       "step1:state_delta": {
-        "chars": 1026,
-        "tokens": 256
+        "chars": 1081,
+        "tokens": 270
       },
       "system_prompt": {
         "chars": 15458,
@@ -74,15 +74,15 @@
       }
     },
     "system": {
-      "chars": 29898,
-      "tokens": 7474
+      "chars": 29953,
+      "tokens": 7488
     },
     "tools": {
-      "chars": 96962,
+      "chars": 97250,
       "count": 103,
-      "tokens": 24240
+      "tokens": 24312
     },
-    "total_tokens": 31715
+    "total_tokens": 31800
   },
   "goal": {
     "layers": {
@@ -107,8 +107,8 @@
         "tokens": 1797
       },
       "step1:state_delta": {
-        "chars": 1026,
-        "tokens": 256
+        "chars": 1081,
+        "tokens": 270
       },
       "system_prompt": {
         "chars": 15458,
@@ -124,15 +124,15 @@
       }
     },
     "system": {
-      "chars": 29882,
-      "tokens": 7470
+      "chars": 29937,
+      "tokens": 7484
     },
     "tools": {
-      "chars": 96962,
+      "chars": 97250,
       "count": 103,
-      "tokens": 24240
+      "tokens": 24312
     },
-    "total_tokens": 31711
+    "total_tokens": 31796
   },
   "leaf": {
     "layers": {
@@ -203,8 +203,8 @@
         "tokens": 1797
       },
       "step1:state_delta": {
-        "chars": 1026,
-        "tokens": 256
+        "chars": 1081,
+        "tokens": 270
       },
       "system_prompt": {
         "chars": 15859,
@@ -220,15 +220,15 @@
       }
     },
     "system": {
-      "chars": 30404,
-      "tokens": 7601
+      "chars": 30459,
+      "tokens": 7614
     },
     "tools": {
-      "chars": 75721,
+      "chars": 75960,
       "count": 92,
-      "tokens": 18930
+      "tokens": 18990
     },
-    "total_tokens": 26531
+    "total_tokens": 26604
   },
   "owner_telegram_dm": {
     "layers": {
@@ -253,12 +253,12 @@
         "tokens": 1797
       },
       "step1:state_delta": {
-        "chars": 1026,
-        "tokens": 256
+        "chars": 1081,
+        "tokens": 270
       },
       "system_prompt": {
-        "chars": 16538,
-        "tokens": 4134
+        "chars": 16533,
+        "tokens": 4133
       },
       "tool_catalog": {
         "chars": 4552,
@@ -270,15 +270,15 @@
       }
     },
     "system": {
-      "chars": 31144,
-      "tokens": 7786
+      "chars": 31194,
+      "tokens": 7798
     },
     "tools": {
-      "chars": 72849,
+      "chars": 73137,
       "count": 59,
-      "tokens": 18212
+      "tokens": 18284
     },
-    "total_tokens": 25998
+    "total_tokens": 26082
   },
   "prod_owner_telegram_dm": {
     "layers": {
@@ -303,12 +303,12 @@
         "tokens": 2117
       },
       "step1:state_delta": {
-        "chars": 3129,
-        "tokens": 782
+        "chars": 3184,
+        "tokens": 796
       },
       "system_prompt": {
-        "chars": 17843,
-        "tokens": 4460
+        "chars": 17838,
+        "tokens": 4459
       },
       "tool_catalog": {
         "chars": 5346,
@@ -320,15 +320,15 @@
       }
     },
     "system": {
-      "chars": 36993,
-      "tokens": 9248
+      "chars": 37043,
+      "tokens": 9260
     },
     "tools": {
-      "chars": 125111,
+      "chars": 127739,
       "count": 85,
-      "tokens": 31277
+      "tokens": 31934
     },
-    "total_tokens": 40526
+    "total_tokens": 41195
   },
   "room": {
     "layers": {
@@ -383,12 +383,12 @@
         "tokens": 1670
       },
       "step1:state_delta": {
-        "chars": 2879,
-        "tokens": 719
+        "chars": 2934,
+        "tokens": 733
       },
       "system_prompt": {
-        "chars": 15948,
-        "tokens": 3987
+        "chars": 15943,
+        "tokens": 3985
       },
       "tool_catalog": {
         "chars": 5814,
@@ -396,14 +396,14 @@
       }
     },
     "system": {
-      "chars": 31780,
-      "tokens": 7945
+      "chars": 31830,
+      "tokens": 7957
     },
     "tools": {
-      "chars": 34690,
+      "chars": 34929,
       "count": 36,
-      "tokens": 8672
+      "tokens": 8732
     },
-    "total_tokens": 16617
+    "total_tokens": 16689
   }
 }

@@ -139,7 +139,7 @@ def test_member_help_never_carries_an_owner_verb(on, tmp_path, monkeypatch):
     text = room_actions.render_member_help(_Container(str(tmp_path)),
                                            surface="telegram", chat_id="-1")
     for owner_verb in ("/trade", "/wallet", "/pause", "/approve", "/goals",
-                       "/deploy", "/launch", "/dev"):
+                       "/deploy", "/launch"):
         if owner_verb in _HELP_BODY:
             assert owner_verb not in text, (
                 f"{owner_verb} leaked into a member's help")

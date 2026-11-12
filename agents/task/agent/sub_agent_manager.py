@@ -428,8 +428,8 @@ class SubAgentManager:
     ) -> SubAgentUsage:
         """Aggregate sub-agent usage to the parent session.
 
-        Queries the sub-agent's virtual session usage and creates an
-        aggregation record in the parent session.
+        Queries the sub-agent's virtual session usage and adds it to this
+        session's in-memory total (no second usage row: 116 W9.3).
 
         Args:
             virtual_session_id: The sub-agent's virtual session ID
@@ -467,33 +467,9 @@ class SubAgentManager:
                     usage.total_tokens = usage.input_tokens + usage.output_tokens
                     usage.llm_calls = first.get('calls', 0)
 
-                # Record aggregation entry in parent session
-                await tracker.db.execute("""
-                    INSERT INTO usage_records (
-                        user_id, session_id, resource_type,
-                        cost, input_tokens, output_tokens, cached_tokens,
-                        cache_creation_tokens,
-                        api_cost_usd, markup_multiplier,
-                        metadata, timestamp
-                    ) VALUES (?, ?, 'sub_agent_aggregate', ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                """, (
-                    self.orchestrator.user_id,
-                    self.session_id,  # Parent session!
-                    usage.credits_charged,
-                    usage.input_tokens,
-                    usage.output_tokens,
-                    usage.cached_tokens,
-                    usage.cache_creation_tokens,
-                    usage.api_cost_usd,
-                    1.0,
-                    json.dumps({
-                        'sub_agent_id': sub_agent_id,
-                        'virtual_session_id': virtual_session_id,
-                        'task': task[:200],
-                        'llm_calls': usage.llm_calls
-                    })
-                ))
-
+                # 116 W9.3: no `sub_agent_aggregate` row. The helper's own calls are
+                # already rows in usage_records (its virtual session), so a parent row
+                # made every window total count the helper twice. The sum stays here.
                 self.logger.info(
                     f"📊 Aggregated sub-agent usage: {usage.credits_charged} credits, "
                     f"{usage.total_tokens} tokens, ${usage.api_cost_usd:.4f}"

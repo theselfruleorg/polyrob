@@ -106,7 +106,7 @@ The agent sends an intent; the signer runs the same transaction guard again and 
 |---|---|---|
 | `local` | the agent process | The agent checks the send and signs it in process. The signer does not run. |
 | `shadow` | the agent and the signer | The agent signs locally and also asks the signer for a verdict on the same intent. The result goes to `<data>/wallet/signer_shadow.jsonl` and the `custody` status section. It never blocks a send. |
-| `remote` | the signer only | The agent holds no key; a seed that reaches it is dropped. The signer re-checks the intent against its own caps and ledger, then signs and broadcasts. x402, Hyperliquid orders, ERC-8004 feedback and the deposit sweep use typed signer endpoints; Solana signing is refused. Above the signer's hard cap, the owner approves on the box: `sudo polyrob owner promote signer_approval <id>`. |
+| `remote` | the signer only | The agent holds no key; a seed that reaches it is dropped. The signer re-checks the intent against its own caps and ledger, then signs and broadcasts. x402, Hyperliquid orders and the deposit sweep use typed signer endpoints; Solana signing is refused. Above the signer's hard cap, the owner approves on the box: `sudo polyrob owner promote signer_approval <id>`. |
 
 With the signer installed (`shadow` or `remote`), its hard caps are the envelope: the agent enforces the
 lower of its own per-tx/daily cap and the signer's. A raise from chat stops at the signer's cap; raise that
@@ -201,14 +201,6 @@ Moving the wallet to a fresh machine or a new install:
    `wallet_spend`/audit trail (`<data_dir>/wallet/audit.jsonl`) — the new install starts
    a fresh audit file, so reconcile old vs. new manually if you need continuous spend
    history across the move.
-
-> ⚠️ **`EIP8004_AGENT_PRIVATE_KEY` is NOT part of this migration.** It's a second,
-> independent signing key for ERC-8004 feedback authorizations ([payments.md](payments.md#62-payment-backed-reputation)) — it is not derived
-> from `AGENT_WALLET_MASTER_SEED` and has no relationship to the wallet's derivation tree.
-> None of the steps above carry it. If you use `EIP8004_PAYMENT_FEEDBACK`, copy
-> `EIP8004_AGENT_PRIVATE_KEY` to the new install's env yourself, or the 8004 signing
-> identity is silently left behind (subsequent feedback signing fails closed, but the key
-> itself doesn't move with the wallet).
 
 ---
 

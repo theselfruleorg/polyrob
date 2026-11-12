@@ -1174,8 +1174,8 @@ class Browser(BrowserInteractionActions, BaseTool):
 		import requests
 
 		try:
-			# Check if browser is already running
-			response = requests.get('http://localhost:9222/json/version', timeout=2)
+			# Check if browser is already running (116 W1.4: sync `requests`, off the loop)
+			response = await asyncio.to_thread(requests.get, 'http://localhost:9222/json/version', timeout=2)
 			if response.status_code == 200:
 				self.logger.info('Reusing existing Chrome instance')
 				browser = await playwright.chromium.connect_over_cdp(
@@ -1201,7 +1201,7 @@ class Browser(BrowserInteractionActions, BaseTool):
 		# Attempt to connect again after starting a new instance
 		for _ in range(10):
 			try:
-				response = requests.get('http://localhost:9222/json/version', timeout=2)
+				response = await asyncio.to_thread(requests.get, 'http://localhost:9222/json/version', timeout=2)
 				if response.status_code == 200:
 					break
 			except requests.ConnectionError:

@@ -48,12 +48,12 @@ def test_a_mid_size_result_is_saved_and_the_cut_names_the_file(tmp_path, monkeyp
     a = _agent(_Controller({"search_docs": _Details("knowledge"), "filesystem_read_file": _Details("filesystem")}))
     a._handle_large_action_results([ar], [{"id": "c1", "name": "search_docs"}])
 
-    files = list(tmp_path.iterdir())
+    files = [p for p in tmp_path.rglob('*') if p.is_file()]
     assert len(files) == 1 and files[0].read_text() == body, "the full text exists on disk"
     out = ar.extracted_content
     assert len(out) <= 6000 * 4, "the wire cap does not cut it again"
     assert out.startswith("line 0\n")
-    assert f'file_path="{files[0].name}"' in out and "char_offset=" in out
+    assert f'file_path="{files[0].relative_to(tmp_path).as_posix()}"' in out and "char_offset=" in out
     assert "use offset/limit" not in out
     # The char_offset points at the first char the head did NOT show.
     offset = int(out.split("char_offset=")[1].split(",")[0])
@@ -100,7 +100,7 @@ def test_a_long_done_report_is_never_spilled(tmp_path, monkeypatch):
     a = _agent(_Controller({"done": _Details("task")}))
     a._spill_over_wire_cap([ar], {"c1": "done"})
     assert ar.extracted_content == report
-    assert list(tmp_path.iterdir()) == []
+    assert [p for p in tmp_path.rglob('*') if p.is_file()] == []
 
 
 def _resume_offset(out):
@@ -119,7 +119,7 @@ def test_a_framed_result_with_defanged_delimiters_names_the_exact_offset(tmp_pat
                       metadata={"url": "https://example.com/x"})  # untrusted
     a = _agent(_Controller({"fetch": _Details("web_fetch"), "filesystem_read_file": _Details("filesystem")}))
     a._spill_over_wire_cap([ar], {"c1": "fetch"})
-    saved = list(tmp_path.iterdir())[0].read_text()
+    saved = [p for p in tmp_path.rglob('*') if p.is_file()][0].read_text()
     assert saved.startswith("<untrusted_tool_result")
     from core.security.untrusted_wrap import _defang_delimiters
     head_chars = (6000 - 150) * 4
@@ -145,3 +145,29 @@ def test_a_seat_with_no_file_reader_is_not_sent_to_one(tmp_path, monkeypatch):
     assert a._can_read_workspace() is False
     a2 = _agent(_Controller({"filesystem_read_file": _Details("filesystem")}))
     assert a2._can_read_workspace() is True
+
+
+def test_a_saved_result_lives_in_the_session_directory_and_ages_out(tmp_path, monkeypatch):
+    """116 W1.2: never the workspace root; 7 days; a read returns a slice."""
+    import os, time
+    from core import tool_results as tr
+    monkeypatch.delenv("TOOL_RESULT_MAX_TOKENS", raising=False)
+    _pm_into(tmp_path, monkeypatch)
+    ToolResultOffloadMixin._last_prune_at = 0.0
+    old = tmp_path / tr.TOOL_RESULTS_DIR / "gone" / "old.txt"
+    old.parent.mkdir(parents=True)
+    old.write_text("x")
+    os.utime(old, (time.time() - 8 * 86400,) * 2)
+
+    ar = ActionResult(extracted_content="y" * 200_000, tool_call_id="c1")
+    a = _agent(_Controller({"filesystem_read_file": _Details("filesystem")}))
+    a.session_id = "ab/../c"
+    a._handle_large_action_results([ar], [{"id": "c1", "name": "search_docs"}])
+
+    assert not old.exists() and not old.parent.exists()
+    assert [p.name for p in tmp_path.iterdir()] == [tr.TOOL_RESULTS_DIR]
+    saved = [p for p in tmp_path.rglob("*") if p.is_file()]
+    assert len(saved) == 1 and saved[0].parent.name == "ab____c"
+    assert f'file_path="{saved[0].relative_to(tmp_path).as_posix()}"' in ar.extracted_content
+    assert tr.is_saved_result(saved[0].relative_to(tmp_path).as_posix())
+    assert not tr.is_saved_result("notes/.tool_results")

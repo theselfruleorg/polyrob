@@ -30,9 +30,9 @@ OPS = frozenset({
     "evm.send",           # remote: guard, sign, broadcast, journal
     "x402.authorize",     # EIP-3009 TransferWithAuthorization
     "venue.sign",         # 066 P3: typed venue payloads (Hyperliquid L1 orders)
-    "eip8004.feedback_auth",  # 066 P3: the EIP-712 feedback authorization
     "journal.sign",       # C1: EIP-191 over the account journal template, nothing else
     "sign.classified",    # 090: a class-A login/challenge text, re-classified here
+    "sign.order",         # 111 §8.3: a class-O pinned market Listing, facts re-read here
     "deposit.address",    # the deterministic per-user deposit address
     "deposit.sweep",      # sweep a deposit to the PINNED treasury destination
     "approvals.list",     # pending above-hard-cap requests
@@ -178,6 +178,12 @@ def _non_negative_amounts(kwargs: Dict[str, Any]) -> None:
         if not (isinstance(grant, tuple) and len(grant) == 3 and isinstance(grant[0], str)
                 and isinstance(grant[1], str) and _whole(grant[2])):
             raise ProtocolError("an allowance grant is not (token, spender, non-negative amount)")
+    for name in ("lp_outflows", "lp_inflows", "lp_held_balances"):
+        for leg in kwargs.get(name) or ():
+            if not (isinstance(leg, tuple) and len(leg) == 2
+                    and (leg[0] is None or isinstance(leg[0], str)) and _whole(leg[1])):
+                raise ProtocolError(f"intent field {name} holds a leg that is not "
+                                    "(token, non-negative amount)")
 
 
 def _intent_cls():

@@ -697,14 +697,9 @@ class TaskAgentDeliveryMixin:
             # Self-wake was entirely invisible (no log/telemetry): fired vs
             # skipped vs dropped collapsed to a silent return. Emit each outcome
             # to the durable event log (fail-open).
-            try:
-                from core.event_log import get_event_log, event_log_enabled
-                if event_log_enabled():
-                    get_event_log().record(
-                        "self_wake", user_id=user_id, session_id=session_id,
-                        source="self_wake", outcome=outcome, reason=reason)
-            except Exception:
-                pass
+            from core.event_log import emit
+            emit("self_wake", source="self_wake", user_id=user_id, session_id=session_id,
+                 attrs={"outcome": outcome, "reason": reason})
 
         if not effective_self_wake_enabled(user_id, data_dir_or_home(_data_dir)):
             return False

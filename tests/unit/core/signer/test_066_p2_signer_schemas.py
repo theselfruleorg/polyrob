@@ -1,7 +1,6 @@
 """066 P2/P3 — the typed schemas, the socket, the policy file.
 
-x402 (EIP-3009), Hyperliquid L1 orders, the EIP-8004 feedback authorization:
-each signs ONLY its exact shape; anything near it refuses. The socket refuses a
+x402 (EIP-3009) and Hyperliquid L1 orders: each signs ONLY its exact shape; anything near it refuses. The socket refuses a
 peer by its kernel UID before reading a request.
 """
 import os
@@ -167,43 +166,14 @@ def test_the_hl_sdk_hook_routes_a_remote_account_to_the_signer(make_rig):
                                                      "amount": "1", "time": 1}, True)
 
 
-# -- 066 P3: EIP-8004 ----------------------------------------------------------
+# -- 115 E7: no EIP-8004 feedback signature ------------------------------------
 
-def _feedback(expires):
-    return {"types": {"EIP712Domain": [
-        {"name": "name", "type": "string"}, {"name": "version", "type": "string"},
-        {"name": "chainId", "type": "uint256"}, {"name": "verifyingContract", "type": "address"}],
-        "FeedbackAuth": [
-        {"name": "agentId", "type": "uint256"}, {"name": "clientAddress", "type": "address"},
-        {"name": "expiresAt", "type": "uint256"}, {"name": "nonce", "type": "string"}]},
-        "primaryType": "FeedbackAuth",
-        "domain": {"name": "EIP8004ReputationRegistry", "version": "1", "chainId": 8453,
-                   "verifyingContract": "0x" + "0" * 40},
-        "message": {"agentId": 7, "clientAddress": "0x" + "c" * 40, "expiresAt": expires,
-                    "nonce": "n1"}}
-
-
-def test_eip8004_feedback_auth_signs_with_the_held_key(rig):
-    from eth_account import Account
-    from eth_account.messages import encode_typed_data
-    typed = _feedback(int(time.time()) + 86400)
-    sig = _ok(rig.call("eip8004.feedback_auth", {"typed": typed}))["signature"]
-    want = Account.from_key(rig.secrets["EIP8004_AGENT_PRIVATE_KEY"]).address
-    assert Account.recover_message(encode_typed_data(full_message=typed), signature=sig) == want
-
-
-def test_eip8004_refuses_another_domain_or_a_long_expiry(rig):
-    typed = _feedback(int(time.time()) + 86400)
-    typed["domain"]["name"] = "SomethingElse"
-    _refused(rig.call("eip8004.feedback_auth", {"typed": typed}), protocol.UNKNOWN_SHAPE)
-    _refused(rig.call("eip8004.feedback_auth",
-                      {"typed": _feedback(int(time.time()) + 90 * 86400)}), protocol.UNKNOWN_SHAPE)
-
-
-def test_eip8004_without_the_key_is_not_configured(rig):
-    rig.secrets.pop("EIP8004_AGENT_PRIVATE_KEY")
-    _refused(rig.call("eip8004.feedback_auth", {"typed": _feedback(int(time.time()) + 60)}),
-             protocol.NOT_CONFIGURED)
+def test_the_signer_has_no_feedback_authorization_op(rig):
+    """The pre-2.0 ``FeedbackAuth`` grant matches no live Reputation Registry, so
+    the signer no longer signs it: the op is unknown and refuses as a bad shape."""
+    assert "eip8004.feedback_auth" not in protocol.OPS
+    assert not hasattr(rig.service, "_op_eip8004_feedback_auth")
+    _refused(rig.call("eip8004.feedback_auth", {"typed": {}}), protocol.UNKNOWN_SHAPE)
 
 
 # -- the socket --------------------------------------------------------------
@@ -302,16 +272,3 @@ def test_signer_toml_is_strict(mutate, match):
     mutate(data)
     with pytest.raises(SignerConfigError, match=match):
         parse_signer_config(data)
-
-
-def test_eip8004_refuses_a_domain_that_is_not_a_pinned_reputation_registry(rig):
-    from core.wallet import erc8004
-    typed = _feedback(int(time.time()) + 86400)
-    typed["domain"]["verifyingContract"] = "0x" + "9" * 40          # some other contract
-    _refused(rig.call("eip8004.feedback_auth", {"typed": typed}), protocol.UNKNOWN_SHAPE)
-    typed["domain"]["verifyingContract"] = erc8004.registry_for("base").reputation
-    typed["domain"]["chainId"] = 1                                  # the pinned address, wrong chain row
-    typed["domain"]["verifyingContract"] = erc8004.registry_for("base-sepolia").reputation
-    _refused(rig.call("eip8004.feedback_auth", {"typed": typed}), protocol.UNKNOWN_SHAPE)
-    typed["domain"]["chainId"] = 84532
-    assert _ok(rig.call("eip8004.feedback_auth", {"typed": typed}))["signature"]

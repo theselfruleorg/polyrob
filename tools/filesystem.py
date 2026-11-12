@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from tools.base_tool import BaseTool
 from core.config import BotConfig
 from core.exceptions import ServiceError
+from core.walk_skip import WALK_SKIP_DIRS
 from tools.controller.views import (
     ReadFileAction, WriteFileAction, AppendFileAction,
     ListDirectoryAction, DeleteFileAction, CreateDirectoryAction,
@@ -385,6 +386,11 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
                 text = await asyncio.to_thread(
                     self._safe_read_text, file_path, root, max_bytes=MAX_FILE_SIZE)
             lines = io.StringIO(text, newline='\n').readlines()
+
+            # A saved tool result is read in slices (a whole read is saved AGAIN).
+            from core.tool_results import is_saved_result, read_slice
+            if is_saved_result(params.file_path):
+                return read_slice(''.join(lines), params.char_offset, params.char_limit)
 
             # Handle character-based chunking (for JSON/dense files)
             if params.char_offset is not None or params.char_limit is not None:
@@ -909,9 +915,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
                                f"{reason}: {display_path}")
         return root
 
-    _NF_SKIP_DIRS = frozenset({'.git', 'node_modules', '.venv', 'venv', 'env',
-                               '__pycache__', '.mypy_cache', '.pytest_cache',
-                               '.tox', 'site-packages', 'dist', 'build'})
+    _NF_SKIP_DIRS = WALK_SKIP_DIRS
 
     @classmethod
     def _find_by_basename(cls, root: str, basename: str, *,

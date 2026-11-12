@@ -14,7 +14,7 @@ import hashlib
 
 import pytest
 
-from core.wallet import abi, collection_registry, erc6551, simulation
+from core.wallet import account_kinds, abi, collection_registry, erc6551, simulation
 from tests.unit.core.wallet.test_tx_guard_via_account import (
     BASE_ID, COLLECTION, OWNER, STATE, TOKEN_ID, TREASURY, _erc20_deltas, _erc20_inner,
     _erc20_intent, _outer, _run, _via)
@@ -34,8 +34,10 @@ class PolyrobRpc:
     """A PolyrobAccount clone of the pinned collection's token #1. ``isLocked``,
     ``lockedUntil`` and ``isTrustedForwarder`` REVERT, as on chain."""
 
-    def __init__(self, *, owner=TREASURY, state=STATE, impl_code=IMPL_CODE, journal=JOURNAL):
+    def __init__(self, *, owner=TREASURY, state=STATE, impl_code=IMPL_CODE, journal=JOURNAL,
+                 ready=False):
         self.owner, self.state, self.impl_code, self.journal = owner, state, impl_code, journal
+        self.ready = ready   # saleReadyOf(id): False, True, or None (the read reverts)
         self.reads = []
 
     def __call__(self, method, params):
@@ -58,6 +60,8 @@ class PolyrobRpc:
                     [{"type": "uint256"}, {"type": "address"}, {"type": "uint256"}],
                     [BASE_ID, COLLECTION, TOKEN_ID]).hex(),
             }
+            if self.ready is not None:   # 115 W7: the sale hold reads the collection's view
+                answers[abi.selector("saleReadyOf(uint256)")] = _word(int(bool(self.ready)))
             if sel not in answers:
                 raise RuntimeError("execution reverted")  # no lock, no forwarder, no fallback
             return answers[sel]
@@ -65,16 +69,15 @@ class PolyrobRpc:
 
 
 def _profile(*, impl_sha=None, journal_log=JOURNAL):
-    ts = collection_registry.TransferSafe(
-        account_impl_runtime_sha256=impl_sha or hashlib.sha256(bytes.fromhex(IMPL_CODE[2:])).hexdigest(),
+    std = collection_registry.Erc6551pStandard(
         market="0x" + "b1" * 20, market_runtime_sha256=_H00, zone="0x" + "c1" * 20,
         zone_runtime_sha256=_H00)
+    sha = impl_sha or hashlib.sha256(bytes.fromhex(IMPL_CODE[2:])).hexdigest()
     return collection_registry.CollectionProfile(
-        spec=collection_registry.SPEC_V1, capabilities=(), chain_id=BASE_ID, address=COLLECTION.lower(),
-        runtime_sha256=_H00, deploy_block=0, max_supply=3, journal_log=journal_log, transfer_safe=ts,
+        spec=collection_registry.SPEC_V2, capabilities=(), chain_id=BASE_ID, address=COLLECTION.lower(),
+        runtime_sha256=_H00, deploy_block=0, max_supply=3, journal_log=journal_log, erc6551p=std,
         accounts=(collection_registry.AccountVersion(
-            erc6551.REGISTRY.lower(), IMPL, 0, collection_registry.KIND_POLYROB,
-            ts.account_impl_runtime_sha256),))
+            erc6551.REGISTRY.lower(), IMPL, 0, account_kinds.ERC6551P, sha),))
 
 
 @pytest.fixture(autouse=True)
@@ -125,7 +128,7 @@ def test_a_profile_without_a_journal_log_skips_the_journal_read(monkeypatch):
 
 def test_an_account_v3_profile_does_not_accept_a_polyrob_clone(monkeypatch):
     v3 = collection_registry.CollectionProfile(
-        spec=collection_registry.SPEC_V1, capabilities=(), chain_id=BASE_ID, address=COLLECTION.lower(),
+        spec=collection_registry.SPEC_V2, capabilities=(), chain_id=BASE_ID, address=COLLECTION.lower(),
         runtime_sha256=_H00, deploy_block=0, max_supply=3,
         accounts=(collection_registry.AccountVersion(erc6551.REGISTRY.lower(),
                                                      erc6551.ACCOUNT_V3_IMPL.lower(), 0),))
@@ -134,19 +137,44 @@ def test_an_account_v3_profile_does_not_accept_a_polyrob_clone(monkeypatch):
     assert d.allowed is False and "is not the pinned ERC-6551 account" in d.reason, d.reason
 
 
-def test_a_reverted_simulation_names_the_polyrob_account_error():
+def test_a_reverted_simulation_carries_its_revert_data_for_the_guard_to_name():
+    """WL3: the simulation names nothing itself; it hands the revert data to the guard, which
+    reads it only against the tables of the contracts the call reaches."""
     entry = {"status": "0x0", "error": {"message": "execution reverted",
                                         "data": "0xd88c09e3" + "00" * 96}}
-    assert "StandingGrant" in simulation._account_revert_name(entry)
-    assert "Refused" in simulation._account_revert_name({"status": "0x0",
-                                                         "returnData": "0xe4073933" + "00" * 64})
-    assert simulation._account_revert_name({"status": "0x0", "error": "out of gas"}) is None
+    assert simulation._revert_data(entry) == "0xd88c09e3" + "00" * 96
+    assert simulation._revert_data({"status": "0x0", "returnData": "0xe4073933" + "00" * 64}) \
+        == "0xe4073933" + "00" * 64
+    assert simulation._revert_data({"status": "0x0", "error": "out of gas"}) is None
 
 
 def test_every_named_error_is_the_selector_of_its_signature():
+    from core.wallet import custom_errors
     sigs = ["NotOwner()", "Reentered()", "SelfCall()", "OperationNotSupported()", "ReadyNotLast()",
             "Refused(address,bytes4)", "BadEncoding()", "TooManyGrants()", "ReadGas()",
             "ReadFailed(address)", "GasReserve()", "OwnerChanged()",
             "StandingGrant(uint256,address,address)", "OwnershipCycle()"]
-    want = {abi.selector(s): s.split("(")[0] for s in sigs}
-    assert {k: v.split(" ")[0] for k, v in erc6551.POLYROB_ACCOUNT_ERRORS.items()} == want
+    want = {abi.selector(s): s for s in sigs}
+    assert {k: custom_errors.canonical(v[0]) for k, v in account_kinds.ERC6551P_ERRORS.items()} == want
+
+
+# ------------------------------------------------------------------ N5 / WL3: revert names
+def test_a_revert_through_the_erc6551p_account_is_named_with_its_arguments():
+    """The guard names the account's own error, decoded with its arguments."""
+    target, sel = "0x" + "77" * 20, "0x095ea7b3"
+    data = "0xe4073933" + "00" * 12 + target[2:] + sel[2:] + "00" * 28
+    d = _run(_via(_erc20_intent(), account=ACCOUNT), simulation.Deltas(
+            ok=False, error="the transaction REVERTS in simulation (execution reverted)",
+            revert_data=data), _outer(_erc20_inner(), to=ACCOUNT), holder=TREASURY,
+        rpc=PolyrobRpc())
+    assert d.allowed is False
+    assert (f"the ERC-6551P account refused it on chain: Refused(target={target}, "
+            f"selector={sel})") in d.reason, d.reason
+
+
+def test_a_collection_error_through_the_account_is_named():
+    d = _run(_via(_erc20_intent(), account=ACCOUNT), simulation.Deltas(
+        ok=False, error="the transaction REVERTS in simulation (execution reverted)",
+        revert_data="0xd15af9b5"), _outer(_erc20_inner(), to=ACCOUNT), holder=TREASURY,
+        rpc=PolyrobRpc())
+    assert "the pinned collection refused it on chain: AccountInBatch()" in d.reason, d.reason

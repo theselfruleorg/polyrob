@@ -21,7 +21,7 @@ from core import verbs
 #: Verbs that act, or that need an argument to say anything: not reads.
 _NOT_A_READ = frozenset({
     "/approve", "/reject", "/fulfill", "/more", "/goal", "/job", "/pause", "/resume",
-    "/halt", "/run", "/dev", "/restart", "/update", "/cancel", "/allow", "/deny",
+    "/halt", "/run", "/restart", "/update", "/cancel", "/allow", "/deny",
     "/config", "/new", "/chats", "/chat", "/rename", "/close", "/send", "/swap",
     "/bridge", "/deploy", "/launch", "/claim", "/pay", "/settle", "/model",
     "/groups", "/mute", "/unmute", "/ban", "/unban", "/paid", "/start", "/x",
@@ -90,6 +90,10 @@ def world(monkeypatch, tmp_path):
     monkeypatch.setenv("DATA_ROOT", home)
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u_owner")
     monkeypatch.delenv("AUTONOMY_HALT", raising=False)
+    # The chat dispatch records one owner_command row AFTER its reply; that write would
+    # create the event log the terminal then reads, so the second seat saw another world.
+    monkeypatch.setattr("core.surfaces.owner_verb_log.record_owner_command",
+                        lambda *a, **k: None)
     return home
 
 

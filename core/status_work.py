@@ -9,9 +9,11 @@ from __future__ import annotations
 
 from core.runtime_paths import correspondents_db_path
 import os
+import time
 from typing import Any, Dict, List
 
 from core import goal_vocab as _gv
+from core.cron_expect import RUN_EFFECTS, run_effect
 from core.surfaces.more_store import clip as _clip
 from core.surfaces.tappable import read_token
 from core.status_types import (  # noqa: F401
@@ -115,15 +117,20 @@ def _work_section(user_id: str, goals_db: str, tele: Section, now: float) -> Sec
     sec.data["counts"] = counts
     # Open asks (tool-approval asks belong to the approvals section).
     asks = []
+    expired_asks = 0
     for r in _rows(goals_db, "SELECT id, title, body, payload, created_at FROM goals "
                              "WHERE kind=? AND status=? AND user_id=? ORDER BY created_at",
                    (_KIND_ASK, _ASK_OPEN, user_id)):
         p = _payload(r)
         if has_own_surface(p):
             continue
+        if _gv.ask_expired(p, now):
+            expired_asks += 1      # the goal loop closes it; it is not a question now
+            continue
         asks.append({"id": r["id"], "title": r["title"], "created_at": r["created_at"],
                      "blocks": list(p.get("blocks_goal_ids") or [])})
     sec.data["open_asks"] = asks
+    sec.data["expired_asks"] = expired_asks
     blocked = [{"id": r["id"], "title": r["title"],
                 "failures": int(r.get("consecutive_failures") or 0),
                 "max_retries": int(r.get("max_retries") or 0),
@@ -134,22 +141,51 @@ def _work_section(user_id: str, goals_db: str, tele: Section, now: float) -> Sec
                               (_KIND_GOAL, _ST_BLOCKED, user_id))]
     sec.data["blocked"] = blocked
     _open_goals_and_stops(sec, user_id, goals_db, now)
-    line =f"{ready} ready, {running} running, {blocked_n} blocked, {waiting} waiting"
+    # 116 W2.5: every live status the board can hold, in the board's own order.
+    # The line printed four of six, so a goal in `triage` was on no seat.
+    line = ", ".join(f"{counts.get(st, 0)} {st}" for st in _gv.LIVE_STATUS_ORDER
+                     if st != _gv.STATUS_PAUSED)
     # 080 WS-4: an owner-paused goal is the owner's choice, not a health problem:
     # it is counted here and never raised as "fix the cause".
-    paused_n = counts.get(getattr(_gv, "STATUS_PAUSED", "paused"), 0)
+    paused_n = counts.get(_gv.STATUS_PAUSED, 0)
     if paused_n:
         line += f" · {paused_n} paused by you (/goal retry <id> to resume)"
+    if expired_asks:
+        line += f" · {expired_asks} question(s) past their time, not closed yet"
+    triage_n = counts.get(_gv.STATUS_TRIAGE, 0)
+    if triage_n:
+        sec.health.append(HealthItem(
+            key="goals_in_triage", severity=SEVERITY_WARN,
+            text=f"{triage_n} goal(s) in triage — nothing dispatches a triage goal",
+            remedy="/goals, then `/goal retry <id>` to make it ready or `/goal cancel <id>`"))
     sec.lines.append(line)
     if tele.available:
         runs = _tele_rows(tele, _K_GOAL_RUN)
-        by = {}
+        by: Dict[str, int] = {}
+        effects: Dict[str, int] = {}
         for r in runs:
-            o = (r["attrs"] or {}).get("outcome") or "?"
+            a = r["attrs"] or {}
+            o = a.get("outcome") or "?"
             by[o] = by.get(o, 0) + 1
-        sec.data["runs_window"] = by
-        sec.lines.append("24h goal runs: " + (", ".join(f"{k}={v}" for k, v in sorted(by.items()))
-                                             or "none"))
+            if o == "done":
+                # 116 W2.2: `verified` is on the row only when a judge or an
+                # acceptance check ran; the one reader says what "done" did.
+                eff = run_effect(a)
+                effects[eff] = effects.get(eff, 0) + 1
+        starts = by.pop("started", 0)
+        sec.data.update({"runs_window": by, "run_starts_window": starts,
+                         "run_effects_window": effects})
+        ends = []
+        for k, v in sorted(by.items()):
+            if k == "done" and effects:
+                names = {"idle": "checked", "unverified": "not checked"}
+                ends.append(f"done={v} (" + ", ".join(
+                    f"{names.get(n, n)} {effects[n]}" for n in RUN_EFFECTS if effects.get(n))
+                    + ")")
+            else:
+                ends.append(f"{k}={v}")
+        sec.lines.append("24h goal runs ended: " + (", ".join(ends) or "none")
+                         + (f"; started={starts}" if starts else ""))
         _model_route_lines(sec, tele)
         # 057 WS-C: a pre-emption is a first-class outcome — the 16 yields of
         # 2026-09-19 were counted by hand because nothing rendered them.
@@ -186,14 +222,21 @@ def _work_section(user_id: str, goals_db: str, tele: Section, now: float) -> Sec
     else:
         sec.lines.append(f"24h goal-run counts unavailable ({tele.reason})")
     _hold_unreadable_item(sec, tele, ready, now)
-    for a in asks:
-        age = _age(a["created_at"], now)
-        blocks = f", blocks {len(a['blocks'])} goal(s)" if a["blocks"] else ""
+    if asks:
+        # 116 W5.12: ONE item for the open questions. One item per question
+        # filled the list a phone shows, so a dead loop was line nine.
+        oldest = min(asks, key=lambda a: float(a["created_at"] or now))
+        blocking = [a for a in asks if a["blocks"]]
+        text = (f"1 open question ({_age(oldest['created_at'], now)} old): "
+                f"{_clip(oldest['title'], 100)}" if len(asks) == 1 else
+                f"{len(asks)} open questions, oldest {_age(oldest['created_at'], now)}")
+        if blocking:
+            text += f" — {len(blocking)} block(s) a goal"
         sec.health.append(HealthItem(
-            key=f"ask:{a['id']}", severity=SEVERITY_CRIT if a["blocks"] else SEVERITY_WARN,
-            text=f"open ask ({age} old{blocks}): {_clip(a['title'], 110)}",
-            remedy=(f"{read_token('/ask', a['id']) or '/asks'} · "
-                    f"/fulfill {a['id']} once done")))
+            key="open_asks", severity=SEVERITY_CRIT if blocking else SEVERITY_WARN,
+            text=text,
+            remedy=(f"{read_token('/ask', oldest['id']) or '/asks'} · /fulfill {oldest['id']} "
+                    f"once done" if len(asks) == 1 else "/asks")))
     for b in blocked:
         kind, why, remedy = _block_reason(b)
         sec.health.append(HealthItem(
@@ -209,6 +252,8 @@ def _approvals_section(user_id: str, data_dir: str, goals_db: str) -> Section:
     open_asks = _rows(goals_db, "SELECT id, title, payload FROM goals WHERE kind=? "
                                 "AND status=? AND user_id=?",
                       (_KIND_ASK, _ASK_OPEN, user_id))
+    now = time.time()
+    open_asks = [r for r in open_asks if not _gv.ask_expired(_payload(r), now)]
     for r in open_asks:
         kind = _payload(r).get("ask_kind")
         if kind == _TOOL_APPROVAL_ASK_KIND:
@@ -220,10 +265,21 @@ def _approvals_section(user_id: str, data_dir: str, goals_db: str) -> Section:
                           "preview": _clip(r["title"] or "", 80)})
     from core import self_evolution
     from core.instance import resolve_instance_id
-    for it in self_evolution.list_pending(user_id, home_dir=data_dir,
-                                          instance_id=resolve_instance_id()) or []:
+    from core.status_rules import identity_home
+    draft_errors: List[str] = []
+    for it in self_evolution.list_pending(user_id, home_dir=identity_home(data_dir),
+                                          instance_id=resolve_instance_id(),
+                                          errors=draft_errors) or []:
         items.append({"kind": it.get("kind"), "id": it.get("id"),
                       "preview": _clip(it.get("preview") or "", 80)})
+    if draft_errors:
+        # 116 W7.3: an unreadable draft store is not "no pending approvals".
+        sec.data["drafts_unreadable"] = draft_errors
+        sec.health.append(HealthItem(
+            key="pending_drafts_unreadable", severity=SEVERITY_WARN,
+            text="pending drafts unreadable (" + "; ".join(draft_errors)
+                 + ") — a draft may wait on you",
+            remedy="/pending · `polyrob doctor`"))
     corr_db = correspondents_db_path(data_dir)
     if os.path.exists(corr_db):
         from core.surfaces.correspondents import CorrespondentRegistry
@@ -251,6 +307,8 @@ def _approvals_section(user_id: str, data_dir: str, goals_db: str) -> Section:
         line = f"{len(items)} pending approval(s)"
     elif any(h.key == "pending_contacts_unreadable" for h in sec.health):
         line = "no other pending approvals; pending contacts unreadable"
+    elif draft_errors:
+        line = "no other pending approvals; pending drafts unreadable"
     else:
         line = "no pending approvals"
     if asks_open:

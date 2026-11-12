@@ -38,15 +38,11 @@ def _goal_ev(goal, outcome: str, reason: Optional[str] = None, **extra) -> None:
     `/telemetry` — the tool built to answer "what ran?" — showed cron and
     self-wake but not the goals that did most of the autonomous work. Mirror _cron_ev
     so goal lifecycle rides the same uniform autonomy/governance stream."""
-    try:
-        from core.event_log import get_event_log, event_log_enabled
-        if event_log_enabled():
-            get_event_log().record(
-                "goal_run", user_id=getattr(goal, "user_id", ""),
-                source="goal", goal_id=getattr(goal, "id", None),
-                outcome=outcome, reason=reason, **extra)
-    except Exception:
-        pass
+    from core.event_log import emit
+    emit("goal_run", source="goal", user_id=getattr(goal, "user_id", ""),
+         session_id=extra.pop("session_id", "") or "",   # the column, never an attr
+         attrs={"goal_id": getattr(goal, "id", None), "outcome": outcome, "reason": reason,
+                **extra})
 
 
 def _goal_ref(goal_id: str):
@@ -416,6 +412,9 @@ class GoalDispatcher(GoalRunMixin):
         #: 057 WS-C (B8): goal ids asked to stop at their step boundary for a rail
         #: yield. Their run must not be recorded as a failure.
         self._yield_requested: set = set()
+        #: 116 W2.4: goal_id -> the hold kind (pause | restart | rail) of a cancel
+        #: hold_inflight is making, so the cut run leaves the ending to the hold.
+        self._cut_kinds: dict = {}
         #: 057 WS-C (B9): goal_id -> monotonic start, for the resume note's elapsed.
         self._goal_started: dict = {}
         #: 057 WS-C (A6): the deferral reason last logged, so a per-minute tick
@@ -887,16 +886,25 @@ class GoalDispatcher(GoalRunMixin):
         else:
             want = None
             tasks = [t for t in list(self._inflight) if not t.done()]
-        for t in tasks:
-            t.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        marked = [gid for gid, t in list(self._goal_tasks.items()) if t in tasks]
+        for gid in marked:
+            self._cut_kinds[gid] = reason_kind
         try:
-            return self.board.hold_running(worker=self._worker, reason=reason,
-                                           goal_ids=want, reason_kind=reason_kind)
-        except Exception:
-            logger.warning("hold_inflight: board hold failed", exc_info=True)
-            return []
+            for t in tasks:
+                t.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            try:
+                held = self.board.hold_running(worker=self._worker, reason=reason,
+                                               goal_ids=want, reason_kind=reason_kind)
+            except Exception:
+                logger.warning("hold_inflight: board hold failed", exc_info=True)
+                return []
+            self._record_hold_endings(held, reason, reason_kind)
+            return held
+        finally:
+            for gid in marked:
+                self._cut_kinds.pop(gid, None)
 
     def _yield_targets(self) -> List[str]:
         """The goal ids a rail yield should pre-empt (057 WS-C A2).

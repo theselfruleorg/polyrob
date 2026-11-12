@@ -24,14 +24,17 @@ Layering: this module imports ``core.*`` only.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import textwrap
 import time
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from core.sqlite_util import execute_retry
 from core.surfaces.user_delivery import NOTICE_MARKERS
+
+logger = logging.getLogger(__name__)
 
 #: Marker -> the short "kind" word surfaced to the owner. Every entry of
 #: ``NOTICE_MARKERS`` must appear here — an unmatched marker is a notice the
@@ -59,8 +62,42 @@ def _resolve_db_path(data_dir: str) -> str:
     return telemetry_db_path(data_dir)
 
 
-def missed_notices(user_id: str, data_dir: str, n: int = 5) -> List[Dict]:
-    """The last *n* undelivered owner notices for *user_id*, newest first.
+#: The most notices one count reads (a bound on the scan, far above a real day).
+_COUNT_SCAN = 2000
+
+
+def _missed_rows(path: str, user_id: str, since_ts: Optional[float], limit: int):
+    """The ONE selection both the list and the count use: undelivered owner
+    notices (every ``NOTICE_MARKERS`` marker — derived, never a hand list: a
+    marker added to the rail without a clause here is a notice this query
+    cannot see), newest first, minus every body a LATER ``sent`` row covers
+    (D50: a body the rail retried and delivered minutes later was NOT missed)."""
+    like_clause = " OR ".join(["attrs LIKE ?"] * len(NOTICE_MARKERS))
+    params: list = [user_id, *[f"%{m}%" for m in NOTICE_MARKERS]]
+    since_sql = ""
+    if since_ts is not None:
+        since_sql = " AND ts >= ?"
+        params.append(float(since_ts))
+    rows = execute_retry(
+        path,
+        "SELECT ts, attrs FROM telemetry_events WHERE kind='owner_notice' "
+        f"AND user_id=? AND ({like_clause}){since_sql} "
+        "ORDER BY ts DESC, id DESC LIMIT ?",
+        (*params, int(limit)), fetch="all") or []
+    for r in rows:
+        try:
+            attrs = json.loads(r["attrs"]) or {}
+        except Exception:
+            attrs = {}
+        if _delivered_later(path, user_id, attrs.get("content_hash"), float(r["ts"])):
+            continue
+        yield float(r["ts"]), attrs
+
+
+def missed_notices(user_id: str, data_dir: str, n: int = 5,
+                   since_ts: Optional[float] = None) -> List[Dict]:
+    """The last *n* undelivered owner notices for *user_id*, newest first
+    (only those at or after ``since_ts`` when given).
 
     Each entry: ``{"ts": float, "text": str, "kind": "capped"|"paused"|"undelivered"}``
     — the marker prefix is stripped from ``text``.
@@ -72,41 +109,52 @@ def missed_notices(user_id: str, data_dir: str, n: int = 5) -> List[Dict]:
     path = _resolve_db_path(data_dir)
     if not os.path.exists(path):
         raise FileNotFoundError(f"telemetry log not found at {path}")
-    # Derived from NOTICE_MARKERS, not a hand-written list of three: a marker
-    # added to the rail without a matching clause here is a notice this query
-    # silently cannot see.
-    like_clause = " OR ".join(["attrs LIKE ?"] * len(NOTICE_MARKERS))
-    # D50: over-read, then drop the entries a LATER `sent` row covers, then trim
-    # back to n. `/missed` answers "what did I miss" — a body the rail retried
-    # and delivered minutes later was NOT missed, and showing it pushes a
-    # genuinely lost entry off the five-row view.
     limit = max(int(n), 1)
-    rows = execute_retry(
-        path,
-        "SELECT ts, attrs FROM telemetry_events WHERE kind='owner_notice' "
-        f"AND user_id=? AND ({like_clause}) "
-        "ORDER BY ts DESC, id DESC LIMIT ?",
-        (user_id, *[f"%{m}%" for m in NOTICE_MARKERS], limit * 4),
-        fetch="all") or []
     out: List[Dict] = []
-    for r in rows:
-        try:
-            attrs = json.loads(r["attrs"]) or {}
-        except Exception:
-            attrs = {}
+    # Over-read (limit * 4): the delivered-later filter drops rows.
+    for ts, attrs in _missed_rows(path, user_id, since_ts, limit * 4):
         text = str(attrs.get("text") or "")
         kind = _kind_for(text)
         # Strip the rail's marker prefix "[<marker>; source=x] ".
         if text.startswith("[") and "] " in text:
             text = text.split("] ", 1)[1]
-        text = text.strip()
-        if _delivered_later(path, user_id, attrs.get("content_hash"),
-                            float(r["ts"])):
-            continue
-        out.append({"ts": float(r["ts"]), "text": text, "kind": kind})
+        out.append({"ts": ts, "text": text.strip(), "kind": kind})
         if len(out) >= limit:
             break
     return out
+
+
+def missed_count(user_id: str, data_dir: str, since_ts: Optional[float] = None) -> int:
+    """How many notices :func:`missed_notices` would list with no limit — the
+    SAME selection (116 W5.6: the header counted cap-suppressed rows of the
+    last 24 h while the list read every marker of all time). Raises like it."""
+    path = _resolve_db_path(data_dir)
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"telemetry log not found at {path}")
+    return sum(1 for _ in _missed_rows(path, user_id, since_ts, _COUNT_SCAN))
+
+
+def missed_since(user_id: str, data_dir: str, default_since: float) -> tuple:
+    """``(since_ts, label)`` for a status seat: everything since the owner last
+    ran ``/missed`` (he has read what came before), else the default window."""
+    # The owner_command event (core/surfaces/owner_verb_log.py) read here with
+    # this module's own connection helper: an import of that module would pull
+    # it into the core import cycle.
+    last = None
+    try:
+        path = _resolve_db_path(data_dir)
+        if os.path.exists(path):
+            row = execute_retry(
+                path,
+                "SELECT MAX(ts) AS ts FROM telemetry_events WHERE kind='owner_command' "
+                "AND user_id=? AND json_extract(attrs, '$.verb')='/missed' "
+                "AND json_extract(attrs, '$.outcome')='ok'", (str(user_id),), fetch="one")
+            last = row["ts"] if row is not None else None
+    except Exception:
+        logger.warning("missed: the last /missed could not be read", exc_info=True)
+    if last is not None:
+        return float(last), "since your last /missed"
+    return float(default_since), "in 24h"
 
 
 def cap_caused(rows: List[Dict]) -> bool:

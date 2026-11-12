@@ -844,9 +844,11 @@ def _bot_db_path():
     one every sibling owner verb (and the running service) uses, and answered a
     confident "no invoices" over a live queue. The seam is ``admin_data_dir``.
     """
-    db_path_env = os.getenv("DB_PATH")
-    if db_path_env and os.path.isfile(db_path_env):
-        return db_path_env
+    if os.getenv("DB_PATH"):
+        from core.runtime_paths import bot_db_path
+        db_path_env = bot_db_path(str(_data_dir(write=None)))
+        if os.path.isfile(db_path_env):
+            return db_path_env
     from core.db_manifest import candidate_sqlite_dbs
     for p in candidate_sqlite_dbs(_data_dir(write=None)):
         if p.name == "bot.db" and p.is_file():

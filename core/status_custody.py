@@ -45,15 +45,24 @@ def custody_section() -> Section:
     if not holds_key:
         sec.lines.append("wallet on, no signing key in this process (public-only; signing is in the agent unit)")
         return sec
+    sec.lines.append(_this_process_line(True, hard, loaded, in_env))
+    sec.lines.append(_lazy_line(sec))
+    _local_custody_health(sec, hard, loaded, in_env)
+    return sec
+
+
+def _this_process_line(holds_key: bool, hard, loaded: bool, in_env) -> str:
+    """The ONE line on THIS process's key for the local and the shadow branch
+    (116 W6.5). It describes the process it renders in: the CLI's doctor holds
+    no key even when the agent unit does, and must not say it "signs locally"."""
+    if not holds_key:
+        return "this process holds no key"
     if loaded:
         env_word = ("scrubbed" if not in_env
                     else "NOT scrubbed (" + ", ".join(in_env) + ")")
     else:
         env_word = "seed not taken yet (the wallet config has not loaded in this process)"
-    sec.lines.append(f"this process: non-dumpable {hard.state} · env {env_word}")
-    sec.lines.append(_lazy_line(sec))
-    _local_custody_health(sec, hard, loaded, in_env)
-    return sec
+    return f"this process: holds a key · non-dumpable {hard.state} · env {env_word}"
 
 
 def _local_custody_health(sec: Section, hard, loaded: bool, in_env) -> None:
@@ -120,11 +129,12 @@ def _signer_section(mode: str, hard, in_env) -> Section:
     else:
         from core.security.custody_env import custody_loaded
         loaded = custody_loaded()
+        holds = holds_custody_secret()
         sec.data["loaded"] = loaded
-        env_word = "scrubbed" if not in_env else "NOT scrubbed (" + ", ".join(in_env) + ")"
-        sec.lines.append("signer: SHADOW · this process still signs locally "
-                         f"(non-dumpable {hard.state} · env {env_word})")
-        if holds_custody_secret():
+        sec.data["holds_key"] = holds
+        sec.lines.append("signer: SHADOW (the agent's key still signs; the signer checks) · "
+                         + _this_process_line(holds, hard, loaded, in_env))
+        if holds:
             _local_custody_health(sec, hard, loaded, in_env)
     sec.lines.append(_signer_ping_line(sec))
     if mode == "shadow":
@@ -151,14 +161,25 @@ def _signer_ping_line(sec: Section) -> str:
     caps = pong.get("caps") or {}
     sec.data["signer_caps"] = caps
     _cap_drift_health(sec, caps)
-    line = (f"signer: reachable · hard caps ${caps.get('per_tx_usd')}/tx, "
-            f"${caps.get('daily_usd')}/24h · chains {', '.join(caps.get('chains') or []) or 'none'}")
+    line = (f"signer: reachable · hard caps {_cap_text(caps.get('per_tx_usd'))}/tx, "
+            f"{_cap_text(caps.get('daily_usd'))}/24h · chains "
+            f"{', '.join(caps.get('chains') or []) or 'none'}")
     if pong.get("paused"):
         line += " · PAUSED"
     pending = int(pong.get("pending_approvals") or 0)
     if pending:
         line += f" · {pending} approval(s) waiting (`polyrob owner pending` on the box)"
     return line
+
+
+def _cap_text(value) -> str:
+    """A signer cap through the envelope's one money format (``$6,000.00``, not
+    ``$6000.0``); a cap the signer did not report is ``unreported``, never $0."""
+    from core.wallet.signer_envelope import _usd
+    try:
+        return _usd(float(value))
+    except (TypeError, ValueError):
+        return "unreported"
 
 
 def _cap_drift_health(sec: Section, caps) -> None:
@@ -212,6 +233,10 @@ def custody_with_settings() -> Section:
     from core.security import settings as ss
     sec.lines.append(ss.status_line())
     sec.data["security_settings"] = ss.effective()
+    for name in ss.retired_entries():
+        # 116 W6.8: a removed row has no effect — say so once, as a fact, not a
+        # WARN on every render.
+        sec.lines.append(f"{ss.ENV} {name}: retired; remove the entry")
     bad = ss.invalid_entries()
     if bad:
         sec.health.append(HealthItem(

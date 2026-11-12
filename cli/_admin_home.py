@@ -165,9 +165,11 @@ def admin_bot_db_path() -> Optional[str]:
     different stores; a standalone CLI has no DI container to ask.
     """
     import os
-    env_db = os.getenv("DB_PATH")
-    if env_db and os.path.isfile(env_db):
-        return env_db
+    from core.runtime_paths import bot_db_path
+    if os.getenv("DB_PATH"):
+        env_db = bot_db_path(str(admin_data_dir(write=False)))
+        if os.path.isfile(env_db):
+            return env_db
     try:
         from core.db_manifest import candidate_sqlite_dbs
         for p in candidate_sqlite_dbs(admin_data_dir(write=False)):

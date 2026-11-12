@@ -101,10 +101,37 @@ def test_mint_params_are_the_blind_mint():
     assert MintParams(qty=10, chain="robinhood-testnet", max_spend_usd=1.0).chain == "robinhood-testnet"
     with pytest.raises(ValidationError):  # there is no default chain
         MintParams(max_spend_usd=1.0)
-    for bad in ({"qty": 0}, {"qty": 11}, {"min_pnl_out": -1}, {"chain": "base"}, {"seed": "POLYROB"},
+    for bad in ({"qty": 0}, {"qty": 11}, {"min_pnl_out": -1}, {"chain": "solana"}, {"seed": "POLYROB"},
                 {"to": "not-an-address"}):
         with pytest.raises(ValidationError):
             MintParams(**{"chain": "robinhood", "max_spend_usd": 1.0, **bad})
+
+
+
+def test_mint_params_carry_the_whitelist_allowance_and_proof():
+    """115 M4: the sale's mintWL needs (allowance, proof); the package verb reads these names."""
+    import pytest
+    from pydantic import ValidationError
+
+    from tools.agent_nft.tool import MintParams
+    p = MintParams(chain="robinhood", max_spend_usd=1.0)
+    assert (p.allowance, p.proof) == (None, None)
+    proof = ["0x" + "ab" * 32, "0x" + "CD" * 32]
+    p = MintParams(chain="robinhood", max_spend_usd=1.0, allowance=3, proof=proof)
+    assert (getattr(p, "allowance"), getattr(p, "proof")) == (3, proof)
+    assert len(MintParams(chain="robinhood", max_spend_usd=1.0, proof=["0x" + "11" * 32] * 32).proof) == 32
+    for bad in ({"allowance": 0}, {"proof": ["0xab"]}, {"proof": ["ab" * 32]},
+                {"proof": ["0x" + "11" * 32] * 33}, {"proof": "0x" + "11" * 32}):
+        with pytest.raises(ValidationError):
+            MintParams(**{"chain": "robinhood", "max_spend_usd": 1.0, **bad})
+
+
+def test_the_mint_text_names_the_sale_not_a_fixed_price():
+    import inspect as _inspect
+    src = _inspect.getsource(AgentNftTool.agent_nft_collection_mint)
+    from tools.agent_nft.tool import MintParams
+    text = src + str(MintParams.model_json_schema())
+    assert "0.033" not in text and "sale" in text
 
 
 def test_descriptions_claim_only_what_ships():
@@ -135,8 +162,9 @@ def test_c10_snapshot_journal_and_bind_name_the_nft(monkeypatch):
         assert (p.chain, p.nft, p.account) == ("robinhood-testnet", "0x" + "c0" * 20 + "#7", acct)
         with pytest.raises(ValidationError):
             model(chain="robinhood", account="not-an-address", **base)
-        with pytest.raises(ValidationError):
-            model(chain="base", **base)
+        with pytest.raises(ValidationError):   # N3: any EVM chain of the table, not a list
+            model(chain="no-such-chain", **base)
+        assert model(chain=" Base ", **base).chain == "base"
     seen = {}
 
     async def snapshot(tool, params, ctx):

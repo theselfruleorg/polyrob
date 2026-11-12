@@ -75,3 +75,13 @@ def test_a_retired_gate_says_what_changed_not_that_the_default_holds():
     for name, note in rf.RETIRED_GATE_NOTES.items():
         lines = [x for x in rf.retired_flag_lines({name: "true"}) if name in x]
         assert lines and note in lines[0] and "default is now permanent" not in lines[0]
+
+
+@pytest.mark.parametrize("name", ["EIP8004_PAYMENT_FEEDBACK", "EIP8004_AGENT_PRIVATE_KEY"])
+def test_removed_feedback_api_flags_are_named(name):
+    """The local ERC-8004 feedback API is gone (1.7.9): a stale line is named, never refused."""
+    from core.config_policy.retired_flags import retired_flags_set
+    assert name in RETIRED_FLAGS and name not in REFUSING_ALIASES
+    assert [n for n, _ in retired_flags_set({name: "x"})] == [name]
+    lines = retired_flag_lines({name: "0x" + "11" * 32})
+    assert lines and all("11" * 32 not in l for l in lines)

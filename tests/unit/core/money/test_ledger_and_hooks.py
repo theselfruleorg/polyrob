@@ -224,3 +224,25 @@ def test_the_kernel_imports_no_rail_module():
             for name in names:
                 assert not name.startswith(("core.wallet", "core.open_positions",
                                             "core.signer")), (path.name, name)
+
+
+def test_an_over_cap_replay_reads_as_a_replay_not_a_cap(monkeypatch):
+    """M6: journal health, then replay, then caps — an over-cap REPLAY must not
+    read as a cap the owner could approve past."""
+    monkeypatch.setattr(hooks, "_PROVIDERS", {})
+    j = _Journal()
+    hooks.register_submission_journal(lambda: j)
+    led = _ledger(audit_sink=_HealthySink())
+    led.record(venue="v", action="swap", amount_usd=1.0, counterparty=None,
+               idempotency_key="k", result_ref="0xtx", submission_ref="sub1")
+    d = led.check(venue="v", amount_usd=1000, idempotency_key="k")
+    assert d.allowed is False and "replay blocked" in d.reason
+    assert not d.cap_exceeded
+    j._u = ["0xabc"]
+    d = led.check(venue="v", amount_usd=1000, idempotency_key="fresh")
+    assert (d.allowed, d.cap_exceeded) == (False, False)
+    assert d.reason.startswith("unaccounted wallet submission")
+    j._u = []
+    d = led.check(venue="v", amount_usd=1000, idempotency_key="fresh")
+    assert (d.allowed, d.cap_exceeded) == (False, True)
+    assert "per-transaction cap" in d.reason

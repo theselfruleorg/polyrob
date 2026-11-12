@@ -58,6 +58,10 @@ class ChainRow:
     max_fee_wei_per_tx: int = 0         # per-chain: L1 gas dwarfs an L2's
     purpose: str = ""                   # guidance the agent reads to pick a chain
     usdc: Optional[str] = None
+    #: Decimals of ``usdc``, measured on chain. 6 on every chain but BNB Chain,
+    #: whose Binance-peg USDC has 18. Every reader takes it from the row: a
+    #: hardcoded 6 reads a BNB balance a million million times too large.
+    usdc_decimals: int = 6
     #: Other USD stablecoins verified on-chain for this row (address, symbol,
     #: name, decimals) — the chain's own dollar where it is not USDC (USDG on
     #: Robinhood). With ``usdc`` they are the canonical pins and the USD-pegged
@@ -303,7 +307,7 @@ _ROWS: Dict[str, ChainRow] = {
         max_fee_wei_per_tx=2 * 10 ** 15,
         fee_reserve=Decimal("0.002"),
         purpose=("Robinhood Chain's TESTNET: valueless ETH, used to rehearse an agent-NFT collection (mint, "
-                 "adopt, inspect) before mainnet. Reads only here — nothing moves value from "
+                 "hold, inspect) before mainnet. Reads only here — nothing moves value from "
                  "the agent on this chain, and no route, price or screen covers it."),
         wrapped_native="0x7943e237c7F95DA44E0301572D358911207852Fa",
         explorer="https://explorer.testnet.chain.robinhood.com",
@@ -453,6 +457,7 @@ _ROWS: Dict[str, ChainRow] = {
                  "the owner arms it. Gas is BNB and costs well under a cent. "
                  "Its USDC is Binance-peg with 18 decimals, not 6."),
         usdc="0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
+        usdc_decimals=18,                     # decimals() == 0x12, measured
         wrapped_native="0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",   # WBNB, verified
         dexscreener_id="bsc",
         geckoterminal_id="bsc",

@@ -12,9 +12,8 @@ know the verb. Now the agent hands ONE owner seat line to
 * ``operator`` — the env file, a backend, a unit: never a card. It is filed as
   an OPEN ask on the goal board (the agent's existing "what I need from you to
   unblock work" queue: ``/asks``, ``/inbox``, ``/status``), with the exact env
-  line in the ask (``payload.ask_kind = "config_change"``). Not the ``/dev``
-  ops inbox: that rail carries only text the OWNER typed, authenticated on the
-  owner-turn path, into a root session — agent-written text must not reach it.
+  line in the ask (``payload.ask_kind = "config_change"``). Never a channel
+  into an operator's root session: agent-written text must not reach one.
 * ``refused`` — money, approval, ingress, trust, secrets, unknown shapes.
 
 D4: an OWNER turn only — never an autonomous run, a room, a correspondent's

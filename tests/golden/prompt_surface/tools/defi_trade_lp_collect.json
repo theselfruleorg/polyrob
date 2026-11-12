@@ -1,10 +1,16 @@
 {
   "function": {
-    "description": "Collect fees from your v3 liquidity position without reducing liquidity. Both token receipts are asserted; caps charge gas. dry_run defaults true.",
+    "description": "Collect fees from your v3 or v4 liquidity position without reducing liquidity (v4: also from an NFT's account with account=/nft=, the fees land there). Receipts are asserted; caps charge gas. dry_run defaults true.",
     "name": "defi_trade_lp_collect",
     "parameters": {
       "additionalProperties": false,
       "properties": {
+        "account": {
+          "default": null,
+          "description": "Optional — work FROM the token-bound (ERC-6551) account of an NFT this treasury OWNS, instead of from the treasury: the account's assets move, the treasury signs as the NFT's owner. A 0x account address. Only accounts of a collection the owner pinned. Needs AGENT_NFT_ENABLED. What each account kind can do: the `account` parameter of defi_trade.transfer.",
+          "nullable": true,
+          "type": "string"
+        },
         "chain": {
           "description": "Chain to manage the Uniswap v3 position on — CHOOSE IT DELIBERATELY, because the same address is a different token on a different chain. Chains that can move value: ethereum, base, robinhood, arbitrum, polygon. Gas differs by orders of magnitude, so a cent-scale trade can cost more in gas on ethereum than it is worth, while base is a fraction of a cent. Per-chain guidance: the `chain` parameter of defi_trade.swap.",
           "type": "string"
@@ -20,9 +26,15 @@
           "exclusiveMinimum": 0,
           "type": "number"
         },
+        "nft": {
+          "default": null,
+          "description": "Optional — the same as `account`, naming the NFT instead: '<collection>#<id>', or just '<id>' when one collection is pinned on the chain.",
+          "nullable": true,
+          "type": "string"
+        },
         "protocol": {
           "default": "v3",
-          "description": "'v3' only.",
+          "description": "'v3', or 'v4' to collect the fees of a Uniswap v4 position (a decrease of 0, both currencies paid to the position's owner; no approval). account=/nft= work with 'v4' only.",
           "type": "string"
         },
         "token_id": {

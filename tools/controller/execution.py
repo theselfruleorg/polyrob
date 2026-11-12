@@ -117,16 +117,11 @@ class ExecutionMixin:
 		"""Record a governance event (tool_denied/tool_timeout) to the durable event
 		log. The governance surface was logged but never telemetered (audit
 		2026-07-04). Fail-open — telemetry must never break tool execution."""
-		try:
-			from core.event_log import get_event_log, event_log_enabled
-			if not event_log_enabled():
-				return
-			uid = getattr(execution_context, "user_id", None) or ""
-			sid = getattr(execution_context, "session_id", "") or ""
-			get_event_log().record(kind, user_id=uid, session_id=sid,
-									source="tool", **attrs)
-		except Exception:
-			pass
+		from core.event_log import emit
+		emit(kind, source="tool",
+			 user_id=getattr(execution_context, "user_id", None) or "",
+			 session_id=getattr(execution_context, "session_id", "") or "",
+			 attrs=attrs)
 
 	def _record_invocation(self, action_type, result, execution_context=None, started_ns=None):
 		"""058 T4.1: ONE ``tool_invoked`` row per tool action, success or error —
@@ -142,6 +137,14 @@ class ExecutionMixin:
 		because ``record()`` has reserved keyword names. Fail-open: telemetry must
 		never break tool execution."""
 		try:
+			# The bridge (`tool_call`) is not a tool: its dispatched target is
+			# recorded by the inner dispatch. Only a call the bridge REFUSED is
+			# recorded here, and as a failure (116 W5.2).
+			refused = False
+			if str(action_type) == "tool_call":
+				refused = bool((getattr(result, "metadata", None) or {}).get("tool_call_refused"))
+				if not refused and not getattr(result, "error", None):
+					return
 			try:
 				details = self.get_action_details(action_type)
 				# A registered action with no tool id is a core action; "unknown"
@@ -161,9 +164,10 @@ class ExecutionMixin:
 			emit(TOOL_INVOKED, source="tool",
 				 user_id=getattr(execution_context, "user_id", None) or "",
 				 session_id=getattr(execution_context, "session_id", "") or "",
-				 attrs={"tool": tool, "action": str(action_type), "ok": not error, "ms": ms,
+				 attrs={"tool": tool, "action": str(action_type),
+						"ok": not error and not refused, "ms": ms,
 						"model": invoking_model(self, execution_context),
-						"error_class": classify_tool_error(error)})
+						"error_class": "refused" if refused and not error else classify_tool_error(error)})
 		except Exception:
 			self.logger.debug("tool_invoked emit skipped", exc_info=True)
 

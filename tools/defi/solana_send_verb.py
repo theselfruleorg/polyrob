@@ -41,7 +41,9 @@ import os
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from tools.defi.account_mode import NoAccountMode
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +65,7 @@ _BENIGN_EXTENSIONS = frozenset({
 })
 
 
-class SolanaTransferParams(BaseModel):
+class SolanaTransferParams(NoAccountMode):
     token: str = Field(..., description=(
         "'native' (or 'SOL') to send SOL itself, or the SPL token's MINT "
         "address (base58). A ticker is not accepted — resolve it to a mint "

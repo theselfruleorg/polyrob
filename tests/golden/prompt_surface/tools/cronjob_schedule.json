@@ -85,7 +85,7 @@
         "script": {
           "additionalProperties": true,
           "default": null,
-          "description": "A SCRIPT job — your own file runs on the schedule, no LLM turn per tick: {'path': 'jobs/collect.py', 'args': ['--x', '1'], 'timeout_s': 120, 'deliver_on': 'alert'|'always'|'never'}. The path is a .py or .sh file in the workspace; write and test it with run_code first. It runs in the code sandbox from the workspace root. Exit code 0 = done; any other exit code or a timeout = failed and alerts. A stdout line that starts with ALERT alerts on a clean run. Use it for repeated mechanical work (collect, count, check) that needs no judgment.",
+          "description": "OWNER TURN ONLY: a SCRIPT job — your own file runs on the schedule, no LLM turn per tick: {'path': 'jobs/collect.py', 'args': ['--x', '1'], 'timeout_s': 120, 'deliver_on': 'alert'|'always'|'never'}. The path is a .py or .sh file in the workspace; write and test it with run_code first. It runs in the code sandbox from the workspace root. Exit code 0 = done; any other exit code or a timeout = failed and alerts. A stdout line that starts with ALERT alerts on a clean run. Use it for repeated mechanical work (collect, count, check) that needs no judgment.",
           "nullable": true,
           "properties": {},
           "type": "object"
@@ -147,7 +147,7 @@
         "write_verb": {
           "additionalProperties": true,
           "default": null,
-          "description": "OWNER TURN ONLY: a deterministic WRITE job, no LLM turn per tick: {'verb': 'agent_nft.agent_nft_collection_reveal', 'params': {'chain': 'robinhood', 'max_ids': 10, 'dry_run': false}, 'deliver_on': 'alert'}. It spends gas (at most AGENT_NFT_REVEAL_MAX_GAS_USD per run) while CRON_WRITE_JOBS_ENABLED=true; without dry_run=false it only simulates.",
+          "description": "OWNER TURN ONLY: a deterministic WRITE job, no LLM turn per tick: {'verb': 'agent_nft.agent_nft_collection_reveal', 'params': {'chain': 'robinhood', 'dry_run': false}, 'deliver_on': 'alert'}. It spends gas (at most AGENT_NFT_REVEAL_MAX_GAS_USD per run) while CRON_WRITE_JOBS_ENABLED=true; without dry_run=false it only simulates.",
           "nullable": true,
           "properties": {},
           "type": "object"

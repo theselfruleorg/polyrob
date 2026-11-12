@@ -32,6 +32,11 @@
           "nullable": true,
           "type": "array"
         },
+        "holds_this_job": {
+          "default": false,
+          "description": "RAISE, in a scheduled job's run only: True HOLDS this job (no run) until the owner answers or the ask expires. Use it when every run is pointless until the answer.",
+          "type": "boolean"
+        },
         "options": {
           "default": null,
           "description": "RAISE: 2 to 6 short options (each at most 80 characters). In a live owner turn the owner gets buttons or a numbered prompt and this call WAITS and returns the pick. In an autonomous run they become tap answers on the durable ask.",

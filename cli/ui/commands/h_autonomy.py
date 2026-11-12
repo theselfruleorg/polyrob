@@ -8,15 +8,15 @@ from cli.ui.commands.registry import CommandContext
 from core.runtime_paths import data_dir_or_home
 
 
-def _autonomy_snapshot(user_id: str, data_dir: str = "data") -> dict:
+def _autonomy_snapshot(user_id: str, data_dir: str = "data", sections=None) -> dict:
     """Gather autonomy loop flags + open-goal / cron-job counts into structured data.
 
     Only the flag-table assembly lives here; the goal/cron COUNTS come from
-    ``cli.ui.autonomy_poll.read_autonomy_snapshot``, which guards every store read
-    with ``os.path.exists`` — a missing ``cron.db``/``goals.db`` is skipped, never
-    CREATED (opening a store would mkdir/create the DB as a side effect; the
-    path-concerns landmine). Fail-open: a poll error degrades to zero counts
-    instead of raising into the REPL.
+    ``cli.ui.autonomy_poll.read_autonomy_snapshot`` — the snapshot's ``work`` and
+    ``loops`` sections (116 W7.4), read-only: a missing ``cron.db``/``goals.db``
+    is 0, never CREATED (the path-concerns landmine). A store that could not be
+    read is ``None`` (rendered "unreadable"), never 0. *sections*: a caller that
+    already built a snapshot passes its sections (no second read).
     """
     from core.config_policy import AutonomyConfig, autonomy_enabled, local_mode_enabled
     from cli.ui.autonomy_poll import read_autonomy_snapshot
@@ -77,9 +77,12 @@ def _autonomy_snapshot(user_id: str, data_dir: str = "data") -> dict:
     ]
 
     try:
-        counts = read_autonomy_snapshot(user_id, data_dir) or {}
-    except Exception:  # fail-open: stores may not exist yet
-        counts = {}
+        counts = read_autonomy_snapshot(user_id, data_dir, sections=sections)
+    except Exception as e:  # the read failed: unreadable, never zero
+        counts = {"goals": None, "cron": None,
+                  "unread": {"goals": type(e).__name__, "cron": type(e).__name__}}
+    if counts is None:   # nothing to show on the status bar: both stores hold nothing
+        counts = {"goals": 0, "cron": 0}
 
     # 031: the ONE pause record (fail-closed read); `halted` == the `all` scope.
     try:
@@ -98,9 +101,16 @@ def _autonomy_snapshot(user_id: str, data_dir: str = "data") -> dict:
         "halted": halted,
         "pause": pause,
         "flags": flags,
-        "cron_count": int(counts.get("cron", 0) or 0),
-        "goal_count": int(counts.get("goals", 0) or 0),
+        # None = the store could not be read (``counts_unread`` names why).
+        "cron_count": counts.get("cron"),
+        "goal_count": counts.get("goals"),
+        "counts_unread": dict(counts.get("unread") or {}),
     }
+
+
+def count_text(n) -> str:
+    """A count as a seat prints it: the number, or "unreadable" (never 0)."""
+    return "unreadable" if n is None else str(n)
 
 
 async def _switch(ctx: CommandContext, on: bool, is_global: bool) -> None:
@@ -163,13 +173,20 @@ def _h_autonomy(ctx: CommandContext):
     except Exception:
         pass
 
-    lines.append(candy.section(f"cron jobs ({snap['cron_count']})"))
-    if snap["cron_count"]:
+    unread = snap.get("counts_unread") or {}
+    lines.append(candy.section(f"cron jobs ({count_text(snap['cron_count'])})"))
+    if snap["cron_count"] is None:
+        lines.append(f"{candy.GUTTER}the cron store could not be read "
+                     f"({unread.get('cron') or '?'})")
+    elif snap["cron_count"]:
         lines.append(f"{candy.GUTTER}/jobs lists the schedule")
 
     lines.append("")
-    lines.append(candy.section(f"goals (open: {snap['goal_count']})"))
-    if snap["goal_count"]:
+    lines.append(candy.section(f"goals (open: {count_text(snap['goal_count'])})"))
+    if snap["goal_count"] is None:
+        lines.append(f"{candy.GUTTER}the goal board could not be read "
+                     f"({unread.get('goals') or '?'})")
+    elif snap["goal_count"]:
         lines.append(f"{candy.GUTTER}/goals lists them")
 
     lines.append("")

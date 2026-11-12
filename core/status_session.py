@@ -18,8 +18,14 @@ from core.status_types import (  # noqa: F401
 def _session_section(task_agent: Any, session_id: Optional[str]) -> Section:
     sec = Section(name="session")
     if not session_id:
-        sec.lines.append("no active session")
-        sec.data["bound"] = False
+        # "Not read here" is not "none" (116 W7.2): a seat with no agent
+        # (doctor, a shell, the digest) cannot see the service's sessions.
+        if task_agent is None:
+            sec.lines.append("no session on this seat (not checked)")
+            sec.data.update({"bound": False, "checked": False})
+        else:
+            sec.lines.append("no active session")
+            sec.data.update({"bound": False, "checked": True})
         return sec
     short = session_id[:12] + ("…" if len(session_id) > 12 else "")
     sec.data.update({"bound": True, "session_id": session_id})
@@ -68,10 +74,17 @@ def _providers_section(tele: Section, now: float) -> Section:
     sec.data["sentinel_enabled"] = credit_sentinel_enabled()
     from core.runtime_config import (operator_provider_pin, resolve_live_provider,
                                      usable_providers_with_credentials)
+    usable_reason = None
     try:
         usable = list(usable_providers_with_credentials())
-    except Exception:
+    except Exception as e:
+        # A failed read is not "none detected" (116 W5.10).
         usable = []
+        usable_reason = f"{type(e).__name__}: {str(e)[:100]}"
+        sec.health.append(HealthItem(
+            key="providers_unreadable", severity=SEVERITY_WARN,
+            text=f"could not read which providers have credentials ({usable_reason})",
+            remedy="`polyrob doctor` and `polyrob auth list`"))
     pin = operator_provider_pin()
     live = resolve_live_provider(pin)
     sec.data.update({"usable": usable, "pin": pin, "live": live})
@@ -99,7 +112,16 @@ def _providers_section(tele: Section, now: float) -> Section:
     line = f"live provider: {live or 'NONE'}"
     if pin:
         line += f" (pin {pin}{' — dead, rerouted' if pin != live else ''})"
-    line += f"; credentialed: {', '.join(usable) if usable else 'none detected'}"
+    if live is None and not usable and usable_reason is None and not latched:
+        # No provider at all: nothing can run. This was a doctor-only alert,
+        # printed AFTER an "Health: OK" headline. (A latched sentinel already
+        # leads the list with its own CRIT.)
+        sec.health.append(HealthItem(
+            key="no_provider", severity=SEVERITY_CRIT,
+            text="NO LLM provider is configured — the agent cannot answer or run anything",
+            remedy="`polyrob auth add` (or set a provider API key), then `polyrob doctor`"))
+    line += ("; credentialed: " + (", ".join(usable) if usable
+             else f"unreadable ({usable_reason})" if usable_reason else "none detected"))
     if not sec.data["sentinel_enabled"]:
         line += "; credit sentinel DISABLED"
     sec.lines.append(line)

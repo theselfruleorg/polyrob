@@ -191,7 +191,7 @@ def _command_result(cmd, *, session_key=_ROOM_KEY):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cmd", [
-    "/trade", "/wallet", "/deploy", "/launch", "/bridge", "/dev",
+    "/trade", "/wallet", "/deploy", "/launch", "/bridge",
     "/pause", "/halt", "/resume", "/approve", "/reject",
     "/allow", "/deny", "/config", "/prefs", "/mcp", "/apps",
     "/invoices", "/settle",

@@ -59,6 +59,7 @@ ALLOWLIST = {
     "XDG_CONFIG_HOME",   # the freedesktop config root — where a systemd --user
                          # unit lives (cli/commands/service.py). An OS path, not
                          # a POLYROB setting.
+    "CREDENTIALS_DIRECTORY",  # set by systemd for a unit with LoadCredential= (116 W9.2)
     "INVOCATION_ID",     # set by systemd for every unit: "a supervisor restarts me" (077)
     "XPC_SERVICE_NAME",  # set by launchd to the job label: the same fact on macOS (077)
     "TMPDIR",            # the OS temp dir; an operator's value wins over the on-disk

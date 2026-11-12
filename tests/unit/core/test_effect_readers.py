@@ -129,7 +129,7 @@ def test_outward_counts_and_line(home):
 async def test_digest_carries_the_outward_line(home, monkeypatch):
     import cron.digest as d
     monkeypatch.setattr(d, "_ledger", lambda u, days: {})
-    monkeypatch.setattr(d, "_health_lines", lambda u, dd: [])
+    monkeypatch.setattr(d, "_health_lines", lambda u, dd, *_: [])
     _write("public", tool="publish", action="publish")
     text = await d.compose_digest("alice", data_dir=str(home))
     assert "• Outward: published 1" in text

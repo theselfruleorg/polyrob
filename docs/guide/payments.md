@@ -376,7 +376,7 @@ OFF) + a treasury (`X402_PAYMENT_RECIPIENT`).
 
 ---
 
-## 6. On-chain identity and payment-backed reputation — ERC-8004 (`modules/eip8004/`)
+## 6. On-chain identity and reputation — ERC-8004 (`modules/eip8004/`)
 
 ERC-8004 is the **trust/discovery** layer (who is this agent, can I trust it), *not* a
 payment rail — it composes with x402 (how do I pay it). Gated `EIP8004_ENABLED`
@@ -412,26 +412,21 @@ oversized document is refused, never truncated.
 > registration is confirmed, the served file carries it as
 > `attestation: "verified"` — evidence from a transaction this code signed, not a claim.
 
-### 6.2 Payment-backed reputation
+### 6.2 Reputation — read on the network
 
-With `EIP8004_PAYMENT_FEEDBACK` (default OFF), a settled invoice becomes a
-**verified-purchase** signal — but ⚠️ **only if `X402_INVOICE_ENABLED` is also on.** The
-feedback offer is raised from inside the settlement watcher's settle path
-(`SettlementWatcher._maybe_offer_payment_feedback`), and — same as
-`X402_SETTLE_ONCHAIN_DETECT` above — the watcher itself only runs when
-`X402_INVOICE_ENABLED` is on; `EIP8004_PAYMENT_FEEDBACK=true` alone offers nothing.
-On settlement of a correspondent-linked invoice the agent
-offers the payer a `ProofOfPayment`-backed feedback **authorization** (it never submits
-feedback on the payer's behalf). `submit_feedback` verifies the proof against the ledger
-— the invoice exists and is settled, the proof's `toAddress` equals the treasury, the
-`txHash` hasn't already backed a feedback (replay guard), and the caller's `agent_id`
-matches the EIP-712-signed authorization. This is the anti-sybil signal 8004 was designed
-for.
+Feedback lives on the Reputation Registry, and the agent reads it there:
+for an identity it holds, it lists the addresses that gave feedback, the count and the
+summed value, and puts apart the ones that paid a completed invoice or
+order of this agent. Any address except the identity's owner can give feedback, so
+a count is not a score. A payer address is often an exchange, so "paid" means "this
+address sent a settled payment here". If the invoice store cannot be read, the agent
+says so; it never says "none paid".
 
-> **Status:** the **Reputation** side is a local simulation — the `ReputationManager`
-> stores feedback locally and writes to no on-chain Reputation Registry. Keep
-> `EIP8004_PAYMENT_FEEDBACK` off outside evaluation. The **Identity** side (6.1 above)
-> is real: it signs and broadcasts.
+There is no local feedback API: the agent signs no feedback grant and keeps no
+feedback of its own. The **Identity** side (6.1 above) signs and broadcasts.
+When an order is delivered, the buyer's message names where to give feedback on
+network (the Reputation Registry, the network and the agentId), if the agent has an
+identity; a feedback call needs no permission from the agent.
 
 ---
 
@@ -636,9 +631,8 @@ turn's health note, read from a cache the bridge watcher refreshes — never a n
 read on the turn. An unreadable chain renders `unknown` and raises a health item; a
 stale snapshot is labelled stale.
 
-The usage bridge and ERC-8004 feedback each need their own flag
-(`USAGE_INVOICE_BRIDGE_ENABLED`, `EIP8004_ENABLED` + `EIP8004_PAYMENT_FEEDBACK`) — read
-the caveats in their sections first.
+The usage bridge needs its own flag (`USAGE_INVOICE_BRIDGE_ENABLED`) — read the caveats
+in its section first.
 
 ---
 

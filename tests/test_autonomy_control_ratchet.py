@@ -26,7 +26,7 @@ STARTERS = [
     "packs/x/polyrob_x/twitter_tool.py",    # 033: social_post, on EVERY write verb (X pack)
     "tools/controller/message_send.py",             # the `message` tool's send path
     "tools/email_tool.py",                          # D9: the email_send escape hatch
-    "core/surfaces/outbound_dispatcher.py",         # the durable outbound drain (hold)
+    "core/surfaces/outbound_queue.py",              # the durable outbound hold (drain + 7-day expiry)
 ]
 
 # `allows(` or the aliased `_allows(` — both must come from core.autonomy_control.

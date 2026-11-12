@@ -124,7 +124,7 @@ def _recall(sec: Section, mem_db: str, uid: str) -> None:
         return
     n = int(row.get("n") or 0)
     sec.data["recall"] = {"state": "ok", "rows": n}
-    sec.lines.append(f"recall: {n:,} rows")
+    sec.lines.append(f"memories: {n:,} rows")
 
 
 def _curated(sec: Section, mem_db: str, uid: str) -> None:
@@ -173,7 +173,7 @@ def _kb(sec: Section, mem_db: str, uid: str) -> None:
     names = [str(r.get("collection") or "?") for r in rows]
     sec.data["kb"] = {"state": "ok", "sources": total, "collections": names}
     if not total:
-        sec.lines.append("knowledge base: no sources indexed")
+        sec.lines.append("knowledge base: no sources")
         return
     shown = ", ".join(names[:_MAX_COLLECTIONS])
     more = f" +{len(names) - _MAX_COLLECTIONS}" if len(names) > _MAX_COLLECTIONS else ""
@@ -227,7 +227,7 @@ def _documents(sec: Section, data_dir: str, uid: str, mem_db: str) -> None:
         if sources is not None:
             indexed = sum(1 for p in knowledge if p in sources)
             data["indexed"] = indexed
-            line += f", {indexed:,} indexed"
+            line += f", {indexed:,} in KB"
     sec.data["documents"] = data
     sec.lines.append(line)
 
@@ -333,9 +333,12 @@ def _headline(sec: Section) -> str:
         if got.get("state") != "ok":
             return "—"
         return f"{int(got.get(key) or 0):,}"
-    return (f"{n('recall')} recalled · {n('episodes')} episodes · "
-            f"{n('curated')} curated · {n('kb', 'sources')} indexed · "
-            f"{n('documents')} written")
+    # Each word is the thing counted (116 W5.3): rows in the memory store are
+    # not recalls, KB sources are not "indexed" documents, and the artifact
+    # registry holds what was REGISTERED.
+    return (f"{n('recall')} memories · {n('episodes')} episodes · "
+            f"{n('curated')} curated · {n('kb', 'sources')} KB sources · "
+            f"{n('documents')} documents registered")
 
 
 def knowledge_section(user_id: str, data_dir: str,

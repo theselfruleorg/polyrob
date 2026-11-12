@@ -1,7 +1,9 @@
 """Guarded Uniswap liquidity writes. One transaction; approvals stay separate.
 
 v3: add/remove/collect. v4 (048 phase 3): lp_add of a new full-range position
-on a Pons PoolKey only — see ``tools/defi/lp_v4_verbs.py``."""
+on a Pons PoolKey, and (115 W4) lp_collect of a position's fees — from the
+wallet, or with ``account=``/``nft=`` from an NFT's account that owns the
+position — see ``tools/defi/lp_v4_verbs.py``. v4 lp_remove is not built."""
 import asyncio
 from dataclasses import dataclass, replace
 from decimal import Decimal
@@ -303,10 +305,16 @@ async def _perform(tool, p, ctx, verb):
         return tool._ar(error=err)
     if p.protocol not in ('v3', 'v4'):
         return tool._ar(error=f'unknown protocol {p.protocol!r}; v3 or v4. Nothing was broadcast.')
-    if p.protocol == 'v4' and verb != 'lp_add':
+    if p.protocol == 'v4' and verb == 'lp_remove':
         return tool._ar(error=('Uniswap v4 builds lp_add (a new full-range position on a Pons '
-                               'PoolKey) only; v4 withdrawal and fee collection are not built '
-                               '(090 R5: no exits during the window). Nothing was broadcast.'))
+                               'PoolKey) and lp_collect (the fees of a position, liquidity '
+                               'unchanged); a v4 withdrawal is not built. Nothing was broadcast.'))
+    from tools.defi import account_mode
+    v4_collect = p.protocol == 'v4' and verb == 'lp_collect'
+    if account_mode.requested(p) and not v4_collect:
+        return tool._ar(error=("account=/nft= works for lp_collect with protocol='v4' only; "
+                               "every other liquidity verb acts from the wallet. Nothing was "
+                               "broadcast."))
     # CR-L21: a deposit OPENS a position, so the scoped trade_entry pause binds
     # it; a removal or a fee collection is an exit and stays available.
     entry = verb == 'lp_add'
@@ -322,12 +330,23 @@ async def _perform(tool, p, ctx, verb):
         from core.wallet.config import WALLET_OFF_TEXT
         return tool._ar(error=WALLET_OFF_TEXT)
     signer, gate = wallet.operational_signer(), wallet.policy
+    # 115 W4: `account=` / `nft=` — the NFT's account owns the position and receives
+    # the fees; the wallet signs account.execute(PositionManager, …) as the NFT's owner.
+    held = None
+    if account_mode.requested(p):
+        held, why = account_mode.resolve(p, p.chain, signer.address, rpc=tool._account_rpc)
+        if why:
+            return tool._ar(error=why)
+    holder = held.account if held is not None else signer.address
     try:
         rail = (tool._rail_factory or EvmRail)(chain=p.chain, signer=signer)
         rpc = getattr(tool, '_lp_rpc', None) or rail._rpc
         npm = dex_registry.resolve_position_manager(p.chain, p.protocol)
         dex_registry.verify_pins(rpc, p.chain, p.protocol)
-        if p.protocol == 'v4':
+        if v4_collect:
+            from tools.defi.lp_v4_verbs import prepare_collect_v4
+            plan = prepare_collect_v4(p, rpc, holder, npm)
+        elif p.protocol == 'v4':
             from tools.defi.lp_v4_verbs import prepare_add_v4
             plan = prepare_add_v4(p, rpc, signer.address, npm, price_fn=tool._price)
         else:
@@ -341,7 +360,7 @@ async def _perform(tool, p, ctx, verb):
         from tools.controller.action_registration import (
             _is_autonomous_goal_turn, _is_forged_or_autonomous_turn)
         cap_note = ''
-        if p.protocol == 'v4':
+        if p.protocol == 'v4' and verb == 'lp_add':
             # 090 R4 caps: a refusal before a broadcast; a note on a dry run, so
             # the guard's own judgement stays visible while the cap is unset.
             from tools.defi.lp_v4_verbs import caps_refusal
@@ -350,8 +369,20 @@ async def _perform(tool, p, ctx, verb):
             if why and not p.dry_run:
                 return tool._ar(error=f'refused: {why}. RESULT: NOT SENT.')
             cap_note = f'LP caps: {why or "within LP_ETH_CAP / LP_ETH_DAILY_CAP / LP_ETH_FLOOR"}\n'
+        journal_entry, journal_skipped, guard_kw = None, '', {}
         try:
             tx = rail.build_call(to=npm, data=plan.data, value=plan.value)
+            if held is not None:
+                # J1: the journal entry rides the same account batch (a pinned JournalLog).
+                journal_entry, journal_skipped = account_mode.prepare_journal(
+                    held, signer, kind='tend', text=f'{verb} v4 position #{p.token_id} on {p.chain}',
+                    rpc=tool._account_rpc)
+                tx, acct_state = account_mode.wrap(rail, tx, held, tool._account_rpc,
+                                                   journal=journal_entry)
+                plan.intent = account_mode.intent_for(plan.intent, held, acct_state,
+                                                      journal=journal_entry is not None)
+                if tool._account_rpc is not None:
+                    guard_kw['account_rpc'] = tool._account_rpc
             from tools.defi.call_verb import intent_idempotency_key
             # The builder refreshes deadlines on retry. Key the requested
             # operation, not that clock-derived calldata, at this nonce.
@@ -367,11 +398,14 @@ async def _perform(tool, p, ctx, verb):
                 holder=signer.address, gate=gate, execution_context=ctx, tool_self=tool,
                 price_fn=tool._price, fallback_price_fn=tool._fallback_price,
                 forged_fn=_is_forged_or_autonomous_turn,
-                autonomous_ok_fn=_is_autonomous_goal_turn, liquidity_rpc=rpc)
-            header = f'{verb} on {p.chain} (Uniswap {p.protocol})\n{plan.description}{cap_note}guard: {decision.reason}; value: {decision.amount_usd}; lane: {decision.lane}\n'
+                autonomous_ok_fn=_is_autonomous_goal_turn, liquidity_rpc=rpc, **guard_kw)
+            header = (f'{verb} on {p.chain} (Uniswap {p.protocol})\n'
+                      + (account_mode.header_line(held) if held is not None else '')
+                      + f'{plan.description}{cap_note}guard: {decision.reason}; value: {decision.amount_usd}; lane: {decision.lane}\n')
             if not decision.allowed:
                 return tool._ar(content=header + 'RESULT: NOT SENT.')
-            if not decision.sim_gas_used:
+            from core.wallet.broadcast.evm import is_account_call
+            if not decision.sim_gas_used and not is_account_call(tx):
                 raise ValueError('simulation did not measure gas; refusing to broadcast unsized')
             tx = rail.size_gas(tx, decision.sim_gas_used)
             if p.dry_run:
@@ -396,6 +430,8 @@ async def _perform(tool, p, ctx, verb):
         # v4: stamp the native sent (the declared maximum — the SWEEP refund is
         # not subtracted, so the LP caps over-count, never under-count).
         extra = {'native_raw': plan.value} if p.protocol == 'v4' else {}
+        if held is not None:
+            extra['account'] = held.account
         asset, positions, detail, state = None, [], '', tx_notify.STATE_IN_FLIGHT
         receipt = None
         # CLI1: a cancel in the receipt wait or the position read-back records the
@@ -416,7 +452,7 @@ async def _perform(tool, p, ctx, verb):
                 if receipt.status == 'success':
                     state = tx_notify.STATE_CONFIRMED
                     raw = await asyncio.to_thread(rpc, 'eth_getTransactionReceipt', [tx_hash])
-                    token_id = receipt_position(plan, raw, signer.address)
+                    token_id = receipt_position(plan, raw, holder)
                     # The token-keyed book cannot represent an LP claim separately.
                     # Adding the legs would double-count previously acquired tokens;
                     # removing them on withdrawal would erase unrelated holdings.
@@ -435,7 +471,14 @@ async def _perform(tool, p, ctx, verb):
         tool._notify_tx(ctx, tx_notify.TxNotice(verb=verb, route=f'{p.chain}:{p.protocol}',
             chain=p.chain, amount_in=plan.description, usd=decision.amount_usd,
             tx_ref=tx_hash, state=state, detail=detail, ledger_recorded=True), settled=True)
-        return tool._ar(content=header + f'RESULT: {detail}\ntx: {tx_hash}')
+    journal = ''
+    if held is not None:
+        journal = account_mode.journal_line(
+            held, signer, kind='tend',
+            text=f'{verb} v4 position #{p.token_id} on {p.chain}: tx {tx_hash} ({detail})',
+            refs=(tx_hash,), entry=journal_entry, landed=state != tx_notify.STATE_REVERTED,
+            skipped=journal_skipped, rpc=tool._account_rpc)
+    return tool._ar(content=header + f'RESULT: {detail}\ntx: {tx_hash}' + journal)
 
 
 async def perform_lp_add(tool, params, execution_context=None):

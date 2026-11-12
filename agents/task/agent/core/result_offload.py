@@ -103,6 +103,17 @@ def _first_content_area(text: str, low: str):
 	return text[gt + 1:min(ends)]
 
 
+class _SavedResult:
+	"""One saved result: ``name`` is the workspace-relative path the model
+	reads it by (the pointer text), ``path`` the file on disk."""
+
+	__slots__ = ("path", "name")
+
+	def __init__(self, path, name: str):
+		self.path = path
+		self.name = name
+
+
 def _write_new_file(path, content: str) -> None:
 	"""Create ``path`` with O_EXCL|O_NOFOLLOW (mode 0600) and write ``content`` as UTF-8.
 
@@ -465,7 +476,8 @@ class ToolResultOffloadMixin:
 			)
 
 	def _write_offload_file(self, result, action_type: str = ''):
-		"""Write ``result.extracted_content`` to a NEW workspace file.
+		"""Write ``result.extracted_content`` to a NEW file in the session's
+		tool-results directory (``core/tool_results.py``).
 
 		Returns ``(path, offset_of)``: ``offset_of(n)`` is the file offset of
 		``content[n]`` — where a reader resumes after a head of *n* chars — or None
@@ -510,13 +522,18 @@ class ToolResultOffloadMixin:
 		else:
 			filename = f"{action_type}_{timestamp}_{content_hash}{file_extension}"
 
-		# Store in workspace root: the filesystem tool is workspace-only.
+		# One directory per session INSIDE the workspace (the filesystem tool is
+		# workspace-only), never the workspace root: core/tool_results.py.
+		from core.tool_results import relative_path
+		rel_path = relative_path(self.session_id, filename)
 		content_file = pm().create_file_path(
 			self.session_id,
 			"workspace",
-			filename,
+			rel_path,
 			user_id=self.user_id
 		)
+		self._prune_saved_results(content_file)   # before mkdir: it drops empty directories
+		content_file.parent.mkdir(parents=True, exist_ok=True)
 
 		# P1-2: frame the FILE content as untrusted DATA when it came from an
 		# untrusted tool, so a later `read_file` (a trusted tool, hence not
@@ -535,7 +552,23 @@ class ToolResultOffloadMixin:
 
 		# H09: create the file exclusively and never follow a symlink.
 		_write_new_file(content_file, content_to_write)
-		return content_file, _offset_mapper(content, content_to_write, body_transform)
+		return _SavedResult(content_file, rel_path), _offset_mapper(content, content_to_write, body_transform)
+
+	_last_prune_at = 0.0
+
+	def _prune_saved_results(self, content_file) -> None:
+		"""The age rule at write time, at most once an hour per process: a seat
+		with no retention ticker (a terminal session) still loses old files."""
+		import time
+		now = time.time()
+		if now - ToolResultOffloadMixin._last_prune_at < 3600:
+			return
+		ToolResultOffloadMixin._last_prune_at = now
+		try:
+			from core.tool_results import prune
+			prune(content_file.parent.parent.parent, now=now)
+		except Exception as e:
+			self.logger.warning(f"saved tool results: age sweep failed: {e}")
 
 	def _offload_one_result(self, result) -> bool:
 		"""Write ONE result's content to a workspace file and replace it with a pointer.

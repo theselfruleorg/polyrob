@@ -15,8 +15,9 @@ from typing import Any, Dict, List, Optional
 from core.event_kinds import EMAIL_DELIVERY_UNKNOWN
 from core.status_types import (  # noqa: F401
     HealthItem, MISSED_IN_SNAPSHOT, MISSED_TEXT_CHARS, SEVERITY_CRIT, SEVERITY_WARN,
+    STATE_DEGRADED,
     Section, _K_OWNER_NOTICE, _K_RUN_DEGRADED, _K_SURFACE_POLL_ERROR, _K_TOOL_DENIED,
-    _K_TOOL_TIMEOUT, _K_USER_DELIVERY, _SUPPRESSED_PREFIX, _hhmm, _payload, _tele_rows,
+    _K_TOOL_TIMEOUT, _K_USER_DELIVERY, _SUPPRESSED_PREFIX, _age, _hhmm, _payload, _tele_rows,
     snapshot_rows as _rows,
 )
 
@@ -35,6 +36,10 @@ def delivery_fact(line: str) -> Optional[str]:
 
 #: Poll faults in 24h below this are ordinary long-poll turbulence, not news.
 _POLL_ERROR_WARN_AT = 6
+
+#: 116 W3.6: an outbound row pending longer than this is a WARN — the
+#: dispatcher ticks once a second, so an hour means nothing claims it.
+_PENDING_WARN_SEC = 3600.0
 
 
 def _surface_poll_health(tele: Section) -> List[HealthItem]:
@@ -67,7 +72,8 @@ def _surface_poll_health(tele: Section) -> List[HealthItem]:
         remedy="`polyrob doctor` and the service log; usually upstream turbulence")]
 
 
-def _digest_health(user_id: str, data_dir: str) -> List[HealthItem]:
+def _digest_health(user_id: str, data_dir: str,
+                   lines: Optional[List[str]] = None) -> List[HealthItem]:
     """Is the owner digest ENABLED but has no producer scheduled?
 
     2026-09-15 prod review, C4. The delivery rail records every suppressed
@@ -79,11 +85,17 @@ def _digest_health(user_id: str, data_dir: str) -> List[HealthItem]:
 
     An unreadable cron store is reported as UNKNOWN, never as scheduled: "I
     could not look" is a different fact from "it is fine".
+
+    116 W5.9: the switch is the per-tenant pref over the env default
+    (``core.owner_digest``), and a digest job the OWNER stopped silences the
+    warning — *lines* gets "digest stopped by you <date>" instead (prod: the
+    owner stopped the job on 11-03 and was told to schedule one on every render).
     """
-    from core.runtime_paths import cron_db_path
-    from core.config_policy import AutonomyConfig
+    from core.owner_digest import digest_enabled_for
+    from core.runtime_paths import cron_db_path, prefs_home_dir
     try:
-        if not AutonomyConfig.owner_digest_enabled():
+        # The per-tenant pref over the env default — the switch the runner reads.
+        if not digest_enabled_for(user_id, prefs_home_dir()):
             return []
     except Exception as e:
         return [HealthItem(
@@ -100,11 +112,23 @@ def _digest_health(user_id: str, data_dir: str) -> List[HealthItem]:
             text=f"owner digest is enabled but the cron store is unreadable "
                  f"({type(e).__name__}) — cannot tell whether it is scheduled",
             remedy="`polyrob doctor` for the store path, then `polyrob job list`")]
+    stopped_at = None
     for row in jobs:
-        if not _payload(row).get("digest"):
+        payload = _payload(row)
+        if not payload.get("digest"):
             continue
         if str(row.get("status") or "") in ("cancelled", "done") or not row.get("enabled"):
+            # The OWNER stopped it (a seat, not the agent): that is a decision,
+            # not a fault — say it once as a fact and raise nothing.
+            note = payload.get("stopped") or {}
+            if isinstance(note, dict) and note.get("via") and note.get("via") != "agent":
+                stopped_at = max(str(stopped_at or ""), str(note.get("at") or "?"))
             continue
+        return []
+    if stopped_at:
+        if lines is not None:
+            lines.append(f"digest stopped by you {stopped_at[:10]} "
+                         f"(`polyrob job digest 'every day 08:00'` to start it again)")
         return []
     return [HealthItem(
         key="digest_unscheduled", severity=SEVERITY_WARN,
@@ -147,26 +171,30 @@ def _recent_notices(rows: List[Dict[str, Any]], *, session_id: Optional[str],
     return out
 
 
-def _missed_bodies(user_id: str, data_dir: str, suppressed: int):
-    """``(entries, left_out, unavailable_reason)`` for the undelivered owner
-    messages — the BODIES, not just the count.
+def _missed_bodies(user_id: str, data_dir: str, since_ts: float):
+    """``(entries, left_out, unavailable_reason, label)`` for the undelivered
+    owner messages — the BODIES, not just the count.
 
-    Reads the ONE query every `/missed` seat uses
-    (``core.surfaces.missed.missed_notices``) rather than carrying a second
-    marker list; a marker the rail adds shows up here for free.
+    Reads the ONE selection every `/missed` seat uses
+    (``core.surfaces.missed``) for the list AND its count, over ONE window:
+    since the owner's last `/missed`, else the snapshot window (116 W5.6 — the
+    header was a 24 h count of cap-suppressed rows over an all-time list of
+    every marker).
 
     ⚠️ That reader RAISES on an unreadable telemetry store precisely so a
     caller cannot conflate it with "nothing was missed". Here that becomes a
     NAMED reason next to an empty list — a digest told "you missed nothing" by
     a failed read is the confident-wrong class this file exists to prevent.
-    The independent `suppressed` count is computed from rows already in hand
-    and is unaffected either way.
     """
+    label = "in 24h"
     try:
         from core.surfaces import missed as missed_mod
-        rows = missed_mod.missed_notices(user_id, data_dir, n=MISSED_IN_SNAPSHOT)
+        since, label = missed_mod.missed_since(user_id, data_dir, since_ts)
+        rows = missed_mod.missed_notices(user_id, data_dir, n=MISSED_IN_SNAPSHOT,
+                                         since_ts=since)
+        total = missed_mod.missed_count(user_id, data_dir, since_ts=since)
     except Exception as e:
-        return [], 0, f"{type(e).__name__}: {e}"[:200]
+        return [], 0, f"{type(e).__name__}: {e}"[:200], label
     entries = []
     for r in rows[:MISSED_IN_SNAPSHOT]:
         text = str(r.get("text") or "")
@@ -175,10 +203,7 @@ def _missed_bodies(user_id: str, data_dir: str, suppressed: int):
         entries.append({"ts": float(r.get("ts") or 0.0),
                         "kind": str(r.get("kind") or "capped"),
                         "text": text})
-    # The reader is bounded by n, so the remainder is derived from the 24h
-    # count rather than from the (already truncated) row list.
-    left_out = max(0, int(suppressed) - len(entries))
-    return entries, left_out, None
+    return entries, max(0, int(total) - len(entries)), None, label
 
 
 def _delivery_section(user_id: str, data_dir: str, tele: Section, container: Any,
@@ -201,6 +226,10 @@ def _delivery_section(user_id: str, data_dir: str, tele: Section, container: Any
         raise RuntimeError(f"delivery rail memory unreadable ({tele.reason})")
     outcomes: Dict[str, int] = {}
     by_source: Dict[str, int] = {}
+    # 116 W6.7: a `fallback` row is one of two facts, never "delivered" —
+    # `attrs.queued` = handed to the outbox (delivery still owed), else a live
+    # sink refused the send (`core/surfaces/user_delivery.py`, the fallback emit).
+    fallback_queued = fallback_refused = 0
     rows = _tele_rows(tele, _K_USER_DELIVERY)
     for r in rows:
         o = (r["attrs"] or {}).get("outcome") or "?"
@@ -208,6 +237,11 @@ def _delivery_section(user_id: str, data_dir: str, tele: Section, container: Any
         if o == "capped":
             src = r.get("source") or "?"
             by_source[src] = by_source.get(src, 0) + 1
+        elif o == "fallback":
+            if (r["attrs"] or {}).get("queued"):
+                fallback_queued += 1
+            else:
+                fallback_refused += 1
     # D46: "cap used" must be the number the GATE counts, so the ONE predicate
     # decides it here too. Every critical/exempt-lane row was included, so the
     # figure routinely read over the cap while nothing was being denied — and
@@ -217,43 +251,61 @@ def _delivery_section(user_id: str, data_dir: str, tele: Section, container: Any
               if (r["attrs"] or {}).get("outcome") in _CONSUMED_OUTCOMES]
     consumed = len(_budgeted(_spent))
     uncounted = len(_spent) - consumed
+    # The uncapped-lane line says "sent": it counts `sent` rows only, never a
+    # queued or refused `fallback` row that also rode an uncapped lane.
+    _sent = [r for r in _spent if (r["attrs"] or {}).get("outcome") == "sent"]
+    uncapped_sent = len(_sent) - len(_budgeted(_sent))
     capped = outcomes.get("capped", 0)
     suppressed_notices = sum(
         1 for r in _tele_rows(tele, _K_OWNER_NOTICE)
         if str((r["attrs"] or {}).get("text") or "").startswith(_SUPPRESSED_PREFIX))
-    missed, missed_more, missed_unavailable = _missed_bodies(user_id, data_dir,
-                                                             suppressed_notices)
+    missed, missed_more, missed_unavailable, missed_label = _missed_bodies(
+        user_id, data_dir, float(tele.data.get("since_ts") or now - 86400))
     sec.data.update({"outcomes": outcomes, "consumed": consumed, "capped": capped,
-                     "uncounted": uncounted,
+                     "uncounted": uncounted, "uncapped_sent": uncapped_sent,
+                     "fallback_queued": fallback_queued,
+                     "fallback_refused": fallback_refused,
                      "capped_by_source": by_source, "suppressed_notices": suppressed_notices,
                      "missed": missed, "missed_more": missed_more,
                      "missed_unavailable": missed_unavailable,
+                     "missed_window": missed_label,
                      "reserved_slots": _reserved_slots(),
                      "recent_notices": _recent_notices(rows, session_id=session_id, now=now)})
     sec.lines.append(
         f"{_DELIVERY_LINE_HEAD} {consumed}/{cap} cap used, {capped} suppressed, "
-        f"{outcomes.get('fallback', 0)} fallback, {outcomes.get('no_sink', 0)} no sink, "
+        f"{fallback_queued} queued to the outbox, {fallback_refused} refused by a sink, "
+        f"{outcomes.get('no_sink', 0)} no sink, "
         f"{outcomes.get('paused', 0)} paused, "
         f"{outcomes.get('deduped', 0)} deduped, {outcomes.get('rate_limited', 0)} rate-limited, "
-        f"{outcomes.get('quiet_held', 0)} held (quiet hours)")
+        f"{outcomes.get('quiet_held', 0)} held (quiet hours) [telemetry_events.db]")
     # 061: "am I recording the conversation" — checkable on every seat. A
     # missing store is an honest line, never a zero; it is never created here.
+    # 116 W5.11: a failed read is "unavailable (<reason>)" and degrades the
+    # section — never "nothing recorded yet".
+    _tc_err = None
     try:
         from core.surfaces.owner_thread import thread_counts
         _tc = thread_counts(container, user_id, hours=24.0, data_dir=data_dir)
-    except Exception:
-        _tc = None
+    except Exception as e:
+        _tc, _tc_err = None, f"{type(e).__name__}: {str(e)[:120]}"
     sec.data["owner_thread_24h"] = _tc
-    sec.lines.append(
-        f"owner thread 24h: {_tc['out']} lines to you, {_tc['in']} from you" if _tc
-        else "owner thread: nothing recorded yet")
-    if uncounted:
+    sec.data["owner_thread_unavailable"] = _tc_err
+    if _tc_err:
+        sec.lines.append(f"owner thread 24h: unavailable ({_tc_err})")
+        sec.state = STATE_DEGRADED
+        sec.reason = sec.reason or f"owner thread unreadable ({_tc_err})"
+    else:
+        sec.lines.append(
+            f"owner thread 24h: {_tc['out']} lines to you, {_tc['in']} from you "
+            f"[owner_thread.db]" if _tc
+            else "owner thread: nothing recorded yet")
+    if uncapped_sent:
         # D46: its OWN line, never folded into "cap used". These landed and are
         # exempt from the cap by design; hiding them would make the delivered
         # total look smaller than it is.
         sec.lines.append(
-            f"plus {uncounted} delivered on an uncapped lane (critical / the "
-            f"message tool) — these do not spend the cap")
+            f"plus {uncapped_sent} sent in 24h on an uncapped lane (critical / the "
+            f"message tool) — these do not spend the cap [telemetry_events.db]")
     # The BODIES, on their own lines. ⚠️ Rendered, not merely stored: the LLM
     # digest job reads `agent_status`, which renders LINES and never touches
     # `section.data`, so a data-only field would have changed nothing for the
@@ -263,7 +315,8 @@ def _delivery_section(user_id: str, data_dir: str, tele: Section, container: Any
             f"missed owner messages: could not read them ({missed_unavailable}) "
             f"— do not report this as 'nothing missed'")
     elif missed:
-        sec.lines.append(f"missed owner messages ({len(missed) + missed_more}), newest first:")
+        sec.lines.append(f"missed owner messages ({len(missed) + missed_more} "
+                         f"{missed_label}), newest first:")
         for entry in missed:
             body = entry["text"].replace("\n", " ")
             if len(body) > 160:
@@ -288,7 +341,7 @@ def _delivery_section(user_id: str, data_dir: str, tele: Section, container: Any
             text=f"{no_sink} owner message(s) in 24h reached nobody — no chat surface "
                  f"could carry them",
             remedy="connect a chat surface (`polyrob surfaces list`), then /missed"))
-    sec.health.extend(_digest_health(user_id, data_dir))
+    sec.health.extend(_digest_health(user_id, data_dir, sec.lines))
     sec.health.extend(_surface_poll_health(tele))
     unknown_mail = len(_tele_rows(tele, EMAIL_DELIVERY_UNKNOWN))
     if unknown_mail:
@@ -387,17 +440,33 @@ def _outbound_queue_lines(sec: Section, data_dir: str, container: Any = None) ->
             q = OutboundDeliveryQueue(path)
         counts = q.counts()
         dead = q.dead_letters(limit=3)
+        stats = q.pending_stats()
     except Exception as e:
         sec.data["outbound_queue"] = None
         sec.lines.append(f"outbound queue: unavailable ({type(e).__name__}: "
                          f"{str(e)[:120]})")
         return
+    import time as _time
+    now = _time.time()
+    oldest = stats.get("oldest_pending_ts")
     sec.data["outbound_queue"] = counts
     sec.data["outbound_dead_letters"] = dead
+    sec.data["outbound_oldest_pending_ts"] = oldest
+    sec.data["outbound_delivered_7d"] = stats.get("delivered_7d", 0)
+    # 116 W3.6: "delivered" is the rows closed in the last 7 d (the window
+    # prune keeps), not a lifetime count; the oldest pending row says whether
+    # the queue moves at all.
     sec.lines.append(
-        f"outbound queue: {counts.get('pending', 0)} pending, "
-        f"{counts.get('inflight', 0)} in flight, "
-        f"{counts.get('delivered', 0)} delivered, {counts.get('dead', 0)} dead")
+        f"outbound queue: {counts.get('pending', 0)} pending"
+        + (f" (oldest pending {_age(oldest, now)})" if oldest is not None else "")
+        + f", {counts.get('inflight', 0)} in flight, "
+        f"{stats.get('delivered_7d', 0)} delivered last 7 d, {counts.get('dead', 0)} dead")
+    if oldest is not None and now - float(oldest) > _PENDING_WARN_SEC:
+        sec.health.append(HealthItem(
+            key="outbound_pending_stale", severity=SEVERITY_WARN,
+            text=f"the oldest pending outbound message waits {_age(oldest, now)} — no "
+                 f"process sent it (surface not hosted, circuit open, or an owner pause)",
+            remedy="`polyrob surfaces list` to see which surfaces run; /resume if paused"))
     n_dead = int(counts.get("dead", 0) or 0)
     if n_dead:
         for row in dead:
@@ -409,5 +478,7 @@ def _outbound_queue_lines(sec: Section, data_dir: str, container: Any = None) ->
             key="outbound_dead_letters", severity=SEVERITY_WARN,
             text=f"{n_dead} outbound message(s) were dead-lettered — the queue "
                  f"gave up and nobody received them",
-            remedy="/missed to read what was undelivered; check the surface is "
-                   "online, then re-send"))
+            # /missed reads owner notices from the event log, not this queue: the
+            # rows are the "dead letter" lines of this section (116 W3.6).
+            remedy="the delivery lines of /status name each one; check the surface "
+                   "is online (`polyrob doctor`), then re-send"))

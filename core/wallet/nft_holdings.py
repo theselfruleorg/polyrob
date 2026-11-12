@@ -3,7 +3,7 @@
 069 v4 §3: "each tick the agent checks it still owns each NFT it tracks; a lost NFT (sold, given,
 moved) is reported to its owner and dropped from its work". And the other direction: an NFT
 that ARRIVES on the treasury from a pinned collection is detected and reported ("you gave me
-POLYROB #N").
+<label> #N").
 
 Deterministic, no model turn: an ``IntervalTicker`` on the autonomy runtime, in the
 ``bridge_watcher`` pattern (reads only, signs nothing; deliberately NOT pause-gated — a paused
@@ -15,7 +15,15 @@ owner still needs to know an NFT left). On each pass, per pinned collection:
   never a log's;
 * tracked and still owned: kept; tracked and no longer owned: LOST (reported once, dropped);
   owned and not tracked: ARRIVED (reported once, tracked). An ``ownerOf`` read that fails is
-  UNKNOWN: the id stays tracked and nothing is reported — an unreadable answer is not a loss.
+  UNKNOWN: the id stays tracked and nothing is reported — an unreadable answer is not a loss;
+* 115 W7, an account kind with a sale-ready view: ``saleReadyOf`` per held id — READY FOR SALE
+  and READINESS LOST (no transfer) are reported once each; an NFT that LEAVES while ready is
+  reported as sold or moved, with its transfer's receipt facts (the pinned market's ``Sold``
+  price only when that event is in the receipt; never a guessed price);
+* 111 W9a: an NFT of a collection with a pinned market that leaves by a ``Sold`` of that market
+  (a listing the treasury signed was filled, or an offer accepted) is reported SOLD with the
+  price from the event; the open market orders (``core/wallet/market_orders.py``) are re-read
+  each pass and an order that ended (expired, cancelled) is reported once and dropped.
 
 State: ``<self tier>/agent_nft/holdings.json`` (``tracked``, ``scanned`` per collection, the
 last ``lost`` rows). The state changes only after the notice was handed to the owner rail, so a
@@ -61,6 +69,10 @@ class WatchResult:
     lost: List[Dict[str, Any]] = field(default_factory=list)
     kept: int = 0
     errors: List[str] = field(default_factory=list)
+    #: 115 W7: a held NFT whose account kind has a sale-ready view became ready for sale, or
+    #: lost its readiness with no transfer (an act through its account, or cancelReady).
+    ready: List[Dict[str, Any]] = field(default_factory=list)
+    unready: List[Dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> Dict[str, int]:
         return {"arrived": len(self.arrived), "lost": len(self.lost), "kept": self.kept,
@@ -136,7 +148,7 @@ def scan(treasury: str, *, state: Dict[str, Any], rpc_for: Callable[[str], Rpc],
     """One pass over every pinned collection; mutates *state* to the new truth and returns what
     changed. Never raises for a collection read (it lands in ``errors`` and that collection's
     tracked ids stay as they were)."""
-    from core.wallet import collection_registry, erc6551
+    from core.wallet import collection_registry
     from core.wallet.nft_account import chain_name_for_id, read_owner_of
 
     result = WatchResult()
@@ -176,24 +188,143 @@ def scan(treasury: str, *, state: Dict[str, Any], rpc_for: Callable[[str], Rpc],
             label = f"{p.journal_prefix or p.address[:10] + '…'} #{token_id}"
             if owned and key in tracked_rows:
                 result.kept += 1
+                _readiness(rpc, p, tracked_rows[key], result)
+                _identity(rpc, p, tracked_rows[key])
             elif owned:
-                account = erc6551.account_address(p.chain_id, p.address, token_id,
-                                                  salt=p.accounts[0].salt,
-                                                  implementation=p.accounts[0].implementation)
+                account, _version = p.account_of(token_id)
                 row = {"chain": chain, "chain_id": p.chain_id, "collection": p.address,
                        "token_id": token_id, "account": account, "label": label,
                        "since": float(now())}
                 tracked_rows[key] = row
                 result.arrived.append(row)
+                _readiness(rpc, p, row, None)
+                _identity(rpc, p, row)
             elif key in tracked_rows:
                 row = dict(tracked_rows.pop(key))
                 row.update({"lost_at": float(now()), "new_owner": owner})
+                if row.get("sale_ready"):
+                    row["left_while_ready"] = _departure(rpc, p, treasury, token_id, start, head)
+                elif p.erc6551p is not None:   # 111 W9a: a filled listing or an accepted offer
+                    row["left"] = _departure(rpc, p, treasury, token_id, start, head)
                 state.setdefault("lost", []).append(row)
                 state["lost"] = state["lost"][-LOST_KEEP:]
                 result.lost.append(row)
         if complete:
             scanned[ckey] = head + 1
     return result
+
+
+def _readiness(rpc: Rpc, profile, row: Dict[str, Any], result: Optional[WatchResult]) -> None:
+    """115 W7: read ``saleReadyOf`` for a held NFT whose account kind names the view; record it
+    on the row and, with *result*, report a change (ready / readiness lost with no transfer). An
+    unreadable read changes nothing and reports nothing (never "not ready")."""
+    from core.wallet import sale_acts
+    version = profile.version_for_account(int(row["token_id"]), row["account"])
+    if version is None or not version.kind.sale_ready_view:
+        return
+    try:
+        ready = sale_acts.read_sale_ready(rpc, profile.address, int(row["token_id"]))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("nft holdings watch: %s readiness unread (%s)", row.get("label"), exc)
+        return
+    before = row.get("sale_ready")
+    row["sale_ready"] = ready
+    if result is None or ready == bool(before):
+        return
+    (result.ready if ready else result.unready).append(row)
+
+
+def _identity(rpc: Rpc, profile, row: Dict[str, Any]) -> None:
+    """115 W6: the ERC-8004 identity a held NFT's account owns, for a kind whose collection names
+    identities (ERC-6551P: ``hasIdentity`` / ``agentIdOf``). The agentId is read once (the
+    collection records it at mint: ``agent_id``, None = no identity); each pass reads the
+    registry's ``ownerOf(agentId)`` (``identity_held``: the holder may move the identity out of
+    the account). An unreadable read changes nothing (``core.wallet.held_identity`` reads the
+    rows)."""
+    from core.wallet import abi, erc8004, erc8004_reputation
+    version = profile.version_for_account(int(row["token_id"]), row["account"])
+    if version is None or not version.kind.collection_iface:
+        return
+    try:
+        if "agent_id" not in row:
+            row["agent_id"] = erc8004_reputation.agent_id_of(rpc, profile.address,
+                                                             int(row["token_id"]))
+        if row["agent_id"] is None:
+            return
+        raw = rpc("eth_call", [{"to": erc8004.resolve_identity_registry(row["chain"]),
+                                "data": abi.encode_call("ownerOf", [{"type": "uint256"}],
+                                                        [int(row["agent_id"])])}, "latest"])
+        if not isinstance(raw, str) or len(raw) < 66:
+            raise ValueError(f"ownerOf({row['agent_id']}) returned {raw!r}")
+        row["identity_held"] = ("0x" + raw[-40:]).lower() == str(row["account"]).lower()
+    except Exception as exc:  # noqa: BLE001 — unknown is not "no identity"
+        logger.warning("nft holdings watch: %s identity unread (%s)", row.get("label"), exc)
+
+
+def _departure(rpc: Rpc, profile, treasury: str, token_id: int, start: int, head: int
+               ) -> Dict[str, Any]:
+    """The receipt facts of the transfer that took a READY NFT away: the transaction, its block,
+    the recipient, and the pinned market's ``Sold`` event in the same receipt when there is one
+    (the price is never guessed: a plain marketplace fill pays outside the collection)."""
+    from core.wallet import sale_acts
+    try:
+        logs = rpc("eth_getLogs", [{"address": profile.address, "fromBlock": hex(int(start)),
+                                    "toBlock": hex(int(head)),
+                                    "topics": [TOPIC_TRANSFER, _word(treasury), None,
+                                               "0x" + format(int(token_id), "064x")]}])
+        if not isinstance(logs, list) or not logs:
+            return {"error": f"no Transfer of #{token_id} from the treasury in blocks "
+                             f"{start}..{head}"}
+        last = logs[-1]
+        out: Dict[str, Any] = {"tx": last.get("transactionHash"),
+                               "block": int(str(last.get("blockNumber") or "0x0"), 16),
+                               "to": "0x" + str(last["topics"][2])[-40:], "sold": None}
+        market = profile.erc6551p.market if profile.erc6551p is not None else None
+        if market and out["tx"]:
+            receipt = rpc("eth_getTransactionReceipt", [out["tx"]]) or {}
+            for lg in receipt.get("logs") or ():
+                topics = [str(t).lower() for t in (lg.get("topics") or [])]
+                data = str(lg.get("data") or "0x").lower().removeprefix("0x")
+                if (str(lg.get("address") or "").lower() == market and len(topics) == 4
+                        and topics[0] == sale_acts.TOPIC_SOLD and int(topics[2], 16) == int(token_id)
+                        and len(data) == 4 * 64):
+                    out["sold"] = {"buyer": "0x" + data[24:64],
+                                   "currency": "0x" + data[64 + 24:128],
+                                   "price": int(data[128:192], 16),
+                                   "royalty": int(data[192:256], 16)}
+        return out
+    except Exception as exc:  # noqa: BLE001 — the facts are a courtesy; the loss stands
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+def _row_key(row: Dict[str, Any]) -> str:
+    return f"{row['chain_id']}:{row['collection']}:{row['token_id']}"
+
+
+def _seed_tokens(state: Dict[str, Any], rpc_for: Callable[[str], Rpc], user_id: str) -> Dict[str, str]:
+    """Record what each tracked account already holds (``core.wallet.nft_inherited``), once per
+    NFT: a row is marked ``tokens_seeded`` only after a COMPLETE pass, so an unreadable balance is
+    tried again on the next pass. Returns one sentence per row for its arrival notice."""
+    from core.wallet import nft_inherited
+    said: Dict[str, str] = {}
+    for key, row in (state.get("tracked") or {}).items():
+        if row.get("tokens_seeded"):
+            continue
+        try:
+            held, unread = nft_inherited.seed(row, rpc=rpc_for(row["chain"]), user_id=user_id)
+        except Exception as exc:  # noqa: BLE001 — never fail the watch for the book
+            held, unread = [], [f"{type(exc).__name__}: {exc}"]
+        if unread:
+            # Not a failed PASS (the ownership answer is good): the blind-watch alert stays quiet.
+            logger.warning("nft holdings watch: %s token balances unread (%s)", row.get("label"),
+                           "; ".join(unread))
+            said[key] = (" I could not read all of its token balances yet ("
+                         + "; ".join(unread) + "); I will try again.")
+            continue
+        row["tokens_seeded"] = True
+        said[key] = (f" It already holds {', '.join(held)}: recorded as inherited, with no cost "
+                     f"basis." if held else "")
+    return said
 
 
 def arrived_text(row: Dict[str, Any]) -> str:
@@ -203,9 +334,47 @@ def arrived_text(row: Dict[str, Any]) -> str:
 
 
 def lost_text(row: Dict[str, Any]) -> str:
+    facts = row.get("left_while_ready")
+    if facts is not None:
+        if facts.get("error"):
+            how = f"The transfer could not be read ({facts['error']})."
+        else:
+            sold = facts.get("sold")
+            currency = (sold or {}).get("currency") or ""
+            paid = ((f"the pinned market's Sold event in it names the price {sold['price']} "
+                     f"{'wei (native)' if int(currency, 16) == 0 else f'(raw units of {currency})'}, "
+                     f"royalty {sold['royalty']}, buyer {sold['buyer']}.")
+                    if sold else "no Sold event of the pinned market is in it, so I do not "
+                                 "know the price (a plain marketplace fill pays outside the "
+                                 "collection).")
+            how = f"It left in tx {facts['tx']} (block {facts['block']}); {paid}"
+        return (f"{row['label']} on {row['chain']} was SOLD OR MOVED while it was ready for sale: "
+                f"its owner is now {row['new_owner']}. {how} Its account {row['account']} went "
+                f"with it. I dropped it from my work and can no longer act from that account.")
+    sold = (row.get("left") or {}).get("sold")
+    if sold:
+        currency = sold.get("currency") or ""
+        unit = "wei (native)" if int(currency, 16) == 0 else f"(raw units of {currency})"
+        return (f"{row['label']} on {row['chain']} was SOLD on its pinned market: the market's "
+                f"Sold event in tx {row['left'].get('tx')} names the price {sold['price']} {unit}, "
+                f"royalty {sold['royalty']}, buyer {sold['buyer']}. Its account {row['account']} "
+                f"went with it. I dropped it from my work and can no longer act from that account.")
     return (f"{row['label']} on {row['chain']} is no longer mine: its owner is now "
             f"{row['new_owner']}. Its account {row['account']} went with it. I dropped it from "
             f"my work and can no longer act from that account.")
+
+
+def ready_text(row: Dict[str, Any]) -> str:
+    return (f"{row['label']} on {row['chain']} is READY FOR SALE: a plain marketplace fill may now "
+            f"move it and everything its account {row['account']} holds. I do not act through "
+            f"that account on my own while it is ready (any act ends the readiness); "
+            f"agent_nft_sale_unready ends it.")
+
+
+def unready_text(row: Dict[str, Any]) -> str:
+    return (f"{row['label']} on {row['chain']} is no longer ready for sale (readiness lost, no "
+            f"transfer): an act through its account or cancelReady ended it. A plain "
+            f"marketplace fill of it now reverts.")
 
 
 #: C8: per state file, ``{"failed": n, "alerted": bool, "last": str}`` for this process.
@@ -254,11 +423,22 @@ async def tick(container: Any = None, *, treasury: Optional[str] = None,
             result.errors.append(f"state unreadable: {exc}")
             return result
         result = await asyncio.to_thread(scan, treasury, state=state, rpc_for=rpc_for, now=now)
-        if result.arrived or result.lost:
+        seeded = await asyncio.to_thread(_seed_tokens, state, rpc_for, user_id)
+        ended = await asyncio.to_thread(_prune_orders, rpc_for, home_dir, user_id, instance_id,
+                                        result)
+        if result.arrived or result.lost or result.ready or result.unready:
             for row in result.arrived:
-                await notifier(container, user_id, arrived_text(row))
+                await notifier(container, user_id, arrived_text(row) + seeded.get(_row_key(row), ""))
             for row in result.lost:
                 await notifier(container, user_id, lost_text(row))
+            for row in result.ready:
+                await notifier(container, user_id, ready_text(row))
+            for row in result.unready:
+                await notifier(container, user_id, unready_text(row))
+        from core.wallet import market_orders
+        for row, how, why in ended:
+            if how != market_orders.MOVED:   # a sale or a move is the holdings notice above
+                await notifier(container, user_id, market_orders.ended_text(row, how, why))
         save_state(path, state)
     except Exception as exc:  # noqa: BLE001
         logger.warning("nft holdings watch: pass failed", exc_info=True)
@@ -267,6 +447,17 @@ async def tick(container: Any = None, *, treasury: Optional[str] = None,
         if health_key is not None:
             await _track_health(health_key, result, container, user_id, notifier)
     return result
+
+
+def _prune_orders(rpc_for, home_dir, user_id, instance_id, result: WatchResult) -> list:
+    """111 W9a: drop the market orders that ended; an unreadable orders file is an error of the
+    pass (named), never "no orders"."""
+    from core.wallet import market_orders
+    try:
+        return market_orders.prune(rpc_for, at=market_orders.path(home_dir, user_id, instance_id))
+    except Exception as exc:  # noqa: BLE001
+        result.errors.append(f"the market orders could not be read ({exc})")
+        return []
 
 
 async def _track_health(key: str, result: WatchResult, container, user_id, notifier) -> None:
@@ -326,6 +517,31 @@ def _book_rows(user_id: str, account: str) -> Optional[List[Dict[str, Any]]]:
             for e in rows.values()]
 
 
+def _order_lines(r: Dict[str, Any], rpc_for, home_dir, user_id, instance_id) -> List[str]:
+    """The open market orders of one held NFT, each re-read live (111 §8.3 "open orders")."""
+    from core.wallet import market_orders
+    try:
+        rows = [o for o in market_orders.open_orders(
+            at=market_orders.path(home_dir, user_id, instance_id))
+            if int(o.get("chain_id") or 0) == int(r["chain_id"])
+            and str(o.get("collection")) == r["collection"]
+            and int(o.get("token_id") or -1) == int(r["token_id"])]
+    except Exception as exc:  # noqa: BLE001 — unreadable is never "none"
+        return [f"  orders:  UNREADABLE ({exc}) — never read as none"]
+    if not rows:
+        return ["  orders:  no open market order signed by me"]
+    out = [f"  orders:  {len(rows)} open market order(s) — a listing binds transferCount, not "
+           f"readiness: I keep working while listed, but a spend below the listing's promise "
+           f"makes its fill revert"]
+    for o in rows[:5]:
+        try:
+            state, why = market_orders.status(rpc_for(o["chain"]), o)
+        except Exception as exc:  # noqa: BLE001
+            state, why = market_orders.UNKNOWN, str(exc)
+        out.append("    " + market_orders.line(o, state, why))
+    return out
+
+
 def overview(*, treasury: str, rpc_for: Optional[Callable[[str], Rpc]] = None, home_dir=None,
              user_id: Optional[str] = None, instance_id: Optional[str] = None,
              now: Callable[[], float] = time.time) -> str:
@@ -353,6 +569,10 @@ def overview(*, treasury: str, rpc_for: Optional[Callable[[str], Rpc]] = None, h
         lines.append(f"  NEW: {arrived_text(row)}")
     for row in res.lost:
         lines.append(f"  GONE: {lost_text(row)}")
+    for row in res.ready:
+        lines.append(f"  READY: {ready_text(row)}")
+    for row in res.unready:
+        lines.append(f"  READINESS LOST: {unready_text(row)}")
     for err in res.errors:
         lines.append(f"  ⚠ not checked: {err}")
     rows = sorted(state.get("tracked", {}).values(),
@@ -364,6 +584,10 @@ def overview(*, treasury: str, rpc_for: Optional[Callable[[str], Rpc]] = None, h
     for r in rows:
         lines.append(f"\n{r['label']} — {r['collection']} #{r['token_id']} on {r['chain']}")
         lines.append(f"  account: {r['account']}")
+        if "sale_ready" in r:
+            lines.append("  sale:    READY — a plain marketplace fill may move it; I hold my own "
+                         "acts through the account" if r["sale_ready"] else "  sale:    not ready")
+        lines.extend(_order_lines(r, rpc_for, home_dir, user_id, instance_id))
         try:
             rpc = rpc_for(r["chain"])
             bal = int(rpc("eth_getBalance", [r["account"], "latest"]), 16)
@@ -377,19 +601,19 @@ def overview(*, treasury: str, rpc_for: Optional[Callable[[str], Rpc]] = None, h
             approvals = erc6551.open_approvals(rpc, r["account"], profile.deploy_block, to_block=head)
             cover = f"complete: blocks {profile.deploy_block}..{head}, {'/'.join(erc6551.APPROVAL_KINDS)}"
             version = profile.version_for_account(int(r["token_id"]), r["account"])
-            polyrob = bool(version and version.is_polyrob)
+            kind = version.kind if version is not None else None
             if approvals:
                 lines.append(f"  approvals: {len(approvals)} OPEN ({cover}) — it cannot be sent until "
                              f"they are cleared (agent_nft_revoke_all)")
-                if polyrob:
-                    lines.append(f"    ⚠ {erc6551.POLYROB_FOUND_APPROVAL}")
+                if kind is not None and kind.found_approval_text:
+                    lines.append(f"    ⚠ {kind.found_approval_text}")
                 for a in approvals[:5]:
                     lines.append(f"    {a.kind} {a.contract}"
                                  + (f" #{a.token_id}" if a.token_id is not None else "")
                                  + f" → {a.spender}" + ("" if a.verified else " (unconfirmed)"))
-            elif polyrob:
-                lines.append(f"  approvals: none — {erc6551.POLYROB_NO_APPROVALS} ({cover}; "
-                             f"{erc6551.POLYROB_RESIDUALS})")
+            elif kind is not None and kind.approvals_text:
+                lines.append(f"  approvals: none — {kind.approvals_text} ({cover}; "
+                             f"{kind.residuals_text})")
             else:
                 lines.append(f"  approvals: none ({cover})")
         except Exception as exc:  # noqa: BLE001

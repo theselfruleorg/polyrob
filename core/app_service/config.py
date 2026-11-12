@@ -7,7 +7,7 @@ from core.config_policy.builder_mode import base_domain, cert_dir_for
 from core.config_policy.members import member_flag
 from core.env import bool_env, float_env, int_env
 
-RESERVED_SLUGS = frozenset({"www", "api", "apps", "console", "pub", "mail", "admin", "status",
+RESERVED_SLUGS = frozenset({"www", "api", "app", "apps", "console", "pub", "mail", "admin", "status",
                             "ns", "ns1", "ns2", "mx", "smtp", "imap", "autoconfig",
                             # the static publish host `polyrob apps install` renders
                             "static"})

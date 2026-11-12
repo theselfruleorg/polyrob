@@ -193,7 +193,8 @@ def _x402_cursor(user_id: str, data_dir: str) -> str:
     ``json_extract(metadata, '$.tenant_id')`` — NOT a ``metadata LIKE`` on the
     tenant id, which would misfire (SQLite LIKE treats ``_`` as a wildcard,
     and real tenant ids look like ``u_<hex>``)."""
-    db = os.path.join(data_dir, "database", "bot.db")
+    from core.runtime_paths import bot_db_path
+    db = bot_db_path(data_dir)
     if not os.path.exists(db):
         return "x402:none"
     return _neutral_on_missing_table(lambda: _x402_read(user_id, db), "x402:none")

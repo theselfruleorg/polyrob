@@ -4,7 +4,7 @@ The sixteen ``_authorize`` arguments (after their defaults are resolved), then
 the values the steps derive, in the order the steps derive them. Mutable on
 purpose: a step that falls through writes what a later step reads.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 
@@ -48,6 +48,14 @@ class GuardContext:
     outer_tx: Optional[dict] = None
     #: step 2b: the signer under ``via_account`` (``holder`` is then the account).
     sender: Optional[str] = None
+    #: step 3: a claim from a pinned sale — ``"claim"`` / ``"settle"`` (``core.wallet.collection_sale``).
+    sale_call: Optional[str] = None
+    #: step 3: a seller's sale act — ``(kind, arg, target)`` (``core.wallet.tx_guard_account``).
+    sale_act: Optional[tuple] = None
+    #: step 3: a buyer's call on a pinned market (``core.wallet.tx_guard_sale.BuyerAct``).
+    sale_buyer: Optional[object] = None
+    #: step 4: sentences the final allow appends to its reason (the sale hold's note).
+    notes: list = field(default_factory=list)
     #: step 5: the simulation's measurement.
     deltas: Optional[object] = None
     #: step 6: what the simulation proved about a CREATE.

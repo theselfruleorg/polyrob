@@ -60,6 +60,19 @@ def _no_nft_marketplace_integration() -> bool:
     trade_words = ("buy", "sell", "list", "bid", "offer", "sweep")
     if any("nft" in m and any(w in m for w in trade_words) for m in methods):
         return False
+    # 115 W7: the agent_nft seller verbs make an owned NFT ready, end that, and CANCEL market
+    # orders — none lists, offers, accepts, fills or sells. A verb that does flips the claim.
+    # 115 W9: ONE buy verb, agent_nft_buy (a pinned collection's own market listing, the skill
+    # text names it); 111 W9a: ONE list verb and ONE accept verb, both on that pinned market
+    # (agent_nft_sale_list, agent_nft_sale_accept). Any other buy, sell, list, offer, accept or
+    # fill verb flips the claim — an offer of the treasury's own, a Seaport or OpenSea listing.
+    import tools.agent_nft.tool as agent_nft
+    pinned_market_verbs = {"agent_nft_buy", "agent_nft_sale_list", "agent_nft_sale_accept"}
+    nft_verbs = [n.lower() for n in dir(agent_nft.AgentNftTool)
+                 if n.startswith("agent_nft_") and n not in pinned_market_verbs]
+    acquire = ("buy", "sell", "list", "bid", "offer", "accept", "fill", "sweep")
+    if any(w in m and "cancel" not in m for m in nft_verbs for w in acquire):
+        return False
     tools_dir = ROOT / "tools"
     for pattern in ("**/marketplace*.py", "**/seaport*.py", "**/reservoir*.py",
                     "**/opensea*.py", "**/blur*.py"):
@@ -191,7 +204,12 @@ CLAIMS = (
         why="a MARKETPLACE verb (Seaport, Reservoir, or similar buy/sell/list) "
             "would need to ship on defi_trade or a new tool for this claim to "
             "become false. The 2026-09-15 hold/see/send/revoke verbs do NOT "
-            "make it false -- they are not a purchase rail",
+            "make it false -- they are not a purchase rail; nor do the 115 W7 "
+            "agent_nft_sale_ready/unready/cancel_listing verbs (no order is "
+            "signed, nothing is listed). The 115 W9 agent_nft_buy and the 111 W9a "
+            "agent_nft_sale_list / agent_nft_sale_accept (a pinned collection's own "
+            "market only) are the rails the skill names; an offer verb, a Seaport/"
+            "OpenSea listing or fill, or a second buy/list/accept verb flips it",
     ),
     # goal-create-excludes-money-tools RETIRED 2026-10-23 (086 W7): treasury-trading
     # no longer explains the goal grant; trading runs only under a mandate.

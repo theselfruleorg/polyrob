@@ -180,3 +180,12 @@ def test_check_env_files_suggests_the_key_with_its_words_reordered(tmp_path):
     envfile.write_text("CORRESPONDENT_APPROVAL_REQUIRED=true\n")
     findings = check_env_files([envfile])
     assert findings and "did you mean CORRESPONDENT_REQUIRE_APPROVAL?" in findings[0], findings
+
+
+def test_retired_flag_is_named_retired_not_a_typo(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("EIP8004_PAYMENT_FEEDBACK=true\nCHAT_MODEL=x\n")
+    out = check_env_files([env])
+    assert "EIP8004_PAYMENT_FEEDBACK: retired, not read — delete the line" in out
+    assert "CHAT_MODEL: retired, not read — delete the line (use DEFAULT_MODEL)" in out
+    assert not any("typo" in f for f in out)

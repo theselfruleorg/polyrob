@@ -101,9 +101,19 @@ def _digest_key() -> bytes:
     Trusted only when this process owns the file and nobody else can read it; a
     planted, shared or unreadable key yields a process-lifetime random key
     instead (fail-open: verdicts from that process are then per-process, never
-    wrong for a different credential)."""
+    wrong for a different credential).
+
+    116 W9.2: the units run under different uids (agent, email), so each one but the
+    file's creator fell to a random key, a login the email unit saw fail was probed
+    again by the agent, and the backoff restarted at each start. systemd now hands
+    every unit that computes a digest ONE root-owned key (``LoadCredential=
+    verdicts.key:…``); ``$CREDENTIALS_DIRECTORY/verdicts.key`` is read FIRST. That
+    directory is private to the unit, so the uid check does not apply there."""
     import secrets as _secrets
     import stat as _stat
+    cred = _credential_key()
+    if cred is not None:
+        return cred
     try:
         db = data_home_db_path(_DB_NAME, env_key=_DB_ENV_KEY)
     except Exception:
@@ -148,6 +158,38 @@ def _digest_key() -> bytes:
         key = _secrets.token_bytes(32)
     _DIGEST_KEYS[path] = key
     return key
+
+
+def _credential_key() -> Optional[bytes]:
+    """The key systemd delivered (``$CREDENTIALS_DIRECTORY/verdicts.key``), or None
+    when there is none or it is not a private regular file of 32+ bytes."""
+    import stat as _stat
+    cred_dir = os.environ.get("CREDENTIALS_DIRECTORY") or ""
+    if not cred_dir:
+        return None
+    path = os.path.join(cred_dir, _DIGEST_KEY_NAME)
+    cached = _DIGEST_KEYS.get(path)
+    if cached is not None:
+        return cached
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        logger.warning("credential verdicts: the delivered key %s is unreadable (%s)", path, e)
+        return None
+    try:
+        st = os.fstat(fd)
+        data = os.read(fd, 4096).strip() if _stat.S_ISREG(st.st_mode) else b""
+        private = not (st.st_mode & 0o007)
+    finally:
+        os.close(fd)
+    if len(data) < 32 or not private:
+        logger.warning("credential verdicts: the delivered key %s is not a private key of "
+                       "32+ bytes; using the data-home key", path)
+        return None
+    _DIGEST_KEYS[path] = data
+    return data
 
 
 def credential_digest(value: Optional[str]) -> str:

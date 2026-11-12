@@ -53,8 +53,8 @@ class FakeDispatcher:
         self.board = type("B", (), {"get": staticmethod(
             lambda gid: type("G", (), {"user_id": "u1"})())})()
 
-    async def hold_inflight(self, reason):
-        self.calls.append(reason)
+    async def hold_inflight(self, reason, *, reason_kind="pause"):
+        self.calls.append((reason, reason_kind))
         if self._hangs:
             await asyncio.sleep(3600)
         return list(self._held)
@@ -112,7 +112,10 @@ async def test_a_finished_cron_task_is_left_alone():
 
 
 @pytest.mark.asyncio
-async def test_goal_runs_are_held_and_each_gets_a_terminal_event(monkeypatch):
+async def test_goal_runs_are_held_as_a_restart_and_the_drain_writes_no_second_row(monkeypatch):
+    """116 W2.4: the hold (reason_kind="restart") writes each run's ONE
+    `cut_by_restart` row (tests/unit/agents/goals/test_goal_run_endings.py); the
+    drain no longer writes its own copy."""
     recorded = []
 
     class FakeLog:
@@ -124,11 +127,9 @@ async def test_goal_runs_are_held_and_each_gets_a_terminal_event(monkeypatch):
     disp = FakeDispatcher(["g1", "g2"])
     await _handles(dispatcher=disp).drain_inflight()
 
-    assert disp.calls and "shutdown" in disp.calls[0]
-    assert [k for k, _ in recorded] == ["goal_run", "goal_run"]
-    outcomes = {kw["goal_id"]: kw["outcome"] for _, kw in recorded}
-    assert outcomes == {"g1": "cut_by_restart", "g2": "cut_by_restart"}
-    assert all(kw["user_id"] == "u1" for _, kw in recorded)
+    assert disp.calls and "shutdown" in disp.calls[0][0]
+    assert disp.calls[0][1] == "restart"
+    assert [k for k, _ in recorded if k == "goal_run"] == []
 
 
 @pytest.mark.asyncio

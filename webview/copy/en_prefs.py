@@ -84,8 +84,8 @@ PREF_WORDS = {
     "pref.digest.channel.help": "The chat app that gets the daily summary.",
     "pref.digest.quiet_hours.label": "Quiet hours",
     "pref.digest.quiet_hours.help": "Hours with no messages from the agent, as start-end, for example 23-08. Messages wait until the end.",
-    "pref.digest.timezone.label": "Your time zone",
-    "pref.digest.timezone.help": "For example Europe/Berlin. Quiet hours use it. Empty uses the server clock.",
+    "pref.owner.timezone.label": "Your time zone",
+    "pref.owner.timezone.help": "For example Europe/Berlin. Quiet hours, the agent's clock and status times use it. Empty uses the server clock.",
 
     "pref.style.verbosity.label": "How much the agent writes",
     "pref.style.verbosity.help": "Short, normal, or with full detail.",

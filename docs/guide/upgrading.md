@@ -105,6 +105,23 @@ polyrob config check
 
 ## 3. Version notes
 
+### Upgrading to 1.7.9
+
+No database migration.
+
+- **The local ERC-8004 feedback API is gone.** `POST /eip8004/reputation/authorize`, `POST /eip8004/reputation/feedback`, `POST /eip8004/reputation/query` and `GET /eip8004/reputation/{agent_id}` now answer 404. The registration file no longer lists an `EIP8004-reputation` service. Feedback lives on the Reputation Registry: give it there, and the agent reads it there.
+- **`EIP8004_PAYMENT_FEEDBACK` and `EIP8004_AGENT_PRIVATE_KEY` are gone.** A settled invoice no longer offers the payer a feedback grant, and the signer no longer has the `eip8004.feedback_auth` operation. `polyrob config check` names a line that still sets one of them as retired. You can delete `EIP8004_AGENT_PRIVATE_KEY` from your env files and from the signer's env.
+- **The `/dev` owner verb and `DEV_RAIL_SCRIPT` are gone.** The core no longer relays a message to a maintenance script. A pack can add such a verb (`owner.verbs`).
+- **`agent_nft_adopt` is gone.** There is no adopt step: when an NFT arrives, the holdings watch records the tokens its account holds as inherited holdings.
+- **The collection pin file has schema 2.** A schema-1 file still loads. `polyrob nft profile upgrade` prints the new form and its diff; `polyrob nft profile upgrade go` (as root) writes it. An account kind must prove itself by ERC-165 at `/nft trust`.
+- **The credential-verdict key can come from systemd.** A unit with `LoadCredential=verdicts.key:<file>` reads that key first, so every unit of one install shares one key. Without it, the key stays in `<data home>/verdicts.key`.
+- **A thin gas limit refuses.** A transaction that the gas limit leaves with under 20% headroom refuses with "split the call". Send it in smaller parts.
+- **`feedback_replays.db` is no longer read or backed up.** You can delete it from the data home.
+- **`/status` counts differently.** A run line prints ended runs apart from started runs, a skipped slot is not a run, and each window is 24 hours. A script that reads the status text must be checked. `polyrob doctor --audit-status` compares each count with its store.
+- **`digest.timezone` is now `owner.timezone`.** The old name still works. The value also puts your time beside UTC in status, in the agent's clock and in the schedule result.
+- **Large results are saved in a new place.** A result that is too large for the chat goes to `.tool_results/<session>/` in the run's files and is deleted after 7 days. Older saved results are not moved; you can delete them.
+- **An undelivered message is given up after 7 days.** A message that waits for a chat host for more than 7 days becomes a dead letter, and `/status` names it. A message that your `/pause` holds is not given up.
+
 ### Upgrading to 1.7.8
 
 No database migration.

@@ -4,8 +4,7 @@ from core.signer import protocol
 from tests.unit.core.signer.test_066_p2_signer_schemas import _x402
 
 @pytest.mark.parametrize("op", ["evm.send", "evm.verdict", "x402.authorize",
-                                "deposit.sweep", "venue.sign", "eip8004.feedback_auth",
-                                "journal.sign"])
+                                "deposit.sweep", "venue.sign", "journal.sign"])
 def test_paused_signer_never_dispatches_signing_operation(rig, monkeypatch, op):
     assert rig.call("pause.set", {"paused": True}, uid=0)["ok"]
     def forbidden(*args):

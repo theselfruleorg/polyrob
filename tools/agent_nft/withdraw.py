@@ -143,8 +143,8 @@ async def revoke_all(tool, params, execution_context) -> Any:
                               f"INCOMPLETE, not empty. Nothing was broadcast.")
     if not rows:
         version = profile.version_for_account(held.token_id, held.account)
-        why = (f" ({erc6551.POLYROB_NO_APPROVALS}; {erc6551.POLYROB_RESIDUALS})"
-               if version is not None and version.is_polyrob else "")
+        why = (f" ({version.kind.approvals_text}; {version.kind.residuals_text})"
+               if version is not None and version.kind.approvals_text else "")
         return tool._ar(content=(f"no open approvals on {held.account} ({held.label}) — scanned "
                                  f"blocks {profile.deploy_block}..{head}, kinds "
                                  f"{', '.join(erc6551.APPROVAL_KINDS)} (complete){why}. Nothing to revoke."))

@@ -26,6 +26,7 @@ import base64
 import json
 import logging
 import os
+import re
 from typing import Any, Dict, Optional
 
 from core.wallet import erc8004
@@ -44,6 +45,20 @@ MAX_AGENT_URI_BYTES = 16_384
 
 
 
+#: A CAIP-10 EVM account (``eip155:<chain id>:0x<40 hex>``): the file's own address fields. A
+#: chain id of five digits or more followed by ``:`` reads as a bot-token shape to the
+#: credential scrub (``46630:0x…`` on Robinhood testnet), so these are masked before the check.
+_CAIP10 = re.compile(r"eip155:\d{1,12}:0x[0-9a-fA-F]{40}(?![0-9a-fA-F])")
+
+
+def _refuse_credentials(document: Dict[str, Any]) -> None:
+    """Raise when the document carries a credential shape (the CAIP-10 addresses excepted)."""
+    from core.secret_scrub import scrub_secret_shapes
+    text = _CAIP10.sub("eip155:caip10", json.dumps(document, ensure_ascii=False))
+    if scrub_secret_shapes(text) != text:
+        raise ValueError("Registration document contains credential material")
+
+
 class AgentUriTooLarge(ValueError):
     """The encoded registration file exceeds what may go on-chain."""
 
@@ -51,13 +66,65 @@ class AgentUriTooLarge(ValueError):
 def instance_agent_uri() -> str:
     """The instance's own registration document, checked before encoding."""
     from modules.eip8004.registration import build_registration_file
-    from core.secret_scrub import scrub_secret_shapes
     base_url = os.environ.get("A2A_BASE_URL")
     document = build_registration_file(base_url or "http://localhost:9000").model_dump(exclude_none=True)
-    text = json.dumps(document, ensure_ascii=False)
-    if scrub_secret_shapes(text) != text:
-        raise ValueError("Registration document contains credential material")
+    _refuse_credentials(document)
     return build_agent_uri(document, base_url=base_url)
+
+
+def account_agent_uri(chain_id: int, account: str, *, agent_id: Optional[int] = None,
+                      registry: Optional[str] = None) -> str:
+    """The registration document for an identity an NFT's ERC-6551 ACCOUNT registers.
+
+    The instance document with two facts corrected: ``agentWallet`` names the ACCOUNT on the
+    account's own chain (the registry records the account as the agent's wallet, so a payer that
+    reads the file must find the same address), and the instance wallet's own ``registrations``
+    are left out (they belong to another identity). Always a ``data:`` URI: the hosted
+    ``/eip8004/registration.json`` serves the instance document, not this one.
+
+    115 W6: with *agent_id* and *registry* (the card published on an identity the account
+    already owns, ``setAgentURI``) ``registrations`` names exactly that entry,
+    ``eip155:<chain_id>:<registry>``, and ``trustMode`` is ``onchain``: the file IS that
+    agentId's token URI. A ``register`` cannot know its agentId before the mint: ``[]``.
+    """
+    from modules.eip8004.registration import build_registration_file
+    base_url = os.environ.get("A2A_BASE_URL")
+    document = build_registration_file(base_url or "http://localhost:9000").model_dump(exclude_none=True)
+    services = [s for s in (document.get("services") or []) if s.get("name") != "agentWallet"]
+    services.append({"name": "agentWallet", "endpoint": f"eip155:{int(chain_id)}:{account}"})
+    document["services"] = services
+    document["registrations"] = []
+    document["trustMode"] = "local"
+    if agent_id is not None and registry:
+        document["registrations"] = [{"agentId": int(agent_id),
+                                      "agentRegistry": f"eip155:{int(chain_id)}:{registry}"}]
+        document["trustMode"] = "onchain"
+    _refuse_credentials(document)
+    raw = json.dumps(document, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    uri = "data:application/json;base64," + base64.b64encode(raw).decode("ascii")
+    if len(uri.encode("utf-8")) > MAX_AGENT_URI_BYTES:
+        raise AgentUriTooLarge(
+            f"the account's registration file encodes to {len(uri)} bytes, over the "
+            f"{MAX_AGENT_URI_BYTES}-byte on-chain ceiling. It is NOT truncated.")
+    return uri
+
+
+def account_identity_note() -> str:
+    """115 W6 (B2): the quote lines of ``register_agent`` when an NFT account this treasury
+    holds already owns an identity (``core.wallet.held_identity``). It does not block: the
+    instance wallet's own entry is a second, separate identity, and the instance's registration
+    file names the account's entry so the two link."""
+    try:
+        from core.wallet.held_identity import account_identities
+        rows = account_identities()
+    except Exception as exc:  # noqa: BLE001 — unread is not "none"
+        return (f"  note: whether a held NFT account already owns an identity could not be read "
+                f"({type(exc).__name__})\n")
+    return "".join(
+        f"  note: an NFT account identity already exists: agentId {r['agent_id']} on {r['chain']}, "
+        f"owned by the account {r['account']}. This registers a SECOND, separate identity for the "
+        f"instance wallet; its registration file names the account identity, so the two link.\n"
+        for r in rows)
 
 
 def _is_public(base_url: Optional[str]) -> bool:

@@ -11,13 +11,52 @@ side effect; the path-concerns landmine).
 from __future__ import annotations
 
 import os
-from typing import Optional
+from typing import Any, Dict, Optional, Tuple
 
 
-def read_autonomy_snapshot(user_id: str, data_dir: str = "data") -> Optional[dict]:
-    """Count open goals + scheduled cron jobs for the tenant. None = hide the line."""
-    goals = 0
-    cron = 0
+def counts_from_sections(sections: Dict[str, Any], data_dir: str
+                         ) -> Tuple[Optional[int], Optional[int], Dict[str, str]]:
+    """``(open goals, enabled cron jobs, {store: reason})`` from the snapshot's
+    ``work`` and ``loops`` sections (116 W7.4) — the numbers `/status` shows.
+
+    Open goals = ``work.data["open_goals"]`` (the live statuses of
+    ``core.goal_vocab.LIVE_STATUS_ORDER``); cron jobs = ``loops.data
+    ["cron_enabled"]`` (a cancelled or disabled row is not a job). A store that
+    does not exist yet holds nothing (0, a fresh install); a store that exists
+    and could not be read is ``None`` with its reason, never 0."""
+    from core.runtime_paths import cron_db_path, goals_db_path
+    unread: Dict[str, str] = {}
+    goals: Optional[int] = 0
+    cron: Optional[int] = 0
+    if os.path.exists(goals_db_path(data_dir)):
+        work = sections.get("work")
+        open_goals = work.data.get("open_goals") if work is not None and work.available else None
+        if open_goals is None:
+            goals = None
+            unread["goals"] = (getattr(work, "reason", "") or "no open-goal list") \
+                if work is not None else "no work section"
+        else:
+            goals = len(open_goals)
+    if os.path.exists(cron_db_path(data_dir)):
+        loops = sections.get("loops")
+        enabled = loops.data.get("cron_enabled") if loops is not None and loops.available else None
+        if enabled is None:
+            cron = None
+            unread["cron"] = ((loops.data.get("cron_reason") or loops.reason or "no cron count")
+                              if loops is not None else "no loops section")
+        else:
+            cron = int(enabled)
+    return goals, cron, unread
+
+
+def read_autonomy_snapshot(user_id: str, data_dir: str = "data",
+                           sections: Optional[Dict[str, Any]] = None) -> Optional[dict]:
+    """Open goals + enabled cron jobs for the tenant, read from the snapshot's
+    ``work``/``loops`` sections (``core.status_snapshot.build_operations_sections``:
+    the cheap builder the agent's per-turn ``<operations>`` block uses, no 24h
+    telemetry read). *sections*: a caller that already holds a snapshot passes
+    its sections. None = hide the line. ``goals``/``cron`` None = unreadable;
+    ``unread`` names why (present only when something could not be read)."""
     review = False
     try:
         try:
@@ -27,39 +66,19 @@ def read_autonomy_snapshot(user_id: str, data_dir: str = "data") -> Optional[dic
         except Exception:
             review = None
 
-        from core.runtime_paths import cron_db_path, goals_db_path
-
-        cron_db = cron_db_path(data_dir)
-        if os.path.exists(cron_db):
-            try:
-                from cron.jobs import CronJobStore
-                from cron.service import CronService
-
-                cron = len(CronService(CronJobStore(cron_db)).list_jobs(user_id=user_id))
-            except Exception:
-                cron = None
-
-        goals_db = goals_db_path(data_dir)
-        if os.path.exists(goals_db):
-            try:
-                from agents.task.goals.board import GoalBoard
-
-                # C16: ``status_counts`` counts EVERY row of this tenant.
-                # ``board.list`` is the dispatcher's ``priority DESC … LIMIT``
-                # order, so the old count here was "open goals among the
-                # highest-priority 100" — a number that silently stopped
-                # growing on a busy board and read as a plateau, not a window.
-                counts = GoalBoard(goals_db).status_counts(user_id=user_id)
-                goals = sum(n for status, n in counts.items()
-                            if status not in ("done", "cancelled"))
-            except Exception:
-                goals = None
+        if sections is None:
+            from core.status_snapshot import build_operations_sections
+            sections = build_operations_sections(user_id, data_dir=data_dir)
+        goals, cron, unread = counts_from_sections(sections, data_dir)
     except Exception:
         return None
 
     if goals == 0 and cron == 0 and review is False:
         return None
-    return {"goals": goals, "cron": cron, "review": review}
+    out = {"goals": goals, "cron": cron, "review": review}
+    if unread:
+        out["unread"] = unread
+    return out
 
 
 def poll_status_bar(user_id: Optional[str]) -> Optional[dict]:

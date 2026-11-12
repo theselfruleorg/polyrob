@@ -16,6 +16,11 @@ from tools.code_exec.result import ExecutionResult
 SPEC = {"path": "jobs/collect.py"}
 
 
+def _armed(spec=None, **more):
+    """The spec as the service stores it: with the file's content pinned."""
+    return S.checked_script({**(spec or SPEC), **more})
+
+
 def _job(payload):
     return CronJob(id="j1", user_id="alice", task="t", schedule_spec="30m", next_run_at=None,
                    payload=payload)
@@ -103,7 +108,7 @@ class _Backend:
 async def test_the_request_is_one_bounded_run_in_the_workspace(workspace):
     (workspace / "jobs" / "collect.py").write_text("print('3 rows')")
     backend = _Backend(ExecutionResult(stdout="3 rows\n", exit_code=0))
-    ok, text = await S.call_script({**SPEC, "args": ["--n", "3"], "timeout_s": 45},
+    ok, text = await S.call_script(_armed(args=["--n", "3"], timeout_s=45),
                                    backend_factory=lambda: backend)
     assert (ok, text) == (True, "3 rows")
     req = backend.requests[0]
@@ -119,7 +124,7 @@ async def test_the_request_is_one_bounded_run_in_the_workspace(workspace):
 ])
 async def test_a_bad_exit_or_a_timeout_is_a_failure_with_the_reason(workspace, result, needle):
     (workspace / "jobs" / "collect.py").write_text("x")
-    ok, text = await S.call_script(SPEC, backend_factory=lambda: _Backend(result))
+    ok, text = await S.call_script(_armed(), backend_factory=lambda: _Backend(result))
     assert ok is False and needle in text and text.startswith("jobs/collect.py: ")
     if result.stderr:
         assert "Traceback: boom" in text and "partial" in text
@@ -144,11 +149,11 @@ async def test_a_real_script_runs_from_the_workspace_root(workspace):
     (workspace / "jobs" / "collect.py").write_text(
         "import os, sys\nopen('out.txt', 'w').write(sys.argv[1])\n"
         "print('ALERT', os.path.basename(os.getcwd()))\nsys.exit(int(sys.argv[2]))\n")
-    ok, text = await S.call_script({**SPEC, "args": ["hello world", "0"]},
+    ok, text = await S.call_script(_armed(args=["hello world", "0"]),
                                    backend_factory=LocalSubprocessBackend)
     assert (ok, text) == (True, "ALERT project")
     assert (workspace / "out.txt").read_text() == "hello world"
-    ok, text = await S.call_script({**SPEC, "args": ["x", "4"]},
+    ok, text = await S.call_script(_armed(args=["x", "4"]),
                                    backend_factory=LocalSubprocessBackend)
     assert ok is False and "exit code 4" in text
 
@@ -171,7 +176,7 @@ async def test_delivery_follows_deliver_on(workspace, monkeypatch, result, deliv
         sent.append((text, kw))
         return True
     monkeypatch.setattr("cron.delivery.deliver_result", deliver)
-    job = _job({"script": {**SPEC, "deliver_on": deliver_on}, "deliver": "telegram"})
+    job = _job({"script": _armed(deliver_on=deliver_on), "deliver": "telegram"})
     ok, why = await S.run_script_job(None, job, backend_factory=lambda: _Backend(result))
     assert ok is result.ok and bool(sent) is delivered
     assert why == ("script_delivered" if delivered else "script")
@@ -317,3 +322,84 @@ async def test_the_tool_refuses_a_script_where_code_cannot_run(tmp_path, workspa
         CronScheduleAction(task="collect the rows", schedule="15m", script=SPEC),
         execution_context=_ctx())
     assert "disabled" in res.error and not t._cron_service.list_jobs(user_id="u1")
+
+
+# -- the owner arms the content (security review H3) -----------------------------
+
+def test_the_service_pins_the_content_and_a_later_edit_keeps_the_pin(tmp_path, workspace):
+    script = workspace / "jobs" / "collect.py"
+    script.write_text("print(1)")
+    svc = CronService(CronJobStore(str(tmp_path / "cron.db")))
+    job = svc.schedule(task="collect", schedule_spec="15m", user_id="alice",
+                       payload={"script": SPEC})
+    pin = job.payload["script"]["sha256"]
+    assert pin == S.file_sha256(str(script))
+    script.write_text("print(2)")
+    svc.edit(job.id, user_id="alice", schedule_spec="20m")
+    assert svc.store.get(job.id, user_id="alice").payload["script"]["sha256"] == pin
+    svc.edit(job.id, user_id="alice", payload_updates={"script": SPEC})   # set again = re-arm
+    assert svc.store.get(job.id, user_id="alice").payload["script"]["sha256"] == \
+        S.file_sha256(str(script))
+
+
+@pytest.mark.asyncio
+async def test_a_changed_or_unpinned_script_does_not_run(workspace):
+    script = workspace / "jobs" / "collect.py"
+    script.write_text("print(1)")
+    spec = _armed()
+    never = lambda: (_ for _ in ()).throw(AssertionError("must not run"))
+    script.write_text("print('other')")
+    ok, text = await S.call_script(spec, backend_factory=never)
+    assert ok is False and "changed after the owner armed" in text and "cronjob_edit" in text
+    ok, text = await S.call_script(dict(SPEC), backend_factory=never)
+    assert ok is False and "never armed" in text
+
+
+@pytest.mark.parametrize("path", ["inbound/a.py", "Inbound/x/run.sh"])
+def test_a_received_file_is_never_a_script(path):
+    with pytest.raises(S.ScriptJobError, match="received files"):
+        S.validate_script({"path": path})
+
+
+def test_the_output_is_literal_text_under_a_label():
+    text = S.script_output_text({"path": "jobs/a.py"}, "see [x](https://e.example) ```")
+    fence = "`" * 3
+    assert text.startswith("script jobs/a.py printed:\n" + fence + "\n")
+    assert text.endswith("\n" + fence) and text.count(fence) == 2
+
+
+@pytest.mark.asyncio
+async def test_only_an_owner_turn_sets_a_script(tmp_path, workspace, monkeypatch):
+    from tools import goal_tools
+    from tools.cronjob_tools import CronEditAction, CronScheduleAction
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
+    (workspace / "jobs" / "collect.py").write_text("print(1)")
+    t = _tool(tmp_path)
+    ask = CronScheduleAction(task="collect the rows", schedule="15m",
+                             script={**SPEC, "sha256": "0" * 64})
+
+    monkeypatch.setattr(goal_tools, "owner_seat_turn", lambda c: False)
+    res = await t.cronjob_schedule(ask, execution_context=_ctx())
+    assert res.error and "owner turn" in res.error
+    assert not t._cron_service.list_jobs(user_id="u1")
+
+    monkeypatch.setattr(goal_tools, "owner_seat_turn", lambda c: True)
+    res = await t.cronjob_schedule(ask, execution_context=_ctx())
+    assert res.error is None, res.error
+    job = t._cron_service.list_jobs(user_id="u1")[0]
+    # The caller's own hash is dropped: the pin is the file as it is now.
+    assert job.payload["script"]["sha256"] == S.file_sha256(str(workspace / "jobs" / "collect.py"))
+
+    monkeypatch.setattr(goal_tools, "owner_seat_turn", lambda c: False)
+    res = await t.cronjob_edit(CronEditAction(job_id=job.id, script=SPEC), execution_context=_ctx())
+    assert res.error and "owner turn" in res.error
+    res = await t.cronjob_edit(CronEditAction(job_id=job.id, script={}), execution_context=_ctx())
+    assert res.error is None      # removing the script needs no owner
+
+
+def test_the_owner_seat_names_the_script():
+    from core.rules_sweep import rail_instruction_lines
+    lines = rail_instruction_lines("collect", {"script": {"path": "jobs/a.py", "args": ["-n", "3"],
+                                                          "sha256": "ab" * 32}})
+    assert lines[0].startswith("runs a script, no model: jobs/a.py -n 3 (content pin abababababab")
+    assert not rail_instruction_lines("collect", {})[0].startswith("runs a script")

@@ -124,11 +124,11 @@ async def test_insufficient_balance_is_refused(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_v4_builds_a_full_range_mint_only():
-    # 048 phase 3 (core handoff W6): v4 exits are not built (090 R5).
+async def test_v4_builds_a_full_range_mint_and_a_fee_collect_only():
+    # 048 phase 3 (core handoff W6): a v4 withdrawal is not built; 115 W4 builds the
+    # fee collect (tests/unit/tools/defi/test_lp_v4_collect.py).
     t, _ = tool()
-    assert 'lp_add' in (await t.lp_remove(LpRemoveParams(chain="robinhood", token_id=42, protocol='v4'))).error
-    assert 'lp_add' in (await t.lp_collect(LpCollectParams(chain="robinhood", token_id=42, protocol='v4'))).error
+    assert 'withdrawal is not built' in (await t.lp_remove(LpRemoveParams(chain="robinhood", token_id=42, protocol='v4'))).error
     assert 'unknown protocol' in (await t.lp_add(add(protocol='v5'))).error
 
 

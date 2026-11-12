@@ -2,7 +2,7 @@
 
 Split out of ``modules/x402/settlement_watcher.py`` (S6, 2026-08-29). A mixin over
 ``SettlementWatcher`` — it relies on the host for ``task_agent``, ``_db``, the injection
-seams (``_rpc_call``/``_usdc_addr``/``_goal_board_override``/``_reputation_manager_override``)
+seams (``_rpc_call``/``_usdc_addr``/``_goal_board_override``)
 and the module ``logger``; behaviour is byte-identical to the pre-split class.
 """
 from core.runtime_paths import goals_db_path
@@ -142,20 +142,6 @@ class SettlementNotifyMixin:
             "Continue the work this payment was for, or acknowledge and close it out."
         )
         outcome = await self._deliver_session_notice(inv, text, "payment_settled")
-        if outcome == "correspondent":
-            # Task 15 (Phase 4): the settlement notice's target IS an
-            # identifiable payer (an ACTIVE correspondent channel) — exactly
-            # the anti-sybil "who paid" signal ERC-8004 payment-backed
-            # feedback needs. Fail-open: an 8004 error must NEVER affect the
-            # settlement notice above (already delivered by this point).
-            try:
-                await self._maybe_offer_payment_feedback(
-                    inv, inv.get("session_id") or "", inv.get("correspondent_ref"))
-            except Exception:
-                logger.warning(
-                    "settlement watcher: eip8004 payment-feedback hook failed "
-                    "for %s (fail-open, settlement unaffected)",
-                    inv.get("request_id"), exc_info=True)
         owner_text = (f"Invoice {inv['request_id']} SETTLED: ${amount:.2f} received"
                       + (f" (tx {inv['transaction_hash']})" if inv.get("transaction_hash") else "")
                       + ".")

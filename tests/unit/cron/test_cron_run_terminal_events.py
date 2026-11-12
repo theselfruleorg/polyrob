@@ -126,3 +126,76 @@ async def test_a_cancelled_tick_gives_the_row_back_at_once(tmp_path, log):
     with pytest.raises(asyncio.CancelledError):
         await t
     assert store.get("exit0001").status == "scheduled"
+
+
+# --- 116 W2.1: done() after every action errored ------------------------------
+
+def _agent_job(**kw):
+    base = dict(id="err00001", task="read the inbox", schedule_spec="30m", user_id="alice",
+                next_run_at=None, one_shot=True, skip_memory=True,
+                max_duration_seconds=180, payload=kw.pop("payload", {}), created_at=None)
+    base.update(kw)
+    return CronJob(**base)
+
+
+class _Agent:
+    async def create_session(self, *, user_id, request):
+        return {"id": "sess-err"}
+
+
+async def _run_all_errored(tmp_path, monkeypatch, *, errored=True, payload=None):
+    from agents.task.runtime.run_outcome import RunOutcome
+    from cron.runner import make_agent_runner
+    monkeypatch.setenv("CRON_RUN_LOOP", "true")
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "absent" / "bot.db"))
+
+    async def fake_run(*a, **k):
+        return RunOutcome(session_id="sess-err", status="ok", done_called=True,
+                          done_text="nothing new", user_messages=[],
+                          all_actions_errored=errored)
+    monkeypatch.setattr("cron.runner._run_task_to_outcome", fake_run)
+    job = _agent_job(payload=payload or {})
+    ok = await make_agent_runner(_Agent(), data_dir=str(tmp_path))(job)
+    return ok, job
+
+
+def _last_terminal(log, job_id="err00001"):
+    rows = [r for r in log.query(kind="cron_run")
+            if r["attrs"].get("job_id") == job_id and r["attrs"].get("outcome") != "started"]
+    return rows[-1]["attrs"]
+
+
+@pytest.mark.asyncio
+async def test_all_errored_done_is_recorded_only_in_dry_mode(tmp_path, monkeypatch, log):
+    import cron.runner as cr
+    assert cr.ALL_ERRORED_FAILS is False      # the dry day: record, do not fail
+    ok, job = await _run_all_errored(tmp_path, monkeypatch,
+                                     payload={"expect": {"idle_ok": True}})
+    a = _last_terminal(log)
+    assert ok is True and a["outcome"] == "done"
+    assert a["all_errored_verdict"] is True
+    assert a["verified"] is True              # dry mode leaves idle_ok as it was
+    assert job.run_note["outcome"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_all_errored_done_fails_once_switched_on(tmp_path, monkeypatch, log):
+    import cron.runner as cr
+    monkeypatch.setattr(cr, "ALL_ERRORED_FAILS", True)
+    ok, job = await _run_all_errored(tmp_path, monkeypatch,
+                                     payload={"expect": {"idle_ok": True}})
+    a = _last_terminal(log)
+    assert ok is False and a["outcome"] == "failed"
+    assert a["reason"] == cr.ALL_ERRORED_REASON
+    assert a["all_errored_verdict"] is True
+    assert a["verified"] is False             # idle_ok no longer verifies such a run
+    assert job.run_note == {"outcome": "failed", "reason": cr.ALL_ERRORED_REASON,
+                            "report": job.run_note["report"]}
+
+
+@pytest.mark.asyncio
+async def test_a_clean_done_carries_no_all_errored_verdict(tmp_path, monkeypatch, log):
+    ok, _job_ = await _run_all_errored(tmp_path, monkeypatch, errored=False)
+    a = _last_terminal(log)
+    assert ok is True and a["outcome"] == "done"
+    assert "all_errored_verdict" not in a

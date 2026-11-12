@@ -12,8 +12,10 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from typing import Any, Dict, List, Optional
 
+from core.cron_expect import MISSED as RUN_MISSED, RUN_EFFECTS, run_effect
 from core.event_kinds import RESOURCE_HOLD
 from core.status_types import (  # noqa: F401
     HealthItem, SEVERITY_CRIT, SEVERITY_WARN, Section, _K_AUTONOMY_STARTED,
@@ -21,6 +23,7 @@ from core.status_types import (  # noqa: F401
     _PAUSE_HONOURED_OUTCOMES, _age, _hhmm, _tele_rows, _telemetry_db_path, snapshot_rows
     as _rows,
 )
+from core.surfaces.tappable import read_token
 from core.status_rails import (  # noqa: F401
     _distinct_runs, _effect_violations, _external_rail_health, _rail_cost_bits,
     _rail_gate_health, _rail_verdict_line, _rail_verdicts,
@@ -113,10 +116,13 @@ def _loops_section(user_id: str, cron_db: str, tele: Section, now: float,
     window) the rail ledger, the external-rail health and loop liveness."""
     sec = Section(name="loops")
     _pause_lines(sec, user_id, tele, data_dir)
+    sec.data["started_loops"] = _read_started_loops(sec, data_dir) if tele.available else None
     _live_actor_lines(sec, user_id, cron_db, goals_db)
+    sec.data["live_actors"]["started_loops"] = sec.data["started_loops"]
     _rail_verdict_lines(sec)
     jobs = _cron_job_lines(sec, user_id, cron_db)
     _next_lines(sec, user_id, jobs, goals_db, data_dir)
+    _held_job_lines(sec, user_id, jobs, goals_db, now)
     if tele.available:
         _cron_rail_lines(sec, tele, jobs)
         # 056 WS4/WS9: an external rail the deploy cannot use is a HEALTH fact, not a
@@ -281,6 +287,14 @@ def _cron_job_lines(sec: Section, user_id: str, cron_db: str) -> List[Dict[str, 
         sec.data["cron_reason"] = f"{type(e).__name__}: {str(e)[:120]}"
         sec.lines.append(f"cron: unavailable ({sec.data['cron_reason']})")
         jobs = []
+        if os.path.exists(cron_db or ""):
+            # The store is there and the read failed: that is a fault, not a
+            # fresh install (116 W5.8).
+            sec.health.append(HealthItem(
+                key="cron_store_unreadable", severity=SEVERITY_WARN,
+                text=f"the job store cannot be read ({sec.data['cron_reason']}) — "
+                     f"the job list and the next runs are unknown",
+                remedy="`polyrob doctor` (file permissions, a locked or damaged cron.db)"))
     if "cron_reason" not in sec.data:
         enabled = [j for j in jobs if int(j.get("enabled") or 0)]
         upcoming = sorted(j["next_run_at"] for j in enabled if j.get("next_run_at"))
@@ -299,7 +313,7 @@ def _cron_job_lines(sec: Section, user_id: str, cron_db: str) -> List[Dict[str, 
             for j in sorted(enabled, key=lambda j: str(j.get("next_run_at") or "~"))]
         line = f"cron: {len(enabled)} enabled / {len(jobs) - len(enabled)} disabled"
         if upcoming:
-            line += f"; next {upcoming[0][:16]}"
+            line += f"; next {_when_text(upcoming[0])}"
         sec.lines.append(line)
     return jobs
 
@@ -308,15 +322,24 @@ def _cron_job_lines(sec: Section, user_id: str, cron_db: str) -> List[Dict[str, 
 NEXT_DEFAULT = 5
 
 
-def autonomy_idle_reason() -> Optional[str]:
+def autonomy_gates(started_loops: Optional[List[str]] = None) -> tuple:
+    """``(cron_on, goals_on)``. The loops a LIVE process recorded starting win;
+    this process's own gates are read only for a loop no live process named —
+    they are a fact of the RENDERING process (a shell, a doctor run), not of
+    the service. Raises when a gate cannot be read."""
+    from core.config_policy import AutonomyConfig
+    started = set(started_loops or ())
+    return ("cron" in started or bool(AutonomyConfig.cron_enabled()),
+            "goals" in started or bool(AutonomyConfig.goals_enabled()))
+
+
+def autonomy_idle_reason(started_loops: Optional[List[str]] = None) -> Optional[str]:
     """``"autonomy is off"`` when neither the scheduler nor the goal loop is on,
     else ``None``. The ONE reader the headline (``status_render``) and the Next
     list share, so a seat never says RUNNING over loops that are off. A gate
     that cannot be read is named, never read as on."""
-    from core.config_policy import AutonomyConfig
     try:
-        cron_on = bool(AutonomyConfig.cron_enabled())
-        goals_on = bool(AutonomyConfig.goals_enabled())
+        cron_on, goals_on = autonomy_gates(started_loops)
     except Exception as e:
         return f"autonomy state unreadable ({type(e).__name__})"
     if not cron_on and not goals_on:
@@ -349,7 +372,8 @@ def _job_name(job: Dict[str, Any]) -> str:
 
 def next_runs(user_id: str, jobs: List[Dict[str, Any]], cron_reason: Optional[str],
               goals_db: Optional[str], *, n: int = NEXT_DEFAULT,
-              data_dir: Optional[str] = None) -> Dict[str, Any]:
+              data_dir: Optional[str] = None,
+              started_loops: Optional[List[str]] = None) -> Dict[str, Any]:
     """The next *n* runs BY NAME: enabled cron jobs by ``next_run_at`` and the
     ready-goal queue in dispatch order (priority, then age — the board's own
     ``idx_goals_ready`` order). ``none`` is ONE sentence when nothing will run
@@ -363,12 +387,11 @@ def next_runs(user_id: str, jobs: List[Dict[str, Any]], cron_reason: Optional[st
     if st.paused and "all" in st.scopes:
         out["none"] = "nothing will run: paused (everything)"
         return out
-    idle = autonomy_idle_reason()
+    idle = autonomy_idle_reason(started_loops)
     if idle:
         out["none"] = f"nothing will run: {idle}"
         return out
-    cron_on = bool(AutonomyConfig.cron_enabled())
-    goals_on = bool(AutonomyConfig.goals_enabled())
+    cron_on, goals_on = autonomy_gates(started_loops)
     cands: List[tuple] = []
     enabled = [j for j in (jobs or []) if int(j.get("enabled") or 0)]
     if cron_reason:
@@ -406,6 +429,26 @@ def next_runs(user_id: str, jobs: List[Dict[str, Any]], cron_reason: Optional[st
     return out
 
 
+def _when_text(when: Any) -> str:
+    """A job's ``next_run_at`` with the clock it is written in. A stamp with no
+    zone is the SERVER clock, which is not always UTC (116 W5.14)."""
+    text = str(when or "")
+    body = text[:16].replace("T", " ")
+    tail = text[16:]
+    if tail.endswith("Z") or "+00:00" in tail:
+        return body + " UTC"
+    if "+" in tail or "-" in tail:
+        return body + " " + tail[tail.find("+") if "+" in tail else tail.rfind("-"):]
+    from core.cron_slots import server_clock
+    return f"{body} {server_clock()}"
+
+
+def _run_length(seconds: Any) -> str:
+    """``42s`` under a minute, else whole minutes (a 40 s run is not "0m")."""
+    sec = float(seconds)
+    return f"{int(sec)}s" if sec < 60 else f"{int(sec // 60)}m"
+
+
 def next_line(nxt: Dict[str, Any]) -> str:
     """The ONE render of the Next list (status, console, digest, agent_status)."""
     if nxt.get("none") and not nxt.get("unreadable"):
@@ -414,7 +457,7 @@ def next_line(nxt: Dict[str, Any]) -> str:
         bits = []
         for it in nxt.get("items") or []:
             if it["kind"] == "job":
-                bits.append(f"{it['name']} (job, {str(it['when'])[:16].replace('T', ' ')} UTC)")
+                bits.append(f"{it['name']} (job, {_when_text(it['when'])})")
             else:
                 bits.append(f"{it['name']} (goal, when the goal loop is free)")
         line = "next: " + ("; ".join(bits) if bits else "unknown")
@@ -432,7 +475,7 @@ def _next_lines(sec: Section, user_id: str, jobs: List[Dict[str, Any]],
     """``sec.data["next"]`` and its one line (080 WS-4)."""
     try:
         nxt = next_runs(user_id, jobs, sec.data.get("cron_reason"), goals_db,
-                        data_dir=data_dir)
+                        data_dir=data_dir, started_loops=sec.data.get("started_loops"))
     except Exception as e:
         nxt = {"items": [], "none": None, "notes": [], "more": 0,
                "unreadable": [f"next runs: {type(e).__name__}: {str(e)[:80]}"]}
@@ -440,19 +483,93 @@ def _next_lines(sec: Section, user_id: str, jobs: List[Dict[str, Any]],
     sec.lines.append(next_line(nxt))
 
 
+def _held_job_lines(sec: Section, user_id: str, jobs: List[Dict[str, Any]],
+                    goals_db: Optional[str], now: float) -> None:
+    """One line per job an open question of the owner holds (116 W2.3): the job
+    does not run until the question is answered or expires, and "next" alone
+    would not say why."""
+    enabled = [j for j in jobs if int(j.get("enabled") or 0)]
+    if not enabled or not goals_db or not os.path.exists(goals_db):
+        return
+    from core.cron_expect import holding_ask
+    from core.goal_vocab import ASK_OPEN, KIND_ASK
+    try:
+        asks = _rows(goals_db, "SELECT id, title, payload FROM goals WHERE kind=? AND status=? "
+                               "AND user_id=? ORDER BY created_at", (KIND_ASK, ASK_OPEN, user_id))
+    except Exception as e:
+        sec.lines.append(f"held jobs: unavailable ({type(e).__name__}: {str(e)[:80]})")
+        sec.data["held_jobs_reason"] = f"{type(e).__name__}: {str(e)[:80]}"
+        return
+    held = []
+    for j in enabled:
+        h = holding_ask(asks, str(j.get("id") or ""), now=now)
+        if not h:
+            continue
+        held.append({"job_id": str(j.get("id") or ""), "name": _job_name(j), **h})
+        via = " (set after idle runs)" if h.get("via") == "auto" else ""
+        sec.lines.append(
+            f"job {_job_name(j)[:28]}: held by your question{via} — "
+            f"{str(h.get('question') or '')[:70]} · {read_token('/ask', h['ask_id']) or '/asks'}")
+    sec.data["held_jobs"] = held
+
+
 def _cron_rail_lines(sec: Section, tele: Section, jobs: List[Dict[str, Any]]) -> None:
     """The window's cron runs: counts, the per-job ledger, its cost, and the
     cut / cut-repeat health items. A cron job is a "job" on every line the owner
     reads (080 WS-4); the ``rails*`` data keys stay for the existing readers."""
     cron_runs = _tele_rows(tele, _K_CRON_RUN)
-    by = {}
+    by: Dict[str, int] = {}
+    effects: Dict[str, int] = {}
+    missed_jobs: Dict[str, int] = {}
     for r in cron_runs:
-        o = (r["attrs"] or {}).get("outcome") or "?"
+        a = r["attrs"] or {}
+        o = a.get("outcome") or "?"
         by[o] = by.get(o, 0) + 1
-    wakes = len(_tele_rows(tele, _K_SELF_WAKE))
-    sec.data.update({"cron_runs_window": by, "self_wakes_window": wakes})
-    sec.lines.append("24h: cron " + (", ".join(f"{k}={v}" for k, v in sorted(by.items()))
-                                     or "no runs") + f"; self-wakes={wakes}")
+        if o == "done":
+            eff = run_effect(a)
+            effects[eff] = effects.get(eff, 0) + 1
+            if eff == RUN_MISSED:
+                jid = str(a.get("job_id") or "?")
+                missed_jobs[jid] = missed_jobs.get(jid, 0) + 1
+    # A start is not an ending, and a `provider_rerouted` marker is not a run
+    # (116 W2.6): they are counted apart, and a start that no later row of its
+    # job closed is the one number that shows a lost row.
+    starts = by.pop("started", 0)
+    rerouted = by.pop("provider_rerouted", 0)
+    no_end = _starts_without_end(cron_runs, now=time.time())
+    wakes: Dict[str, int] = {}
+    for r in _tele_rows(tele, _K_SELF_WAKE):
+        a = r["attrs"] or {}
+        o = str(a.get("outcome") or "?")
+        if o == "skipped" and a.get("reason") == "budget_exhausted":
+            o = "budget"
+        wakes[o] = wakes.get(o, 0) + 1
+    sec.data.update({"cron_runs_window": by, "cron_starts_window": starts,
+                     "cron_no_end_window": no_end, "cron_effects_window": effects,
+                     "self_wakes_window": wakes.get("fired", 0),
+                     "self_wakes_by_outcome": wakes})
+    ends = []
+    for k, v in sorted(by.items()):
+        if k == "done" and effects:
+            ends.append(f"done={v} (" + ", ".join(
+                f"{name} {effects[name]}" for name in RUN_EFFECTS if effects.get(name)) + ")")
+        else:
+            ends.append(f"{k}={v}")
+    line = "24h job runs ended: " + (", ".join(ends) or "none") + f"; started={starts}"
+    if no_end:
+        line += f", {no_end} started with no end recorded"
+    if rerouted:
+        line += f"; provider rerouted ×{rerouted} (not a run)"
+    other = ", ".join(f"{k} {v}" for k, v in sorted(wakes.items()) if k != "fired")
+    line += f"; self-wakes fired={wakes.get('fired', 0)}" + (f" ({other})" if other else "")
+    sec.lines.append(line)
+    if missed_jobs:
+        names = {str(j.get("id") or ""): _job_name(j) for j in jobs}
+        sec.health.append(HealthItem(
+            key="runs_missed", severity=SEVERITY_WARN,
+            text="job said done and its check did not hold: " + "; ".join(
+                f"{names.get(jid, jid)[:28]} ×{n}" for jid, n in sorted(missed_jobs.items())[:4]),
+            remedy="`polyrob job show <id>` (what it expects), then fix the job or its `expect`"))
     # 056 WS1: the rail ledger, per enabled job — last TERMINAL outcome (done /
     # failed / cut_by_cap / cut_by_restart / held / deferred / skipped) and a
     # health item when a rail was cut. A `started` with no terminal event is
@@ -461,7 +578,7 @@ def _cron_rail_lines(sec: Section, tele: Section, jobs: List[Dict[str, Any]]) ->
     # before done() after real work, or that declared BLOCKED, is a terminal
     # outcome of its own — never folded into done or failed.
     _terminal = {"done", "failed", "partial", "blocked", "cut_by_cap", "cut_by_restart",
-                 "held", "deferred", "skipped", "provider_rerouted"}
+                 "held", "deferred", "skipped"}
     rails: Dict[str, Dict[str, Any]] = {}
     for r in cron_runs:  # newest-first
         a = r.get("attrs") or {}
@@ -472,7 +589,9 @@ def _cron_rail_lines(sec: Section, tele: Section, jobs: List[Dict[str, Any]]) ->
         o = a.get("outcome")
         if o in _terminal and "last" not in slot:
             slot["last"] = {"outcome": o, "ts": r.get("ts"), "steps": a.get("steps"),
-                            "duration_s": a.get("duration_s"), "reason": a.get("reason")}
+                            "duration_s": a.get("duration_s"), "reason": a.get("reason"),
+                            "effect": run_effect(a) if o == "done" else None,
+                            "hold": a.get("hold"), "held_by": a.get("held_by")}
         if o == "started" and "last_started" not in slot:
             slot["last_started"] = r.get("ts")
     sec.data["rails"] = rails
@@ -485,19 +604,24 @@ def _cron_rail_lines(sec: Section, tele: Section, jobs: List[Dict[str, Any]]) ->
     # admits what it could not price. A `skipped` run really did cost
     # nothing, so it prices as a true zero.
     spend_by_job: Dict[str, Dict[str, Any]] = {}
-    for r in _tele_rows(tele, _K_CRON_RUN):
+    for r in cron_runs:
         a = r["attrs"] or {}
         jid = str(a.get("job_id") or "")
-        if not jid or a.get("outcome") == "started":
+        o = a.get("outcome")
+        if not jid or o in ("started", "provider_rerouted"):
             continue
-        slot = spend_by_job.setdefault(jid, {"usd": 0.0, "runs": 0, "unpriced": 0})
+        slot = spend_by_job.setdefault(jid, {"usd": 0.0, "runs": 0, "unpriced": 0,
+                                             "skipped": 0})
+        if o == "skipped" or a.get("hold"):
+            slot["skipped"] += 1    # no model turn: not a run, and a true $0
+            continue
         slot["runs"] += 1
-        raw = a.get("spend_usd")
+        # 116 W2.6: `cost_usd` is the ledger figure and is ABSENT when it was
+        # not read. `spend_usd` reads 0.0 for a failed read too, so only a
+        # figure above zero is taken from it (a row from an older build).
+        raw = a.get("cost_usd")
         if raw is None:
-            if a.get("outcome") == "skipped":
-                continue  # a $0 skip is a real zero, not an unknown
-            slot["unpriced"] += 1
-            continue
+            raw = a.get("spend_usd") or None
         try:
             slot["usd"] += float(raw)
         except (TypeError, ValueError):
@@ -526,12 +650,21 @@ def _cron_rail_lines(sec: Section, tele: Section, jobs: List[Dict[str, Any]]) ->
         name = (j.get("task") or "")[:28].strip()
         last, ls = slot.get("last"), slot.get("last_started")
         if last and (ls is None or float(last["ts"] or 0) >= float(ls or 0)):
-            bits = [f"{name}: {last['outcome']} {_hhmm(last['ts'])}"]
+            word = last["outcome"]
+            if last.get("hold"):
+                word = "held by your question" + (
+                    " (set after idle runs)" if last["hold"] == "auto" else "")
+            elif last.get("effect"):
+                word += f" ({last['effect']})"
+            bits = [f"{name}: {word} {_hhmm(last['ts'])}"]
             if last.get("steps") is not None:
                 bits.append(f"{last['steps']} steps")
             if last.get("duration_s") is not None:
-                bits.append(f"{int(float(last['duration_s']) // 60)}m")
-            bits.extend(_rail_cost_bits(spend_by_job.get(str(j.get("id") or ""))))
+                bits.append(_run_length(last['duration_s']))
+            cost = spend_by_job.get(str(j.get("id") or "")) or {}
+            bits.extend(_rail_cost_bits(cost))
+            if cost.get("skipped"):
+                bits.append(f"{cost['skipped']} slot(s) skipped in 24h")
             sec.lines.append("job " + " · ".join(bits))
             if last["outcome"] in ("cut_by_cap", "cut_by_restart"):
                 cut.append(f"{name} {last['outcome']} at {_hhmm(last['ts'])}")
@@ -550,7 +683,7 @@ def _cron_rail_lines(sec: Section, tele: Section, jobs: List[Dict[str, Any]]) ->
             name = (j.get("task") or "")[:28].strip()
             need = longest_done.get(jid)
             repeats.append(f"{name} cut {cuts_per_job[jid]}× in 24h"
-                           + (f" (longest completed run {int(need // 60)}m)" if need else ""))
+                           + (f" (longest completed run {_run_length(need)})" if need else ""))
     if repeats:
         sec.data["rail_cut_repeat"] = repeats
         sec.health.append(HealthItem(
@@ -560,22 +693,225 @@ def _cron_rail_lines(sec: Section, tele: Section, jobs: List[Dict[str, Any]]) ->
                    "run, or narrow the job's rig (`--rig money_rail`) so its steps are shorter"))
 
 
-def _loop_lag_lines(sec: Section, latest: Dict[str, Dict[str, Any]]) -> None:
-    """102 C-13: the worst event-loop stall in the last heartbeat window. A row
-    with no value was NOT measured, and that never reads as no lag."""
-    lags = [hb["lag"] for hb in latest.values() if isinstance(hb.get("lag"), (int, float))]
-    if not lags:
-        if latest:
+#: A start this old with no ending is a lost row; a newer one may still run.
+NO_END_AFTER_SEC = 6 * 3600
+
+
+def _starts_without_end(cron_runs: List[Dict[str, Any]], *, now: float) -> int:
+    """Starts that no later row of the same job closed (rows NEWEST FIRST). The
+    newest open start of a job counts only when it is older than
+    ``NO_END_AFTER_SEC``: before that the run may still be live."""
+    open_by_job: Dict[str, Optional[float]] = {}
+    lost = 0
+    for r in reversed(cron_runs):
+        a = r.get("attrs") or {}
+        jid, o = str(a.get("job_id") or ""), a.get("outcome")
+        if not jid or o == "provider_rerouted":
+            continue
+        if o == "started":
+            if open_by_job.get(jid) is not None:
+                lost += 1
+            open_by_job[jid] = float(r.get("ts") or 0)
+        elif open_by_job.get(jid) is not None:
+            open_by_job[jid] = None
+    return lost + sum(1 for ts in open_by_job.values()
+                      if ts is not None and now - ts > NO_END_AFTER_SEC)
+
+
+#: A tick still running after this long is reported (a goal run inside a tick
+#: is long by design; a tick that never returns is a hung loop).
+TICK_STUCK_SEC = 6 * 3600
+#: This many failed ticks in a row is a loop that does no work.
+TICK_ERROR_STREAK = 3
+
+
+def latest_heartbeats(tick_rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """``{loop: heartbeat}`` from ``autonomy_tick`` rows (NEWEST FIRST): the
+    newest row per (process, loop), then per loop the newest row of a LIVE
+    process. A loop whose only rows come from a process that is gone keeps its
+    newest row with ``proc_gone=True`` — a second process (a REPL beside the
+    service) can no longer mask it, and a dead process is not "alive"."""
+    per: Dict[tuple, Dict[str, Any]] = {}
+    for r in tick_rows:
+        a = r.get("attrs") or {}
+        key = (a.get("pid"), a.get("loop") or "?")
+        if key not in per:
+            per[key] = {"ts": r["ts"], "alive": a.get("alive"), "pid": a.get("pid"),
+                        "lag": a.get("loop_lag_ms_max"), "tick_ok_at": a.get("tick_ok_at"),
+                        "tick_running_since": a.get("tick_running_since"),
+                        "tick_errors": a.get("tick_errors"), "tick_error": a.get("tick_error"),
+                        "interval_s": a.get("interval_s"), "tracked": "tick_ok_at" in a}
+    gone: Dict[Any, bool] = {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for (pid, loop), hb in per.items():   # insertion order = newest first
+        if pid not in gone:
+            gone[pid] = isinstance(pid, int) and not _pid_alive(pid)
+        hb["proc_gone"] = gone[pid]
+        cur = out.get(loop)
+        if cur is None or (cur["proc_gone"] and not hb["proc_gone"]):
+            out[loop] = hb
+    return out
+
+
+def loop_verdict(hb: Optional[Dict[str, Any]], now: float, stale_after: float) -> tuple:
+    """``(state, detail)`` for one loop — the ONE liveness rule (the headline
+    count, the health item and the host health check all call it).
+
+    ``alive`` · ``silent`` (no heartbeat) · ``dead`` (the task exited, the
+    process is gone, or the heartbeat is stale) · ``failing`` (the last
+    ``TICK_ERROR_STREAK`` ticks raised) · ``stuck`` (no completed tick within
+    two intervals and none running, or one tick running over
+    ``TICK_STUCK_SEC``). A heartbeat from a process that does not record ticks
+    (an older build during a deploy) is judged by task and age alone."""
+    if hb is None:
+        return ("silent", "no heartbeat in 24h")
+    age = _age(hb["ts"], now)
+    if hb.get("proc_gone"):
+        return ("dead", f"last heartbeat {age} ago (process {hb.get('pid')} is gone)")
+    if hb.get("alive") is False:
+        return ("dead", f"last heartbeat {age} ago (task exited)")
+    if now - float(hb["ts"]) > stale_after:
+        return ("dead", f"last heartbeat {age} ago")
+    if not hb.get("tracked"):
+        return ("alive", f"alive ({age} ago)")
+    errors = int(hb.get("tick_errors") or 0)
+    if errors >= TICK_ERROR_STREAK:
+        return ("failing", f"the last {errors} ticks failed: {hb.get('tick_error') or '?'}")
+    running = hb.get("tick_running_since")
+    hb_ts = float(hb["ts"])
+    if running:
+        if hb_ts - float(running) > TICK_STUCK_SEC:
+            return ("stuck", f"one tick has run for {_age(running, hb_ts)}")
+        return ("alive", f"alive (tick running since {_hhmm(running)})")
+    ok_at = hb.get("tick_ok_at")
+    allowed = max(stale_after, 2 * float(hb.get("interval_s") or 0))
+    if ok_at is None:
+        return (("alive", f"alive ({age} ago)") if errors == 0
+                else ("failing", f"no tick has completed: {hb.get('tick_error') or '?'}"))
+    if hb_ts - float(ok_at) > allowed:
+        return ("stuck", f"no completed tick for {_age(ok_at, hb_ts)}")
+    return ("alive", f"alive (last tick {_age(ok_at, now)} ago)")
+
+
+def loops_health(data_dir: Optional[str] = None, *, now: Optional[float] = None,
+                 window_sec: int = 86400) -> List[tuple]:
+    """``[(loop, state, detail)]`` for every loop a live process started — the
+    snapshot's liveness verdict for a caller that builds no snapshot (the host
+    health check). Raises when the telemetry store cannot be read: a caller
+    must not turn that into "healthy"."""
+    import time as _time
+    from core.env import int_env
+    now = _time.time() if now is None else now
+    rows = _rows(_telemetry_db_path(data_dir),
+                 "SELECT ts, attrs FROM telemetry_events WHERE kind=? AND ts >= ? "
+                 "ORDER BY ts DESC LIMIT 20000", (_K_AUTONOMY_TICK, now - window_sec))
+    for r in rows:
+        try:
+            r["attrs"] = json.loads(r.get("attrs") or "{}") or {}
+        except Exception:
+            r["attrs"] = {}
+    latest = latest_heartbeats(rows)
+    probe = Section(name="loops")
+    expected = _read_started_loops(probe, data_dir)
+    if expected is None:
+        expected = sorted(latest)
+    stale_after = max(900, 2 * int_env("AUTONOMY_HEARTBEAT_INTERVAL_SEC", 300))
+    return [(loop,) + loop_verdict(latest.get(loop), now, stale_after) for loop in expected]
+
+
+def loop_lag_window(tick_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """The event-loop lag over the rows' window: the maximum, the stalls over
+    1 s, the newest window's value and the blocking site of the worst stall.
+    ``measured`` is False when no row carried a value (never "no lag")."""
+    seen: set = set()
+    out: Dict[str, Any] = {"measured": False, "max_ms": 0, "stalls": 0,
+                           "latest_ms": None, "site": None}
+    for r in tick_rows:                       # newest first
+        a = r.get("attrs") or {}
+        lag = a.get("loop_lag_ms_max")
+        if not isinstance(lag, (int, float)) or isinstance(lag, bool):
+            continue
+        # One emission writes the same window on every loop's row: count it once.
+        key = (a.get("pid"), a.get("hb") if a.get("hb") is not None
+               else int(float(r.get("ts") or 0) // 5))
+        if key in seen:
+            continue
+        seen.add(key)
+        if not out["measured"]:
+            out["measured"], out["latest_ms"] = True, int(lag)
+        stalls = a.get("loop_stalls")
+        out["stalls"] += int(stalls) if isinstance(stalls, int) else (1 if lag > 1000 else 0)
+        if lag > out["max_ms"]:
+            out["max_ms"] = int(lag)
+            out["site"] = a.get("loop_stall_site") or out["site"]
+        elif out["site"] is None and a.get("loop_stall_site"):
+            out["site"] = a.get("loop_stall_site")
+    return out
+
+
+def _ms_text(ms: int) -> str:
+    return f"{ms / 1000:.1f} s" if ms >= 1000 else f"{ms} ms"
+
+
+def _loop_lag_lines(sec: Section, tick_rows: List[Dict[str, Any]]) -> None:
+    """102 C-13 / 116 W4.3: the WINDOW's worst event-loop stall (the newest
+    5-minute value alone said `max 2035 ms` on a day with 25 s stalls). A
+    window with no value was NOT measured, and that never reads as no lag."""
+    win = loop_lag_window(tick_rows)
+    if not win["measured"]:
+        if tick_rows:
             sec.lines.append("event-loop lag: not measured")
         return
-    worst = int(max(lags))
+    worst = win["max_ms"]
     sec.data["loop_lag_ms_max"] = worst
-    sec.lines.append(f"event-loop lag: max {worst} ms in the last heartbeat window")
+    sec.data["loop_lag"] = win
+    sec.lines.append(
+        f"event-loop lag: max {_ms_text(worst)} in 24h, {win['stalls']} stall(s) over 1 s "
+        f"(latest window {_ms_text(int(win['latest_ms'] or 0))})")
     if worst > 1000:
+        site = win.get("site")
         sec.health.append(HealthItem(
             key="loop_lag", severity=SEVERITY_WARN,
-            text=f"the event loop stalled for {worst} ms: every session stops for that time",
-            remedy="find `event loop stuck` in the service log; it names the blocking call"))
+            text=(f"the event loop stalled for {_ms_text(worst)} ({win['stalls']} stall(s) over "
+                  f"1 s in 24h): every session stops for that time"
+                  + (f"; blocked at {site}" if site else "")),
+            remedy=("move that call off the event loop" if site else
+                    "find `event loop stuck` in the service log; it names the blocking call")))
+
+
+def _read_started_loops(sec: Section, data_dir: Optional[str]) -> Optional[List[str]]:
+    """The loops every LIVE process started (``autonomy_started``), or None when
+    no row exists or the record cannot be read (a health item says so). Read
+    ONCE per snapshot: loop liveness, the Next list and the headline use it, so
+    a seat whose own env has autonomy off (a shell beside the service) does
+    not print IDLE over a running service (116 W4.4)."""
+    started_loops = None
+    try:
+        db = _telemetry_db_path(data_dir)
+        started_rows = _rows(
+            db, "SELECT MAX(ts) AS ts, attrs FROM telemetry_events "
+                "WHERE kind=? GROUP BY CASE WHEN json_valid(attrs) "
+                "AND json_type(attrs)='object' "
+                "AND json_extract(attrs,'$.pid') IS NOT NULL "
+                "THEN 'pid:' || json_extract(attrs,'$.pid') "
+                "ELSE 'row:' || ts END "
+                "ORDER BY ts DESC LIMIT 500", (_K_AUTONOMY_STARTED,))
+        started_loops, unreadable_rows = _live_started_loops(started_rows)
+        if unreadable_rows:
+            sec.health.append(HealthItem(
+                key="loops_expected_partial", severity=SEVERITY_WARN,
+                text=f"{unreadable_rows} autonomy_started row(s) could not be "
+                     f"parsed — whatever loops those processes started are NOT "
+                     f"being checked for liveness",
+                remedy="inspect telemetry_events.db for corrupt autonomy_started attrs"))
+    except Exception as e:
+        sec.health.append(HealthItem(
+            key="loops_expected_unreadable", severity=SEVERITY_WARN,
+            text=f"could not read the autonomy_started record ({type(e).__name__}) — "
+                 f"loop liveness is narrowed to cron/goals only, not the full set this "
+                 f"process actually started",
+            remedy="check telemetry_events.db exists and is readable"))
+    return started_loops
 
 
 def _loop_liveness_lines(sec: Section, tele: Section, now: float,
@@ -586,14 +922,9 @@ def _loop_liveness_lines(sec: Section, tele: Section, now: float,
     # Loop liveness from the supervisor heartbeat (autonomy_tick). A loop
     # that should run but has no fresh heartbeat is reported as such — a
     # dead ticker must never render identically to a healthy one.
-    latest: Dict[str, Dict[str, Any]] = {}
-    for r in _tele_rows(tele, _K_AUTONOMY_TICK):  # rows are newest-first
-        loop = (r["attrs"] or {}).get("loop") or "?"
-        latest.setdefault(loop, {"ts": r["ts"], "alive": (r["attrs"] or {}).get("alive"),
-                                 "lag": (r["attrs"] or {}).get("loop_lag_ms_max")})
+    tick_rows = _tele_rows(tele, _K_AUTONOMY_TICK)   # newest-first
+    latest = latest_heartbeats(tick_rows)
     sec.data["heartbeats"] = latest
-    sec.data["live_actors"]["loops_alive"] = {
-        loop: bool(hb.get("alive")) for loop, hb in latest.items()}
     gate_expected = []
     try:
         if AutonomyConfig.cron_enabled():  # the runtime's own gate
@@ -649,32 +980,7 @@ def _loop_liveness_lines(sec: Section, tele: Section, now: float,
     # grouping RULE lives in Python (one implementation); this is a cost
     # pre-filter that agrees with it, not a second copy of it. `LIMIT` is
     # a backstop on distinct PROCESSES, not on rows.
-    started_loops = None
-    try:
-        db = _telemetry_db_path(data_dir)
-        started_rows = _rows(
-            db, "SELECT MAX(ts) AS ts, attrs FROM telemetry_events "
-                "WHERE kind=? GROUP BY CASE WHEN json_valid(attrs) "
-                "AND json_type(attrs)='object' "
-                "AND json_extract(attrs,'$.pid') IS NOT NULL "
-                "THEN 'pid:' || json_extract(attrs,'$.pid') "
-                "ELSE 'row:' || ts END "
-                "ORDER BY ts DESC LIMIT 500", (_K_AUTONOMY_STARTED,))
-        started_loops, unreadable_rows = _live_started_loops(started_rows)
-        if unreadable_rows:
-            sec.health.append(HealthItem(
-                key="loops_expected_partial", severity=SEVERITY_WARN,
-                text=f"{unreadable_rows} autonomy_started row(s) could not be "
-                     f"parsed — whatever loops those processes started are NOT "
-                     f"being checked for liveness",
-                remedy="inspect telemetry_events.db for corrupt autonomy_started attrs"))
-    except Exception as e:
-        sec.health.append(HealthItem(
-            key="loops_expected_unreadable", severity=SEVERITY_WARN,
-            text=f"could not read the autonomy_started record ({type(e).__name__}) — "
-                 f"loop liveness is narrowed to cron/goals only, not the full set this "
-                 f"process actually started",
-            remedy="check telemetry_events.db exists and is readable"))
+    started_loops = sec.data.get("started_loops")
     if started_loops is not None:
         expected = sorted(set(started_loops) | set(gate_expected))
     else:
@@ -682,26 +988,34 @@ def _loop_liveness_lines(sec: Section, tele: Section, now: float,
     from core.env import int_env
     stale_after = max(900, 2 * int_env("AUTONOMY_HEARTBEAT_INTERVAL_SEC", 300))
     hb_bits = []
+    verdicts: Dict[str, bool] = {}
     for loop in expected:
         hb = latest.get(loop)
-        if hb is None:
-            hb_bits.append(f"{loop}: no heartbeat in 24h")
+        state, detail = loop_verdict(hb, now, stale_after)
+        verdicts[loop] = state == "alive"
+        hb_bits.append(f"{loop}: {detail}")
+        if state == "silent":
             sec.health.append(HealthItem(
                 key=f"loop_silent:{loop}", severity=SEVERITY_WARN,
                 text=f"{loop} loop: no liveness heartbeat recorded in 24h (dead, or "
                      f"this process does not emit heartbeats)",
                 remedy="check the service log (`polyrob service logs`); /restart if the "
                        "loop task exited"))
-        elif hb.get("alive") is False or now - float(hb["ts"]) > stale_after:
-            hb_bits.append(f"{loop}: last heartbeat {_age(hb['ts'], now)} ago"
-                           + ("" if hb.get("alive") else " (task exited)"))
+        elif state == "dead":
             sec.health.append(HealthItem(
                 key=f"loop_silent:{loop}", severity=SEVERITY_WARN,
-                text=f"{loop} loop looks DEAD — last heartbeat {_age(hb['ts'], now)} ago"
-                     + ("" if hb.get("alive") else " (task exited)"),
+                text=f"{loop} loop looks DEAD — {detail}",
                 remedy="/restart (or `polyrob service restart`)"))
-        else:
-            hb_bits.append(f"{loop}: alive ({_age(hb['ts'], now)} ago)")
+        elif state in ("failing", "stuck"):
+            sec.health.append(HealthItem(
+                key=f"loop_{state}:{loop}", severity=SEVERITY_WARN,
+                text=f"{loop} loop does no work — {detail}",
+                remedy="check the service log (`polyrob service logs`) for `ticker tick "
+                       "failed`; /restart if it does not recover"))
+    # The headline count uses the SAME verdict as the health items above, over
+    # the loops that should run (it counted every loop that had a row).
+    sec.data["live_actors"]["loops_alive"] = verdicts
+    sec.data["live_actors"]["loops_checked"] = bool(tele.available)
     if hb_bits:
         sec.lines.append("loops: " + "; ".join(hb_bits))
-    _loop_lag_lines(sec, latest)
+    _loop_lag_lines(sec, tick_rows)

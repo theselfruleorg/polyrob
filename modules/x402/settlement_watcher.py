@@ -84,11 +84,10 @@ from modules.x402.settlement_scan import (  # noqa: F401  (helpers re-exported f
 )
 from modules.x402.settlement_notify import SettlementNotifyMixin
 from modules.x402.settlement_subscriptions import SettlementSubscriptionsMixin
-from modules.x402.settlement_reputation import SettlementReputationMixin
 
 
 class SettlementWatcher(SettlementScanMixin, SettlementNotifyMixin,
-                        SettlementSubscriptionsMixin, SettlementReputationMixin):
+                        SettlementSubscriptionsMixin):
     """Poll pending/settled agent invoices; deliver settlement wakes."""
 
     #: ask_kind/tool_name pair identifying a durable owner ask created for a
@@ -100,8 +99,7 @@ class SettlementWatcher(SettlementScanMixin, SettlementNotifyMixin,
     _RENEWAL_ASK_TOOL = "subscription_renewal"
 
     def __init__(self, task_agent: Any, *, db=None, interval_seconds: int = 60,
-                 rpc_call=None, usdc_addr: Optional[str] = None, goal_board=None,
-                 reputation_manager=None):
+                 rpc_call=None, usdc_addr: Optional[str] = None, goal_board=None):
         """``rpc_call``/``usdc_addr`` are the on-chain-detection test seam
         (Task 11): ``rpc_call(method: str, params: list) -> Any`` returning
         the JSON-RPC ``result``. When left None (production default), a
@@ -117,18 +115,13 @@ class SettlementWatcher(SettlementScanMixin, SettlementNotifyMixin,
         file the goal dispatcher/owner CLI already use — so an injected
         instance in tests never touches a real data home.
 
-        ``reputation_manager`` (Task 15, Phase 4): test/injection seam for the
-        ERC-8004 `ReputationManager` the payment-feedback-authorization hook
-        uses (`_maybe_offer_payment_feedback`). Production lazily builds a
-        real one (`modules.eip8004.reputation.ReputationManager`), sharing
-        this watcher's `db`. 046's room seams live on the notify mixin."""
+        046's room seams live on the notify mixin."""
         self.task_agent = task_agent
         self._db = db
         self.interval_seconds = interval_seconds
         self._rpc_call = rpc_call
         self._usdc_addr = usdc_addr
         self._goal_board_override = goal_board
-        self._reputation_manager_override = reputation_manager
 
     async def tick_once(self) -> dict:
         from modules.x402 import invoicing

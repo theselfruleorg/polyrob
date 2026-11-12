@@ -1073,11 +1073,14 @@ def relative_delete_refusal(command: str, cwd: Optional[str],
         m = _OWN_WORKSPACE_RE.fullmatch(path)
         if m and (m.group(1) or "/") != "/" and _mask_own_workspace(path) == "_own_workspace_":
             return True
-        project = (os.environ.get("POLYROB_PROJECT_DIR") or "").strip()
+        from core.runtime_paths import persistent_workspace_root
+        project = persistent_workspace_root() or ""  # the ONE rule (116 W5.4)
         if project:
             proj = os.path.normpath(project)
             proj_r = os.path.realpath(proj) if resolve_links else proj
-            for p in {proj, proj_r}:
+            # the rule resolves links; the folder as the env names it still counts
+            raw = (os.environ.get("POLYROB_PROJECT_DIR") or "").strip()
+            for p in {proj, proj_r} | ({os.path.normpath(raw)} if raw else set()):
                 # Strictly BELOW the project folder (never the folder itself).
                 if p == data_root or path == p or not _under(path, p) \
                         or not _under(p, data_root):

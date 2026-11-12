@@ -164,12 +164,12 @@ class CronScheduleAction(BaseModel):
         default=None,
         description="OWNER TURN ONLY: a deterministic WRITE job, no LLM turn per tick: "
                     "{'verb': 'agent_nft.agent_nft_collection_reveal', 'params': {'chain': "
-                    "'robinhood', 'max_ids': 10, 'dry_run': false}, 'deliver_on': 'alert'}. "
+                    "'robinhood', 'dry_run': false}, 'deliver_on': 'alert'}. "
                     "It spends gas (at most AGENT_NFT_REVEAL_MAX_GAS_USD per run) while "
                     "CRON_WRITE_JOBS_ENABLED=true; without dry_run=false it only simulates.")
     script: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="A SCRIPT job — your own file runs on the schedule, no LLM turn per tick: "
+        description="OWNER TURN ONLY: a SCRIPT job — your own file runs on the schedule, no LLM turn per tick: "
                     "{'path': 'jobs/collect.py', 'args': ['--x', '1'], 'timeout_s': 120, "
                     "'deliver_on': 'alert'|'always'|'never'}. The path is a .py or .sh file "
                     "in the workspace; write and test it with run_code first. It runs in the "
@@ -256,7 +256,8 @@ class CronEditAction(BaseModel):
         default=None, description="OWNER TURN ONLY: replace the job's write verb (see "
                                   "cronjob_schedule); {} clears it.")
     script: Optional[Dict[str, Any]] = Field(
-        default=None, description="Replace the job's script (see cronjob_schedule); {} clears it.")
+        default=None, description="OWNER TURN ONLY: replace the job's script (see cronjob_schedule) "
+                                  "and pin the file as it is now; {} clears it.")
     pause_windows: Optional[List[List[Any]]] = Field(
         default=None, description="Replace the job's pause windows ([[start, end], ...]); [] clears them.")
     expect: Optional[Dict[str, Any]] = Field(
@@ -271,6 +272,18 @@ _MANDATE_JOB_OWNER_ONLY = (
 
 _KB_HOLDOUT_OWNER_ONLY = ("kb_holdout_pct refused: only a genuine owner turn may set a job's "
                           "knowledge-base holdout. Ask the owner.")
+_SCRIPT_OWNER_ONLY = (
+    "script refused: a script job runs a file on a schedule with no model turn, so only a "
+    "genuine owner turn may set it. Ask the owner (owner_ask) with the path and what the "
+    "script does; a normal job needs no such step.")
+
+
+def _unpinned(script):
+    """The spec without a caller's own ``sha256``: the service pins the file as it is now."""
+    return ({k: v for k, v in script.items() if k != "sha256"}
+            if isinstance(script, dict) else script)
+
+
 _WRITE_VERB_OWNER_ONLY = (
     "write_verb refused: a scheduled write job spends from the treasury with no model turn, "
     "so only a genuine owner turn may create or change one. Ask the owner.")
@@ -295,7 +308,8 @@ def _precheck_line(payload: dict) -> str:
     sc = payload.get("script")
     if sc:
         return (f"script (no model run): {sc.get('path')} {' '.join(sc.get('args') or [])}".rstrip()
-                + f"; timeout {sc.get('timeout_s')} s; deliver on {sc.get('deliver_on')}")
+                + f"; timeout {sc.get('timeout_s')} s; deliver on {sc.get('deliver_on')}"
+                + f"; content pin {str(sc.get('sha256') or 'none')[:12]}")
     pc = payload.get("precheck")
     if not pc:
         return "precheck: none (every run calls the model)"
@@ -354,6 +368,19 @@ def _server_clock_note() -> str:
     return "" if clock == "UTC" else f" (server clock {clock})"
 
 
+def _owner_clock_note(runs, user_id) -> str:
+    """116 W8: cron stays on the server clock; the owner's clock is shown next to it.
+    '' when the owner set no zone or it reads the same clock as the server."""
+    from core.owner_time import in_zone, owner_zone
+    runs = [r for r in runs if r is not None]
+    zone = owner_zone(user_id) if runs else None
+    local = [in_zone(r, zone) for r in runs] if zone else []
+    if not local or None in local or all(
+            lt.utcoffset() == r.astimezone().utcoffset() for lt, r in zip(local, runs)):
+        return ""
+    return f"; owner clock ({zone}): " + ", ".join(lt.strftime("%Y-%m-%d %H:%M") for lt in local)
+
+
 def _job_tools(tools: List[str]) -> list:
     from tools.goal_tools import _SELF_GOAL_BASELINE_TOOLS
     return sorted(set(tools) | set(_SELF_GOAL_BASELINE_TOOLS))
@@ -391,7 +418,9 @@ def _timing_lines(svc, job, user_id) -> list:
     the next 3 fire times, a day-of-month step note, the jobs that fire the same
     minute, and the next runs of every live job that pins one of its skills."""
     from cron.schedule import dom_step_note
-    out = [f"next runs: {_fmt_runs(_job_runs(job))}{_server_clock_note()}"] if job.next_run_at else []
+    runs = _job_runs(job)
+    out = ([f"next runs: {_fmt_runs(runs)}{_server_clock_note()}{_owner_clock_note(runs, user_id)}"]
+           if job.next_run_at else [])
     out += [dom_step_note(job.schedule_spec), _overlap_line(svc, job, user_id)]
     skills = set((job.payload or {}).get("skills") or [])
     if skills:
@@ -688,7 +717,9 @@ class CronJobTool(BaseTool):
         if params.read_verb:
             payload["read_verb"] = params.read_verb
         if params.script:
-            payload["script"] = params.script   # 114 W2: checked by CronService.schedule
+            if not owner_turn:
+                return ActionResult(error=_SCRIPT_OWNER_ONLY, include_in_memory=True)
+            payload["script"] = _unpinned(params.script)   # 114 W2: CronService.schedule pins it
         if params.pause_windows:
             payload["pause_windows"] = params.pause_windows
         if params.precheck:
@@ -823,7 +854,8 @@ class CronJobTool(BaseTool):
         lines = [
             f"Cron job `{job.id}` [{job.status}] — {'one-shot' if job.one_shot else 'recurring'}",
             f"schedule: {job.schedule_spec}",
-            f"next run: {job.next_run_at.isoformat() if job.next_run_at else '-'}",
+            f"next run: {job.next_run_at.isoformat() if job.next_run_at else '-'}"
+            f"{_owner_clock_note([job.next_run_at], job.user_id)}",
             f"last run: {last_outcome(job)}",
             f"last report: {(p.get('last_outcome') or {}).get('report') or '(none stored)'}",
             f"max duration: {job.max_duration_seconds}s",
@@ -915,7 +947,9 @@ class CronJobTool(BaseTool):
         if params.read_verb is not None:
             updates["read_verb"] = params.read_verb or None
         if params.script is not None:
-            updates["script"] = params.script or None
+            if params.script and not owner_turn:
+                return ActionResult(error=_SCRIPT_OWNER_ONLY, include_in_memory=True)
+            updates["script"] = _unpinned(params.script) or None
         if params.pause_windows is not None:
             updates["pause_windows"] = params.pause_windows or None
         if params.precheck is not None:

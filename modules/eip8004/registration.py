@@ -122,6 +122,23 @@ def _avatar(base_url: str) -> tuple:
         return None, None
 
 
+def _account_registrations() -> list:
+    """The identities the accounts of held agent NFTs own (``core.wallet.held_identity``), as
+    ``registrations`` entries with ``attestation="nft-account"``: read on chain by the holdings
+    watch, owned by the account, not by the instance wallet. An unreadable holdings file names
+    none (logged), never a guess."""
+    try:
+        from core.wallet.held_identity import account_identities
+        return [Registration(agentId=int(r["agent_id"]),
+                             agentRegistry=f"eip155:{int(r['chain_id'])}:{r['registry']}",
+                             attestation="nft-account")
+                for r in account_identities()]
+    except Exception:
+        logger.warning("eip8004: the held NFT account identities could not be read",
+                       exc_info=True)
+        return []
+
+
 def build_registration_file(
     base_url: Optional[str] = None,
     config: Optional[EIP8004Config] = None,
@@ -153,16 +170,12 @@ def build_registration_file(
         version="1.0"
     ))
     
-    # MCP Endpoint (if enabled)
-    # SA-08: use the core.env SSOT parser so MCP_ENABLED means the SAME thing here as in
-    # core/config.py (pydantic bool). The old `== "true"` treated MCP_ENABLED=1 as False
-    # while BotConfig treated it as True — the agent card could advertise MCP as disabled
-    # while MCP was actually running.
-    # A posture member (D7): the ONE member resolver, so the agent card never
-    # disagrees with what core/config.py actually built. Fail to False.
+    # MCP Endpoint — advertised only when THIS instance SERVES `/mcp`. The flag is the one the
+    # router mounts by (`api.mcp_serve.router.mcp_serve_enabled`, MCP_SERVE_ENABLED). The client
+    # flag MCP_ENABLED says the agent may CALL other servers; it serves nothing, and a file that
+    # followed it advertised an endpoint that answers 404.
     try:
-        from core.config_policy.members import member_flag
-        mcp_enabled = member_flag("MCP_ENABLED")
+        mcp_enabled = bool_env("MCP_SERVE_ENABLED", False)
     except Exception:
         mcp_enabled = False
     if mcp_enabled:
@@ -200,11 +213,6 @@ def build_registration_file(
     
     # ERC-8004 specific endpoints
     if config.enabled:
-        endpoints.append(Endpoint(
-            name="EIP8004-reputation",
-            endpoint=f"{base_url}/eip8004/reputation",
-            version="1.0"
-        ))
         endpoints.append(Endpoint(
             name="EIP8004-validation",
             endpoint=f"{base_url}/eip8004/validation",
@@ -273,6 +281,11 @@ def build_registration_file(
             agentRegistry=f"eip155:{config.chain_id}:{config.identity_registry_address}",
             attestation="operator",
         ))
+
+    # 115 W6 (B2): one agent, two entries. An NFT account this treasury holds owns its own
+    # identity on the same registries; naming it here links the two (the account's file names
+    # only itself). It does not change trustMode: that speaks for the instance wallet's entry.
+    registrations.extend(_account_registrations())
 
     # Build the registration file
     name, description = _agent_identity()

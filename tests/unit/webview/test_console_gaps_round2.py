@@ -67,7 +67,7 @@ def test_mcp_detail_never_shows_a_token():
 
 def test_tenant_capabilities_withhold_mcp_and_helpers(monkeypatch):
     from webview import pages_new
-    monkeypatch.setattr(pages_new, "_tools_section", lambda: {"items": []})
+    monkeypatch.setattr(pages_new, "_tools_section", lambda uid="": {"items": []})
     monkeypatch.setattr(pages_new, "_skills_section", lambda uid: {"items": []})
     monkeypatch.setattr(pages_new, "_mcp_section",
                         lambda: pytest.fail("tenant must not read MCP config"))

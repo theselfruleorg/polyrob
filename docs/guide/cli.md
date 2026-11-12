@@ -172,6 +172,7 @@ polyrob doctor --flags --all          # every tier: public, advanced, internal
 polyrob doctor --flags --group memory
 polyrob doctor --flags --search x402
 polyrob doctor --changed              # only flags set away from their default
+polyrob doctor --audit-status         # count again what /status prints, from the stores
 ```
 
 Plain `doctor` leads with the same snapshot every other seat renders. `--group`,
@@ -185,6 +186,9 @@ shows the rest.
 `--full` — without it the `report` field is the one-line pointer, not the
 transcript. `--perms` audits the shared data home (group, group-write, setgid,
 root-owned files); `--perms --strict` exits non-zero when it finds an offender.
+`--audit-status` builds the snapshot, reads each count again with a direct query
+and prints one row per count: `ok`, `DIFFERS` or `not checked` (with the reason).
+It changes nothing. Run it after an upgrade; a `DIFFERS` row is a defect to report.
 The economics section of the snapshot is where you check whether prompt caching
 is paying: it names the share of input tokens served from cache, the tokens
 written *into* cache (a write costs more than an ordinary input token, so a

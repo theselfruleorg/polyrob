@@ -111,7 +111,7 @@
         "script": {
           "additionalProperties": true,
           "default": null,
-          "description": "Replace the job's script (see cronjob_schedule); {} clears it.",
+          "description": "OWNER TURN ONLY: replace the job's script (see cronjob_schedule) and pin the file as it is now; {} clears it.",
           "nullable": true,
           "properties": {},
           "type": "object"

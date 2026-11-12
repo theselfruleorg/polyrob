@@ -50,7 +50,7 @@ from tools.descriptors import TOOL_DESCRIPTORS
 from core.config_policy.payment_tools import PAYMENT_APPROVAL_TOOLS
 from agents.task.agent.core.correspondent_gate import is_high_impact
 venue = {"descriptors": sorted(t for t in TOOL_DESCRIPTORS if "market" in t or "liquid" in t),
-         "approval": sorted(v for v in PAYMENT_APPROVAL_TOOLS if "market" in v or "liquid" in v),
+         "approval": sorted(v for v in PAYMENT_APPROVAL_TOOLS if "polymarket" in v or "liquid" in v),
          "reserved": [is_high_impact(t) for t in ("hyperliquid", "polymarket")]}
 from core.surfaces import catalog
 from core.delivery_channels import unavailable_reason

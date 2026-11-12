@@ -21,12 +21,21 @@ def _owner(monkeypatch):
 
 
 def test_tenant_loses_only_money_tools():
-    asked = ["browser", "defi_trade", "filesystem", "x402_pay", "mcp", "shell"]
-    assert tenant_toolset(asked, "usr_tenant") == ["browser", "filesystem", "mcp", "shell"]
+    asked = ["browser", "defi_trade", "filesystem", "x402_pay", "mcp"]
+    assert tenant_toolset(asked, "usr_tenant") == ["browser", "filesystem", "mcp"]
+
+
+def test_tenant_loses_every_exec_tool_from_the_capability_table():
+    """M8: the set dropped is the table's ``exec`` rows, never a hand list."""
+    from core.tool_capabilities import ids_with
+    exec_ids = sorted(ids_with("exec"))
+    assert {"code_execution", "shell", "process", "coding", "self_env"} <= set(exec_ids)
+    asked = ["browser", "filesystem"] + exec_ids
+    assert tenant_toolset(asked, "usr_tenant") == ["browser", "filesystem"]
 
 
 def test_owner_keeps_the_list_as_given():
-    asked = ["browser", "defi_trade", "x402_pay"]
+    asked = ["browser", "defi_trade", "x402_pay", "shell", "code_execution"]
     assert tenant_toolset(asked, OWNER) == asked
 
 

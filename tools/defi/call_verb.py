@@ -238,6 +238,37 @@ def encode_call(signature: str, args: list) -> str:
     return "0x" + keccak(text=sig).hex()[:8] + body.hex()
 
 
+def account_call_refusal(params, to_addr: str, execution_context=None) -> Optional[str]:
+    """Why a generic call FROM an NFT account (``account=`` / ``nft=``) is refused before
+    anything is built, or None (115 G6).
+
+    * no allowance grant: a grant made by an account outlives the call and the sale of the NFT
+      (an ERC-6551P account refuses it on chain anyway); an ERC-20 spend from an account is the
+      approve-spend-reset batch of the typed verbs;
+    * not an order run: an order run acts through no account (the guard refuses it too);
+    * not the account's own collection, its sale or its sale rails: ready, list, buy and mint
+      are acts of their own typed verbs, each with its own measured shape. Fails closed when
+      the pins cannot be read."""
+    if params.allow_spender:
+        return ("refused: a call from an NFT account grants no allowance (allow_spender) — the "
+                "grant would outlive the call and the sale of the NFT; spend a token from the "
+                "account with defi_trade swap/transfer (approve, spend and reset in one batch)")
+    if _order_run(execution_context):
+        return "refused: an order run acts through no NFT account"
+    try:
+        from core.wallet import collection_registry
+        t = str(to_addr).lower()
+        for p in collection_registry.profiles_on(collection_registry.chain_id_of(params.chain)):
+            rails = (p.erc6551p.market, p.erc6551p.zone) if p.erc6551p else ()
+            if t == p.address or (p.sale and t == p.sale.address) or t in rails:
+                return (f"refused: {to_addr} is a pinned collection, its sale or its sale rail — "
+                        f"a call from an NFT account may not address it (its acts are typed "
+                        f"verbs)")
+    except Exception as exc:  # noqa: BLE001 — the pins cannot be read: fail closed
+        return f"refused: the pinned collections could not be read ({exc})"
+    return None
+
+
 async def perform_call(tool, params, execution_context=None):
     from core.wallet import tx_guard, tx_notify
     from core.wallet.broadcast.evm import EvmRail
@@ -293,6 +324,12 @@ async def perform_call(tool, params, execution_context=None):
     pinned_err = typed_verb_only_refusal(to_addr)
     if pinned_err:
         return tool._ar(error=pinned_err + " Nothing was broadcast.")
+    from tools.defi import account_mode
+    from_account = account_mode.requested(params)
+    if from_account:
+        acct_err = account_call_refusal(params, to_addr, execution_context)
+        if acct_err:
+            return tool._ar(error=acct_err + " Nothing was broadcast.")
 
     # The guard's ERC-20 branch refuses ANY material native movement alongside a
     # declared token outflow ("the transaction does something that was not
@@ -392,10 +429,25 @@ async def perform_call(tool, params, execution_context=None):
         return tool._ar(error=WALLET_OFF_TEXT)
     signer = wallet.operational_signer()
     gate = wallet.policy
+    # 115 G6: `account=` / `nft=` — the call leaves the NFT's account (the treasury signs
+    # account.execute(to, value, data, 0) as the NFT's owner); the guard judges the inner call
+    # with the ACCOUNT as the holder, by the same rules as a direct call.
+    held = None
+    account_rpc = getattr(tool, "_account_rpc", None)
+    if from_account:
+        held, why = account_mode.resolve(params, params.chain, signer.address, rpc=account_rpc)
+        if why:
+            return tool._ar(error=why)
 
     rail = (tool._rail_factory or EvmRail)(chain=params.chain, signer=signer)
+    journal_entry, journal_skipped = None, ""
     try:
         tx = rail.build_call(to=to_addr, data=data, value=value_wei)
+        if held is not None:
+            journal_entry, journal_skipped = account_mode.prepare_journal(
+                held, signer, kind="tend",
+                text=f"call {data[:10]} on {to_addr} ({params.chain})", rpc=account_rpc)
+            tx, acct_state = account_mode.wrap(rail, tx, held, account_rpc, journal=journal_entry)
     except Exception as exc:
         return tool._ar(error=f"could not build the call: {exc}")
     idem = intent_idempotency_key(
@@ -424,6 +476,12 @@ async def perform_call(tool, params, execution_context=None):
         from core.money.hooks import offer_recipient
         intent = dataclasses.replace(intent, resource_recipient=offer_recipient(
             str(execution_context.metadata.get("mandate"))))
+    guard_kw = {}
+    if held is not None:
+        intent = account_mode.intent_for(intent, held, acct_state,
+                                         journal=journal_entry is not None)
+        if account_rpc is not None:
+            guard_kw["account_rpc"] = account_rpc
 
     authorize = tool._guard_fn or tx_guard.authorize
     async with gate.reserve():
@@ -438,10 +496,11 @@ async def perform_call(tool, params, execution_context=None):
                              price_fn=tool._price,
                              fallback_price_fn=tool._fallback_price,
                              forged_fn=_is_forged_or_autonomous_turn,
-                             autonomous_ok_fn=_is_autonomous_goal_turn)
+                             autonomous_ok_fn=_is_autonomous_goal_turn, **guard_kw)
 
         header = (
             f"call {data[:10]} on {to_addr} ({params.chain})\n"
+            + (account_mode.header_line(held) if held is not None else "") +
             f"  spends:   "
             f"{f'{params.spend_max_raw} raw of {spend_token}' if spend_token else f'{params.value:g} native'} (max)\n"
             f"  receives: "
@@ -454,7 +513,8 @@ async def perform_call(tool, params, execution_context=None):
         if not decision.allowed:
             return tool._ar(content=header + "  RESULT: NOT SENT — nothing was broadcast.")
 
-        if decision.sim_gas_used:
+        from core.wallet.broadcast.evm import is_account_call
+        if decision.sim_gas_used or is_account_call(tx):
             try:
                 tx = await asyncio.to_thread(rail.size_gas, tx, decision.sim_gas_used)
             except Exception as exc:
@@ -484,7 +544,8 @@ async def perform_call(tool, params, execution_context=None):
         _rec = dict(venue="defi", action="call",
                     amount_usd=decision.amount_usd or 0.0,
                     counterparty=to_addr, idempotency_key=idem,
-                    result_ref=tx_hash, chain=params.chain)
+                    result_ref=tx_hash, chain=params.chain,
+                    account=(held.account if held is not None else None))
         # CLI1: a cancel during the wait records the broadcast first (one seam).
         from tools.defi.receipt_wait import await_receipt_or_record
         receipt = await await_receipt_or_record(
@@ -505,14 +566,21 @@ async def perform_call(tool, params, execution_context=None):
             detail=f"contract call on {params.chain}", ledger_recorded=True),
             settled=True)
 
+    journal = ""
+    if held is not None:
+        journal = account_mode.journal_line(
+            held, signer, kind="tend",
+            text=f"call {data[:10]} on {to_addr} ({params.chain}): tx {tx_hash} ({receipt.status})",
+            refs=(tx_hash,), entry=journal_entry, landed=receipt.status != "failed",
+            skipped=journal_skipped, rpc=account_rpc)
     if receipt.succeeded:
         return tool._ar(content=header + (
             f"  RESULT: SENT AND CONFIRMED\n"
-            f"  tx: {tx_hash}\n  block: {receipt.block_number}"))
+            f"  tx: {tx_hash}\n  block: {receipt.block_number}") + journal)
     if receipt.status == "pending":
         return tool._ar(content=header + (
             f"  RESULT: BROADCAST BUT NOT CONFIRMED within the timeout. It may "
-            f"still land — do NOT retry blindly.\n  tx: {tx_hash}"))
+            f"still land — do NOT retry blindly.\n  tx: {tx_hash}") + journal)
     return tool._ar(content=header + (
         f"  RESULT: REVERTED ON-CHAIN — the fee was spent, nothing else "
-        f"happened.\n  tx: {tx_hash}"))
+        f"happened.\n  tx: {tx_hash}") + journal)

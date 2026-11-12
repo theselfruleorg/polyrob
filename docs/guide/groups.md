@@ -83,7 +83,7 @@ outbound messages).
 | `/groups allow\|deny\|list\|set\|role\|tools\|audit\|service\|admins` (owner-only, confirmed by DM) | yes | no | no | no |
 | Tools on the turn | room toolset | room toolset | room toolset | — |
 | `/admin <what to do>`, with the bundles the owner granted this group | yes | yes | no | no |
-| Money, self-mod, host, secrets, recall, `/pause`, `/dev`, wallet, trade, deploy | never in a room — the owner uses the DM | no | no | no |
+| Money, self-mod, host, secrets, recall, `/pause`, wallet, trade, deploy | never in a room — the owner uses the DM | no | no | no |
 
 The **owner** is the bound owner principal, resolved from the authenticated sender —
 never from a display name. A member who renames themselves to look like the owner
@@ -361,7 +361,7 @@ place a shoulder-surfer or a screen-share is guaranteed. These are refused with 
 one-line note in the owner's DM:
 
 `/trade` `/wallet` `/send` `/swap` `/check` `/cards` `/deploy` `/launch` `/lp` `/bridge`
-`/claim` `/pay` `/nft` `/dapp` `/identity` `/writeoff` `/unquarantine` `/dev` `/pause`
+`/claim` `/pay` `/nft` `/dapp` `/identity` `/writeoff` `/unquarantine` `/pause`
 `/halt` `/resume` `/run` `/approve` `/reject` `/allow` `/deny` `/config` `/prefs`
 `/model` `/skills` `/mcp` `/apps` `/invoices` `/settle` `/job` `/goal` `/fulfill`
 `/contacts` `/thread` `/why` `/restart` `/update`, plus the write forms

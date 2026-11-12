@@ -200,7 +200,7 @@
     {
       "name": "/nft",
       "group": "money",
-      "help": "Collectibles I hold: look, trust a collection, send one, or revoke an approval",
+      "help": "Collectibles I hold: look, trust a collection, send one, make one ready for sale, or revoke an approval",
       "aliases": []
     },
     {
@@ -283,12 +283,6 @@
       "name": "/mode",
       "group": "control",
       "help": "What I may do without you, what I do when you are away, and how to change it",
-      "aliases": []
-    },
-    {
-      "name": "/dev",
-      "group": "control",
-      "help": "Pass a message to an operator-run maintenance script, if this host has one",
       "aliases": []
     },
     {

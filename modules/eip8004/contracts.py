@@ -3,9 +3,11 @@
 >>> STATUS: SIMULATION / not wired on-chain. <<<
 No code in this repository calls these interfaces — there is no on-chain write
 path. `build_registration_file` / the `/eip8004/*` API only ever emit a
-`trustMode: "local"` (off-chain, in-process) registration; the reputation and
-validation "registries" are process-volatile Python dicts, not the on-chain
-contracts these interfaces describe. Treat everything below as ABI/interface
+`trustMode: "local"` (off-chain, in-process) registration; the validation
+"registry" is a process-volatile Python dict, not the on-chain contract these
+interfaces describe. There is no Reputation Registry interface here: the one
+reputation read is ``core/wallet/erc8004_reputation.py`` (the live registry's
+``getClients`` / ``getSummary``). Treat everything below as ABI/interface
 reference for a FUTURE on-chain integration, not as running code.
 See docs/guide/payments.md §ERC-8004 for the current, honest status.
 
@@ -73,69 +75,6 @@ IDENTITY_REGISTRY_ABI = [
             {"indexed": True, "name": "owner", "type": "address"}
         ],
         "name": "Registered",
-        "type": "event"
-    },
-]
-
-REPUTATION_REGISTRY_ABI = [
-    {
-        "inputs": [],
-        "name": "getIdentityRegistry",
-        "outputs": [{"name": "identityRegistry", "type": "address"}],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [
-            {"name": "agentId", "type": "uint256"},
-            {"name": "feedbackAuth", "type": "bytes"},
-            {"name": "score", "type": "uint8"},
-            {"name": "tag1", "type": "bytes32"},
-            {"name": "tag2", "type": "bytes32"},
-            {"name": "fileUri", "type": "string"},
-            {"name": "fileHash", "type": "bytes32"}
-        ],
-        "name": "submitFeedback",
-        "outputs": [],
-        "stateMutability": "nonpayable",
-        "type": "function"
-    },
-    {
-        "inputs": [
-            {"name": "agentId", "type": "uint256"},
-            {"name": "clientAddress", "type": "address"},
-            {"name": "tag1", "type": "bytes32"},
-            {"name": "tag2", "type": "bytes32"}
-        ],
-        "name": "getAggregatedFeedback",
-        "outputs": [
-            {"name": "count", "type": "uint64"},
-            {"name": "avgScore", "type": "uint8"},
-            {"name": "scores", "type": "uint8[]"},
-            {"name": "tag1s", "type": "bytes32[]"},
-            {"name": "tag2s", "type": "bytes32[]"},
-            {"name": "revokedStatuses", "type": "bool[]"}
-        ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [{"name": "agentId", "type": "uint256"}],
-        "name": "getClients",
-        "outputs": [{"name": "", "type": "address[]"}],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    # Events
-    {
-        "anonymous": False,
-        "inputs": [
-            {"indexed": True, "name": "agentId", "type": "uint256"},
-            {"indexed": True, "name": "clientAddress", "type": "address"},
-            {"indexed": False, "name": "score", "type": "uint8"},
-            {"indexed": True, "name": "feedbackIndex", "type": "uint64"}
-        ],
-        "name": "FeedbackSubmitted",
         "type": "event"
     },
 ]
@@ -294,13 +233,6 @@ class IdentityRegistryContract(BaseContract):
     
     def __init__(self, address: str, chain_id: int = 8453):
         super().__init__(address, IDENTITY_REGISTRY_ABI, chain_id)
-
-
-class ReputationRegistryContract(BaseContract):
-    """Interface for the ERC-8004 Reputation Registry."""
-    
-    def __init__(self, address: str, chain_id: int = 8453):
-        super().__init__(address, REPUTATION_REGISTRY_ABI, chain_id)
 
 
 class ValidationRegistryContract(BaseContract):

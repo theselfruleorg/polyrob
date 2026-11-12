@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 @contextlib.contextmanager
 def surface_owner_turn(kind: str = "owner_chat", session_id: Optional[str] = None,
-                       lock_timeout: float = 5.0) -> Iterator[bool]:
+                       lock_timeout: float = 0.0) -> Iterator[bool]:
     """Hold the human-turn gate for the body. Yields whether it was held.
 
     Never raises for a gate fault, and never refuses the human: an unwritable

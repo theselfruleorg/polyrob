@@ -34,6 +34,7 @@ CUSTODY_SECRET_ENV = (
     "AGENT_WALLET_MASTER_SEED",
     "PAYMENT_MASTER_SEED",
     "MASTER_SEED",
+    # Retired (115 E7: nothing signs with it), still popped: an old env file may hold it.
     "EIP8004_AGENT_PRIVATE_KEY",
 )
 

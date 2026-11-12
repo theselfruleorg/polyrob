@@ -103,7 +103,6 @@ modules/
 │   ├── contracts.py            # Smart-contract interfaces/ABIs
 │   ├── models.py               # Data models
 │   ├── registration.py         # Agent identity registration
-│   ├── reputation.py           # On-chain reputation/feedback
 │   └── validation.py           # Pluggable validation (reputation/crypto-economic/TEE)
 │
 ├── credits/                    # Credits and usage tracking
@@ -388,7 +387,7 @@ other agents across organizational boundaries without pre-existing trust. It lay
 of existing agent protocols (A2A, MCP).
 
 - **Registration file** — the ERC-8004 `tokenURI` target, served at `/eip8004/registration.json` (`registration.py`)
-- **Feedback grants** — EIP-712-signed, one-use (`reputation.py`, `feedback_replays.py`); the reputation store itself is an in-memory simulation
+- **Reputation** — read on-chain by `core/wallet/erc8004_reputation.py`; there is no local feedback API
 - **Validation** — an in-memory simulation (`validation.py`); `contracts.py` is ABI reference with no caller
 
 The on-chain identity mint lives in `core/wallet/erc8004.py` and the DeFi tool, not here.

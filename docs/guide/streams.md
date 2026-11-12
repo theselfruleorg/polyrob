@@ -171,6 +171,13 @@ spaces, or put `|` between the two. `tools=a,b` grants the job those tools;
 can also ask in plain words ("check the site every morning at nine") and the
 agent writes the job for you.
 
+A job can wait for your answer. When a run asks you a question and marks it as
+the job's own (`owner_ask(holds_this_job=true)`), the job does not run again until you answer. A job is also held
+after 3 runs in a row that did nothing (`idle` or `unverified`) while its question was open;
+the hold also ends when the question expires. `/status`
+prints `held by your question` with the question; `/fulfill <id>` starts the job
+again.
+
 A job's lane is its first pinned skill, or its rig when it pins no skill.
 `/jobs` lists the lanes you stopped. A job created while `/pause cron`
 is on waits paused and runs after `/resume cron`.
@@ -274,6 +281,7 @@ goal or cron run moves funds unattended.
 | "the goal board is durable, but no dispatcher will pick goals up" | `AUTONOMY_ENABLED`/`GOALS_ENABLED` is off. `polyrob autonomy on`. |
 | A goal or job is due but waits | `/status` names a hold. New work waits under 500 MB of free memory, at 90% of `memory.high`, or under 2 GB of free disk (less on a small machine). A hold of over an hour tells you. |
 | A job never runs | `/jobs` — is it paused, and when is its next run? `CRON_ENABLED` must be on. |
+| A job is on but does not run | `/status` — `held by your question` means the job waits for your answer: `/asks`, then `/fulfill <id>`. |
 | Goals run but you never hear about them | `goals.notify_on_done`, and `AUTONOMY_POSTURE` — `silent` means autonomous work is not reported. |
 | The agent keeps asking for the same thing | `/inbox`, then answer the decision (`/fulfill <id>` for an ask). |
 | Everything stopped at once | A pause is in force: `/status`, then `/resume`. |

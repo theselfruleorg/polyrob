@@ -100,10 +100,11 @@ def step_3_collection_shapes(c: GuardContext) -> Optional[Decision]:
     elif intent.reveal_ids:
         return Decision(False, "refused: reveal ids were declared without is_collection_reveal")
 
+    from core.wallet import collection_mint as _collection_mint
     if intent.is_collection_mint:
-        # A pinned collection (mint capability), exactly mint(treasury, qty, min) for the declared
-        # consecutive ids, value == amount_raw == qty × PRICE, no other shape. Before any RPC.
-        from core.wallet import collection_mint as _collection_mint
+        # The pinned SALE of a collection (mint capability), exactly mint / mintWL (treasury,
+        # qty, …) for the declared consecutive ids, value == amount_raw within the sale's
+        # bounds, no other shape. Before any RPC.
         _mint_err = _collection_mint.structural(intent, tx, holder)
         if _mint_err:
             _tg._record_money_refusal("money_gate", tool_self, execution_context,
@@ -111,6 +112,36 @@ def step_3_collection_shapes(c: GuardContext) -> Optional[Decision]:
             return Decision(False, f"refused: {_mint_err}")
     elif intent.mint_ids:
         return Decision(False, "refused: mint ids were declared without is_collection_mint")
+    else:
+        # A pinned sale is paid only by the mint shape above, and called otherwise only by
+        # the claim shape's claim(treasury) / settle(own records) (core.wallet.collection_sale).
+        _sale_err = _collection_mint.sale_payment_refusal(intent, tx)
+        if not _sale_err:
+            from core.wallet import collection_sale as _collection_sale
+            c.sale_call, _sale_err = _collection_sale.gate(intent, tx, holder)
+        if _sale_err:
+            _tg._record_money_refusal("money_gate", tool_self, execution_context,
+                                      detail=f"collection_mint: {_sale_err}")
+            return Decision(False, f"refused: {_sale_err}")
+    # 115 W7: a seller's sale act (readyToSell / cancelReady on a pinned collection, a cancel on
+    # its pinned market) is made only by its own declared shape, and every such call is one.
+    from core.wallet import tx_guard_account as _tga
+    c.sale_act, _act_err = _tga.sale_act_gate(intent, tx)
+    if _act_err:
+        _tg._record_money_refusal("money_gate", tool_self, execution_context,
+                                  detail=f"sale_act: {_act_err}")
+        return Decision(False, f"refused: {_act_err}")
+    # 115 W9: a buyer's call on a pinned market (buy, claim what it owes) — its own gate only.
+    from core.wallet import tx_guard_sale as _tgs
+    try:
+        _markets = _tga._sale_rails(intent.chain)[1]
+    except Exception:  # noqa: BLE001 — an untrusted registry pins nothing here
+        _markets = {}
+    c.sale_buyer, _buy_err = _tgs.gate(intent, tx, holder, _markets)
+    if _buy_err:
+        _tg._record_money_refusal("money_gate", tool_self, execution_context,
+                                  detail=f"sale_buyer: {_buy_err}")
+        return Decision(False, f"refused: {_buy_err}")
     return None
 
 
@@ -163,6 +194,14 @@ def step_3_registration_shape(c: GuardContext) -> Optional[Decision]:
                 f"but the declared ERC-8004 registry is "
                 f"{intent.expected_registry} -- the signed destination is what "
                 f"matters, and it is not the pinned registry"))
+    # 115 W6: through an account the identity registry is called only as a registration, and a
+    # registration through an account is a register / setAgentURI / setMetadata call.
+    from core.wallet import identity_card as _card
+    _card_err = _card.shape_refusal(intent, tx)
+    if _card_err:
+        _tg._record_money_refusal("money_gate", c.tool_self, c.execution_context,
+                                  detail=f"identity_card: {_card_err}")
+        return Decision(False, f"refused: {_card_err}")
     return None
 
 
@@ -181,7 +220,7 @@ def step_3_nft_and_revoke_shapes(c: GuardContext) -> Optional[Decision]:
                 "what moves"))
         if not (intent.nft_out or intent.expected_nft_in
                 or intent.nft_operator_ops or intent.nft_approval_revokes
-                or intent.erc6909_revokes):
+                or intent.erc6909_revokes or c.sale_act):
             return Decision(False, (
                 "refused: an NFT operation must declare what leaves "
                 "(`nft_out`), what must arrive (`expected_nft_in`), or the "
@@ -347,21 +386,74 @@ def step_4_rpc_trust(c: GuardContext) -> Optional[Decision]:
 
     if intent.is_collection_mint or intent.is_collection_reveal:
         # 069 v4 A3: the pinned profile's runtime_sha256 is re-checked against the live code
-        # before the guard trusts the collection's own events (fail closed).
-        _code_why = _tg._collection_runtime_refusal(
-            intent.chain, intent.to, account_rpc or _tg.simulation._default_rpc_for(intent.chain))
+        # before the guard trusts the collection's own events (fail closed). A mint pays the
+        # pinned SALE: both the collection and the sale are hashed, each against its own pin.
+        _code_rpc = account_rpc or _tg.simulation._default_rpc_for(intent.chain)
+        if intent.is_collection_mint:
+            from core.wallet import collection_mint as _collection_mint
+            _code_why = _collection_mint.runtime_refusal(intent.chain, intent.to, _code_rpc)
+        else:
+            _code_why = _tg._collection_runtime_refusal(intent.chain, intent.to, _code_rpc)
         if _code_why:
             _tg._record_money_refusal("money_gate", tool_self, execution_context,
                                       detail=f"collection: {_code_why}")
             return Decision(False, f"refused: {_code_why}")
+    if c.sale_call:
+        # A claim from a pinned sale: both codes against their pins, and a settle names only
+        # the treasury's own open records of a settled sale.
+        from core.wallet import collection_sale as _collection_sale
+        _sale_why = _collection_sale.runtime_refusal(
+            c.sale_call, intent, tx, holder,
+            account_rpc or _tg.simulation._default_rpc_for(intent.chain))
+        if _sale_why:
+            _tg._record_money_refusal("money_gate", tool_self, execution_context,
+                                      detail=f"collection_sale: {_sale_why}")
+            return Decision(False, f"refused: {_sale_why}")
+
+    if c.sale_act:
+        # 115 W7: the act's pins — the collection's (and the market's) code, the account's own
+        # token for a ready, the treasury's ownership for an unready.
+        from core.wallet import tx_guard_account as _tga
+        _act_why = _tga.sale_act_runtime_refusal(
+            c.sale_act, intent, tx, holder, sender,
+            account_rpc or _tg.simulation._default_rpc_for(intent.chain))
+        if _act_why:
+            _tg._record_money_refusal("money_gate", tool_self, execution_context,
+                                      detail=f"sale_act: {_act_why}")
+            return Decision(False, f"refused: {_act_why}")
+
+    if c.sale_buyer:
+        # 115 W9: the buyer call's pins (both codes) and, for a buy, the conditions a fresh read
+        # of the account builds now (core.wallet.tx_guard_sale).
+        from core.wallet import collection_registry as _registry, tx_guard_sale as _tgs
+        _buy_why = _tgs.runtime_refusal(
+            c.sale_buyer, intent, tx, holder,
+            account_rpc or _tg.simulation._default_rpc_for(intent.chain), _registry)
+        if _buy_why:
+            _tg._record_money_refusal("money_gate", tool_self, execution_context,
+                                      detail=f"sale_buyer: {_buy_why}")
+            return Decision(False, f"refused: {_buy_why}")
 
     if intent.via_account:
+        # WL10: the forwarder read covers every leg's target, not only the spend leg's.
+        # 115 W7: the sale hold reads whether THE OWNER asked (step 0).
+        from core.wallet.tx_guard_account import inner_targets
         preflight = _tg._via_account_preflight(
             intent, sender, account_rpc or _tg.simulation._default_rpc_for(intent.chain),
-            inner_to=tx.get("to"), journal_to=journal_to)
+            inner_to=inner_targets(c.outer_tx) or tx.get("to"), journal_to=journal_to,
+            owner_asked=bool(c.owner_direct or c.owner_granted), sale_act=c.sale_act,
+            notes=c.notes)
         if preflight:
             _tg._record_money_refusal("money_gate", tool_self, execution_context, detail=f"account: {preflight}")
             return Decision(False, f"refused: {preflight}")
+        # 115 W6: a card published through the account names the account's own identity.
+        from core.wallet import identity_card as _card
+        _card_why = _card.runtime_refusal(
+            intent, tx, account_rpc or _tg.simulation._default_rpc_for(intent.chain))
+        if _card_why:
+            _tg._record_money_refusal("money_gate", tool_self, execution_context,
+                                      detail=f"identity_card: {_card_why}")
+            return Decision(False, f"refused: {_card_why}")
 
     if intent.is_liquidity_op:
         from core.wallet import dex_registry, abi

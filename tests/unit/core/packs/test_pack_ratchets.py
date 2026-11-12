@@ -20,8 +20,7 @@ SOURCE_DIRS = ("core", "polyrob", "modules", "agents", "tools", "api", "cli", "s
 #: (file, package). Shrink-only: 050's agent_nft surface predates the loader (WS-B moves it).
 #: 069 v4 renamed the package; the second row is its legacy-name fallback (drop it when the
 #: package has renamed).
-ALLOWED_PACK_IMPORTS = frozenset({("tools/agent_nft/tool.py", "polyrob_drop"),
-                                  ("tools/agent_nft/tool.py", "polyrob_desk")})
+ALLOWED_PACK_IMPORTS = frozenset()
 
 
 def _imports(path: Path):

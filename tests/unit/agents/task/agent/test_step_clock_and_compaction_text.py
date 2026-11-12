@@ -75,3 +75,25 @@ def test_the_compaction_warning_names_the_ladder_not_a_literal(caplog):
 
 def test_no_warning_under_the_warn_band(caplog):
     assert _warnings(caplog, COMPACTION_WARN_PCT - 1) == []
+
+
+def test_the_step_clock_adds_the_owner_clock_when_a_zone_is_set(monkeypatch):
+    """116 W8 (P15): the agent read UTC only and gave the owner yesterday's date."""
+    from core import owner_time
+    monkeypatch.setattr(owner_time, "owner_zone", lambda *a, **k: "Asia/Bangkok")
+    text = AgentMessagePrompt(state=_State(), result=[]).get_user_message(use_vision=False).content
+    m = re.search(r"Current date and time: (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) UTC · owner: "
+                  r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}) Asia/Bangkok \(UTC\+7\)\. Use the owner's "
+                  r"date and time in replies to the owner", text)
+    assert m, text[:400]
+    utc = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M")
+    owner = datetime.strptime(m.group(2), "%Y-%m-%d %H:%M")
+    assert (owner - utc).total_seconds() == 7 * 3600
+
+
+def test_the_step_clock_is_utc_only_without_a_zone(monkeypatch):
+    from core import owner_time
+    monkeypatch.setattr(owner_time, "owner_zone", lambda *a, **k: None)
+    text = AgentMessagePrompt(state=_State(), result=[]).get_user_message(use_vision=False).content
+    assert re.search(r"Current date and time: \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC(\n|$)", text), text[:400]
+    assert "owner:" not in text

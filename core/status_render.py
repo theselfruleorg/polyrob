@@ -22,9 +22,28 @@ from core.status_snapshot import (
     STATE_DEGRADED, STATE_UNAVAILABLE, StatusSnapshot,
 )
 
+#: Health lines a chat seat and the digest print before the rest rolls into a
+#: count (116 W7.4: Telegram printed 8 and the digest 6). One number.
+SEAT_HEALTH_LIMIT = 8
+
 _CHECKED = ("credit sentinel", "live provider", "open asks", "blocked goals",
             "pending approvals", "delivery cap", "loop heartbeats",
             "owner pause", "surface circuits", "tool timeouts")
+
+def checked_list(snap: StatusSnapshot) -> List[str]:
+    """The checks this render really ran (116 W5.7). A seat with no container
+    read no surface circuit, and one with no event log read no heartbeat: the
+    OK headline must not name them."""
+    def _data(name: str) -> dict:
+        sec = snap.sections.get(name)
+        return (sec.data or {}) if sec is not None and sec.available else {}
+    skip = set()
+    if "surfaces" not in _data("delivery"):
+        skip.add("surface circuits")
+    if not (_data("loops").get("live_actors") or {}).get("loops_checked"):
+        skip.update({"loop heartbeats", "tool timeouts", "delivery cap"})
+    return [c for c in _CHECKED if c not in skip]
+
 
 _SECTION_TITLES = {
     "session": "Session",
@@ -121,7 +140,7 @@ def health_headline(snap: StatusSnapshot) -> str:
     if snap.overall == OVERALL_PARTIAL:
         return ("Health: PARTIAL — no issue found, but could not verify: "
                 + "; ".join(snap.unavailable_sources))
-    return f"Health: OK — no issue found (checked: {', '.join(_CHECKED)})"
+    return f"Health: OK — no issue found (checked: {', '.join(checked_list(snap))})"
 
 
 def render_health_lines(snap: StatusSnapshot, *, prefix: str = "• ",
@@ -168,8 +187,13 @@ def render_section_lines(snap: StatusSnapshot, name: str, *, prefix: str = "• 
 
 
 def _hhmm_ts(ts) -> str:
+    """``18:03 UTC``, with the owner's clock beside it when a zone is set."""
+    from core.owner_time import stamp
+    from core.status_types import render_zone
     try:
-        return time.strftime("%H:%M UTC", time.gmtime(float(ts)))
+        if not float(ts):
+            return time.strftime("%H:%M UTC", time.gmtime(0))
+        return stamp(float(ts), render_zone(), utc_format="%H:%M UTC")
     except (TypeError, ValueError, OverflowError):
         return "?"
 
@@ -194,17 +218,23 @@ def pause_headline_from(p: dict, live: Optional[dict] = None, *,
                 f"— {resume_hint} to continue")
     # 080 WS-4: never RUNNING while autonomy is off — the ONE gate reader.
     from core.status_loops import autonomy_idle_reason
-    idle = autonomy_idle_reason()
+    idle = autonomy_idle_reason((live or {}).get("started_loops"))
     if idle:
         return f"■ IDLE — {idle}: no job or goal runs on its own"
     if not live:
         return f"▶ RUNNING — {pause_hint} to stop"
+    # The SAME verdict as the health items, over the loops that should run;
+    # with no telemetry the count is unknown, never 0.
     alive = live.get("loops_alive") or {}
-    n_alive = sum(1 for v in alive.values() if v)
+    loops = (f"{sum(1 for v in alive.values() if v)}/{len(alive)}"
+             if alive and live.get("loops_checked", True) else "?")
     rg = live.get("running_goals")
     rc = live.get("running_cron")
+    turn = live.get("turn") or {}
+    turn_bit = (f" · owner turn live since {_hhmm_ts(turn.get('started'))}"
+                if turn else "")
     return (f"▶ RUNNING — {'?' if rg is None else rg} goal run(s), "
-            f"{'?' if rc is None else rc} cron run(s), loops alive {n_alive}/{len(alive) or '?'} "
+            f"{'?' if rc is None else rc} cron run(s), loops alive {loops}{turn_bit} "
             f"— {pause_hint} to stop")
 
 

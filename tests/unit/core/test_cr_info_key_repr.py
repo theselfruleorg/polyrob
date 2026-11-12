@@ -16,8 +16,8 @@ def test_hyperliquid_models_hide_private_keys():
 
 
 def test_botconfig_never_holds_the_eip8004_key(monkeypatch):
-    # 067 F4: the unread field is gone — modules/eip8004 reads the env directly,
-    # so the key cannot reach a BotConfig repr or dump at all.
+    # 067 F4: the unread field is gone (and 115 E7 removed its last reader), so
+    # the key cannot reach a BotConfig repr or dump at all.
     from core.config import BotConfig
     monkeypatch.setenv("EIP8004_AGENT_PRIVATE_KEY", KEY)
     cfg = BotConfig()

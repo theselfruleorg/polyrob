@@ -62,7 +62,6 @@ def announce_eip8004(logger) -> None:
     eip8004_enabled = bool_env("EIP8004_ENABLED", False)
     logger.info("✅ ERC-8004 Trustless Agents endpoints registered at /eip8004")
     logger.info("   - Registration: /eip8004/registration.json")
-    logger.info("   - Reputation: /eip8004/reputation/*")
     logger.info("   - Validation: /eip8004/validation/*")
     logger.info(f"   - Status: {'enabled' if eip8004_enabled else 'discovery-only'}")
 

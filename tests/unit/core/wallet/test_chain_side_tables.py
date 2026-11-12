@@ -125,6 +125,28 @@ def test_robinhood_alchemy_rows_are_the_measured_ones():
     assert _nft_hosts()["robinhood"] == "robinhood-mainnet.g.alchemy.com"
 
 
+def test_bnb_usdc_has_18_decimals_in_every_reader(monkeypatch):
+    """BNB Chain's USDC is Binance-peg with 18 decimals. The canonical pin said 6
+    with `verified`, so a balance read a million million times too large."""
+    from core.wallet import chains, onchain, tokens
+    row = chains.get("bnb")
+    assert row.usdc_decimals == 18
+    assert tokens.CANONICAL_TOKENS[("bnb", row.usdc)]["decimals"] == 18
+    one_and_a_half = hex(15 * 10 ** 17)
+    monkeypatch.setattr(onchain, "_rpc", lambda rpc, method, params, timeout: (
+        "0x0" if method == "eth_getBalance" else one_and_a_half))
+    assert onchain.balances("0x" + "11" * 20, "bnb")[1] == 1.5
+
+
+def test_usdc_has_6_decimals_on_every_other_chain():
+    from core.wallet import chains, tokens
+    for row in chains.all_rows():
+        if row.name != "bnb" and row.usdc:
+            assert row.usdc_decimals == 6, row.name
+            pin = tokens.CANONICAL_TOKENS.get((row.name, row.usdc))
+            assert pin is None or pin["decimals"] == 6, row.name
+
+
 def test_bnb_row_is_pinned_and_read_only():
     """Order 0015: measured 2026-11-11 on two RPCs; the USDC is the 18-decimal peg."""
     row = chains.get("bnb")

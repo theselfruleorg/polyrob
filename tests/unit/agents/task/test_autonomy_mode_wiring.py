@@ -76,10 +76,15 @@ def test_mcp_enabled_default_on_under_autonomous(monkeypatch):
     from core.config_policy import _mode_capability_default
     assert _mode_capability_default("MCP_ENABLED") is True
 
+    # The file advertises /mcp by the SERVER flag (the route is mounted by it), never by
+    # the client flag: MCP_ENABLED alone lists nothing.
     from modules.eip8004.registration import build_registration_file
+    monkeypatch.delenv("MCP_SERVE_ENABLED", raising=False)
     reg = build_registration_file(base_url="http://localhost:9000")
-    names = {ep.name for ep in reg.services}
-    assert "MCP" in names
+    assert "MCP" not in {ep.name for ep in reg.services}
+    monkeypatch.setenv("MCP_SERVE_ENABLED", "true")
+    reg = build_registration_file(base_url="http://localhost:9000")
+    assert "MCP" in {ep.name for ep in reg.services}
 
 
 def test_mcp_enabled_stays_off_supervised(monkeypatch):

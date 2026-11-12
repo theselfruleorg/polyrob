@@ -105,6 +105,9 @@ EXTERNAL_WRITE = "external_write"
 # --- delivery / correspondence --------------------------------------------------
 USER_DELIVERY = "user_delivery"
 OWNER_NOTICE = "owner_notice"
+# 116 W3.7: one row per owner verb — attrs {verb, seat, outcome, reply_chars}.
+# No arguments, no body (core/surfaces/owner_verb_log.py).
+OWNER_COMMAND = "owner_command"
 OUTBOUND_OPEN_SEND = "outbound_open_send"
 CORRESPONDENT_PENDING = "correspondent_pending"
 CORRESPONDENT_RESUMED = "correspondent_resumed"
@@ -186,7 +189,6 @@ POSITION_WRITTEN_OFF = "position_written_off"
 POSITION_OPENED = "position_opened"
 POSITION_CLOSED = "position_closed"
 PAYMENT_SETTLING_REVERTED = "payment_settling_reverted"
-PAYMENT_FEEDBACK_AUTHORIZED = "payment_feedback_authorized"
 
 # --- subscriptions ---------------------------------------------------------------
 SUBSCRIPTION_CREATED = "subscription_created"

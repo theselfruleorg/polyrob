@@ -88,6 +88,13 @@ def _seed_telemetry(path, *, capped=3, timeouts=1, rerouted=2):
     return log
 
 
+def _with_provider(monkeypatch):
+    """A home with one usable provider (116 W5.10: none at all is a CRIT)."""
+    import core.runtime_config as rc
+    monkeypatch.setattr(rc, "usable_providers_with_credentials", lambda: ["openai"])
+    monkeypatch.setattr(rc, "resolve_live_provider", lambda pin=None: "openai")
+
+
 @pytest.fixture()
 def degraded(tmp_path, monkeypatch):
     """The 2026-08-28 prod state: sentinel tripped + suppressed notices + open
@@ -127,7 +134,7 @@ def test_degraded_fixture_renders_every_condition(degraded):
     assert snap.overall == OVERALL_DEGRADED
     keys = {h.key for h in snap.health}
     assert "credit_sentinel:openrouter" in keys
-    assert any(k.startswith("ask:") for k in keys)
+    assert "open_asks" in keys          # 116 W5.12: one item for every open question
     assert any(k.startswith("blocked:") for k in keys)
     assert "delivery_capped" in keys
     assert "tool_timeouts" in keys
@@ -151,7 +158,7 @@ def test_degraded_fixture_renders_every_condition(degraded):
     # tenant scoping: the other tenant's ask is invisible
     assert "Not alice's ask" not in text
     # money is labelled, never merged
-    assert "treasury cash flow (income − spend; open positions NOT included): net $+0.50" in text
+    assert "treasury cash flow (income − spend; open positions NOT included): net $+0.50 (last " in text
     assert "runtime cost (owner's compute bill): $2.00 last 24h · $40.00 total" in text
 
 
@@ -297,6 +304,7 @@ def test_unreadable_autonomy_started_falls_back_and_warns(tmp_path, monkeypatch)
 
 def test_clean_fixture_is_ok_with_evidence(tmp_path, monkeypatch):
     """OK is a claim with evidence: the headline lists what was checked."""
+    _with_provider(monkeypatch)
     data_dir = str(tmp_path)
     monkeypatch.setenv("POLYROB_DATA_DIR", data_dir)
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH", os.path.join(data_dir, "telemetry_events.db"))
@@ -316,6 +324,7 @@ def test_partial_when_a_health_source_is_unreadable(tmp_path, monkeypatch):
     # With autonomy off, an absent store is not a failed check (test_status_absent_stores).
     monkeypatch.setattr("core.status_loops.autonomy_idle_reason", lambda: "")
     """No issue found but a source could not be read ⇒ PARTIAL, never OK."""
+    _with_provider(monkeypatch)
     data_dir = str(tmp_path)
     monkeypatch.setenv("POLYROB_DATA_DIR", data_dir)
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH", os.path.join(data_dir, "telemetry_events.db"))
@@ -734,7 +743,48 @@ def test_a_skipped_run_costs_nothing_and_says_so(tmp_path, monkeypatch):
                ts=time.time() - 60)
     spend = build_status_snapshot(OWNER, data_dir=data_dir).section(
         "loops").data["rails_spend_24h"]["job1"]
-    assert spend["usd"] == 0.0 and spend["unpriced"] == 0 and spend["runs"] == 1
+    # 116 W2.6: a skipped slot is not a run.
+    assert spend["usd"] == 0.0 and spend["unpriced"] == 0
+    assert spend["runs"] == 0 and spend["skipped"] == 1
+
+
+def test_the_job_line_says_what_done_did_and_counts_starts_apart(tmp_path, monkeypatch):
+    """116 W2.2 / W2.6: `done=68` hid idle and unchecked runs; a start and a
+    reroute marker were counted as runs; a lost end row was invisible."""
+    data_dir = str(tmp_path)
+    monkeypatch.setenv("POLYROB_DATA_DIR", data_dir)
+    monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH",
+                       os.path.join(data_dir, "telemetry_events.db"))
+    monkeypatch.setenv("CRON_ENABLED", "true")
+    _seed_cron(data_dir)
+    from core.event_log import TelemetryEventLog
+    log = TelemetryEventLog(os.path.join(data_dir, "telemetry_events.db"))
+    now = time.time()
+
+    def ev(age, outcome, **attrs):
+        log.record("cron_run", user_id=OWNER, source="cron",
+                   attrs={"job_id": "job1", "outcome": outcome, **attrs}, ts=now - age)
+
+    ev(30000, "started")                      # no end ever came, and it is old
+    ev(900, "started"); ev(890, "done", useful=True, verified=True, cost_usd=0.02)
+    ev(800, "started"); ev(790, "done", useful=False, verified=True, spend_usd=0.0)
+    ev(700, "started"); ev(690, "done", useful=False)
+    ev(600, "started"); ev(590, "done", useful=False, verified=False)
+    ev(500, "provider_rerouted")
+    for outcome, reason in (("fired", "self_wake"), ("paused", "x"),
+                            ("skipped", "budget_exhausted")):
+        log.record("self_wake", user_id=OWNER, source="self_wake",
+                   attrs={"outcome": outcome, "reason": reason}, ts=now - 50)
+    sec = build_status_snapshot(OWNER, data_dir=data_dir).section("loops")
+    line = next(l for l in sec.lines if l.startswith("24h job runs ended"))
+    assert "done=4 (effect 1, idle 1, missed 1, unverified 1)" in line, line
+    assert "started=5, 1 started with no end recorded" in line, line
+    assert "provider rerouted ×1 (not a run)" in line, line
+    assert "self-wakes fired=1 (budget 1, paused 1)" in line, line
+    assert any(h.key == "runs_missed" for h in sec.health)
+    spend = sec.data["rails_spend_24h"]["job1"]
+    assert spend["runs"] == 4 and spend["unpriced"] == 3      # 0.0 is not a price
+    assert any(l.startswith("job ") and "done (missed)" in l for l in sec.lines), sec.lines
 
 
 def test_a_rail_with_nothing_priced_never_renders_a_confident_zero(tmp_path, monkeypatch):
@@ -754,4 +804,84 @@ def test_a_rail_with_nothing_priced_never_renders_a_confident_zero(tmp_path, mon
     sec = build_status_snapshot(OWNER, data_dir=data_dir).section("loops")
     line = "\n".join(l for l in sec.lines if l.startswith("job "))
     assert "$0.00" not in line, line
-    assert "cost not recorded for 2 runs today" in line, line
+    assert "cost not recorded for 2 runs in 24h" in line, line
+    assert "today" not in line, line
+
+
+def test_the_missed_header_counts_what_the_list_holds_since_the_last_missed(tmp_path, monkeypatch):
+    """116 W5.6: one selection and one window for the list and its count; a
+    `/missed` moves the window start (the owner has read what came before)."""
+    import core.event_log as el
+    from core.surfaces import missed as missed_mod
+    from core.surfaces.owner_verb_log import record_owner_command
+    data_dir = str(tmp_path)
+    db = os.path.join(data_dir, "telemetry_events.db")
+    monkeypatch.setenv("POLYROB_DATA_DIR", data_dir)
+    monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH", db)
+    monkeypatch.setattr(el, "_INSTANCES", {})
+    _seed_telemetry(db, capped=4)
+    now = time.time()
+    assert missed_mod.missed_count(OWNER, data_dir, since_ts=now - 86400) == \
+        len(missed_mod.missed_notices(OWNER, data_dir, n=50, since_ts=now - 86400))
+    snap = build_status_snapshot(OWNER, data_dir=data_dir)
+    data = snap.section("delivery").data
+    assert data["missed_window"] == "in 24h"
+    assert len(data["missed"]) + data["missed_more"] == \
+        missed_mod.missed_count(OWNER, data_dir, since_ts=now - 86400)
+    record_owner_command(OWNER, "/missed", "telegram", "…", data_dir=data_dir)
+    data = build_status_snapshot(OWNER, data_dir=data_dir).section("delivery").data
+    assert data["missed_window"] == "since your last /missed"
+    assert data["missed"] == [] and data["missed_more"] == 0
+
+
+def test_a_cut_telemetry_read_says_so_and_dropped_rows_are_shown(tmp_path, monkeypatch):
+    """116 W3.4 / W3.1."""
+    import core.event_log as el
+    import core.status_snapshot as ss
+    data_dir = str(tmp_path)
+    db = os.path.join(data_dir, "telemetry_events.db")
+    monkeypatch.setenv("POLYROB_DATA_DIR", data_dir)
+    monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH", db)
+    _seed_telemetry(db, capped=6)
+    # The drop counter is per process: an earlier test may have dropped a row.
+    monkeypatch.setattr(el, "dropped_rows", lambda: {"n": 0, "last_error": ""})
+    assert not [h for h in build_status_snapshot(OWNER, data_dir=data_dir).health
+                if h.key in ("telemetry_truncated", "telemetry_dropped")]
+    monkeypatch.setattr(ss, "TELEMETRY_READ_LIMIT", 3)
+    monkeypatch.setattr(el, "dropped_rows", lambda: {"n": 2, "last_error": "OperationalError: x"})
+    keys = [h.key for h in build_status_snapshot(OWNER, data_dir=data_dir).health]
+    assert "telemetry_truncated" in keys and "telemetry_dropped" in keys
+
+
+def test_no_provider_at_all_is_a_critical_item_and_a_failed_read_is_not_none(tmp_path, monkeypatch):
+    """116 W5.10: doctor added this alert AFTER an 'Health: OK' headline, and a
+    raise read as 'none detected'."""
+    import core.runtime_config as rc
+    data_dir = str(tmp_path)
+    monkeypatch.setenv("POLYROB_DATA_DIR", data_dir)
+    monkeypatch.setattr(rc, "usable_providers_with_credentials", lambda: [])
+    monkeypatch.setattr(rc, "resolve_live_provider", lambda pin=None: None)
+    snap = build_status_snapshot(OWNER, data_dir=data_dir)
+    assert "no_provider" in [h.key for h in snap.health if h.severity == "crit"]
+
+    def boom():
+        raise OSError("auth.json unreadable")
+    monkeypatch.setattr(rc, "usable_providers_with_credentials", boom)
+    sec = build_status_snapshot(OWNER, data_dir=data_dir).section("providers")
+    assert "credentialed: unreadable (OSError" in sec.lines[0]
+    assert [h.key for h in sec.health] == ["providers_unreadable"]
+
+
+def test_a_seat_without_an_agent_says_not_checked_and_a_container_brings_its_agent(tmp_path, monkeypatch):
+    """116 W7.1 / W7.2."""
+    from types import SimpleNamespace
+    data_dir = str(tmp_path)
+    monkeypatch.setenv("POLYROB_DATA_DIR", data_dir)
+    sec = build_status_snapshot(OWNER, data_dir=data_dir).section("session")
+    assert sec.lines == ["no session on this seat (not checked)"] and sec.data["checked"] is False
+
+    agent = SimpleNamespace(get_orchestrator=lambda sid: None, container=None)
+    container = SimpleNamespace(get_agent=lambda name: agent if name == "task_agent" else None,
+                                config=None)
+    sec = build_status_snapshot(OWNER, data_dir=data_dir, container=container).section("session")
+    assert sec.lines == ["no active session"] and sec.data["checked"] is True

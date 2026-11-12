@@ -327,13 +327,17 @@ def _gate_leave(token: int) -> None:
 
 @contextlib.contextmanager
 def owner_turn(kind: str = "owner_chat", session_id: Optional[str] = None,
-               lock_timeout: float = 5.0):
+               lock_timeout: float = 0.0):
     """A human turn on a HEADLESS surface (Telegram/email owner turn): a human
     holder of the gate — the process is busy, the `turn.active` marker names it,
     and the first live human turn takes the cross-process lock — but NEVER
-    refuses the human. If another process holds the lock past ``lock_timeout``
-    the turn proceeds without it (logged); the holder and the marker still stop
-    this process's cron/goal ticks and the deploy waiter.
+    refuses the human. If the lock is held the turn proceeds without it
+    (logged); the holder and the marker still stop this process's cron/goal
+    ticks and the deploy waiter. ``lock_timeout`` is 0: the acquire runs ON the
+    event loop, and a cron or goal run holds the lock for its whole run, so a
+    5 s wait stalled every session and then proceeded without the lock anyway
+    (116 W1.3). Do not move the acquire to a thread: ``filelock`` is
+    thread-local, and a release from another thread leaks the lock.
 
     056 WS3 (2026-09-19): until this existed the headless server's owner turns held
     nothing, so a money rail could run under the owner's live turn on the same

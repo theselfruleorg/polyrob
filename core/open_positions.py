@@ -50,7 +50,7 @@ import random
 import sqlite3
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -215,7 +215,7 @@ class PositionEntry:
     entry_usd: Optional[float]
     entry_ts: float
     account: str = TREASURY_ACCOUNT
-    #: ``"trade"`` (the rail bought it) | ``"inherited"`` (held at adopt; no cost basis).
+    #: ``"trade"`` (the rail bought it) | ``"inherited"`` (held when the NFT arrived; no cost basis).
     origin: str = "trade"
     #: ``open`` | ``quarantined`` | ``written_off`` (W0) | ``dust`` | ``retired`` (086).
     status: str = STATUS_OPEN
@@ -884,6 +884,23 @@ def positions_for(user_id: str, *, chain: Optional[str] = None,
     return [e for e in (_entry_from_row(r) for r in rows) if e.status in wanted]
 
 
+def held_positions(user_id: str, *, db_path: Optional[str] = None,
+                   ) -> Tuple[List[PositionEntry], List[PositionEntry]]:
+    """``(open, quarantined)`` — the ONE selection of the book a status line
+    counts (116 W6.2): the active rows with ``qty > 0``, split by status so a
+    look-alike the identity gate quarantined is never counted as held. STRICT
+    like :func:`positions_for` (an unreadable book raises)."""
+    rows = [r for r in positions_for(user_id, db_path=db_path) if r.qty > 0]
+    return ([r for r in rows if r.status == STATUS_OPEN],
+            [r for r in rows if r.status == STATUS_QUARANTINED])
+
+
+def held_count_text(open_rows, quarantined) -> str:
+    """``"3 open (+1 quarantined)"`` — the count both status lines render."""
+    text = f"{len(open_rows)} open"
+    return text + (f" (+{len(quarantined)} quarantined)" if quarantined else "")
+
+
 def realized_for(user_id: str, *, chain: Optional[str] = None,
                  account: str = TREASURY_ACCOUNT,
                  db_path: Optional[str] = None) -> List[RealizedEntry]:
@@ -1011,7 +1028,7 @@ def set_status(user_id: str, chain: str, address: str, status: str, *,
 
 def seed_inherited(user_id: str, *, chain: str, account: str, address: str, symbol: Optional[str],
                    qty: float, db_path: Optional[str] = None, now: Optional[float] = None) -> bool:
-    """Record a position a token-bound account ALREADY held when it was adopted (050 §6, adopt).
+    """Record a position a token-bound account ALREADY held when its NFT arrived (050 §6; 115 W1).
 
     No cost basis exists for it — the seller's entry is not ours to claim — so
     ``entry_usd`` is NULL (unknown, 071 W3 — it was ``0`` before) and

@@ -77,8 +77,37 @@ _ERC20_TRANSFER_SELECTOR = "0xa9059cbb"
 #: passes the simulation and then REVERTS on chain and burns the fee, so ``size_gas`` sizes such
 #: a call from ``eth_estimateGas`` (the node's binary search on success) instead.
 _ACCOUNT_CALL_SELECTORS = frozenset({"0x51945447", "0x43629a73"})
+
+
+def is_account_call(tx) -> bool:
+    """True when *tx* calls an ERC-6551 account's ``execute`` / ``executeBatch``. Such a call is
+    sized from ``eth_estimateGas`` with or without a simulation measurement
+    (:meth:`size_gas`), so a caller sizes it even when the simulation gave no ``gasUsed``."""
+    return str((tx or {}).get("data") or "")[:10].lower() in _ACCOUNT_CALL_SELECTORS
+
+
 #: The margin on an ``eth_estimateGas`` answer: broadcast state differs slightly from the head.
 _ESTIMATE_MARGIN_NUM, _ESTIMATE_MARGIN_DEN = 6, 5
+
+#: The THINNEST margin a sized limit may keep when :data:`MAX_GAS_LIMIT`, not the x1.5 margin,
+#: bounds it: the limit must stay at least x1.2 (the estimate margin above) of the gas the
+#: transaction is measured to need (gasUsed, or eth_estimateGas for an account call). Below
+#: that the rail refuses and names the remedy (split the call) instead of signing a thin limit.
+#:
+#: Why (proposal 115 R1, measured on the agent-NFT rig, 2026-11-12): a 10-id collection mint
+#: simulated 7,378,492-7,421,192 gas, eth_estimateGas said 7,714,733 (the collection reverts
+#: ``IdentityGas`` unless 800,000 x 64/63 + 10,000 gas is LEFT before each id's identity call,
+#: so a mint needs ~4.5% above what it uses), and it landed at 7,487,948 because the mint also
+#: auto-reveals up to 4 ids that fell due after the simulation. The x1.5 limit (11.1M) was
+#: capped to 8M: 6.8% over the gas used, ~3% over the gas needed. A little more state drift
+#: reverts on chain AFTER the guard allowed it, and burns the fee.
+#:
+#: What it can refuse: ONLY a transaction measured above MAX_GAS_LIMIT / 1.2 = 6,666,666 gas.
+#: Below 5,333,333 the x1.5 margin is never capped (every swap, aggregator route, launchpad
+#: launch at 3.47M, reveal(64) at 2.24M); in between the cap leaves at least x1.2. Nothing
+#: that measured under 6,666,666 gas changes. On the rig a mint of 8 ids (5.93M) gets 8M
+#: (x1.35), 9 ids (6.65-6.72M) sits on the threshold, 10 ids (7.38M+) refuses.
+_MIN_CAPPED_MARGIN_NUM, _MIN_CAPPED_MARGIN_DEN = _ESTIMATE_MARGIN_NUM, _ESTIMATE_MARGIN_DEN
 
 
 #: CR-L01: JSON-RPC error texts that mean the node REFUSED these bytes, so the
@@ -342,8 +371,12 @@ class EvmRail:
         ``eth_estimateGas`` x1.2 as well (never below gasUsed x1.5), with or without a
         measurement: the account holds gas back after each leg. An estimate that fails
         refuses (the call would revert), never falls back to the built default.
+
+        When :data:`MAX_GAS_LIMIT` caps the limit, the capped limit must still keep x1.2 of the
+        measured need (:data:`_MIN_CAPPED_MARGIN_NUM`); otherwise :class:`GasCeilingExceeded`
+        names the remedy — split the call into smaller transactions.
         """
-        account_call = str(tx.get("data") or "")[:10].lower() in _ACCOUNT_CALL_SELECTORS
+        account_call = is_account_call(tx)
         measured = bool(sim_gas_used) and sim_gas_used > 0
         if not measured and not account_call:
             return tx
@@ -353,13 +386,26 @@ class EvmRail:
                 f"gas-limit ceiling — broadcasting with less would out-of-gas "
                 f"revert on-chain and burn the fee; refusing to sign")
         sized = max(sim_gas_used * 3 // 2, 21_000) if measured else 21_000
+        need = sim_gas_used if measured else 0
         if account_call:
-            need = self.estimate_gas(tx)
-            if need > MAX_GAS_LIMIT:
+            estimated = self.estimate_gas(tx)
+            if estimated > MAX_GAS_LIMIT:
                 raise GasCeilingExceeded(
-                    f"the account call needs {need} gas (eth_estimateGas), above the "
+                    f"the account call needs {estimated} gas (eth_estimateGas), above the "
                     f"{MAX_GAS_LIMIT} gas-limit ceiling; refusing to sign")
-            sized = max(sized, need * _ESTIMATE_MARGIN_NUM // _ESTIMATE_MARGIN_DEN)
+            sized = max(sized, estimated * _ESTIMATE_MARGIN_NUM // _ESTIMATE_MARGIN_DEN)
+            need = max(need, estimated)
+        if sized > MAX_GAS_LIMIT:
+            floor = need * _MIN_CAPPED_MARGIN_NUM // _MIN_CAPPED_MARGIN_DEN
+            if floor > MAX_GAS_LIMIT:
+                raise GasCeilingExceeded(
+                    f"the transaction needs {need} gas, and the {MAX_GAS_LIMIT} gas-limit "
+                    f"ceiling leaves only {MAX_GAS_LIMIT - need} gas "
+                    f"({(MAX_GAS_LIMIT - need) / need:.1%}) of headroom, under the "
+                    f"{_MIN_CAPPED_MARGIN_NUM / _MIN_CAPPED_MARGIN_DEN - 1:.0%} minimum: a "
+                    f"little state drift would out-of-gas revert it on chain and burn the fee. "
+                    f"Split the call into smaller transactions (for a mint: fewer ids per "
+                    f"mint) — refusing to sign")
         sized = min(sized, MAX_GAS_LIMIT)
         max_fee = int(tx.get("maxFeePerGas", 0) or 0)
         total_fee = max_fee * sized

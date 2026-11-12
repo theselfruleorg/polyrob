@@ -3,9 +3,10 @@
 
 A supported account is a DIRECT ERC-1167 clone, created by the canonical registry, of either
 the canonical Tokenbound ``AccountV3`` (pinned by :data:`CODE_SHA256`) or a collection's own
-PolyrobAccount (pinned by its profile's ``transfer_safe.account_impl_runtime_sha256``; see
-``core/wallet/collection_registry.py``). The profile's account version decides which: there is
-no default implementation here, so a caller that forgets it fails loudly. Measured on 4663 (2026-09-22): the Tokenbound
+ERC-6551P account implementation (pinned by its profile's ``accounts[i].runtime_sha256``; see
+``core/wallet/collection_registry.py`` and the kind table ``core/wallet/account_kinds.py``). The
+profile's account version decides which: there is no default implementation here, so a caller
+that forgets it fails loudly. Measured on 4663 (2026-09-22): the Tokenbound
 guardian trusts NO implementation there, so the ``AccountProxy`` path cannot be
 initialised — ``ACCOUNT_PROXY`` is recorded here and never used. A clone has no
 ERC-1967 slot: its implementation is the 20 bytes at ``code[10:30]`` (the
@@ -21,7 +22,7 @@ refuses on mismatch.
 
 ⚠️ No signing helper lives here, by design: for AccountV3 the NFT's owner is a valid ERC-1271
 signer of the account and the lock is not consulted for signatures, so an unscoped signing
-helper would be a way to sign FOR the account. A PolyrobAccount signs nothing
+helper would be a way to sign FOR the account. An ERC-6551P account signs nothing
 (``isValidSignature`` always fails, ``isValidSigner`` always 0).
 
 069 v4 (the simple model): this instance acts through an account ONLY as the NFT's
@@ -71,10 +72,11 @@ _RUNTIME_LEN = 10 + 20 + 15 + 128
 
 # Account-admin selectors (050 §7.3 rule 4). `execute` with operation != 0 is refused separately.
 # C14 — the agent NEVER locks an account: `lock` is in this denylist, so no guarded call (direct,
-# through `execute`, nested or batched) can set one (a PolyrobAccount has no lock at all). A sale of
-# a POLYROB needs `readyToSell(id)` from an earlier transaction or a market/zone ticket
-# (polyrob-desk SPEC §7.3), and core has no verb for either: the agent cannot sell its NFT; it
-# moves only by an owner transfer (`agent_nft_withdraw_token`, always owner-approved).
+# through `execute`, nested or batched) can set one (an ERC-6551P account has no lock at all). A
+# sale of a token of an ERC-6551P collection needs `readyToSell(id)` from an earlier transaction or
+# a market/zone ticket (the first deployment: polyrob-desk SPEC §7.3), and core has no verb for
+# either: the agent cannot sell its NFT; it moves only by an owner transfer
+# (`agent_nft_withdraw_token`, always owner-approved).
 ADMIN_SELECTORS: Dict[str, str] = {
     abi.selector("lock(uint256)"): "lock",
     abi.selector("setPermissions(address[],bool[])"): "setPermissions",
@@ -90,14 +92,14 @@ EXECUTE_SELECTOR = abi.selector("execute(address,uint256,bytes,uint8)")
 #: Every selector that drives an account: ``execute`` (any operation) plus the admin verbs.
 ACCOUNT_CALL_SELECTORS: Dict[str, str] = {EXECUTE_SELECTOR: "execute", **ADMIN_SELECTORS}
 
-#: ERC-2771 forwarders AccountV3 trusts (``isTrustedForwarder(f) == true``; AccountV3 only — a
-#: PolyrobAccount has no forwarder). A call THROUGH
+#: ERC-2771 forwarders AccountV3 trusts (``isTrustedForwarder(f) == true``; AccountV3 only — an
+#: ERC-6551P account has no forwarder). A call THROUGH
 #: one reaches the account with ``_msgSender()`` = the ORIGINAL sender, so the owner key
 #: that sends ``forwarder.aggregate3([(account, execute(...))])`` drives the account while
 #: the transaction's own ``to`` is the forwarder. MEASURED on 4663 (G0.2, 2026-09-29): the
 #: guard read such a call as a 1-wei treasury send and authorized it; 0.05 ETH left the
 #: account on replay. Static pin here; the ``via_account`` pre-flight also reads
-#: ``isTrustedForwarder`` on the account for the inner destination (core handoff W1).
+#: ``isTrustedForwarder`` on the account for every distinct inner target.
 TRUSTED_FORWARDERS: Dict[str, str] = {
     "0xca1167915584462449ee5b4ea51c37fe81ecdccd": "Tokenbound ERC-2771 forwarder (Multicall3-shaped)",
 }
@@ -132,14 +134,9 @@ APPROVAL_KINDS: Tuple[str, ...] = ("erc20", "erc721", "operator", "permit2", "er
                                    "erc6909_operator")
 
 
-#: What a PolyrobAccount guarantees about approvals, and what it does not (polyrob-desk SPEC §7.1,
-#: G1 and its residuals). The approval scan still runs for such an account: a row found there is a
-#: residual R-1 symptom, never "impossible".
-POLYROB_NO_APPROVALS = "the PolyrobAccount refuses standing approvals"
-POLYROB_RESIDUALS = ("not covered by the account: grants it cannot decode (R-1), built-in "
-                     "grants of a protocol (R-5), configuration rights (R-6)")
-POLYROB_FOUND_APPROVAL = ("the PolyrobAccount refuses standing approvals, so a row found here is a "
-                          "residual R-1 symptom (a grant the account could not decode)")
+# What each account kind guarantees about approvals (and its view text) is a field of its row
+# in ``core/wallet/account_kinds.py``: the approval scan runs for every kind (a row found on an
+# account that refuses standing approvals is a residual R-1 symptom, never "impossible").
 
 
 class Erc6551Error(RuntimeError):
@@ -166,7 +163,7 @@ def account_address(chain_id: int, token_contract: str, token_id: int, salt: int
                     implementation: str) -> str:
     """The registry's ``account(impl, salt, chainId, contract, tokenId)`` computed offline (pure
     CREATE2). *implementation* has no default: it is the profile's account version (AccountV3 or
-    a collection's PolyrobAccount), so a caller that forgets it fails loudly."""
+    a collection's ERC-6551P implementation), so a caller that forgets it fails loudly."""
     from eth_utils import keccak
     salt_b = int(salt).to_bytes(32, "big")
     footer = salt_b + int(chain_id).to_bytes(32, "big") + (b"\x00" * 12 + _addr20(token_contract)) \
@@ -317,7 +314,7 @@ def embedded_account_selector(data: Optional[str]) -> Optional[str]:
 
 def is_trusted_forwarder(address: Optional[str]) -> bool:
     """True when *address* is a PINNED ERC-2771 forwarder AccountV3 trusts (static list). The
-    guard refuses a call to one for every account kind (a PolyrobAccount trusts none)."""
+    guard refuses a call to one for every account kind (an ERC-6551P account trusts none)."""
     return bool(address) and str(address).lower() in TRUSTED_FORWARDERS
 
 
@@ -347,17 +344,18 @@ def verify(rpc: Rpc, version=None) -> None:
     """The registry and the account implementation must be EXACTLY the reviewed code. Re-read
     per call; raises on mismatch.
 
-    *version* is the profile's ``collection_registry.AccountVersion`` of the account. None or an
-    AccountV3 version checks the registry and AccountV3 against :data:`CODE_SHA256`; a
-    PolyrobAccount version checks the registry there and its implementation against the
-    profile's ``transfer_safe.account_impl_runtime_sha256`` (G-3)."""
-    if version is None or not getattr(version, "is_polyrob", False):
+    *version* is the profile's ``collection_registry.AccountVersion`` of the account. None, or a
+    kind with a built-in pin (Tokenbound AccountV3), checks the registry and AccountV3 against
+    :data:`CODE_SHA256`; any other kind (ERC-6551P) checks the registry there and its
+    implementation against the profile's ``runtime_sha256`` (G-3)."""
+    kind = getattr(version, "kind", None)
+    if version is None or getattr(kind, "builtin_code_sha256", None):
         for address, expected in CODE_SHA256.items():
             _verify_code(rpc, address, expected)
         return
     if not getattr(version, "runtime_sha256", None):
-        raise Erc6551Error(f"the PolyrobAccount implementation {version.implementation} has no "
-                           f"pinned code hash — refusing")
+        raise Erc6551Error(f"the {getattr(kind, 'label', 'account')} implementation "
+                           f"{version.implementation} has no pinned code hash — refusing")
     _verify_code(rpc, REGISTRY.lower(), CODE_SHA256[REGISTRY.lower()])
     _verify_code(rpc, version.implementation, version.runtime_sha256)
 
@@ -409,12 +407,12 @@ def read_state(rpc: Rpc, account: str) -> int:
 
 
 def read_locked_until(rpc: Rpc, account: str) -> int:
-    """AccountV3 only (a PolyrobAccount has no lock: the read reverts)."""
+    """AccountV3 only (an ERC-6551P account has no lock: the read reverts)."""
     return int(_call(rpc, account, "lockedUntil", [], [], [{"type": "uint256"}]))
 
 
 def read_is_locked(rpc: Rpc, account: str) -> bool:
-    """AccountV3 only (a PolyrobAccount has no lock: the read reverts)."""
+    """AccountV3 only (an ERC-6551P account has no lock: the read reverts)."""
     return bool(_call(rpc, account, "isLocked", [], [], [{"type": "bool"}]))
 
 
@@ -438,7 +436,7 @@ def _magic(raw) -> str:
 
 def read_is_valid_signer(rpc: Rpc, account: str, signer: str, context: str = "0x") -> bool:
     """ERC-6551 ``isValidSigner(signer, context)`` == magic. AccountV3: the owner or a permissioned
-    caller; a PolyrobAccount: nobody (always 0). Raises when unreadable."""
+    caller; an ERC-6551P account: nobody (always 0). Raises when unreadable."""
     raw = _call(rpc, account, "isValidSigner", [{"type": "address"}, {"type": "bytes"}],
                 [signer, context or "0x"], [{"type": "bytes4"}])
     return _magic(raw) == IS_VALID_SIGNER_MAGIC
@@ -446,7 +444,7 @@ def read_is_valid_signer(rpc: Rpc, account: str, signer: str, context: str = "0x
 
 def read_is_valid_signature(rpc: Rpc, account: str, digest: str, signature: str) -> bool:
     """ERC-1271 ``isValidSignature(hash, signature)`` == magic. ⚠️ AccountV3 checks raw ECDSA with
-    no account in the digest and does NOT consult the lock; a PolyrobAccount always answers
+    no account in the digest and does NOT consult the lock; an ERC-6551P account always answers
     ``0xffffffff`` (it signs nothing). Raises when unreadable; a revert
     (invalid signature) raises too — callers treat "not proven valid" as False."""
     raw = _call(rpc, account, "isValidSignature", [{"type": "bytes32"}, {"type": "bytes"}],
@@ -456,52 +454,26 @@ def read_is_valid_signature(rpc: Rpc, account: str, digest: str, signature: str)
 
 def read_is_trusted_forwarder(rpc: Rpc, account: str, forwarder: str) -> bool:
     """``isTrustedForwarder(forwarder)`` on the account (ERC-2771). AccountV3 only: a
-    PolyrobAccount has no such function and no fallback, so the read reverts. Raises when
+    ERC-6551P account has no such function and no fallback, so the read reverts. Raises when
     unreadable."""
     return bool(_call(rpc, account, "isTrustedForwarder", [{"type": "address"}], [forwarder],
                       [{"type": "bool"}]))
 
 
 def read_journal(rpc: Rpc, account: str) -> str:
-    """PolyrobAccount ``JOURNAL()``: the JournalLog its ``readyToSell`` leg may be followed by
+    """ERC-6551P ``JOURNAL()``: the JournalLog its ``readyToSell`` leg may be followed by
     (an immutable of the implementation). Lowercase. Raises when unreadable."""
     return str(_call(rpc, account, "JOURNAL", [], [], [{"type": "address"}])).lower()
 
 
 def read_in_batch(rpc: Rpc, account: str) -> bool:
-    """PolyrobAccount ``inBatch()``: True only while one of its batches runs (a view from
+    """ERC-6551P ``inBatch()`` (its ERC-165 id): True only while one of its batches runs (a view from
     outside a batch reads False). Raises when unreadable."""
     return bool(_call(rpc, account, "inBatch", [], [], [{"type": "bool"}]))
 
 
-#: The custom errors of PolyrobAccount (polyrob-desk ``contracts/src/account/PolyrobAccount.sol``),
-#: by selector: a reverted simulation through such an account names the on-chain refusal.
-POLYROB_ACCOUNT_ERRORS: Dict[str, str] = {
-    "0x30cd7471": "NotOwner (only the NFT's current owner can make the account call)",
-    "0xb5dfd9e5": "Reentered (the account is already inside a batch)",
-    "0x5363d184": "SelfCall (the account may not call itself)",
-    "0x29a270f5": "OperationNotSupported (CALL only: no DELEGATECALL, no CREATE)",
-    "0xc17da94a": "ReadyNotLast (after readyToSell only JournalLog.log legs with no value may follow)",
-    "0xe4073933": "Refused (the account refuses this selector or target at any depth)",
-    "0xb04d6d52": "BadEncoding (a grant call or a wrapper is not canonically ABI-encoded)",
-    "0x2645cabb": "TooManyGrants (more grant tuples than the account reads)",
-    "0x1bc29056": "ReadGas (too little gas left for a grant read)",
-    "0x6379a90a": "ReadFailed (a grant read of a target failed)",
-    "0xdab3582e": "GasReserve (the account holds gas back after each leg; the gas limit is too low)",
-    "0xa210d63b": "OwnerChanged (the NFT's owner changed inside the batch)",
-    "0xd88c09e3": ("StandingGrant (an approval would outlive the batch: an approve must be spent "
-                   "and reset to zero in the same batch)"),
-    "0xb79e3f3f": "OwnershipCycle (an account may not receive its own NFT)",
-}
-
-
-def polyrob_account_error(revert_data) -> Optional[str]:
-    """The PolyrobAccount error named by the 4-byte selector anywhere at the start of
-    *revert_data* (hex string or bytes), or None."""
-    if isinstance(revert_data, (bytes, bytearray)):
-        revert_data = "0x" + bytes(revert_data).hex()
-    head = str(revert_data or "").lower()[:10]
-    return POLYROB_ACCOUNT_ERRORS.get(head)
+# The custom errors of each account kind are a field of its row (``account_kinds.ERC6551P_ERRORS``);
+# a collection's and its sale's are in ``core/wallet/collection_errors.py``.
 
 
 # ==========================================================================

@@ -423,11 +423,14 @@ def _data_dir(container: Any) -> Optional[str]:
 
 
 def resolve_store(container: Any, *, create: bool,
-                  data_dir: Optional[str] = None) -> Optional[OwnerThreadStore]:
+                  data_dir: Optional[str] = None,
+                  strict: bool = False) -> Optional[OwnerThreadStore]:
     """The registered store, else one opened on the data home.
 
     ``create=False`` (every READ) returns None when the file does not exist —
     an absent thread is "nothing recorded", never a freshly minted empty db.
+    ``strict`` (116 W5.11) re-raises when a file that EXISTS will not open:
+    an unreadable store is not an absent one.
     """
     try:
         svc = container.get_service(SERVICE_NAME) if container is not None else None
@@ -447,6 +450,8 @@ def resolve_store(container: Any, *, create: bool,
     try:
         store = OwnerThreadStore(path)
     except Exception as e:
+        if strict:
+            raise
         logger.debug("owner thread store unavailable at %s: %s", path, e)
         return None
     if container is not None and create:
@@ -704,14 +709,15 @@ def recent_outbound_bodies(container: Any, user_id: str, since_secs: float, *,
 
 def thread_counts(container: Any, user_id: str, *, hours: float = 24.0,
                   data_dir: Optional[str] = None) -> Optional[Dict[str, int]]:
-    """``{"out": n, "in": m}`` over the window, or None when there is no store."""
-    try:
-        store = resolve_store(container, create=False, data_dir=data_dir)
-        if store is None:
-            return None
-        return store.counts_since(user_id, hours * 3600)
-    except Exception:
+    """``{"out": n, "in": m}`` over the window, or None when there is no store.
+
+    116 W5.11: RAISES on a failed read (a store that exists and will not open
+    or answer) — "no store" and "could not read it" are different facts, and
+    the caller renders the second as "unavailable (<reason>)"."""
+    store = resolve_store(container, create=False, data_dir=data_dir, strict=True)
+    if store is None:
         return None
+    return store.counts_since(user_id, hours * 3600)
 
 
 def thread_recent(container: Any, user_id: str, *, limit: int = 20,

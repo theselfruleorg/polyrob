@@ -118,6 +118,32 @@ def _warn_backfill_retired_once(config_dir: str = "config") -> None:
     )
 
 
+def _root_env_text(path) -> Optional[str]:
+    """The text of env file *path* for a process that runs as ROOT, or ``None`` when it is
+    refused (security review 2026-11-10, M7).
+
+    ``<data home>/.env`` sits in a group-writable tree: as root, only a file root owns and
+    no group or other user can write configures the process. The file is opened once and
+    checked on that descriptor (``fstat``), and the values come from the same descriptor,
+    so a file swapped after the check is never read. One WARN names a refused file.
+    """
+    import stat as _stat
+    log = logging.getLogger(__name__)
+    fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0))
+    with os.fdopen(fd, "r", encoding="utf-8") as fh:
+        info = os.fstat(fh.fileno())
+        if not _stat.S_ISREG(info.st_mode):
+            log.warning("env file %s is skipped: this process runs as root and it is not "
+                        "a regular file", path)
+            return None
+        if info.st_uid != 0 or info.st_mode & 0o022:
+            log.warning("env file %s is skipped: this process runs as root and the file is "
+                        "not owned by root or is group/other-writable (uid %d, mode %04o)",
+                        path, info.st_uid, _stat.S_IMODE(info.st_mode))
+            return None
+        return fh.read()
+
+
 def load_env(env: Optional[str] = None, config_dir: str = "config") -> str:
     """Load environment variables from the ONE env ladder (080 WS-1).
 
@@ -167,6 +193,17 @@ def load_env(env: Optional[str] = None, config_dir: str = "config") -> str:
                 from dotenv import dotenv_values
                 from core.config_service import note_file_loaded
                 from core.security.custody_env import note_env_file
+                if hasattr(os, "geteuid") and os.geteuid() == 0:
+                    # M7: as root, only a root-owned file no one else can write.
+                    import io
+                    text = _root_env_text(cand.path)
+                    if text is None:
+                        continue
+                    values = dotenv_values(stream=io.StringIO(text))
+                    note_file_loaded(cand.path, values)
+                    note_env_file(cand.path, values)
+                    load_dotenv(stream=io.StringIO(text), override=False)
+                    continue
                 values = dotenv_values(str(cand.path))
                 note_file_loaded(cand.path, values)
                 # 085 W1: a custody secret in a file this UID can read is a gap.
@@ -558,13 +595,10 @@ def _resolve_cli_data_home():
     # (POLYROB_DATA_DIR) vs "sessions share one workspace?" (POLYROB_PROJECT_DIR).
     # This is the headless multi-session case the battle test needed
     # (2026-06-29 working-directory model analysis).
+    from core.runtime_paths import persistent_workspace_root
     data_home = resolve_data_home()
-    env_project = os.environ.get("POLYROB_PROJECT_DIR")
-    if env_project:
-        return data_home, True, str(Path(env_project).resolve())
-    if os.environ.get("POLYROB_DATA_DIR"):
-        return data_home, False, None
-    return data_home, True, str(Path.cwd())
+    root = persistent_workspace_root()  # the ONE rule (116 W5.4)
+    return data_home, root is not None, root
 
 
 def _resolve_workspace_lock_dir(data_home, ws_is_project_root: bool, project_root) -> str:

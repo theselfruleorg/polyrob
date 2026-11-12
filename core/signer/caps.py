@@ -31,6 +31,9 @@ Layout::
                                 # price needs the on-box approval. "caps": a send the
                                 # weaker, liquidity-measured price valued is signed
                                 # inside the caps; one with no price still asks
+    resource_calls = []         # "chain:0xcontract:0xselector" rows. A zero-value
+                                # resource call (an order's delivery) is signed only
+                                # when its contract and function are listed here
 
     [server]
     socket = "/run/polyrob-signer/signer.sock"
@@ -78,7 +81,7 @@ _TABLES = {
     "caps": {"per_tx_usd", "daily_usd", "x402_per_payment_usd", "x402_daily_usd",
              "approve_above_usd"},
     "policy": {"chains", "approval_ttl_sec", "x402_max_window_sec", "hyperliquid_orders",
-               "unverified_sends"},
+               "unverified_sends", "resource_calls"},
     "server": {"socket", "socket_group", "state_dir", "client_uids", "peer_check"},
     "identity": {"network", "operational_venue", "treasury", "x402", "polymarket",
                  "hyperliquid", "solana"},
@@ -124,6 +127,8 @@ class SignerConfig:
     approve_above_usd: Optional[float] = None
     #: "approve" | "caps" — see the module docstring.
     unverified_sends: str = "approve"
+    #: The ``(chain, contract, selector)`` rows a resource call may address (lower case).
+    resource_calls: Tuple[Tuple[str, str, str], ...] = ()
 
     def __post_init__(self):
         if self.x402_daily_usd is None:
@@ -142,7 +147,26 @@ class SignerConfig:
                 "operational_venue": self.operational_venue,
                 "hyperliquid_orders": self.hyperliquid_orders,
                 "unverified_sends": self.unverified_sends,
+                "resource_calls": len(self.resource_calls),
                 "sweep": bool(self.sweep_destination)}
+
+
+_RESOURCE_CALL_RE = re.compile(r"^([a-z0-9-]+):(0x[0-9a-f]{40}):(0x[0-9a-f]{8})$")
+
+
+def _resource_calls(rows) -> Tuple[Tuple[str, str, str], ...]:
+    """``[policy] resource_calls`` as ``(chain, contract, selector)`` rows."""
+    if not isinstance(rows, list):
+        raise SignerConfigError("[policy] resource_calls must be a list")
+    out = []
+    for row in rows:
+        m = _RESOURCE_CALL_RE.match(row.strip().lower()) if isinstance(row, str) else None
+        if m is None:
+            raise SignerConfigError(
+                '[policy] resource_calls rows are "chain:0xcontract:0xselector" '
+                "(a 20-byte address and a 4-byte selector)")
+        out.append(m.groups())
+    return tuple(out)
 
 
 def _cap(table: dict, key: str, *, required: bool = True,
@@ -240,6 +264,7 @@ def parse_signer_config(data: dict) -> SignerConfig:
     unverified = policy.get("unverified_sends", "approve")
     if unverified not in ("approve", "caps"):
         raise SignerConfigError('[policy] unverified_sends must be "approve" or "caps"')
+    resource_calls = _resource_calls(policy.get("resource_calls", []))
     venue = str(identity.get("operational_venue", "treasury")).strip().lower() or "treasury"
     if venue not in ("treasury", "x402"):
         raise SignerConfigError("[identity] operational_venue must be treasury or x402")
@@ -255,6 +280,7 @@ def parse_signer_config(data: dict) -> SignerConfig:
         x402_max_window_sec=_int(policy, "x402_max_window_sec", 600, "policy"),
         hyperliquid_orders=hl,
         unverified_sends=unverified,
+        resource_calls=resource_calls,
         network=str(identity.get("network", "mainnet")),
         operational_venue=venue,
         expected_addresses=expected,
@@ -297,6 +323,8 @@ def render_signer_toml(cfg: SignerConfig) -> str:
              f"x402_max_window_sec = {cfg.x402_max_window_sec}",
              f"hyperliquid_orders = {'true' if cfg.hyperliquid_orders else 'false'}",
              f"unverified_sends = {_toml_str(cfg.unverified_sends)}",
+             "resource_calls = [" + ", ".join(
+                 _toml_str(":".join(row)) for row in cfg.resource_calls) + "]",
              "", "[server]",
              f"socket = {_toml_str(cfg.socket)}",
              f"state_dir = {_toml_str(cfg.state_dir)}",

@@ -492,7 +492,7 @@ async def close_session_llms(agent: Any, container: Any = None) -> None:
         for llm in main:
             if id(llm) not in closed:
                 closed.add(id(llm))
-                await close_own_llm(llm, container)
+                await close_own_llm(llm, container, may_be_shared=True)
 
 
 def _set_level(agent: Any, level: Optional[str]) -> None:

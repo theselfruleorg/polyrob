@@ -166,6 +166,14 @@ class Deltas:
     #: 085 W2 — the native change of each address in ``simulate(watch_native=…)``
     #: (an endowed deploy's new contract). Empty = not measured.
     watched_native_deltas: Dict[str, int] = field(default_factory=dict)
+    #: 115 W7 — each ``(to, data)`` word view of ``simulate(views=…)`` read BEFORE and AFTER the
+    #: transaction in the same bundle (a sale act's readiness or nonce). Empty = not measured.
+    views_before: Dict[Tuple[str, str], int] = field(default_factory=dict)
+    views_after: Dict[Tuple[str, str], int] = field(default_factory=dict)
+    #: A reverted transaction's revert data (``error.data`` or ``returnData``), 0x hex; None
+    #: when it did not revert or carried none. The guard names it from the tables of the
+    #: contracts the transaction is known to reach (``core.wallet.collection_errors``).
+    revert_data: Optional[str] = None
 
     @property
     def grants_allowance(self) -> bool:
@@ -243,7 +251,8 @@ def simulate(tx: dict, *, holder: str, chain: str,
              tokens: List[str], spenders: List[str],
              rpc: Optional[Callable] = None,
              sender: Optional[str] = None,
-             watch_native: Tuple[str, ...] = ()) -> Deltas:
+             watch_native: Tuple[str, ...] = (),
+             views: Tuple[Tuple[str, str], ...] = ()) -> Deltas:
     """Simulate *tx* and return the observed deltas for *holder*.
 
     ⚠️ Uses ``eth_simulateV1``, NOT a sequence of ``eth_call``s. This is the
@@ -272,6 +281,11 @@ def simulate(tx: dict, *, holder: str, chain: str,
     ``watch_native`` (085 W2): more addresses whose native balance is measured
     before and after (``Deltas.watched_native_deltas``) — the address an endowed
     CREATE lands at, so a constructor that forwards its endowment is visible.
+
+    ``views`` (115 W7): ``(to, data)`` calls answering one word (a bool or a uint), read before
+    and after the transaction in the same bundle (``Deltas.views_before`` / ``views_after``) — what
+    a call that moves nothing changed (``saleReadyOf``, a market nonce). An unreadable view
+    refuses like an unreadable balance.
 
     085 W8 LEAD-1: the bundle runs with ``validation: true``, a real ``gas`` and
     ``maxFeePerGas`` (the tip is 0, see below), and
@@ -320,6 +334,10 @@ def simulate(tx: dict, *, holder: str, chain: str,
         reads.append({"from": holder, "to": MULTICALL3,
                       "data": _SEL_GET_ETH_BALANCE + _pad_addr(w)})
         layout.append(("watch_native", str(w).lower()))
+    for to, data in views or ():
+        key = (str(to).lower(), str(data).lower())
+        reads.append({"from": holder, "to": key[0], "data": key[1]})
+        layout.append(("view", key))
 
     # The simulated tip is 0, whatever the transaction carries: an ArbOS chain
     # (robinhood) does not charge a tip, so adding back gasUsed x (base + tip)
@@ -377,11 +395,9 @@ def simulate(tx: dict, *, holder: str, chain: str,
 
     tx_entry = entries[tx_index]
     if str(tx_entry.get("status")) not in ("0x1", "1"):
-        named = _account_revert_name(tx_entry)
         return Deltas(ok=False, error=(
             f"the transaction REVERTS in simulation "
-            f"({tx_entry.get('error') or 'status 0'})"
-            + (f" — the PolyrobAccount refused it on chain: {named}" if named else "")))
+            f"({tx_entry.get('error') or 'status 0'})"), revert_data=_revert_data(tx_entry))
 
     # The tx's own event log — the only view that covers tokens and spenders
     # the caller did NOT declare. A missing log SET (key absent, not an empty
@@ -430,6 +446,8 @@ def simulate(tx: dict, *, holder: str, chain: str,
     allowance_deltas: Dict[Tuple[str, str], int] = {}
     allowance_after: Dict[Tuple[str, str], int] = {}
     watched: Dict[str, int] = {}
+    views_before: Dict[Tuple[str, str], int] = {}
+    views_after: Dict[Tuple[str, str], int] = {}
     for i, (kind, key) in enumerate(layout):
         delta = after[i] - before[i]
         if (kind == "native" and not split) or kind == "sender_native" or \
@@ -437,6 +455,8 @@ def simulate(tx: dict, *, holder: str, chain: str,
             delta += gas_charge
         if kind == "native":
             native_delta = delta
+        elif kind == "view":
+            views_before[key], views_after[key] = before[i], after[i]
         elif kind == "watch_native":
             watched[key] = delta
         elif kind == "sender_native":
@@ -467,23 +487,17 @@ def simulate(tx: dict, *, holder: str, chain: str,
                   sender_native_delta=sender_native_delta,
                   sender_moved=sender_moved,
                   allowance_after=allowance_after,
-                  watched_native_deltas=watched)
+                  watched_native_deltas=watched,
+                  views_before=views_before, views_after=views_after)
 
 
-def _account_revert_name(entry) -> Optional[str]:
-    """The PolyrobAccount custom error (``erc6551.POLYROB_ACCOUNT_ERRORS``) a reverted call
-    carries in its revert data (``error.data`` or ``returnData``), or None."""
+def _revert_data(entry) -> Optional[str]:
+    """The revert data a reverted call carries (``error.data``, else ``returnData``), as 0x
+    hex with at least a selector, or None. Which contract's error it is, the caller decides."""
     err = entry.get("error")
-    candidates = [err.get("data")] if isinstance(err, dict) else []
-    candidates.append(entry.get("returnData"))
-    try:
-        from core.wallet import erc6551
-    except Exception:  # noqa: BLE001 — no crypto extra: no name, the revert still refuses
-        return None
-    for data in candidates:
-        named = erc6551.polyrob_account_error(data) if isinstance(data, str) else None
-        if named:
-            return named
+    for data in ([err.get("data")] if isinstance(err, dict) else []) + [entry.get("returnData")]:
+        if isinstance(data, str) and data.lower().startswith("0x") and len(data) >= 10:
+            return data.lower()
     return None
 
 
@@ -491,7 +505,7 @@ def _sender_movements(raw_logs, sender: str) -> Tuple[str, ...]:
     """Every log whose INDEXED topics name *sender* (050 §7.3; measured, not judged since 069 v4).
 
     Deliberately wider than :func:`_holder_events`: it does not parse the event,
-    it only asks whether the signer appears in it. An ERC-6551 account's own `execute` (AccountV3, PolyrobAccount) emits
+    it only asks whether the signer appears in it. An ERC-6551 account's own `execute` (AccountV3, ERC-6551P) emits
     no event, so a clean account call produces none of these.
     """
     word = "0x" + "0" * 24 + str(sender).lower().removeprefix("0x")

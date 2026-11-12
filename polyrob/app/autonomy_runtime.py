@@ -357,8 +357,26 @@ def _requeue_on_boot(board) -> int:
     """§5.1 cold-start requeue. NOT pause-gated (031 review): a `running` row after
     a restart is a lie whatever the pause state, and requeueing starts nothing —
     dispatch itself is gated. Leaving the rows `running` would let the unconditional
-    `reclaim_stale` count the restart as a failure once the claim TTL lapsed."""
-    return board.requeue_running_on_boot()
+    `reclaim_stale` count the restart as a failure once the claim TTL lapsed.
+
+    116 W2.4: each requeued run was cut by the restart (a crash, or a shutdown that
+    did not drain): it gets its terminal `goal_run cut_by_restart` row here, as
+    `cron/jobs.py::reclaim_stale_running` does for a job. A drained shutdown already
+    returned its rows to `ready`, so nothing is written twice."""
+    ids = board.requeue_running_on_boot_ids()
+    if ids:
+        try:
+            from agents.task.goals.dispatcher import _goal_ev, _goal_ref
+            for gid in ids:
+                try:
+                    row = board.get(gid)
+                except Exception:
+                    row = None
+                _goal_ev(row or _goal_ref(gid), "cut_by_restart",
+                         "process restart: the running row was requeued on boot")
+        except Exception:
+            logger.debug("cold-start goal sweep: terminal events failed", exc_info=True)
+    return len(ids)
 
 
 def _build_retention_ticker(data_dir):
@@ -998,9 +1016,10 @@ class AutonomyHandles:
             logger.debug("shutdown: cron cancel failed for %s", jid, exc_info=True)
 
     async def _drain_goals(self) -> None:
-        """Cancel this worker's goal runs, return their rows to `ready` (no
-        failure increment — a restart is not the goal's fault) and record a
-        `cut_by_restart` goal_run event each, so the ledger has an ending."""
+        """Cancel this worker's goal runs and return their rows to `ready` (no
+        failure increment — a restart is not the goal's fault). The hold itself
+        writes each run's ONE `goal_run cut_by_restart` row (116 W2.4:
+        `reason_kind="restart"`, `GoalRunMixin._record_hold_endings`)."""
         goals = self._loops.get("goals")
         dispatcher = getattr(goals, "dispatcher", None)
         if dispatcher is None:
@@ -1008,32 +1027,15 @@ class AutonomyHandles:
         held = []
         try:
             held = await asyncio.wait_for(
-                dispatcher.hold_inflight("process shutdown (cut_by_restart)"),
+                dispatcher.hold_inflight("process shutdown (cut_by_restart)",
+                                         reason_kind="restart"),
                 timeout=_STOP_GRACE_SEC)
         except asyncio.TimeoutError:
             logger.warning("shutdown: goal hold did not finish in %ss", _STOP_GRACE_SEC)
         except Exception:
             logger.debug("shutdown: goal hold failed", exc_info=True)
-        if not held:
-            return
-        logger.warning("shutdown: cut %d in-flight goal run(s) (cut_by_restart)", len(held))
-        try:
-            from core.event_log import event_log_enabled, get_event_log
-            if not event_log_enabled():
-                return
-            board = getattr(dispatcher, "board", None)
-            log = get_event_log()
-            for gid in held:
-                user_id = ""
-                try:
-                    row = board.get(gid) if board is not None else None
-                    user_id = getattr(row, "user_id", "") or ""
-                except Exception:
-                    user_id = ""
-                log.record("goal_run", user_id=user_id, source="goal", goal_id=gid,
-                           outcome="cut_by_restart", reason="process shutdown")
-        except Exception:
-            logger.debug("shutdown: goal terminal events failed", exc_info=True)
+        if held:
+            logger.warning("shutdown: cut %d in-flight goal run(s) (cut_by_restart)", len(held))
 
     async def drain_inflight(self) -> None:
         """Give the in-flight cron/goal work an honest ending before the loops

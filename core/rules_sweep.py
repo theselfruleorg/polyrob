@@ -138,7 +138,7 @@ def sweep(rule: str, *, user_id: str, data_dir: str, instance_id: str,
     "notes": [str]}``. Never raises for an unreadable surface — it is named
     in ``notes`` instead (an unswept surface must not read as a clean one).
     """
-    from core.doc_kind import KIND_INSTRUCTION, classify_tree, doc_kind
+    from core.doc_kind import KIND_INSTRUCTION, doc_kind
     from core.instance import load_owner_doc, load_self_context
     rule = (rule or "").strip()
     out = {"hits": [], "more": 0, "swept": [], "notes": [
@@ -164,8 +164,7 @@ def sweep(rule: str, *, user_id: str, data_dir: str, instance_id: str,
     for where, text in rails:
         hits += _scan(rule, "rail_prose", where, text)
     out["swept"].append("rail_prose")
-    ws = str(Path(data_dir) / "workspace")
-    tree = classify_tree(ws)
+    tree, ws = workspace_doctrine_tree()
     if tree.get("state"):
         out["notes"].append(f"workspace: {tree['state']}")
     else:
@@ -184,6 +183,26 @@ def sweep(rule: str, *, user_id: str, data_dir: str, instance_id: str,
     out["hits"] = hits[:MAX_HITS]
     out["more"] = max(0, len(hits) - MAX_HITS)
     return out
+
+
+#: How deep the doctrine walk reads the persistent workspace. The folder is the
+#: agent's whole project (prod: 21k entries) or, in a local CLI, the cwd; an
+#: instruction doc sits near its top (``reports/rules.md``). Status and the
+#: sweep share this bound, so they count the same documents (116 W5.4).
+DOCTRINE_MAX_DEPTH = 3
+NO_PERSISTENT_WORKSPACE = "no persistent workspace (each session has its own)"
+
+
+def workspace_doctrine_tree():
+    """``(classify_tree result, root)`` over ``core.runtime_paths.
+    persistent_workspace_root()`` — the ONE workspace the agent works in, never
+    ``<data_dir>/workspace`` (a path nothing creates). Root is "" when there is none."""
+    from core.doc_kind import classify_tree
+    from core.runtime_paths import persistent_workspace_root
+    ws = persistent_workspace_root() or ""
+    if not ws:
+        return {"state": NO_PERSISTENT_WORKSPACE}, ""
+    return classify_tree(ws, max_depth=DOCTRINE_MAX_DEPTH), ws
 
 
 def same_subject_lines(new_text: str, skill_id: str, rules_text: str) -> List[str]:
@@ -335,7 +354,14 @@ def render_conflict_check(result: dict) -> str:
 
 def rail_instruction_lines(task: str, payload: Optional[dict] = None) -> List[str]:
     """How an owner seat shows a job's prose: as the SCOPED instruction it is."""
-    lines = ["instruction (the rail's own — a later owner rule outranks it):"]
+    lines = []
+    script = (payload or {}).get("script") if isinstance(payload, dict) else None
+    if isinstance(script, dict):
+        # A script job runs a file, not this text: the owner must see which file.
+        words = " ".join([str(script.get("path") or "?")] + [str(a) for a in script.get("args") or ()])
+        lines.append(f"runs a script, no model: {words} "
+                     f"(content pin {str(script.get('sha256') or 'none')[:12]})")
+    lines.append("instruction (the rail's own — a later owner rule outranks it):")
     lines += [f"  {l}" for l in (task or "").strip().splitlines()] or ["  (empty)"]
     skills = (payload or {}).get("skills") if isinstance(payload, dict) else None
     if skills:

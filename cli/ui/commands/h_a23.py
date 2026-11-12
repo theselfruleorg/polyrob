@@ -1,7 +1,7 @@
 """h_a23.py — the ten REPL parity verbs, registered from ONE seam (043 A23).
 
 The verbs live one-per-module (``h_steer``, ``h_goal_one``, ``h_reject``,
-``h_money_verbs`` = wallet/trade/bridge/dev, ``h_mode``, ``h_prefs``,
+``h_money_verbs`` = wallet/trade/bridge, ``h_mode``, ``h_prefs``,
 ``h_files``) so each stays beside its own handler and out of the size-ratcheted
 ``handlers.py`` (``tests/test_file_size_ratchet.py``: extract, never grow).
 
@@ -29,7 +29,7 @@ def register(reg, Command) -> None:
     h_steer.register(reg, Command)         # /steer (new on every seat)
     h_goal_one.register(reg, Command)      # /goal
     h_reject.register(reg, Command)        # /reject
-    h_money_verbs.register(reg, Command)   # /wallet /trade /bridge /dev
+    h_money_verbs.register(reg, Command)   # /wallet /trade /bridge
     h_mode.register(reg, Command)          # /mode
     h_prefs.register(reg, Command)         # /prefs
     h_files.register(reg, Command)

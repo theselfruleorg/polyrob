@@ -15,7 +15,7 @@ window. All helpers fail open (None/False) — a parse or pref fault must never
 hold traffic.
 
 OB8 (2026-10-03 audit): "local time" is the OWNER's, not the server's (prod
-runs UTC). The ``digest.timezone`` pref (an IANA name, e.g. ``Europe/Berlin``)
+runs UTC). The ``owner.timezone`` pref (old name ``digest.timezone``) (an IANA name, e.g. ``Europe/Berlin``)
 selects the zone the window is read in; unset or unknown keeps the server's
 local clock, byte-identical to before.
 """
@@ -49,8 +49,10 @@ def in_quiet_window(hour: int, window: Tuple[int, int]) -> bool:
     return hour >= start or hour < end
 
 
-#: The owner-timezone preference key (IANA name). A pure preference, no env.
-TIMEZONE_PREF = "digest.timezone"
+#: The owner-timezone preference key and its resolver live in ``core.owner_time``
+#: (116 W8: one owner zone for quiet hours, the prompt clock and status times). The
+#: names stay here because callers and tests use them.
+from core.owner_time import TIMEZONE_PREF, owner_zone as effective_timezone  # noqa: E402,F401
 
 
 def _now_hour_local() -> int:
@@ -68,19 +70,6 @@ def _now_hour_in(tz_name: str) -> Optional[int]:
     except Exception:
         logger.warning("quiet_hours: unknown timezone %r — using the server clock",
                        tz_name)
-        return None
-
-
-def effective_timezone(user_id, home_dir) -> Optional[str]:
-    """The owner's ``digest.timezone`` pref, or None (server-local)."""
-    try:
-        from core import prefs
-        out = prefs.resolve("digest.timezone", user_id, home_dir,
-                            env_value=None, default=None)
-        return out.strip() if isinstance(out, str) and out.strip() else None
-    except Exception:
-        logger.debug("quiet_hours: timezone pref resolution failed (fail-open)",
-                     exc_info=True)
         return None
 
 
@@ -110,7 +99,7 @@ def effective_quiet_hours(user_id, home_dir) -> Optional[str]:
 
 def quiet_window_active(user_id, home_dir) -> bool:
     """True iff the tenant configured a quiet window and the owner's local time
-    (``digest.timezone``, else the server clock) is inside it."""
+    (``owner.timezone``, else the server clock) is inside it."""
     window = parse_quiet_window(effective_quiet_hours(user_id, home_dir))
     if window is None:
         return False

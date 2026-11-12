@@ -198,7 +198,9 @@ def test_a_read_fault_fails_open_and_logs(tlog, job_run, monkeypatch, caplog):
 def test_an_unreadable_store_fails_open_and_logs(tlog, job_run, monkeypatch, caplog):
     ctx = _Ctx()
     _post(*API, ctx)
-    monkeypatch.setattr("core.event_log.execute_retry",
+    # Every event-log READ goes through ``_run`` (a read-only handle first, then the
+    # shared connection), so a raising ``_run`` is an unreadable store on both paths.
+    monkeypatch.setattr("core.event_log.TelemetryEventLog._run",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("locked")))
     with caplog.at_level(logging.WARNING, logger="tools.controller.effect_hooks"):
         assert _pre(*API, ctx) is None

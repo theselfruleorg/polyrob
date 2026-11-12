@@ -173,6 +173,17 @@ def open_rail_asks(board: Any, user_id: str, rail_id: str) -> List[Any]:
             if (a.payload or {}).get("rail_id") == rail_id and not board.ask_expired(a)]
 
 
+def mark_holds_rail(db_path: str, ask_id: str, *, via: str) -> bool:
+    """116 W2.3: the OPEN ask *ask_id* holds the cron job its ``rail_id`` names
+    (``payload.holds_rail``; *via* ``owner_ask`` | ``auto``). The read is
+    ``core.cron_expect.holding_ask``. True when the row matched."""
+    from agents.task.goals.payload_keys import patch
+    from core.cron_expect import HOLD_VIA_KEY, HOLDS_RAIL_KEY
+    return patch(db_path, str(ask_id),
+                 set_keys={HOLDS_RAIL_KEY: True, HOLD_VIA_KEY: via, "held_at": time.time()},
+                 where_extra=f"kind='ask' AND status='{ASK_OPEN}'")
+
+
 def render_decisions(records: List[dict], header: str) -> str:
     """The OWNER DECISIONS block — ONE renderer for the cron rail and the goal
     row. ``records``: ``{question, decision ("approved"|"rejected"), answer,

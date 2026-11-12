@@ -10,7 +10,7 @@ import os
 
 import pytest
 
-from core.wallet import abi, erc6551, erc8004
+from core.wallet import abi, account_kinds, erc6551, erc8004
 from core.wallet.signer import LocalEoaSigner
 from tests.collection_pins import CODE, RUNTIME_SHA256, pin, polyrob_profile
 from tests.unit.tools.test_agent_nft_withdraw import FakeRail, _run, _tool
@@ -98,10 +98,11 @@ def test_the_snapshot_of_a_polyrob_account_reads_no_lock_and_names_the_kind(arme
     text = res.extracted_content
     assert abi.selector("isLocked()") not in chain.reads
     assert abi.selector("lockedUntil()") not in chain.reads
-    assert "clone:     PolyrobAccount (pinned)" in text
+    assert "clone:     ERC-6551P account (pinned)" in text
+    assert "kind:      " + account_kinds.ERC6551P.limits_text in text
     assert "locked:" not in text and "lockedUntil" not in text
     assert "sale ready: False" in text and "[note   ] sale ready: not ready" in text
-    assert erc6551.POLYROB_NO_APPROVALS in text and "R-1" in text
+    assert account_kinds.ERC6551P.approvals_text in text and "R-1" in text
     assert "signs:     nothing" in text
     assert "unreadable" not in text, text
 
@@ -117,13 +118,13 @@ def test_revoke_all_on_a_polyrob_account_says_why_nothing_is_open(armed):
     res = _run(tool.agent_nft_revoke_all(RevokeAllParams(chain="robinhood", nft="3")))
     assert res.error is None, res.error
     assert "Nothing to revoke" in res.extracted_content
-    assert erc6551.POLYROB_NO_APPROVALS in res.extracted_content
+    assert account_kinds.ERC6551P.approvals_text in res.extracted_content
 
 
 def test_the_view_does_not_depend_on_the_account_v3_pin(armed):
-    """verify(rpc, version): the PolyrobAccount version checks the registry + its own hash."""
+    """verify(rpc, version): the ERC-6551P version checks the registry + its own hash."""
     from tools.agent_nft import view
     from core.wallet import collection_registry
     (p,) = collection_registry.profiles()
     v = view.build_view(PolyrobChain(armed.address), "robinhood", p, 3, treasury=armed.address)
-    assert v.is_polyrob and v.implementation_ok is True and v.locked is None
+    assert v.kind is account_kinds.ERC6551P and v.implementation_ok is True and v.locked is None

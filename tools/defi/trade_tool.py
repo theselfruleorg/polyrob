@@ -567,7 +567,8 @@ class DefiTradeTool(SolanaRailMixin, WalletHolderMixin, BaseTool):
         # Size the gas limit from the simulation's gasUsed (§3a): the fixed
         # default out-of-gas-reverts a swap on-chain and burns the fee. Done
         # before the dry-run return so a sizing refusal shows up in a dry run.
-        if decision.sim_gas_used:
+        from core.wallet.broadcast.evm import is_account_call
+        if decision.sim_gas_used or is_account_call(tx):
             try:
                 tx = rail.size_gas(tx, decision.sim_gas_used)
             except Exception as exc:
@@ -935,7 +936,7 @@ class DefiTradeTool(SolanaRailMixin, WalletHolderMixin, BaseTool):
             "register_agent", params.chain, tx, execution_context))
         kind = "data: URI (no hosting)" if agent_uri.startswith("data:") else agent_uri
         header = (f"register on ERC-8004 ({params.chain}) at {intent.to}\n"
-                  f"agentURI: {kind}\n")
+                  f"agentURI: {kind}\n" + ar.account_identity_note())
         async with gate.reserve():
             # CR-L15: the double-mint checks run INSIDE the reservation, so two
             # registrations cannot both read "not registered" before either
@@ -1162,8 +1163,9 @@ class DefiTradeTool(SolanaRailMixin, WalletHolderMixin, BaseTool):
         return await perform_lp_remove(self, params, execution_context)
 
     @BaseTool.action(
-        "Collect fees from your v3 liquidity position without reducing liquidity. "
-        "Both token receipts are asserted; caps charge gas. dry_run defaults true.",
+        "Collect fees from your v3 or v4 liquidity position without reducing liquidity "
+        "(v4: also from an NFT's account with account=/nft=, the fees land there). "
+        "Receipts are asserted; caps charge gas. dry_run defaults true.",
         param_model=LpCollectParams)
     async def lp_collect(self, params: LpCollectParams, execution_context=None):
         from tools.defi.lp_verbs import perform_lp_collect

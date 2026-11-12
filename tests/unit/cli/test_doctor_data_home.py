@@ -69,11 +69,19 @@ def test_plain_doctor_headline_carries_a_critical_host_item(monkeypatch):
     from cli.commands import doctor, doctor_host
     monkeypatch.setattr(doctor_host, "_checkers",
                         lambda: [lambda env: ["CRITICAL data home split: x", "data home: y"]])
-    from types import SimpleNamespace
-    snap = SimpleNamespace(sections={})
+    from core.status_types import StatusSnapshot
+    snap = StatusSnapshot(user_id="u1", generated_at=0.0, window_sec=86400, sections={},
+                          health=[], unavailable_sources=[])
     monkeypatch.setattr(doctor, "build_doctor_snapshot", lambda: (snap, None))
-    monkeypatch.setattr("core.status_render.render_status_lines", lambda *a, **k: ["Health: OK"])
+    from core.status_render import render_health_lines
+    monkeypatch.setattr("core.status_render.render_status_lines",   # no sections here
+                        lambda s, **k: render_health_lines(s))
     monkeypatch.setattr(doctor, "credential_alert_lines", lambda env: [])
     lines = doctor.status_snapshot_lines()
-    assert "CRITICAL data home split: x" in lines
-    assert "data home: y" not in lines
+    # 116 W7.4: the host CRITICAL is a health item, so the headline counts it.
+    head = next(ln for ln in lines if ln.startswith("Health:"))
+    assert head.startswith("Health: DEGRADED") and "1 critical" in head
+    assert any("⛔ data home split: x" in ln for ln in lines)
+    assert lines.index(head) < next(i for i, ln in enumerate(lines) if "data home split" in ln)
+    assert not any("data home: y" in ln for ln in lines)
+    assert snap.health == []     # the cached snapshot is not changed

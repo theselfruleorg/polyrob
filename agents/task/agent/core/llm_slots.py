@@ -11,12 +11,16 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-async def close_own_llm(llm: Any, container: Any = None) -> None:
+async def close_own_llm(llm: Any, container: Any = None, *, may_be_shared: bool = False) -> None:
     """Close a model this session built on an isolated client (aux, judge, swap).
 
     ⚠️ Never the shared per-provider client: closing it stops every session that
     uses the provider. Each caller holds only isolated models, and the check against
     the manager's registered clients is the second lock on that door.
+
+    ``may_be_shared=True`` is the session's MAIN slot, which holds the shared client
+    on most sessions: the refusal is then the expected path and logs at DEBUG. The aux,
+    judge and swap slots keep the WARNING — a shared client there is a defect.
     """
     if llm is None:
         return
@@ -27,7 +31,8 @@ async def close_own_llm(llm: Any, container: Any = None) -> None:
     except Exception:
         shared = ()
     if any(client is registered for registered in shared):
-        logger.warning("refused to close the shared LLM client %s", type(client).__name__)
+        (logger.debug if may_be_shared else logger.warning)(
+            "refused to close the shared LLM client %s", type(client).__name__)
         return
     close = getattr(client, "cleanup", None) or getattr(client, "aclose", None)
     if not callable(close):

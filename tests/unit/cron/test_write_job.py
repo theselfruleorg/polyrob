@@ -28,7 +28,7 @@ def test_validate_refuses_other_verbs_bad_params_and_bad_delivery():
     with pytest.raises(W.WriteJobError, match="do not validate"):
         W.validate_write_verb({"verb": "agent_nft.agent_nft_collection_reveal", "params": {"chain": "robinhood", "max_ids": 500}})
     with pytest.raises(W.WriteJobError, match="do not validate"):
-        W.validate_write_verb({"verb": "agent_nft.agent_nft_collection_reveal", "params": {"chain": "base"}})
+        W.validate_write_verb({"verb": "agent_nft.agent_nft_collection_reveal", "params": {"chain": "no-such-chain"}})
     with pytest.raises(W.WriteJobError, match="deliver_on"):
         W.validate_write_verb(dict(SPEC, deliver_on="sometimes"))
     assert W.validate_write_verb(SPEC)["deliver_on"] == "alert"

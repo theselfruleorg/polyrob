@@ -463,6 +463,10 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin):
         return n
 
     def requeue_running_on_boot(self) -> int:
+        """How many rows :meth:`requeue_running_on_boot_ids` requeued."""
+        return len(self.requeue_running_on_boot_ids())
+
+    def requeue_running_on_boot_ids(self) -> List[str]:
         """§5.1 cold-start sweep: re-queue ``running`` goals immediately at boot
         WITHOUT a failure increment — a process restart is not the goal's fault.
 
@@ -493,6 +497,9 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin):
         (or unidentifiable — ``None``, never assumed dead) is left alone; if that
         owner really did die in a way we cannot see, ``reclaim_stale`` still
         recovers the row once the TTL lapses.
+
+        Returns the requeued ids: each was cut by the restart, and the boot path
+        gives each its terminal ``goal_run cut_by_restart`` row (116 W2.4).
         """
         from agents.task.goals.claim_liveness import claim_owner_alive
         now = self._now()
@@ -502,9 +509,9 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin):
             "WHERE status='running' AND kind='goal'",
             (), fetch="all",
         ) or []
+        requeued: List[str] = []
         if not rows:
-            return 0
-        n = 0
+            return requeued
         for r in rows:
             gid, lock, expires = r["id"], r["claim_lock"], r["claim_expires"]
             if expires is not None and float(expires) >= now:
@@ -524,9 +531,9 @@ class GoalBoard(BoardDepsMixin, BoardAsksMixin):
                 (gid, lock, expires),
             )
             if rc == 1:
-                n += 1
+                requeued.append(gid)
                 self._event(gid, "requeued_on_boot", {"reason": reason})
-        return n
+        return requeued
 
     def hold_running(self, *, worker: str, reason: str,
                      goal_ids: Optional[List[str]] = None,

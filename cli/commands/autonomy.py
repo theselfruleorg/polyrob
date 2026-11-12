@@ -92,17 +92,18 @@ def status_cmd(as_json):
     from core.config_policy.posture_card import build_posture_card, render_posture_card
     from core.identity import resolve_identity
 
+    from cli.ui.commands.h_autonomy import count_text
     user_id = resolve_identity()
-    snap = _autonomy_snapshot(user_id, _data_dir(write=False))
-    _pause = snap.get("pause") or {}  # 031: the ONE pause record (read once, in the snapshot)
-    rows = build_posture_card()
+    data_dir = _data_dir(write=False)
     # 2026-08-28 status SSOT: the health block every seat renders, first.
     health_rows: list = []
     health_text: list = []
+    sections = None   # 116 W7.4: the counts below are this snapshot's work/loops
     try:
         from core.status_snapshot import build_status_snapshot
         from core.status_render import render_health_lines
-        status = build_status_snapshot(user_id, data_dir=_data_dir(write=False), include_money=False)
+        status = build_status_snapshot(user_id, data_dir=data_dir, include_money=False)
+        sections = status.sections
         health_rows = [{"key": h.key, "severity": h.severity, "text": h.text,
                         "remedy": h.remedy} for h in status.health]
         health_text = render_health_lines(status, prefix="  ")
@@ -112,6 +113,9 @@ def status_cmd(as_json):
         health_overall = "unavailable"
         health_unverified = [f"{type(e).__name__}: {str(e)[:120]}"]
         health_text = [f"health: unavailable ({type(e).__name__}: {str(e)[:120]})"]
+    snap = _autonomy_snapshot(user_id, data_dir, sections=sections)
+    _pause = snap.get("pause") or {}  # 031: the ONE pause record (read once, in the snapshot)
+    rows = build_posture_card()
 
     if as_json:
         payload = {
@@ -125,8 +129,10 @@ def status_cmd(as_json):
             "halted": snap.get("halted", False),
             "pause": _pause,
             "loops": {name: bool(val) for name, val in snap["flags"]},
-            "open_goals": snap.get("goal_count", 0),
-            "cron_jobs": snap.get("cron_count", 0),
+            # null = the store could not be read (``counts_unread`` names why)
+            "open_goals": snap.get("goal_count"),
+            "cron_jobs": snap.get("cron_count"),
+            "counts_unread": snap.get("counts_unread") or {},
         }
         click.echo(_json.dumps(payload, indent=2, default=str))
         return
@@ -144,8 +150,10 @@ def status_cmd(as_json):
     click.echo(click.style("loops", bold=True))
     for name, val in snap["flags"]:
         click.echo(f"  {name}: {'on' if val else 'off'}")
-    click.echo(f"open goals: {snap.get('goal_count', 0)}  "
-               f"cron jobs: {snap.get('cron_count', 0)}")
+    click.echo(f"open goals: {count_text(snap.get('goal_count'))}  "
+               f"cron jobs: {count_text(snap.get('cron_count'))}")
+    for store, why in sorted((snap.get("counts_unread") or {}).items()):
+        click.echo(click.style(f"  {store}: could not be read ({why})", fg="yellow"))
     if not snap["autonomy_enabled"]:
         click.echo(click.style(
             "autonomy is OFF — turn it on with `polyrob autonomy on` "

@@ -94,31 +94,92 @@ def _address_view(rpc: Rpc, to: str, signature: str, *, strict: bool = False) ->
     return None if int(got, 16) == 0 else got.lower()
 
 
-def _account_version(rpc: Rpc, address: str) -> Tuple[Dict[str, Any], Optional[Dict[str, str]]]:
-    """The profile's ``accounts[0]`` and ``transfer_safe`` for *address*. A collection that names
-    its own account implementation (``accountImplementation()``, the POLYROB collection) is
-    pinned with that implementation, its market and its zone, each by its runtime code hash read
-    now; any other collection is pinned with Tokenbound AccountV3. Raises ``ValueError`` when a
-    transfer-safe fact cannot be read (never a silent fall-back to AccountV3)."""
-    from core.wallet import collection_registry, erc6551
+def _supports(rpc: Rpc, address: str, iid: str) -> bool:
+    """ERC-165 ``supportsInterface(iid)``. A revert or no data = False; a read that FAILED (a
+    timeout, a refused RPC) raises ``ValueError`` — "does not answer" and "unread" differ."""
+    from core.wallet import abi
+    try:
+        raw = _call(rpc, address, abi.selector("supportsInterface(bytes4)")
+                    + str(iid).lower().removeprefix("0x").ljust(64, "0"))
+    except Exception as exc:  # noqa: BLE001
+        if "revert" in str(exc).lower():
+            return False
+        raise ValueError(f"I could not read supportsInterface({iid}) of {address} "
+                         f"({type(exc).__name__}) — try again; nothing was pinned") from exc
+    try:
+        return bool(abi.decode([{"type": "bool"}], raw)[0])
+    except Exception:  # noqa: BLE001 — no data: not ERC-165
+        return False
+
+
+def erc165_proves(rpc: Rpc, address: str, iid: str) -> bool:
+    """The ERC-165 detection rule: the contract answers ERC-165 itself (``0x01ffc9a7`` true,
+    ``0xffffffff`` false) AND *iid*. A contract that says yes to everything proves nothing."""
+    return (_supports(rpc, address, "0x01ffc9a7") and not _supports(rpc, address, "0xffffffff")
+            and _supports(rpc, address, iid))
+
+
+def _rail_view(rpc: Rpc, address: str, signature: str, impl: str) -> Optional[str]:
+    """A sale rail of a PROVEN ERC-6551P collection (``MARKET()`` / ``ZONE()``, part of the
+    interface ERC-165 proved): the address, or None when it is the zero address. A revert or
+    a failed read refuses — a collection that claims the interface answers both."""
+    got = _address_view(rpc, address, signature, strict=True)
+    if got is not None:
+        return got
+    from core.wallet import abi
+    try:
+        raw = _call(rpc, address, abi.selector(signature))
+        if int(str(abi.decode([{"type": "address"}], raw)[0]), 16) == 0:
+            return None
+    except Exception:  # noqa: BLE001 — a revert or no data
+        pass
+    raise ValueError(f"{address} names its own account implementation {impl}, but its "
+                     f"{signature} is unreadable — I cannot pin its account")
+
+
+def _account_version(rpc: Rpc, address: str):
+    """``(accounts[0] row, standard or None, kind)`` for *address*. A collection that names its
+    own account implementation (``accountImplementation()``) is pinned as the ERC-6551P kind
+    ONLY when ERC-165 proves it: the collection answers the kind's collection interface and the
+    implementation its account interface (``core.wallet.account_kinds``); otherwise it refuses
+    — the kind is proven, never inferred. Its market and zone (``MARKET()`` / ``ZONE()``), when
+    it names both, are pinned by their runtime code hash. Any other collection is pinned with
+    Tokenbound AccountV3. Raises ``ValueError`` when a fact cannot be read (never a silent
+    fall-back to AccountV3)."""
+    from core.wallet import account_kinds, collection_registry, erc6551
+    v3 = account_kinds.TOKENBOUND_V3
     impl = _address_view(rpc, address, "accountImplementation()", strict=True)
-    if impl is None or impl == erc6551.ACCOUNT_V3_IMPL.lower():
-        return {"registry": erc6551.REGISTRY, "implementation": erc6551.ACCOUNT_V3_IMPL,
-                "salt": 0}, None
-    ts: Dict[str, str] = {}
-    for key, value in (("account_impl", impl), ("market", _address_view(rpc, address, "MARKET()")),
-                       ("zone", _address_view(rpc, address, "ZONE()"))):
-        if value is None:
-            raise ValueError(f"{address} names its own account implementation {impl}, but its "
-                             f"{key.upper()}() is unreadable — I cannot pin its account")
+    if impl is None or impl == v3.builtin_implementation.lower():
+        return {"kind": v3.name, "registry": erc6551.REGISTRY,
+                "implementation": v3.builtin_implementation, "salt": 0}, None, v3
+    kind = account_kinds.ERC6551P
+    coll_ok = erc165_proves(rpc, address, kind.collection_iface)
+    acct_ok = erc165_proves(rpc, impl, kind.account_iface)
+    if not (coll_ok and acct_ok):
+        raise ValueError(
+            f"{address} names its own account implementation {impl}, but ERC-165 does not prove "
+            f"the {kind.label} kind (the collection answers {kind.collection_iface}: "
+            f"{'yes' if coll_ok else 'no'}; the implementation answers {kind.account_iface}: "
+            f"{'yes' if acct_ok else 'no'}) — I pin no account kind I cannot prove")
+    try:
+        sha = collection_registry.runtime_sha256_of(rpc, impl)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"I could not read the code of its account implementation {impl} "
+                         f"({exc})") from exc
+    account = {"kind": kind.name, "registry": erc6551.REGISTRY, "implementation": impl,
+               "salt": 0, "runtime_sha256": sha}
+    rails = {"market": _rail_view(rpc, address, "MARKET()", impl),
+             "zone": _rail_view(rpc, address, "ZONE()", impl)}
+    if None in rails.values():   # a rail at the zero address: the collection names none
+        return account, None, kind
+    std: Dict[str, str] = {}
+    for key, value in rails.items():
         try:
-            sha = collection_registry.runtime_sha256_of(rpc, value)
+            std[f"{key}_runtime_sha256"] = collection_registry.runtime_sha256_of(rpc, value)
         except Exception as exc:  # noqa: BLE001
             raise ValueError(f"I could not read the code of its {key} {value} ({exc})") from exc
-        if key != "account_impl":
-            ts[key] = value
-        ts[f"{key}_runtime_sha256"] = sha
-    return {"registry": erc6551.REGISTRY, "implementation": impl, "salt": 0}, ts
+        std[key] = value
+    return account, {kind.name: std}, kind
 
 
 def _has_code(rpc: Rpc, address: str, block: int) -> bool:
@@ -212,20 +273,21 @@ def read_facts(chain: str, address: str, *, rpc: Optional[Rpc] = None,
                 "balanceOf", [{"type": "address"}], [treasury])))[0])
         except Exception:  # noqa: BLE001
             held = None
-    account, transfer_safe = _account_version(rpc, address)
-    profile = {"spec": collection_registry.SPEC_V1, "capabilities": [],
+    account, standard, kind = _account_version(rpc, address)
+    profile = {"spec": collection_registry.SPEC_V2, "capabilities": [],
                "chain_id": chain_id, "address": address, "runtime_sha256": runtime,
                "deploy_block": int(from_block), "max_supply": int(supply),
                "accounts": [account]}
-    if transfer_safe:
-        profile["transfer_safe"] = transfer_safe
+    if standard:
+        profile["standard"] = standard
     return {"chain": chain, "chain_id": chain_id, "address": address,
             "name": _string_view(rpc, address, "name()"),
             "symbol": _string_view(rpc, address, "symbol()"),
             "runtime_sha256": runtime, "max_supply": int(supply),
             "deploy_block": int(from_block), "held": held, "treasury": treasury,
-            "account_impl": account["implementation"], "transfer_safe": transfer_safe,
-            "profile": profile}
+            "account_impl": account["implementation"], "account_kind": kind,
+            "account_runtime_sha256": account.get("runtime_sha256"),
+            "standard": (standard or {}).get(kind.name), "profile": profile}
 
 
 def _pinned(chain_id: int, address: str) -> Optional[str]:
@@ -250,15 +312,20 @@ def _render(f: Dict[str, Any]) -> str:
              f"  code hash:  {f['runtime_sha256'][:16]}… (checked again before every act)",
              f"  supply cap: {f['max_supply']}",
              f"  deployed:   block {f['deploy_block']}"]
-    ts = f.get("transfer_safe")
-    if ts:
-        lines += [f"  accounts:   PolyrobAccount {f['account_impl']} (code "
-                  f"{ts['account_impl_runtime_sha256'][:16]}…; it signs nothing and holds no "
-                  f"standing approval)",
-                  f"  market:     {ts['market']} (code {ts['market_runtime_sha256'][:16]}…)",
-                  f"  zone:       {ts['zone']} (code {ts['zone_runtime_sha256'][:16]}…)"]
+    kind = f["account_kind"]
+    if f.get("account_runtime_sha256"):
+        lines.append(f"  accounts:   {kind.label} {f['account_impl']} (code "
+                     f"{f['account_runtime_sha256'][:16]}…; ERC-165 proven: collection "
+                     f"{kind.collection_iface}, account {kind.account_iface}; it signs nothing "
+                     f"and holds no standing approval)")
+        std = f.get("standard")
+        if std:
+            lines += [f"  market:     {std['market']} (code {std['market_runtime_sha256'][:16]}…)",
+                      f"  zone:       {std['zone']} (code {std['zone_runtime_sha256'][:16]}…)"]
+        else:
+            lines.append("  sale rails: none pinned (it names no market and zone)")
     else:
-        lines.append("  accounts:   Tokenbound AccountV3")
+        lines.append(f"  accounts:   {kind.label}")
     if f["held"] is not None:
         lines.append(f"  I hold:     {f['held']} of them")
     return "\n".join(lines)
@@ -426,4 +493,4 @@ def status_lines() -> list:
     return out
 
 
-__all__ = ["read_facts", "status_lines", "trust", "trust_quote", "untrust"]
+__all__ = ["erc165_proves", "read_facts", "status_lines", "trust", "trust_quote", "untrust"]

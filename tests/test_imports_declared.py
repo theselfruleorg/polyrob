@@ -33,8 +33,6 @@ OPTIONAL_UNDECLARED = {
     "posthog": "agents/task/telemetry/service.py: optional product telemetry; off without it",
     "pysqlite3": "api/app.py: a newer sqlite3 build when present; stdlib sqlite3 otherwise",
     "tomli": "core/version.py: TOML on Python < 3.11; requires-python is >= 3.11",
-    "polyrob_drop": "tools/agent_nft/tool.py: the separate NFT-drop add-on, probed by name",
-    "polyrob_desk": "tools/agent_nft/tool.py: the separate Desk add-on, probed by name",
 }
 
 _SKIP_PARTS = {"tests", "node_modules", "__pycache__", "dev"}

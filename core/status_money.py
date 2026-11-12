@@ -68,12 +68,16 @@ def _wallet_section(data_dir: Optional[str]) -> Section:
     lines = balance_cache.render_lines(snap)
     totals = balance_cache.total_native_by_symbol(snap)
     unknown = [c.chain for c in snap.chains if c.native is None]
+    # 116 W6.8: a failed USDC read is UNKNOWN too, and degrades the section.
+    usdc_unknown = [c.chain for c in snap.chains if c.usdc_unknown]
     sec = Section(name="wallet",
-                  state=STATE_DEGRADED if (unknown or snap.stale) else STATE_OK,
+                  state=STATE_DEGRADED if (unknown or usdc_unknown or snap.stale) else STATE_OK,
                   lines=lines,
                   data={"address": snap.address, "age_sec": snap.age_sec,
                         "stale": snap.stale, "totals": totals,
-                        "unknown_chains": unknown})
+                        "unknown_chains": unknown, "usdc_unknown_chains": usdc_unknown})
+    if usdc_unknown:
+        sec.reason = f"USDC unknown on {', '.join(usdc_unknown)}"
     if snap.stale:
         sec.reason = f"snapshot is {int(snap.age_sec // 60)}m old"
         sec.health.append(HealthItem(
@@ -100,17 +104,16 @@ def _positions_line(user_id: str, data_dir: Optional[str]) -> str:
     zero: an unreadable store says so. Verifying against chain stays with the
     `reconcile` verb, which is what the remedy points at.
     """
-    from core.open_positions import STATUS_OPEN, open_positions_db_path, positions_for
+    from core.open_positions import held_count_text, held_positions, open_positions_db_path
     try:
-        rows = positions_for(user_id, db_path=open_positions_db_path(data_dir))
+        rows, quarantined = held_positions(user_id, db_path=open_positions_db_path(data_dir))
     except Exception as e:
         return f"open positions: UNKNOWN — {type(e).__name__} (not the same as none)"
-    rows = [r for r in rows if r.status == STATUS_OPEN and r.qty > 0]
-    if not rows:
+    if not rows and not quarantined:
         return "open positions: none in the rail book"
     syms = ", ".join((r.symbol or r.address[:10]) for r in rows[:5])
-    syms += "…" if len(rows) > 5 else ""
-    return (f"open positions: {len(rows)} in the rail book ({syms}) — "
+    syms = f" ({syms}{'…' if len(rows) > 5 else ''})" if rows else ""
+    return (f"open positions: {held_count_text(rows, quarantined)} in the rail book{syms} — "
             f"NOT verified against chain; run `reconcile`")
 
 
@@ -159,7 +162,8 @@ def _runtime_window(user_id: str, ledger: Dict[str, Any], r: Dict[str, Any],
     spend = float(r.get("spend_window_usd") or 0.0)
     if days in (None, 1):
         if data_dir:
-            from core.status_economics import bot_db_path, cost_window_usd
+            from core.runtime_paths import bot_db_path
+            from core.status_economics import cost_window_usd
             if os.path.exists(bot_db_path(data_dir)):
                 import time as _time
                 try:
@@ -196,8 +200,10 @@ def _money_section(user_id: str, ledger: Any, data_dir: Optional[str] = None) ->
                 "unavailable (invoice or wallet ledger not readable)")
     else:
         net = float(t.get("net_usd") or 0.0)
+        days = ledger.get("window_days")
+        window = "last 24h" if days in (None, 1) else f"last {days} days"
         line = (f"treasury cash flow (income − spend; open positions NOT included): "
-                f"net ${net:+.2f}")
+                f"net ${net:+.2f} ({window})")
     if t.get("balance_usd") is not None:
         line += f" · USDC balance ${float(t['balance_usd']):.2f}"
     if int(t.get("pending_count") or 0):

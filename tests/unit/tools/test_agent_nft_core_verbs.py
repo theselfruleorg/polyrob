@@ -164,10 +164,12 @@ def _identity_chain(owner, *, minted=True):
     return rpc
 
 
-def test_bind_refuses_a_second_identity(armed):
+def test_bind_never_registers_a_second_identity(armed):
+    """115 W6: an account that owns its identity gets the card PUBLISHED on it (setAgentURI),
+    never a second register() (tests/unit/tools/test_agent_nft_publish_card.py)."""
     tool, seen = _tool(armed, _identity_chain(armed.address))
-    res = _run(_no_package(tool).agent_nft_bind_identity(BindParams(chain="robinhood", nft="3")))
-    assert res.error and "already holds" in res.error and seen == []
+    _run(_no_package(tool).agent_nft_bind_identity(BindParams(chain="robinhood", nft="3")))
+    assert all(not intent.expects_mint for intent, _tx, _kw in seen)
 
 
 def test_journal_writes_only_author_kinds(armed):

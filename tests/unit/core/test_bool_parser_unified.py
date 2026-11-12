@@ -54,7 +54,9 @@ def test_mcp_enabled_parses_identically_in_eip8004_and_config(monkeypatch):
     import modules.eip8004.registration as reg
     src = inspect.getsource(reg)
     assert 'os.environ.get("MCP_ENABLED", "false").lower() == "true"' not in src
-    assert 'member_flag("MCP_ENABLED")' in src   # D7: the one member resolver
+    # The card advertises `/mcp` by the flag the router MOUNTS by (MCP_SERVE_ENABLED), read
+    # with the SSOT parser; MCP_ENABLED is the client flag and serves nothing.
+    assert 'bool_env("MCP_SERVE_ENABLED", False)' in src
 
 def test_auto_agent_init_uses_ssot_parser():
     import inspect

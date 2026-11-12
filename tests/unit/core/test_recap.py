@@ -361,3 +361,59 @@ def test_curator_proposals_reader_is_deduped_and_tenant_scoped(tmp_path, monkeyp
     from core.recap import curator_proposals
     note = _seed_proposals(tmp_path, monkeypatch)
     assert curator_proposals("u1", time.time() - 3600, str(tmp_path)) == [f"proposal: {note}"]
+
+
+def test_the_event_read_skips_machine_kinds_says_when_cut_and_names_a_failed_read(tmp_path, monkeypatch):
+    """116 W3.5: 200 rows of every kind showed the last hour of a busy day."""
+    import time as _t
+    from core import recap
+    from core.event_log import TelemetryEventLog
+    monkeypatch.setenv("TELEMETRY_EVENT_LOG_ENABLED", "true")
+    monkeypatch.delenv("TELEMETRY_EVENT_LOG_PATH", raising=False)
+    log = TelemetryEventLog(str(tmp_path / "telemetry_events.db"))
+    now = _t.time()
+    log.record("goal_run", user_id="u1", ts=now - 500, outcome="done")
+    for i in range(300):
+        log.record("tool_invoked", user_id="u1", ts=now - i)
+    log.record("owner_command", user_id="u1", ts=now - 1, verb="/journey")  # the owner's own read
+    got = recap._events("u1", now - 3600, str(tmp_path))
+    assert [e["kind"] for e in got] == ["goal_run"]
+
+    monkeypatch.setattr(recap, "_EVENT_LIMIT", 1)
+    entries = recap.build_recap("u1", window="1h", data_home=str(tmp_path))
+    assert any(e.kind == "cut" for e in entries)
+
+    def boom(*a, **k):
+        raise OSError("disk gone")
+    monkeypatch.setattr(TelemetryEventLog, "_run", boom)
+    with pytest.raises(OSError):
+        recap._events("u1", now - 3600, str(tmp_path))
+
+
+def test_a_row_with_no_tenant_is_the_instances_own(tmp_path, monkeypatch):
+    """116 W7.4: the recap reads the event log by the snapshot's tenant rule
+    (``core.event_log.TENANT_OR_INSTANCE_SQL``): a row with no tenant shows
+    beside the tenant's, another tenant's row never does."""
+    from core import event_log as el
+    from core.recap import curator_proposals, mechanism_notes
+    _seed_proposals(tmp_path, monkeypatch)
+    log = el.TelemetryEventLog(str(tmp_path / "telemetry_events.db"))
+    log.record("self_modification", user_id="", source="curator",
+               attrs={"kind": "skill", "action": "propose", "item_id": "y",
+                      "note": "y: instance-wide"})
+    log.record("review_mechanism_note", user_id="", source="background_review",
+               attrs={"note": "the loop has no clock"})
+    log.record("review_mechanism_note", user_id="u2", source="background_review",
+               attrs={"note": "other tenant note"})
+    since = time.time() - 3600
+    assert "proposal: y: instance-wide" in curator_proposals("u1", since, str(tmp_path))
+    assert mechanism_notes("u1", since, str(tmp_path)) == ["the loop has no clock"]
+    texts = [e.text for e in build_recap("u1", str(tmp_path), window="24h")]
+    assert "proposal: y: instance-wide" in texts
+    assert not any("other tenant" in t for t in texts)
+
+
+def test_the_tenant_rule_is_one_fragment():
+    from core.event_log import TENANT_OR_INSTANCE_SQL
+    assert TENANT_OR_INSTANCE_SQL == "(user_id = ? OR user_id = '')"
+    assert TENANT_OR_INSTANCE_SQL.count("?") == 1

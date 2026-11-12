@@ -469,3 +469,82 @@ async def test_j1_an_erc20_swap_carries_the_entry_as_a_fourth_leg(journaled, no_
     assert len(legs) == 4
     assert _journal_leg_entry(legs[3])["kind"] == "entry"
     assert "entry #0 (entry) signed and logged on chain" in res.extracted_content
+
+
+# --- 115 G6: the generic write verb from an account ----------------------------------------
+
+POOL = "0x" + "5e" * 20
+
+
+def _call(**kw):
+    from tools.defi.trade_tool import CallParams
+    base = dict(chain="base", to=POOL, calldata="0xdeadbeef" + "00" * 32, max_spend_usd=1.0)
+    base.update(kw)
+    return CallParams(**base)
+
+
+@pytest.mark.asyncio
+async def test_a_call_from_an_account_rides_execute_through_the_same_guard(env, monkeypatch):
+    monkeypatch.setenv("DEFI_CALL_ENABLED", "true")
+    tool, gate, seen = _tool(env)
+    res = await tool.call(_call(nft=str(ID), value=0.001, dry_run=False))
+    assert res.error is None, res.error
+    intent, tx, kw = seen[0]
+    assert tx["to"] == ACCOUNT and int(tx["value"]) == 0       # the treasury sends no value
+    inner_to, value, inner_data, op = erc6551.decode_execute(tx["data"])
+    assert inner_to.lower() == POOL.lower() and value == 10 ** 15 and op == 0
+    assert inner_data.startswith("0xdeadbeef")
+    assert intent.via_account == ACCOUNT and intent.via_account_state == 3
+    assert intent.amount_raw == 10 ** 15 and "account_rpc" in kw
+    assert "from account" in res.extracted_content and "journal: entry" in res.extracted_content
+    assert gate.recorded[-1]["account"] == ACCOUNT
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kw, needle", [
+    ({"allow_spender": "0x" + "ab" * 20, "spend_token": USDC, "allow_max_raw": 5,
+      "spend_max_raw": 5}, "grants no allowance"),
+    ({"to": PINNED}, "pinned collection, its sale or its sale rail"),
+])
+async def test_a_call_from_an_account_refuses_by_name_before_the_guard(env, monkeypatch, kw, needle):
+    monkeypatch.setenv("DEFI_CALL_ENABLED", "true")
+    tool, _gate, seen = _tool(env)
+    res = await tool.call(_call(account=ACCOUNT, **kw))
+    assert needle in (res.error or ""), res.error
+    assert seen == []
+
+
+# --- 111 WL1: account= / nft= on every money param model --------------------------------------
+
+def _money_param_models():
+    from tools.defi.solana_send_verb import SolanaTransferParams
+    from tools.defi.trade_tool import DefiTradeTool
+    from tools.launchpad.tool import ClaimParams, LaunchParams, TradeParams
+    models = {getattr(fn, "_param_model", None) for fn in vars(DefiTradeTool).values()
+              if callable(fn) and getattr(fn, "_param_model", None) is not None}
+    return sorted(models | {ClaimParams, LaunchParams, TradeParams, SolanaTransferParams},
+                  key=lambda m: m.__name__)
+
+
+@pytest.mark.parametrize("model", _money_param_models(), ids=lambda m: m.__name__)
+def test_every_money_param_model_takes_account_or_refuses_it_by_name(model):
+    """A dropped ``account=`` ran the call from the TREASURY with no "from account" line."""
+    from pydantic import ValidationError
+    from tools.defi.account_mode import NO_ACCOUNT_TEXT
+    if "account" in model.model_fields:
+        assert "nft" in model.model_fields, model.__name__
+        return
+    for key in ("account", "nft"):
+        with pytest.raises(ValidationError) as e:
+            model.model_validate({key: ACCOUNT if key == "account" else "3"})
+        assert NO_ACCOUNT_TEXT in str(e.value), model.__name__
+    # an empty value is not a request
+    with pytest.raises(ValidationError) as e:
+        model.model_validate({"account": None})
+    assert NO_ACCOUNT_TEXT not in str(e.value)
+
+
+def test_the_account_verbs_are_the_ones_that_declare_account():
+    from tools.defi.trade_tool import CallParams, LpCollectParams, SwapParams, TransferParams
+    for m in (CallParams, LpCollectParams, SwapParams, TransferParams):
+        assert {"account", "nft"} <= set(m.model_fields)

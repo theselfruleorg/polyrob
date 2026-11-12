@@ -127,7 +127,6 @@ _DB_JOIN_ALLOWED = {"core/runtime_paths.py", "core/db_manifest.py"}
 DB_JOIN_BASELINE = {
     "cli/commands/doctor.py": 1,
     "cli/commands/kb.py": 1,
-    "cli/commands/keys.py": 1,
     "cli/commands/owner.py": 1,
     "cli/commands/surface.py": 2,
     "core/autonomy_control.py": 1,
@@ -138,7 +137,6 @@ DB_JOIN_BASELINE = {
     "core/signer/shadow.py": 1,
     "core/signer/store.py": 1,
     "core/status_delivery.py": 1,
-    "core/status_economics.py": 1,
     "core/status_room_actions.py": 1,
     "core/status_rooms.py": 2,
     "core/surfaces/access.py": 1,
@@ -150,7 +148,6 @@ DB_JOIN_BASELINE = {
     "core/wallet/submission_journal.py": 1,
     "core/wallet/token_pins.py": 2,
     "core/wallet/token_provenance.py": 2,
-    "cron/wake_gate.py": 1,
     "modules/database/database_manager.py": 1,
     "modules/skills/skill_usage.py": 2,
     "packs/x/polyrob_x/surface/harness.py": 1,

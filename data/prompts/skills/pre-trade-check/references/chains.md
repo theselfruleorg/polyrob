@@ -16,6 +16,7 @@ chain=…)`; `portfolio` and `positions` read only this agent's own wallet.
 | **arbitrum** | yes | ETH, ~free | |
 | **polygon** | yes | **POL, not ether** | |
 | **optimism** | **no — read only** | ETH | Prices, screens, balances and `wallet_holdings` work here. No swap, send or approve can be sent on it, so it is never an entry chain and never an exit chain. |
+| **bnb** | **no — read only** | BNB | Prices, screens, balances and `wallet_holdings` work here. No swap, send or approve can be sent on it. Its USDC has **18 decimals**, not 6: take every amount from the tool, never convert a raw number by hand. |
 
 Solana addresses are base58 and **carry no checksum**, so a typo that still
 decodes is a valid, different account; and they are case-SENSITIVE, so never
