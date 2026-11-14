@@ -19,7 +19,7 @@ in [Who may write on X](#who-may-write-on-x).
   Enterprise tier; use mute on the other tiers.
 
 **Media and Articles.** `twitter_post`, `twitter_reply` and `twitter_thread` attach
-up to four images, or one GIF or video, from the session workspace through the X v2
+up to four images, or one GIF or video, from the agent's working files through the X v2
 media API (video uses the chunked upload and waits for X to process it), with
 optional `media_alt_texts`. `twitter_article` publishes an X Article: a title, a body
 in light markdown (headings, lists, quotes, bold and italic) and an optional cover

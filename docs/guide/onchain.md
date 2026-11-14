@@ -45,7 +45,7 @@ constructed and nothing is broadcast**, so this tool cannot move value:
 | `token_info` | On-chain identity + price + liquidity + safety screen for one contract address | all, incl. Solana |
 | `price` | USD price for one contract address | all, incl. Solana |
 | `swap_quote` | Prices a swap through the *same* route seam `defi_trade.swap` uses — see what a trade would do for $0 | EVM |
-| `portfolio` | The agent's own holdings on one chain, USD-valued, with explicit coverage — includes the wallet's own address in the header and the Uniswap v3/v4 pool deposits it owns, both legs valued | all, incl. Solana |
+| `portfolio` | The agent's own holdings on one network, USD-valued, with explicit coverage — includes the wallet's own address in the header and the Uniswap v3/v4 pool deposits it owns, both legs valued | all, incl. Solana |
 | `reconcile` | Diffs the chain against the rail's own position book (`open_positions.db`); an unpriced token neither book holds is `unsolicited`, not a disagreement — see [the book](#the-book--reconcile-and-one-verdict-across-every-chain) | all, incl. Solana |
 | `token_holders` | Top holders with their share, wallet-vs-contract, LP holders and lock state, creator stake — the concentration read. Solana reads the largest token accounts from the chain (a public RPC often rate-limits this read: it then says NOT CHECKED) | all, incl. Solana |
 | `ohlcv` | Price history as candles; pool-scoped, and the pool read is named | all, incl. Solana |
@@ -678,20 +678,20 @@ terminal and `/lp` in chat (add `v4` to `positions`, `pool`, `quote`, `remove` o
   minimum for each side and keeps the deposit NFT (there is no burn on v4).
 - **Any v4 pool reads.** A v4 pool has no address; its id is the hash of its two tokens,
   fee, tick spacing and hook. `lp_positions(protocol='v4', token_id=…)` reads one deposit
-  from the chain (owner, pool, range, liquidity, what it holds now and the fees it is owed);
-  without `token_id` it counts the wallet's deposits on chain, finds their ids and reads each
+  live (owner, pool, range, liquidity, what it holds now and the fees it is owed);
+  without `token_id` it counts the wallet's deposits live, finds their ids and reads each
   one. A pool read shows the fee, the price and the last 24 hours of swaps, volume and fees. `lp_pool_info` and
   `lp_quote` take `token_id`, or the five pool fields (`lp_quote` with `initial_price`
   quotes the first deposit of a pool that has no price yet).
 - **A new v4 pool, or a custom range, is your declaration.** `/lp seed <token_a> <token_b>
   <amount_a> <amount_b> price <n> fee <n> spacing <n> [range ticks:lo,hi]` (or the agent's
-  `lp_add(protocol='v4', …, tick_spacing=…)`) sends nothing: it puts one card in your chat
+  `lp_add(protocol='v4', …, tick_spacing=…)`) sends nothing: it puts one decision in your chat
   with the pool id, the range, the price, both amounts and the value. Confirm declares it for
   one use within one hour. `/lp seed run <ref> max <usd> go` then creates the pool and mints
   the deposit in ONE transaction, so the pool never stands empty at a price somebody else
   can set; on a pool that exists it mints only while the pool is within your price gap
-  (1% by default, 5% at most). Confirm raises no limit: the wallet's caps and `LP_ETH_CAP`
-  still judge it. The result reads the deposit and the pool back from the chain.
+  (1% by default, 5% at most). Confirm raises no limit: the wallet's limits and `LP_ETH_CAP`
+  still judge it. The result reads the deposit and the pool back from the network.
 
 The guard checks both asset legs, the pinned code and destination, who owns the deposit,
 and the mint, hold or burn of its NFT. Collect minimums use the actual read-only collect

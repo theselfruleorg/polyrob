@@ -227,7 +227,7 @@ reply to the topic's first message.
 - **`active`** — the agent reads every line and decides. A line nobody addressed
   reaches it marked `→ the room`, and the agent answers it only when the line plainly
   asks it something or continues its own last reply. A greeting, a thanks, a join or a
-  talk between members gets no answer. Each line in an `active` room still costs one
+  talk between members gets no answer. Each line in an `active` group still costs one
   model turn; use `mention` with `chat.wake_words` to pay only for addressed lines.
 - **`listen`** — read everything; answer an addressed owner or room admin only.
 - **`off`** — ledger only, never a reply, not even from the owner (the owner changes the mode

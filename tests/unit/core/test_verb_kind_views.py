@@ -17,7 +17,7 @@ from core.verb_policy import VerbPolicy
 #: emits, so the X browser rail was missing from the claim gate and the evidence.
 X_BROWSER_WRITES = {"x_browser_x_post", "x_browser_x_reply", "x_browser_x_dm"}
 TWITTER_TEXT_WRITES = {"twitter_post", "twitter_reply", "twitter_quote",
-                       "twitter_thread", "twitter_dm"}
+                       "twitter_thread", "twitter_dm", "twitter_article"}
 EMAIL_WRITES = {"email_send", "email_reply", "email_forward"}
 
 
@@ -61,7 +61,7 @@ def test_the_twitter_write_gate_is_the_rows():
         "twitter_post", "twitter_reply", "twitter_quote", "twitter_thread",
         "twitter_delete_tweet", "twitter_like", "twitter_unlike", "twitter_retweet",
         "twitter_unretweet", "twitter_follow", "twitter_unfollow", "twitter_mute",
-        "twitter_unmute", "twitter_block", "twitter_dm"}
+        "twitter_unmute", "twitter_block", "twitter_dm", "twitter_article"}
 
 
 # -- reads ------------------------------------------------------------------------

@@ -36,7 +36,7 @@ CEILINGS = {
     # 080 WS-5: every prose line of docs/guide/ and the guide skill. Large on
     # purpose — technical guide prose uses "session", "tool", "config"; the
     # number only falls.
-    "guide_docs": 1669,
+    "guide_docs": 1668,
     "guide_skill": 234,
 }
 
