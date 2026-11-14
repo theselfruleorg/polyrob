@@ -1,15 +1,17 @@
 """Guarded Uniswap liquidity writes. One transaction; approvals stay separate.
 
 v3: add/remove/collect. v4 (048 phase 3): lp_add of a new full-range position
-on a Pons PoolKey, and (115 W4) lp_collect of a position's fees — from the
+on a Pons PoolKey, (115 W4) lp_collect of a position's fees — from the
 wallet, or with ``account=``/``nft=`` from an NFT's account that owns the
-position — see ``tools/defi/lp_v4_verbs.py``. v4 lp_remove is not built."""
+position — and (117 W7) lp_remove from the wallet, which keeps the position
+NFT; see ``tools/defi/lp_v4_verbs.py``."""
 import asyncio
 from dataclasses import dataclass, replace
 from decimal import Decimal
 import time
 import json
 import math
+from typing import Optional
 
 from core.wallet import abi, chains, dex_registry, simulation, tx_guard, univ3_math as M
 from tools.defi import lp_abi as A, lp_reads as R
@@ -60,6 +62,8 @@ class Plan:
     tokens: tuple
     decimals: tuple
     description: str
+    #: 117: the owner's declaration a v4 seed plan was built from (lp_v4_seed).
+    seed: Optional[dict] = None
 
 
 def _pons_warning(rpc, chain, tokens, holder, fragment):
@@ -283,8 +287,10 @@ def receipt_position(plan, raw_receipt, holder):
             raise ValueError('receipt did not burn the declared position')
     elif events.nft_in or events.nft_out:
         raise ValueError('receipt unexpectedly transferred an NFT')
-    from core.wallet.liquidity_guard import assert_position_events
-    assert_position_events(plan.intent, logs, token_id)
+    from core.wallet.liquidity_guard import assert_position_events, protocol_of
+    # v4: the landed events must equal the SIGNED bytes (117), as in the guard.
+    signed = {'data': plan.data} if protocol_of(plan.intent) == 'v4' else None
+    assert_position_events(plan.intent, logs, token_id, signed)
     from tools.defi.lp_receipts import assert_fungible_receipt
     assert_fungible_receipt(plan.intent, logs, holder)
     return token_id
@@ -305,10 +311,6 @@ async def _perform(tool, p, ctx, verb):
         return tool._ar(error=err)
     if p.protocol not in ('v3', 'v4'):
         return tool._ar(error=f'unknown protocol {p.protocol!r}; v3 or v4. Nothing was broadcast.')
-    if p.protocol == 'v4' and verb == 'lp_remove':
-        return tool._ar(error=('Uniswap v4 builds lp_add (a new full-range position on a Pons '
-                               'PoolKey) and lp_collect (the fees of a position, liquidity '
-                               'unchanged); a v4 withdrawal is not built. Nothing was broadcast.'))
     from tools.defi import account_mode
     v4_collect = p.protocol == 'v4' and verb == 'lp_collect'
     if account_mode.requested(p) and not v4_collect:
@@ -346,9 +348,18 @@ async def _perform(tool, p, ctx, verb):
         if v4_collect:
             from tools.defi.lp_v4_verbs import prepare_collect_v4
             plan = prepare_collect_v4(p, rpc, holder, npm)
+        elif p.protocol == 'v4' and verb == 'lp_remove':
+            from tools.defi.lp_v4_verbs import prepare_remove_v4
+            plan = prepare_remove_v4(p, rpc, signer.address, npm, price_fn=exit_price_fn(tool))
         elif p.protocol == 'v4':
+            from tools.defi import lp_v4_seed
             from tools.defi.lp_v4_verbs import prepare_add_v4
-            plan = prepare_add_v4(p, rpc, signer.address, npm, price_fn=tool._price)
+            if lp_v4_seed.proposes(p):
+                # 117: a PoolKey named in full is a PROPOSAL to the owner, never a send.
+                return await lp_v4_seed.raise_card(tool, p, ctx, rpc)
+            plan = (lp_v4_seed.prepare_seed_v4(p, rpc, signer.address, npm, lp_v4_seed.load(p, ctx))
+                    if p.seed is not None else
+                    prepare_add_v4(p, rpc, signer.address, npm, price_fn=tool._price))
         else:
             plan = (prepare_add(p, rpc, signer.address, npm, price_fn=tool._price)
                     if verb == 'lp_add' else
@@ -370,6 +381,7 @@ async def _perform(tool, p, ctx, verb):
                 return tool._ar(error=f'refused: {why}. RESULT: NOT SENT.')
             cap_note = f'LP caps: {why or "within LP_ETH_CAP / LP_ETH_DAILY_CAP / LP_ETH_FLOOR"}\n'
         journal_entry, journal_skipped, guard_kw = None, '', {}
+        claimed = False
         try:
             tx = rail.build_call(to=npm, data=plan.data, value=plan.value)
             if held is not None:
@@ -416,9 +428,17 @@ async def _perform(tool, p, ctx, verb):
                                forged_fn=_is_forged_or_autonomous_turn,
                               autonomous_ok_fn=_is_autonomous_goal_turn).refused:
                 raise ValueError('owner paused spending before broadcast')
+            if plan.seed is not None:
+                # 117: a declaration is ONE use — taken here, just before the signature.
+                from tools.defi import lp_v4_seed
+                lp_v4_seed.claim(plan.seed)
+                claimed = True
             tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
         except Exception as exc:
             from core.wallet.broadcast.evm import broadcast_failure_text, outcome_unknown
+            if claimed:
+                from tools.defi import lp_v4_seed
+                lp_v4_seed.unsent(plan.seed, unknown=outcome_unknown(exc), why=str(exc))
             if outcome_unknown(exc):
                 return tool._ar(error=broadcast_failure_text(exc))
             return tool._ar(error=f'refused before broadcast: {exc}')
@@ -433,7 +453,7 @@ async def _perform(tool, p, ctx, verb):
         if held is not None:
             extra['account'] = held.account
         asset, positions, detail, state = None, [], '', tx_notify.STATE_IN_FLIGHT
-        receipt = None
+        receipt, landed_id = None, None
         # CLI1: a cancel in the receipt wait or the position read-back records the
         # broadcast first (no asset — nothing is measured yet) — the ONE seam.
         from tools.defi.receipt_wait import record_on_interrupt
@@ -459,10 +479,16 @@ async def _perform(tool, p, ctx, verb):
                     # Keep NFT/transaction telemetry until an LP-specific basis exists.
                     asset = f'erc721:{npm.lower()}:{token_id}'
                     detail += f'; position #{token_id}'
+                    landed_id = token_id
                 elif receipt.status == 'failed':
                     state = tx_notify.STATE_REVERTED
             except Exception as exc:
                 detail = f'SUBMITTED; receipt/accounting unverified ({exc}). Do not retry blindly.'
+        if plan.seed is not None:
+            from tools.defi import lp_v4_seed
+            detail += lp_v4_seed.settle(plan.seed, rpc, p.chain, tx_hash=tx_hash, holder=holder,
+                                        token_id=landed_id,
+                                        reverted=state == tx_notify.STATE_REVERTED)
         from tools.defi.receipt_wait import book_after_receipt
         book_after_receipt(gate, receipt, venue='defi', action=verb,
             amount_usd=decision.amount_usd, counterparty=plan.pool,

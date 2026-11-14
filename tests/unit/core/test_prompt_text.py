@@ -42,7 +42,7 @@ BLOCK_MAX_CHARS = {
     # 095 W10: + a lane's pinned skill outranks owner.md on its programme terms.
     "source_precedence": 3350,
     "subtask_delegation": 600,  # 112 W3: trimmed while it gained "that decide no money"
-    "surface": 2700,
+    "surface": 2950,  # active-room fix: an unaddressed line marked → the room gets [SILENT]
     "room_admin": 560,
     "using_your_tools": 750,
     "vision": 2000,

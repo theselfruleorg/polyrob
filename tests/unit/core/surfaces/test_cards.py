@@ -172,8 +172,9 @@ def test_choice_shape_is_bounded(tmp_path):
 def test_list_and_recent_recipients(tmp_path):
     st = _store(tmp_path)
     card = _quote(st)
-    assert "Confirm: /card_" in cards.list_reply("u1", st=st)
-    assert cards.list_reply("u2", st=st) == "No open cards."
+    from core.surfaces.card_list import list_reply
+    assert "Confirm /card_" in list_reply("u1", st=st)
+    assert list_reply("u2", st=st) == "No open cards."
     cards.press(card.card_id, "ok", "u1", st=st)
     cards.finish(card.card_id, "  RESULT: SENT AND CONFIRMED", st=st)
     assert st.recent_recipients("u1") == [ADDR]

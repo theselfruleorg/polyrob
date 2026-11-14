@@ -208,7 +208,7 @@ def test_a_job_card_carries_only_the_seat_write_verbs(tmp_path):
             cards.job_card("alice", bad, title="t", st=st)
     card = cards.job_card("alice", ["/job", "new", "1d", "|", "go", "execute", "it"],
                           title="t", st=st)
-    assert [a.label for a in cards.card_actions(card)] == ["Confirm", "Dismiss"]
+    assert [a.label for a in cards.card_actions(card)] == ["Confirm", "Cancel"]
     assert cards.press(card.card_id, "re", "alice", st=st).run is None
     assert cards.press(card.card_id, "ok", "other", st=st).run is None   # one owner
     first = cards.press(card.card_id, "ok", "alice", st=st)

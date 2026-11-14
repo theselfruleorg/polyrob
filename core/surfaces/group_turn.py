@@ -153,8 +153,16 @@ def render_context(rows: List[Any], *, chat_name: str, surface: str,
                       *body, "</group-context>"])
 
 
-def render_addressed(row: Any, *, role: str, reply_ref: Any = None) -> str:
+def render_addressed(row: Any, *, role: str, reply_ref: Any = None,
+                     to_you: bool = True) -> str:
     """The ``<addressed>`` line: who spoke to you, with their resolved role.
+
+    ``to_you=False`` is an ``active`` room's line that nobody addressed to the
+    agent (no @mention, no reply to the agent, no wake word): it reads
+    ``→ the room``, and the room paragraph tells the model such a line needs
+    an answer only when it is plainly for the agent. Without the marker every
+    line read ``→ you`` and the agent greeted every join and answered asides
+    between members.
 
     A member's text is untrusted and is neutralized to one line; an owner's or
     an admin's line is a genuine STEER (044 §4.2) and reaches the agent intact,
@@ -182,7 +190,8 @@ def render_addressed(row: Any, *, role: str, reply_ref: Any = None) -> str:
     from core.surfaces.reply_ref import render_reply_ref
     quoted = render_reply_ref(reply_ref, one_line=role not in ("owner", "admin"))
     tail = f"\n{quoted}" if quoted else ""
-    return f"<addressed>\n{who}|{sender} ({role}) → you: {text}{tail}\n</addressed>"
+    target = "you" if to_you else "the room (not addressed to you)"
+    return f"<addressed>\n{who}|{sender} ({role}) → {target}: {text}{tail}\n</addressed>"
 
 
 @dataclass(frozen=True)
@@ -288,8 +297,11 @@ def _merge_rows(a: List[Any], b: List[Any]) -> List[Any]:
 
 
 def build_room_turn(container: Any, inbound: Any, *, role: str, chat_name: str,
-                    context_lines: int = 30) -> RoomTurn:
+                    context_lines: int = 30, to_you: bool = True) -> RoomTurn:
     """Resolve one triggered room line into what the model is shown.
+
+    ``to_you`` is :func:`core.surfaces.chat_policy.is_addressed` for this line;
+    only an ``active`` room ever triggers on a line where it is False.
 
     Fail-open on the ledger: an unreadable room log costs the CONTEXT, never the
     turn — the addressed line still reaches the agent.
@@ -332,7 +344,7 @@ def build_room_turn(container: Any, inbound: Any, *, role: str, chat_name: str,
         sender_name=name,
         sender_id=inbound.identity.raw_user_id or inbound.identity.user_id,
         text=inbound.text or ""), role=role,
-        reply_ref=getattr(inbound, "reply_ref", None))
+        reply_ref=getattr(inbound, "reply_ref", None), to_you=to_you)
     return RoomTurn(
         context=ctx, addressed=addressed, surface=surface_id, chat_id=chat_id,
         shown_message_ids=tuple(str(getattr(r, "message_id", "")) for r in shown),

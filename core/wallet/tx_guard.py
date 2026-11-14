@@ -340,6 +340,10 @@ class Decision:
     simulated_token_deltas: Optional[dict] = None
     #: Which side supplied the USD estimate; inflow is a proceeds estimate.
     valuation_basis: str = "outflow"
+    #: The value the transaction moves WITHOUT the network fee (what the
+    #: declared max_spend_usd is held to); ``amount_usd`` adds the fee the caps
+    #: are charged. None when the guard did not value it.
+    value_usd: Optional[float] = None
     #: The refusal is a spend-CAP refusal (the PolicyGate's structured flag) — the
     #: signer's above-cap approval path keys on this, never on the reason text.
     cap_exceeded: bool = False

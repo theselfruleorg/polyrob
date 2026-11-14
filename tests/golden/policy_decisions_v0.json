@@ -80,7 +80,7 @@
    "github_create_issue",
    "aave_supply"
   ],
-  "universe_size": 417
+  "universe_size": 419
  },
  "actions": {
   "": {
@@ -3610,6 +3610,53 @@
    },
    "listed_in": [
     "correspondent_gate._HIGH_IMPACT_NAMES"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": null,
+    "metering_gate.MONEY_TOOLS∋owner": null,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": false
+   }
+  },
+  "cards_read": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": null,
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": null,
+    "write_row": {}
+   },
+   "emitted": {
+    "direct_controller_action": true,
+    "live_default_env": false,
+    "live_twitter_enabled": false,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "effects.ACTION_EFFECTS",
+    "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -18672,6 +18719,58 @@
    "owner_tools": [],
    "room": {
     "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": false
+   }
+  },
+  "twitter_article": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": false,
+    "is_high_impact_call(name, None)": false,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "social",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": "social_post",
+    "write_row": {
+     "twitter": "social"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": false,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "effects.WRITE_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "twitter"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": false,
     "is_room_denied_call(name, owner)": true
    },
    "spend_exemption": {},

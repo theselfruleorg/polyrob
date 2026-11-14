@@ -76,6 +76,9 @@ class GuardContext:
     registered_agent_id: Optional[int] = None
     #: step 7: the value the caps are charged.
     amount_usd: Optional[float] = None
+    #: step 7: the value the transaction MOVES (no network fee) — what the
+    #: declared max_spend_usd and a seat's `$` bound are held to.
+    value_usd: Optional[float] = None
     #: step 7: which side supplied the USD estimate.
     valuation_basis: str = "outflow"
     #: step 7: a send valued below spend grade — step 9 lets only the owner run it.

@@ -27,7 +27,8 @@ logger = logging.getLogger(__name__)
 
 USAGE = ("Usage: /cards — the open cards\n"
          "       /cards <id> — one card in full (the tap /card_<id>)\n"
-         "       /cards <id> ok|no|re|1-6 — the same as tapping the button")
+         "       /cards <id> confirm|cancel|quote|1-6 — the same as tapping the button\n"
+         "       /cancel <id> — cancel one card; /cancel cards — cancel every open card")
 
 
 def _read_id(text: str) -> Optional[str]:
@@ -58,12 +59,13 @@ async def handle(task_agent: Any, result: Any, spawn=None, deliver=None,
     if cid is None:
         args = text.split()[1:]
         if not args:
-            return cards.list_reply(user_id)
+            from core.surfaces.card_list import list_reply
+            return list_reply(user_id)
         if len(args) == 1:
             return cards.read_reply(user_id, args[0])
-        if len(args) != 2 or args[1].lower() not in cards.ACTS:
+        if len(args) != 2 or cards.parse_act(args[1]) is None:
             return USAGE
-        cid, act = args[0].lower(), args[1].lower()
+        cid, act = args[0].lower(), cards.parse_act(args[1])
     p = cards.press(cid, act, user_id)
     logger.info("card %s: press act=%s verb=%s state=%s", cid, act,
                 getattr(p.card, "verb", "") or getattr(p.card, "kind", "?"),

@@ -21,6 +21,10 @@ from core.wallet.tx_guard_steps.context import GuardContext
 
 #: The marker the send rails and the /send seat key the extra confirmation on.
 UNVERIFIED_MARK = "VALUE NOT VERIFIED"
+#: The quote line that carries ``Decision.value_usd`` — the value moved WITHOUT
+#: the network fee. A seat holds a `$` bound to THIS number (the guard holds the
+#: declared max_spend_usd to it too); "simulated value" adds the fee for the caps.
+SENT_VALUE_LABEL = "value sent:"
 
 
 def _spend_price(px, chain: Optional[str] = None) -> Optional[float]:
@@ -392,6 +396,7 @@ def step_7_price(c: GuardContext) -> Optional[Decision]:
             f"${intent.max_spend_usd:.4f}"))
     c.lp_implied = lp_implied
     c.amount_usd = amount_usd
+    c.value_usd = _declared_usd
     c.valuation_basis = valuation_basis
     return None
 
@@ -448,7 +453,7 @@ def step_9_approval_lane(c: GuardContext) -> Optional[Decision]:
                 f"owner approval required: PAYOUT — this call moves value to "
                 f"{c.intent.to or 'a new contract'} and declares nothing coming back, "
                 f"so only the owner can send it"),
-                lane="owner_queue", amount_usd=amount_usd,
+                lane="owner_queue", amount_usd=amount_usd, value_usd=c.value_usd,
                 sim_gas_used=deltas.gas_used, deploy=deploy_facts,
                 agent_id=registered_agent_id, position_token_id=position_token_id)
     _valued = c.unverified_within_caps and c.valuation_basis == "low_confidence"
@@ -458,7 +463,7 @@ def step_9_approval_lane(c: GuardContext) -> Optional[Decision]:
         return Decision(False, (
             f"owner approval required: {UNVERIFIED_MARK} — this send has no "
             f"spend-grade price, so only the owner can send it"),
-            lane="owner_queue", amount_usd=amount_usd,
+            lane="owner_queue", amount_usd=amount_usd, value_usd=c.value_usd,
             sim_gas_used=deltas.gas_used, deploy=deploy_facts,
             agent_id=registered_agent_id, position_token_id=position_token_id)
     _ceiling = (float(c.approve_above_usd) if c.approve_above_usd is not None
@@ -468,7 +473,7 @@ def step_9_approval_lane(c: GuardContext) -> Optional[Decision]:
         return Decision(False, (
             f"owner approval required: ${amount_usd:.4f} is above the autonomous "
             f"ceiling ${_ceiling:.2f}"),
-            lane="owner_queue", amount_usd=amount_usd,
+            lane="owner_queue", amount_usd=amount_usd, value_usd=c.value_usd,
             sim_gas_used=deltas.gas_used, deploy=deploy_facts,
             agent_id=registered_agent_id, position_token_id=position_token_id)
 
@@ -486,7 +491,7 @@ def step_9_approval_lane(c: GuardContext) -> Optional[Decision]:
             "refused: unattended trading needs an aggregate damage bound — set "
             "WALLET_DAILY_CAP_USD (the per-tx ceiling alone can be looped within "
             "to drain the treasury). Owner-driven trades are unaffected."),
-            lane="owner_queue", amount_usd=amount_usd,
+            lane="owner_queue", amount_usd=amount_usd, value_usd=c.value_usd,
             sim_gas_used=deltas.gas_used, deploy=deploy_facts,
             agent_id=registered_agent_id, position_token_id=position_token_id)
     return None
@@ -510,4 +515,4 @@ def allow(c: GuardContext) -> Optional[Decision]:
                     sim_gas_used=deltas.gas_used, deploy=deploy_facts,
                     agent_id=registered_agent_id, position_token_id=position_token_id,
                     simulated_token_deltas=dict(deltas.token_deltas),
-                    valuation_basis=valuation_basis)
+                    valuation_basis=valuation_basis, value_usd=c.value_usd)

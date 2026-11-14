@@ -124,11 +124,12 @@ async def test_insufficient_balance_is_refused(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_v4_builds_a_full_range_mint_and_a_fee_collect_only():
-    # 048 phase 3 (core handoff W6): a v4 withdrawal is not built; 115 W4 builds the
-    # fee collect (tests/unit/tools/defi/test_lp_v4_collect.py).
+async def test_v4_burn_refuses_and_an_unknown_protocol_refuses():
+    # 117 W7 builds the v4 withdrawal (tests/unit/tools/defi/test_lp_v4_collect.py);
+    # a burn stays unbuilt, so the position NFT is always kept.
     t, _ = tool()
-    assert 'withdrawal is not built' in (await t.lp_remove(LpRemoveParams(chain="robinhood", token_id=42, protocol='v4'))).error
+    res = await t.lp_remove(LpRemoveParams(chain="robinhood", token_id=42, protocol='v4', burn=True))
+    assert 'v4 builds no burn' in res.error
     assert 'unknown protocol' in (await t.lp_add(add(protocol='v5'))).error
 
 

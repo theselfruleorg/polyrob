@@ -89,8 +89,8 @@ def _rail_verdict_line(v):
                 f"{v.remedy or 're-check the mailbox credential'}",
                 SEVERITY_WARN, "email_inbound_rejected")
     if v.kind == "twitter_api":
-        # 116 W6.3: the count is the 402 answers recorded; a call refused
-        # locally in the backoff is not one of them.
+        # 116 W6.3: the count is the 402 answers recorded (no call is refused
+        # locally; a success clears the row).
         return (f"x api: {v.code or '402'} since {since}, {n} {v.code or '402'} response(s) — "
                 f"browser rail (x_browser) needs no API credits",
                 SEVERITY_WARN, "x_api_rejected")

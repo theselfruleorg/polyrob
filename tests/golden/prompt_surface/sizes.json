@@ -78,11 +78,11 @@
       "tokens": 7488
     },
     "tools": {
-      "chars": 97250,
-      "count": 103,
-      "tokens": 24312
+      "chars": 97858,
+      "count": 104,
+      "tokens": 24464
     },
-    "total_tokens": 31800
+    "total_tokens": 31952
   },
   "goal": {
     "layers": {
@@ -128,11 +128,11 @@
       "tokens": 7484
     },
     "tools": {
-      "chars": 97250,
-      "count": 103,
-      "tokens": 24312
+      "chars": 97858,
+      "count": 104,
+      "tokens": 24464
     },
-    "total_tokens": 31796
+    "total_tokens": 31948
   },
   "leaf": {
     "layers": {
@@ -224,11 +224,11 @@
       "tokens": 7614
     },
     "tools": {
-      "chars": 75960,
-      "count": 92,
-      "tokens": 18990
+      "chars": 76568,
+      "count": 93,
+      "tokens": 19142
     },
-    "total_tokens": 26604
+    "total_tokens": 26756
   },
   "owner_telegram_dm": {
     "layers": {
@@ -274,11 +274,11 @@
       "tokens": 7798
     },
     "tools": {
-      "chars": 73137,
-      "count": 59,
-      "tokens": 18284
+      "chars": 73745,
+      "count": 60,
+      "tokens": 18436
     },
-    "total_tokens": 26082
+    "total_tokens": 26234
   },
   "prod_owner_telegram_dm": {
     "layers": {
@@ -324,11 +324,11 @@
       "tokens": 9260
     },
     "tools": {
-      "chars": 127739,
-      "count": 85,
-      "tokens": 31934
+      "chars": 129857,
+      "count": 86,
+      "tokens": 32464
     },
-    "total_tokens": 41195
+    "total_tokens": 41725
   },
   "room": {
     "layers": {
@@ -345,8 +345,8 @@
         "tokens": 219
       },
       "system_prompt": {
-        "chars": 13447,
-        "tokens": 3361
+        "chars": 13654,
+        "tokens": 3413
       },
       "tool_catalog": {
         "chars": 3945,
@@ -354,15 +354,15 @@
       }
     },
     "system": {
-      "chars": 18600,
-      "tokens": 4650
+      "chars": 18807,
+      "tokens": 4701
     },
     "tools": {
-      "chars": 23307,
+      "chars": 24602,
       "count": 27,
-      "tokens": 5826
+      "tokens": 6150
     },
-    "total_tokens": 10476
+    "total_tokens": 10852
   },
   "server_owner_telegram_dm": {
     "layers": {
@@ -400,10 +400,10 @@
       "tokens": 7957
     },
     "tools": {
-      "chars": 34929,
-      "count": 36,
-      "tokens": 8732
+      "chars": 35537,
+      "count": 37,
+      "tokens": 8884
     },
-    "total_tokens": 16689
+    "total_tokens": 16841
   }
 }

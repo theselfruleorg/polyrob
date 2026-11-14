@@ -676,6 +676,21 @@ class CronScheduler:
                                  if job.one_shot else None))
         return True
 
+    def _one_shot_waits(self, job: CronJob, started: datetime,
+                        ended: datetime) -> Optional[datetime]:
+        """When a ONE-SHOT job that just ran must run again, or None (it ends).
+        Prod 2026-11-13: a one-shot run asked with ``holds_this_job=true`` and
+        ended ``done``; the row was terminal, so the owner's approval had no job
+        to re-arm (``rearm_job`` moves only a 'scheduled' row) and no run read
+        the answer. An answer that landed during the run runs the job again now;
+        an open question that holds the job keeps it scheduled, and every due
+        slot is deferred (:meth:`_defer_held`) until the answer or the expiry."""
+        if self._answered_during_run(job, started):
+            return ended
+        if self._held_by_question(job) is not None:
+            return ended + timedelta(seconds=HELD_ONE_SHOT_RECHECK_SECONDS)
+        return None
+
     def _deferring_owner_ask(self, job: CronJob, started: float) -> Optional[str]:
         """FIX 3: the OPEN owner-approval ask this run raised, or None. Fail-open
         (any error answers None = record the timeout as a failure, as before)."""
@@ -753,9 +768,11 @@ class CronScheduler:
                     status="scheduled", expected=job,
                 )
                 return streak
+            wait = self._one_shot_waits(job, started, now)
             self.store.update_after_run(
-                job.id, last_run_at=now, next_run_at=None,
-                status="done" if success else "failed", expected=job,
+                job.id, last_run_at=now, next_run_at=wait,
+                status="scheduled" if wait else ("done" if success else "failed"),
+                expected=job,
             )
             return streak
         # recurring: reschedule from the schedule spec

@@ -131,6 +131,82 @@ async def test_an_answered_ask_releases_the_job(tmp_path, log):
     assert ran == ["hold0001"]
 
 
+# --- a ONE-SHOT job that asked (prod 2026-11-13) ---------------------------------
+
+def _one_shot(**kw):
+    return _job(schedule_spec="2026-11-11T17:00:00", one_shot=True, **kw)
+
+
+@pytest.mark.asyncio
+async def test_a_one_shot_that_asked_with_the_hold_stays_scheduled_and_the_answer_runs_it(
+        tmp_path, log):
+    """The run raised its holding ask and ended done: the row was terminal, so
+    the approval re-armed nothing and no run read the answer."""
+    from datetime import timedelta
+    store, board = _home(tmp_path)
+    store.add(_one_shot())
+    ran, asked = [], []
+
+    async def runner(job):
+        ran.append(job.id)
+        if not asked:
+            asked.append(_ask(board, holds_rail=True, holds_rail_via="owner_ask"))
+        return True
+
+    sched = CronScheduler(store, runner, lock_path=str(tmp_path / "t.lock"))
+    await sched.tick(now=NOW)
+    job = store.get("hold0001")
+    assert ran == ["hold0001"]
+    assert job.status == "scheduled" and job.enabled and job.next_run_at > NOW
+    # a due slot while the question is open is deferred, not run
+    res = await sched.tick(now=job.next_run_at + timedelta(seconds=1))
+    assert ran == ["hold0001"] and res.deferred == ["hold0001"]
+    # the owner approves: the job is re-armed and the next tick runs it, once
+    ok, _ = board.decide_ask(asked[0].id, user_id="alice", approved=True, answer="a")
+    assert ok
+    await sched.tick(now=datetime.now() + timedelta(minutes=1))
+    assert ran == ["hold0001", "hold0001"]
+    job = store.get("hold0001")
+    assert job.status == "done" and not job.enabled and job.next_run_at is None
+
+
+@pytest.mark.asyncio
+async def test_a_one_shot_answered_during_its_run_runs_again(tmp_path, log):
+    from datetime import timedelta
+    store, board = _home(tmp_path)
+    store.add(_one_shot())
+    ran = []
+
+    async def runner(job):
+        ran.append(job.id)
+        if len(ran) == 1:
+            a = _ask(board, holds_rail=True)
+            board.decide_ask(a.id, user_id="alice", approved=True, answer="a")
+        return True
+
+    sched = CronScheduler(store, runner, lock_path=str(tmp_path / "t.lock"))
+    start = datetime.now() - timedelta(seconds=5)
+    store.set_schedule("hold0001", start.isoformat(), now=start - timedelta(seconds=1))
+    await sched.tick(now=start)
+    assert store.get("hold0001").status == "scheduled"
+    await sched.tick(now=datetime.now() + timedelta(minutes=1))
+    assert ran == ["hold0001", "hold0001"]
+
+
+@pytest.mark.asyncio
+async def test_a_one_shot_with_no_question_still_ends(tmp_path, log):
+    store, board = _home(tmp_path)
+    store.add(_one_shot())
+
+    async def runner(job):
+        _ask(board)                      # an ask WITHOUT the hold holds nothing
+        return True
+
+    await CronScheduler(store, runner, lock_path=str(tmp_path / "t.lock")).tick(now=NOW)
+    job = store.get("hold0001")
+    assert job.status == "done" and not job.enabled
+
+
 @pytest.mark.asyncio
 async def test_an_open_ask_without_the_hold_does_not_hold(tmp_path, log):
     store, board = _home(tmp_path)

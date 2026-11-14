@@ -259,7 +259,7 @@ caller refuses with the known ids echoed back.
 
 **Built in:** every dollar the network table pins on a money network is payable with
 no step, as `<symbol>-<network>`: `usdc-base`, `usdc-ethereum`, `usdc-arbitrum`,
-`usdc-polygon`, `usdg-robinhood` (the Robinhood network's dollar is USDG; it has no USDC).
+`usdc-polygon`, `usdt-ethereum`, `usdg-robinhood` (the Robinhood network's dollar is USDG; it has no USDC).
 A network whose one pinned dollar is not USDC uses it as its default.
 
 **Pin another asset** (operator only — there is deliberately no agent action and no
@@ -629,7 +629,8 @@ never notifies, and an unknown value renders `unknown`, never `$0.00`.
 `WALLET_CONTEXT_VISIBLE` (default **on**) puts the agent's own balances into every
 turn's health note, read from a cache the bridge watcher refreshes — never a network
 read on the turn. An unreadable chain renders `unknown` and raises a health item; a
-stale snapshot is labelled stale.
+stale snapshot is labelled stale. A network row also names how many Uniswap liquidity holdings the wallet owns
+there: money inside one is in no balance, and `defi_data.portfolio` lists each with both sides and their sum.
 
 The usage bridge needs its own flag (`USAGE_INVOICE_BRIDGE_ENABLED`) — read the caveats
 in its section first.

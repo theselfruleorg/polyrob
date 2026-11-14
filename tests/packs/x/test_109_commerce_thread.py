@@ -33,10 +33,11 @@ def _tool(resp=None, refusal=None, me="999"):
     t = SimpleNamespace(_enabled=True, client=SimpleNamespace(get_users_mentions=MagicMock(),
                                                               get_tweet=MagicMock()))
     t.get_authenticated_user_id = AsyncMock(return_value=me)
-    t._credit_preflight_refusal = lambda: refusal
 
     async def _req(func, endpoint_type, **kw):
         t.last = kw
+        if refusal:
+            raise RuntimeError(refusal)
         return resp
     t._make_request = _req
     return t
@@ -59,7 +60,7 @@ async def test_poll_reads_after_the_cursor_oldest_first_and_is_throttled():
 
 @pytest.mark.asyncio
 async def test_a_402_or_no_account_is_unavailable_with_a_reason():
-    ch = ct.XThreadChannel(lambda: _tool(refusal="X API credits depleted"))
+    ch = ct.XThreadChannel(lambda: _tool(refusal="X API credits depleted (402 Payment Required)"))
     with pytest.raises(ThreadUnavailable, match="402"):
         await ch.poll(None)
     ch = ct.XThreadChannel(lambda: _tool(SimpleNamespace(data=[]), me=None))

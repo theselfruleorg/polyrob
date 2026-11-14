@@ -91,14 +91,15 @@ def test_lp_positions_renders_pool_range_and_fees():
     assert "holds:" in content and "fees:" in content
 
 
-def test_lp_positions_v4_is_an_honest_refusal():
+def test_lp_positions_v4_without_an_indexer_says_so_and_names_the_id_read():
+    """No indexer is 'I could not list', never 'it holds nothing'."""
     tool = _tool(FakeRpc())
     res = _run(tool.lp_positions(
         LpPositionsParams(chain="robinhood", protocol="v4", address=ADDR)))
     assert res.extracted_content is None
     assert res.error is not None
-    assert "phase 3 of proposal 048" in res.error
-    assert "v3 only" in res.error
+    assert "token_id" in res.error
+    assert "no v4 position" not in res.error.lower()
 
 
 # --------------------------------------------------------------------------

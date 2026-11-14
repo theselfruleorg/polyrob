@@ -12,6 +12,7 @@ from core.state.machine import REGISTRY
 MACHINE_MODULES = [
     "core.app_service.registry",
     "core.trading_mandate",
+    "core.wallet.lp_seed",
     "modules.x402.invoice_status",
     "modules.credits.billing_failures",
     "core.wallet.bridge_guard",

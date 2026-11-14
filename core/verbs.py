@@ -158,7 +158,7 @@ _CORE_TABLE: tuple[Verb, ...] = (
     Verb("/fulfill", "needs you",
          "Mark an ask fulfilled so its work can continue", room_refused=True),
     Verb("/cards", "needs you",
-         "Open action cards: confirm a quote, answer a choice, or cancel; /cards <id> reopens one in full", room_refused=True),
+         "Open action cards: confirm, get a quote, answer, or cancel; /cards <id> reopens one in full", room_refused=True),
     # 096 W5: every cut is one tap away. A read of text this seat already
     # rendered for you (``core.surfaces.more_store``), never a decision.
     Verb("/more", "look", "The rest of a list or text I cut short", room_refused=True),
@@ -174,7 +174,9 @@ _CORE_TABLE: tuple[Verb, ...] = (
     # (``register_verbs``) — today by ``core/money_verbs.py``, after 067 P5b by
     # the wallet pack. With none registered the group renders its install hint.
     # control
-    Verb("/cancel", "control", "Stop the task I am running now", aliases=("/stop",)),
+    Verb("/cancel", "control",
+         "Stop the task I am running now; /cancel <card id> or /cancel cards cancels cards",
+         aliases=("/stop",)),
     Verb("/pause", "control", "Stop autonomous work now, all of it or one scope",
          aliases=("/halt",), room_refused=True),
     Verb("/resume", "control", "Lift the pause", room_refused=True),

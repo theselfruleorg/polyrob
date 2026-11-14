@@ -5,7 +5,13 @@ number against anything. Now every price goes through :func:`quote`:
 
 * every registered source that covers the chain is asked (or its answer is
   handed in, already fetched in a batch);
-* the quote is the MEDIAN of the sources that answered;
+* the quote's VALUE is the primary pool price when the primary priced the
+  token; the other sources only grade it (note, dispute) and never move it.
+  Only a quote with no primary price takes the MEDIAN of the sources that
+  answered (graded ``low``). Before 2026-11-13 every quote was the median, so
+  a secondary that answered on one read and hit a 429 on the next moved every
+  holding, total and card by half the sources' gap (prod: "the value is not
+  stable");
 * sources more than 2 % apart (a liquid pool, >= $1M) or 5 % apart (a thin
   one) earn a NOTE and keep their grade; only a gap above 10 % (liquid) or
   25 % (thin) makes the quote ``disputed`` — shown, never used to size or value
@@ -241,8 +247,10 @@ def aggregate(answers: Iterable[SourceAnswer], *, now: Optional[float] = None) -
     if failed:
         reason += "; did not answer: " + ", ".join(n for n, _ in failed)
 
+    # The value is the primary's number whenever it priced the token: a
+    # secondary that answers on one read and fails on the next must not move it.
     return PriceQuote(
-        usd=median, sources=tuple(priced), spread_pct=spread, liquidity_usd=liq, note=note,
+        usd=p_usd if p_usd is not None else median, sources=tuple(priced), spread_pct=spread, liquidity_usd=liq, note=note,
         pool=pool, pool_count=pool_count, confidence=confidence, reason=reason,
         priced_liquidity_usd=priced_liq, primary_usd=p_usd, primary_confidence=p_conf,
         primary_liquidity_usd=(primary.liquidity_usd if primary is not None else None),
@@ -347,6 +355,18 @@ def _anchored(chain: str, address: str, q: PriceQuote, *, use_cache: bool) -> Pr
                                f"WETH quote was {q.confidence}: {q.reason})"))
     except Exception:
         return q
+
+
+# -- the one inclusion rule for a total ------------------------------------
+
+def counts_in_total(confidence: Optional[str]) -> bool:
+    """Whether a value at this grade COUNTS in a total the owner reads (the
+    portfolio, the positions book). Only ``high``: a low, disputed or unknown
+    value is shown apart as indicative, with its own sum, never added in.
+    Before 2026-11-13 the portfolio counted only ``high`` and the positions
+    book also counted ``low``, so one token had a value in one total and none
+    in the other."""
+    return confidence == HIGH
 
 
 # -- the three readings every caller needs --------------------------------

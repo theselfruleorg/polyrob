@@ -71,6 +71,40 @@ def caps_refusal(gate, native_wei: int, balance_wei: int, now: Optional[float] =
     return None
 
 
+def legs_ready(chain, rpc, holder, npm, legs, now):
+    """``(outflows, held)`` for the legs of a v4 mint, each ``(currency, raw
+    maximum, decimals)``. An ERC-20 leg needs the standing allowance to Permit2
+    and the exact, unexpired Permit2 grant to the PositionManager; every leg
+    needs the balance. A refusal names the exact approval to make. A leg of 0
+    (a one-sided range) is not an outflow."""
+    row = dex_registry.row_for(chain, "v4")
+    out, held = [], []
+    for cur, n, dec in legs:
+        if not n:
+            continue
+        if cur == V.ZERO:
+            balance = int(rpc("eth_getBalance", [holder, "latest"]), 16)
+        else:
+            to_permit2 = R.allowance(rpc, chain, cur, holder, row.permit2)
+            if to_permit2 < n:
+                raise ValueError(
+                    f"Permit2 holds an ERC-20 allowance of {to_permit2} on {cur}, need {n}. The "
+                    f"owner runs defi_trade.approve_token(chain={chain}, token={cur}, "
+                    f"spender={row.permit2}, amount=<program size>) once (owner turn only).")
+            granted, expiration = V.permit2_allowance(rpc, chain, holder, cur, npm)
+            if granted < n or expiration <= now + DEADLINE_S:
+                raise ValueError(
+                    f"Permit2 grant to the v4 PositionManager is {granted} (expires {expiration}), "
+                    f"need {n}. Run defi_trade.approve_token(chain={chain}, token={cur}, "
+                    f"spender={npm}, amount={Decimal(n) / 10 ** dec}, via='permit2') first.")
+            balance = int(R.view(rpc, cur, A.NPM_BALANCE_OF, [holder]))
+        if balance < n:
+            raise ValueError(f"insufficient balance of {cur}: {balance} < {n}")
+        out.append((None if cur == V.ZERO else cur, n))
+        held.append((None if cur == V.ZERO else cur, balance))
+    return out, held
+
+
 def prepare_add_v4(p, rpc, holder, npm, price_fn=None):
     """The v4 lp_add plan. Refuses anything but a full-range new position on
     an initialized Pons PoolKey with a pinned hook."""
@@ -105,29 +139,9 @@ def prepare_add_v4(p, rpc, holder, npm, price_fn=None):
     price_token0 = chains.get(p.chain).wrapped_native if native0 else c0
     note = pool_price_check(p, price_token0, c1, dec0, dec1, st.sqrt_price_x96, price_fn)
     row = dex_registry.row_for(p.chain, "v4")
-    out, held = [], []
     now = int(time.time())
-    for cur, n, dec in ((c0, maxima[0], dec0), (c1, maxima[1], dec1)):
-        if cur == V.ZERO:
-            balance = int(rpc("eth_getBalance", [holder, "latest"]), 16)
-        else:
-            to_permit2 = R.allowance(rpc, p.chain, cur, holder, row.permit2)
-            if to_permit2 < n:
-                raise ValueError(
-                    f"Permit2 holds an ERC-20 allowance of {to_permit2} on {cur}, need {n}. The "
-                    f"owner runs defi_trade.approve_token(chain={p.chain}, token={cur}, "
-                    f"spender={row.permit2}, amount=<program size>) once (owner turn only).")
-            granted, expiration = V.permit2_allowance(rpc, p.chain, holder, cur, npm)
-            if granted < n or expiration <= now + DEADLINE_S:
-                raise ValueError(
-                    f"Permit2 grant to the v4 PositionManager is {granted} (expires {expiration}), "
-                    f"need {n}. Run defi_trade.approve_token(chain={p.chain}, token={cur}, "
-                    f"spender={npm}, amount={Decimal(n) / 10 ** dec}, via='permit2') first.")
-            balance = int(R.view(rpc, cur, A.NPM_BALANCE_OF, [holder]))
-        if balance < n:
-            raise ValueError(f"insufficient balance of {cur}: {balance} < {n}")
-        out.append((None if cur == V.ZERO else cur, n))
-        held.append((None if cur == V.ZERO else cur, balance))
+    out, held = legs_ready(p.chain, rpc, holder, npm,
+                           ((c0, maxima[0], dec0), (c1, maxima[1], dec1)), now)
     unlock = V.encode_mint_unlock(key, lo, hi, liq, maxima[0], maxima[1], holder)
     data = V.encode_modify_liquidities(unlock, now + DEADLINE_S)
     value = maxima[0] if native0 else 0
@@ -173,9 +187,67 @@ def prepare_collect_v4(p, rpc, holder, npm):
         lp_position_effect="hold", idempotency_key=None)
     from tools.defi.lp_reads import pool_id
     pid = pool_id(key)
+    try:
+        f0, f1 = V.position_fees(rpc, p.chain, V.position(rpc, p.chain, p.token_id))
+        owed = (f"fees owed now (read, not a minimum): {Decimal(f0) / 10 ** dec0:f} + "
+                f"{Decimal(f1) / 10 ** dec1:f}\n")
+    except Exception as exc:
+        owed = f"fees owed now: NOT READ ({type(exc).__name__}); the receipt shows what arrived\n"
     return Plan(intent, data, 0, pid, (c0, c1), (dec0, dec1),
                 f"v4 pool: {pid} (fee {key['fee']}, hooks {key['hooks']}); position: {p.token_id}\n"
-                f"collect: the fees owed in {c0} and {c1}, paid to {holder}; liquidity unchanged\n")
+                f"collect: the fees owed in {c0} and {c1}, paid to {holder}; liquidity unchanged\n"
+                + owed)
+
+
+def prepare_remove_v4(p, rpc, holder, npm, price_fn=None):
+    """The v4 lp_remove plan (117 W7): DECREASE_LIQUIDITY(token_id, part, min0,
+    min1) + TAKE_PAIR(currency0, currency1 → holder). The position NFT stays
+    (v4 builds no burn). The wallet must own the position; the PoolKey, the
+    ticks and the liquidity are read from the pinned PositionManager, and the
+    two minima are the amounts at the pool price less ``slippage_bps``. The
+    pool price is checked against an independent one (CR-M12) before a live
+    withdrawal, as on v3."""
+    from tools.defi.lp_verbs import Plan, pool_price_check
+    if getattr(p, "burn", False):
+        raise ValueError("v4 builds no burn; withdraw with burn=false (the emptied position stays)")
+    pos = V.position(rpc, p.chain, p.token_id)
+    if pos.owner != holder.lower():
+        raise ValueError(f"{holder} does not own v4 position #{p.token_id}")
+    key = pos.key
+    if not dex_registry.hook_pinned(p.chain, key["hooks"]):
+        raise ValueError(f"v4 hook {key['hooks']} has no pinned code hash; it runs inside the withdrawal")
+    dex_registry.verify_hook(rpc, p.chain, key["hooks"])
+    liq = pos.liquidity * p.liquidity_pct // 100
+    if not liq:
+        raise ValueError("position has no removable liquidity; use lp_collect for the fees owed")
+    st = V.pool_state(rpc, p.chain, pos.pool_id)
+    if st.sqrt_price_x96 == 0:
+        raise ValueError(f"v4 pool {pos.pool_id} is not initialized")
+    c0, c1 = key["currency0"], key["currency1"]
+    native0 = c0 == V.ZERO
+    dec0 = chains.get(p.chain).native_decimals if native0 else int(R.view(rpc, c0, A.ERC20_DECIMALS))
+    dec1 = int(R.view(rpc, c1, A.ERC20_DECIMALS))
+    from core.wallet import univ3_math as M
+    amounts = M.amounts_for_liquidity(st.sqrt_price_x96, M.sqrt_price_at_tick(pos.tick_lower),
+                                      M.sqrt_price_at_tick(pos.tick_upper), liq)
+    minimums = [max(1, n * (10000 - p.slippage_bps) // 10000) if n else 0 for n in amounts]
+    if not any(minimums):
+        raise ValueError("the withdrawal would return nothing at the pool price")
+    price_token0 = chains.get(p.chain).wrapped_native if native0 else c0
+    note = pool_price_check(p, price_token0, c1, dec0, dec1, st.sqrt_price_x96, price_fn)
+    unlock = V.encode_decrease_unlock(p.token_id, liq, minimums[0], minimums[1], c0, c1, holder)
+    data = V.encode_modify_liquidities(unlock, int(time.time()) + DEADLINE_S)
+    row = dex_registry.row_for(p.chain, "v4")
+    inflows = tuple((None if cur == V.ZERO else cur, m) for cur, m in zip((c0, c1), minimums))
+    intent = tx_guard.TxIntent(
+        chain=p.chain, token=None, to=npm, amount_raw=0, max_spend_usd=p.max_spend_usd,
+        is_liquidity_op=True, lp_inflows=inflows, lp_position=(npm, p.token_id),
+        lp_position_effect="hold",
+        expected_events=((row.pool_manager, V.TOPIC_MODIFY_LIQUIDITY),), idempotency_key=None)
+    return Plan(intent, data, 0, pos.pool_id, (c0, c1), (dec0, dec1),
+                f"v4 pool: {pos.pool_id} (fee {key['fee']}, hooks {key['hooks']}); position: {p.token_id}\n"
+                f"withdraw: {p.liquidity_pct}% = liquidity {liq} of {pos.liquidity}; "
+                f"receipts (raw minima): {inflows}; the position NFT stays\n" + note)
 
 
 async def perform_permit2_approve(tool, params, execution_context=None):

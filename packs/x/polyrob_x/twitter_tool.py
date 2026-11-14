@@ -16,6 +16,8 @@ import traceback
 import contextvars
 
 from tools.base_tool import BaseTool, ToolStatus
+from polyrob_x.twitter_media import (TwitterArticleAction, TwitterMediaArticleMixin,  # noqa: F401
+                                    full_read_kwargs, tweet_extras)
 
 #: Set ONLY by :func:`send_approved` while it sends an action the owner already
 #: approved (its grant was consumed by the caller): the approval gate passes it.
@@ -98,7 +100,8 @@ class TwitterPostAction(BaseModel):
     text: str = Field(..., min_length=1, max_length=_TWEET_MAX_INPUT,
                       description="Tweet text. ≤280 chars posts a single tweet." + _AUTOTHREAD_NOTE)
     media_paths: Optional[List[str]] = Field(
-        None, description="Local image/video file paths to upload + attach." + _MEDIA_VERIFY_NOTE)
+        None, description="Local image/GIF/video file paths to upload + attach (≤4 images, or 1 GIF/video)." + _MEDIA_VERIFY_NOTE)
+    media_alt_texts: Optional[List[str]] = Field(None, description="Alt text per media file, same order (≤1000 chars each).")
     poll_options: Optional[List[str]] = Field(None, description="2-4 poll choices (creates a poll).")
     poll_duration_minutes: Optional[int] = Field(None, ge=5, le=10080, description="Poll duration in minutes.")
 
@@ -110,6 +113,7 @@ class TwitterReplyAction(BaseModel):
                       description="Reply text. ≤280 chars posts a single reply." + _AUTOTHREAD_NOTE)
     media_paths: Optional[List[str]] = Field(
         None, description="Local file paths to upload + attach." + _MEDIA_VERIFY_NOTE)
+    media_alt_texts: Optional[List[str]] = Field(None, description="Alt text per media file, same order (≤1000 chars each).")
 
 
 class TwitterQuoteAction(BaseModel):
@@ -124,6 +128,7 @@ class TwitterThreadAction(BaseModel):
     texts: List[str] = Field(..., min_length=1, description="Ordered tweet texts; chained as a thread.")
     media_paths: Optional[List[str]] = Field(
         None, description="Local file paths attached to the FIRST tweet." + _MEDIA_VERIFY_NOTE)
+    media_alt_texts: Optional[List[str]] = Field(None, description="Alt text per media file, same order (≤1000 chars each).")
 
 
 class TwitterDeleteAction(BaseModel):
@@ -232,7 +237,7 @@ def _storefront_mark(t) -> dict:
     return {}
 
 
-class TwitterTool(BaseTool):
+class TwitterTool(TwitterMediaArticleMixin, BaseTool):
     """Service that interacts with the Twitter API."""
 
     @property
@@ -586,16 +591,14 @@ class TwitterTool(BaseTool):
             self.logger.error(f"Error executing Twitter request: {e}")
             raise
 
-    # 2026-09-19: a 402 ("credits depleted") is remembered for this long and every
-    # API call in the window is refused LOCALLY with the remedy — outreach round 15
-    # burned its whole step budget rediscovering the same 402 (52 hits in 15 min).
-    # 057 WS-F: the memory is the DURABLE verdict store, so a restart does not
-    # re-discover a depleted account, and the TTL constant lives there.
+    # A 402 ("credits depleted") is REMEMBERED (the durable verdict store) so the
+    # status snapshot can show the rail is out of credits. It is never a local
+    # refusal: every call goes to the API, so a top-up works on the next call
+    # (2026-11-12, owner: "we should not block any tool because credits ran out" —
+    # the old preflight refused locally for up to 6 h after the owner topped up).
     _CREDIT_402_WINDOW_SEC = TWITTER_API_TTL_SEC
 
-    # The browser rail needs no API credits. This is a HINT, not an auto-fallback:
-    # nothing here re-dispatches the call (an implicit rail change on a public
-    # posting verb is the agent's decision, not the tool's).
+    # The browser rail needs no API credits. This is a HINT, not an auto-fallback.
     CREDIT_402_FALLBACK = "x_browser.x_post"
 
     _CREDIT_402_REMEDY = ("top up the pay-per-use credits or change tier at "
@@ -609,30 +612,10 @@ class TwitterTool(BaseTool):
             return True
         return "402" in str(exc) and "payment required" in str(exc).lower()
 
-    def _credit_preflight_refusal(self) -> Optional[str]:
-        try:
-            from core.credential_verdicts import active, since_text
-            live = active("twitter_api", live_only=True)
-            if not live:
-                return None
-            v = min(live, key=lambda x: x.first_seen)
-            refused = sum(x.count for x in live)
-            return (
-                f"X API credits depleted (402 Payment Required since {since_text(v)}; "
-                f"{refused} rejection(s)) — not retrying, this call was refused "
-                f"locally. Owner remedy: {self._CREDIT_402_REMEDY}. The browser rail "
-                f"({self.CREDIT_402_FALLBACK}) needs no API credits. Stop the round in "
-                "≤3 steps and report; do not probe other endpoints.")
-        except Exception:
-            return None
-
     async def _make_request(self, func: callable, endpoint_type: str, *args, **kwargs) -> Any:
         """Make a rate-limited request."""
         if not self.client:
             raise ConfigurationError("Twitter client not initialized")
-        refusal = self._credit_preflight_refusal()
-        if refusal:
-            raise APIError(refusal)
 
         try:
             # Use the rate_limiter property from BaseService
@@ -658,6 +641,10 @@ class TwitterTool(BaseTool):
         except Exception as e:
             if self._is_payment_required(e):
                 self._record_credit_402(str(endpoint_type or ""))
+                raise APIError(
+                    "X API credits depleted (402 Payment Required). Owner remedy: "
+                    f"{self._CREDIT_402_REMEDY}. The next call tries the API again; "
+                    f"the browser rail ({self.CREDIT_402_FALLBACK}) needs no API credits.")
             raise APIError(f"Twitter request failed: {str(e)}")
 
     def _credit_verdict_key(self) -> str:
@@ -711,10 +698,9 @@ class TwitterTool(BaseTool):
                 "fallback": self.CREDIT_402_FALLBACK})
         if warn_once("twitter_api", key, episode=v.first_seen):
             self.logger.warning(
-                "X API 402 Payment Required (credits depleted) on %s — remembering "
-                "for %ss; further calls refuse locally. Remedy: %s. Fallback rail: %s",
-                endpoint_type or "(api)", int(self._CREDIT_402_WINDOW_SEC),
-                self._CREDIT_402_REMEDY, self.CREDIT_402_FALLBACK)
+                "X API 402 Payment Required (credits depleted) on %s — calls keep "
+                "going to the API. Remedy: %s. Fallback rail: %s",
+                endpoint_type or "(api)", self._CREDIT_402_REMEDY, self.CREDIT_402_FALLBACK)
 
     async def get_tweet(self, tweet_id: str) -> Optional[Dict]:
         """Fetch a single tweet by ID.
@@ -740,8 +726,8 @@ class TwitterTool(BaseTool):
                 func=self.client.get_tweet,
                 endpoint_type='tweets',
                 id=tweet_id,
-                expansions=["author_id", "referenced_tweets.id"],
-                tweet_fields=["created_at", "text", "author_id", "conversation_id", "referenced_tweets", "public_metrics"],
+                **full_read_kwargs(["created_at", "text", "author_id", "conversation_id", "referenced_tweets",
+                                    "public_metrics"], ["author_id", "referenced_tweets.id"]),
                 user_fields=["username", "name", "description"]
             )
             
@@ -758,7 +744,8 @@ class TwitterTool(BaseTool):
                 "author_id": tweet_data.author_id,
                 "created_at": tweet_data.created_at.isoformat() if hasattr(tweet_data, 'created_at') else None,
                 "conversation_id": getattr(tweet_data, 'conversation_id', None),
-                "public_metrics": with_repost_total(getattr(tweet_data, 'public_metrics', {}))
+                "public_metrics": with_repost_total(getattr(tweet_data, 'public_metrics', {})),
+                **tweet_extras(tweet_data, response.includes),
             }
             
             # Add referenced tweets if available
@@ -822,9 +809,7 @@ class TwitterTool(BaseTool):
                 endpoint_type='tweets',
                 id=user_id,  # Use resolved user_id
                 max_results=max(5, max_results),
-                tweet_fields=['created_at', 'text', 'public_metrics'],
-                expansions=['author_id']
-            )
+                **full_read_kwargs(['created_at', 'text', 'public_metrics'], ['author_id']))
             
             if response and hasattr(response, 'data'):
                 # X sends data=None for an account with no tweets in range: that
@@ -837,7 +822,8 @@ class TwitterTool(BaseTool):
                         'text': tweet.text,
                         'created_at': tweet.created_at.isoformat()
                         if getattr(tweet, 'created_at', None) else None,
-                        'metrics': with_repost_total(getattr(tweet, 'public_metrics', {}))
+                        'metrics': with_repost_total(getattr(tweet, 'public_metrics', {})),
+                        **tweet_extras(tweet, response.includes),
                     }
                     for tweet in list(response.data)[:max_results]
                 ]
@@ -1420,8 +1406,7 @@ class TwitterTool(BaseTool):
                     endpoint_type='search',
                     query=query,
                     max_results=max_results,
-                    tweet_fields=['created_at', 'public_metrics', 'entities'],
-                    expansions=['author_id'],
+                    **full_read_kwargs(['created_at', 'public_metrics', 'entities'], ['author_id']),
                     user_fields=['username', 'name', 'profile_image_url'],
                     **kwargs
                 )
@@ -1443,7 +1428,8 @@ class TwitterTool(BaseTool):
                             'name': author.name,
                             'profile_image_url': author.profile_image_url
                         } if author else None,
-                        'entities': tweet.entities
+                        'entities': tweet.entities,
+                        **tweet_extras(tweet, response.includes),
                     })
                     
                 # If original max_results was less than 10, truncate results
@@ -1502,7 +1488,7 @@ class TwitterTool(BaseTool):
     #: New-content publishing actions — a repeat here is a duplicate POST, not
     #: engagement. twitter_reply/twitter_quote are deliberately excluded: a
     #: reply to a DIFFERENT tweet is not a repeat by construction.
-    _SOCIAL_COOLDOWN_ACTIONS = frozenset({"twitter_post", "twitter_thread"})
+    _SOCIAL_COOLDOWN_ACTIONS = frozenset({"twitter_post", "twitter_thread", "twitter_article"})
 
     @staticmethod
     def _social_cooldown_enabled() -> bool:
@@ -1833,39 +1819,6 @@ class TwitterTool(BaseTool):
             raise RuntimeError(f"media upload failed: {err}")
         return validated
 
-    # X only documents chunked upload for these; anything else stays on the
-    # plain image path unchanged.
-    _VIDEO_EXTENSIONS = frozenset({".mp4", ".mov"})
-
-    async def _upload_media(self, media_paths: List[str], execution_context=None) -> List[str]:
-        """Upload local media via v1.1 and return media_id strings.
-
-        Video needs X's chunked upload flow (INIT/APPEND/FINALIZE) with
-        media_category="tweet_video", then a wait for processing_info to reach
-        state=succeeded before the media_id is attachable to a tweet — tweepy's
-        media_upload() already auto-detects video and routes to chunked_upload()
-        (which defaults wait_for_async_finalize=True, so the processing-wait is
-        already handled); the one thing bare media_upload(filename=...) never
-        supplied was media_category, without which X may not process the
-        upload as tweet-attachable video. Images are untouched — this only adds
-        kwargs for recognized video extensions.
-        """
-        if not getattr(self, "api_v1", None):
-            raise RuntimeError("media upload requires the v1.1 API client (OAuth1.0a creds)")
-        resolved_paths = self._resolve_media_paths(media_paths, execution_context)
-        ids: List[str] = []
-        for path in resolved_paths:
-            kwargs: Dict[str, Any] = {"filename": path}
-            if os.path.splitext(path)[1].lower() in self._VIDEO_EXTENSIONS:
-                kwargs["chunked"] = True
-                kwargs["media_category"] = "tweet_video"
-            media = await self._make_request(
-                func=self.api_v1.media_upload, endpoint_type="media", **kwargs
-            )
-            mid = getattr(media, "media_id", None) or getattr(media, "media_id_string", None)
-            ids.append(str(mid))
-        return ids
-
     @staticmethod
     def _tweet_from_response(resp) -> Dict[str, Any]:
         if not resp or not hasattr(resp, "data") or not resp.data:
@@ -1880,10 +1833,10 @@ class TwitterTool(BaseTool):
                              poll_duration_minutes: Optional[int] = None,
                              in_reply_to_tweet_id: Optional[str] = None,
                              quote_tweet_id: Optional[str] = None,
-                             execution_context=None) -> Dict[str, Any]:
+                             execution_context=None, alt_texts=None) -> Dict[str, Any]:
         kwargs: Dict[str, Any] = {"text": text}
         if media_paths:
-            kwargs["media_ids"] = await self._upload_media(media_paths, execution_context)
+            kwargs["media_ids"] = await self._upload_media(media_paths, execution_context, alt_texts)
         if poll_options:
             kwargs["poll_options"] = list(poll_options)
             if poll_duration_minutes:
@@ -1943,14 +1896,14 @@ class TwitterTool(BaseTool):
                               quote_tweet_id: Optional[str] = None,
                               poll_options: Optional[List[str]] = None,
                               poll_duration_minutes: Optional[int] = None,
-                              execution_context=None) -> List[str]:
+                              execution_context=None, alt_texts=None) -> List[str]:
         """Post ``parts`` as a chained thread; media/poll/quote ride the head tweet."""
         prev_id = in_reply_to_tweet_id
         ids: List[str] = []
         for i, part in enumerate(parts):
             tweet = await self._compose_tweet(
                 text=part,
-                media_paths=media_paths if i == 0 else None,
+                media_paths=media_paths if i == 0 else None, alt_texts=alt_texts,
                 poll_options=poll_options if i == 0 else None,
                 poll_duration_minutes=poll_duration_minutes if i == 0 else None,
                 quote_tweet_id=quote_tweet_id if i == 0 else None,
@@ -2031,13 +1984,13 @@ class TwitterTool(BaseTool):
             parts = self._split_tweet_text(params.text)
             if len(parts) == 1:
                 tweet = await self._compose_tweet(
-                    text=parts[0], media_paths=params.media_paths,
+                    text=parts[0], media_paths=params.media_paths, alt_texts=params.media_alt_texts,
                     poll_options=params.poll_options, poll_duration_minutes=params.poll_duration_minutes,
                     execution_context=execution_context,
                 )
                 return await self._published(f"🐦 Posted tweet {tweet.get('id')}", tweet.get('id'))
             ids = await self._compose_thread(
-                parts, media_paths=params.media_paths,
+                parts, media_paths=params.media_paths, alt_texts=params.media_alt_texts,
                 poll_options=params.poll_options, poll_duration_minutes=params.poll_duration_minutes,
                 execution_context=execution_context,
             )
@@ -2059,13 +2012,13 @@ class TwitterTool(BaseTool):
             parts = self._split_tweet_text(params.text)
             if len(parts) == 1:
                 tweet = await self._compose_tweet(
-                    text=parts[0], media_paths=params.media_paths,
+                    text=parts[0], media_paths=params.media_paths, alt_texts=params.media_alt_texts,
                     in_reply_to_tweet_id=params.tweet_id,
                     execution_context=execution_context,
                 )
                 return await self._published(f"🐦 Replied with tweet {tweet.get('id')}", tweet.get('id'))
             ids = await self._compose_thread(
-                parts, media_paths=params.media_paths,
+                parts, media_paths=params.media_paths, alt_texts=params.media_alt_texts,
                 in_reply_to_tweet_id=params.tweet_id,
                 execution_context=execution_context,
             )
@@ -2111,7 +2064,7 @@ class TwitterTool(BaseTool):
                 tweet = await self._compose_tweet(
                     text=text,
                     media_paths=params.media_paths if i == 0 else None,
-                    in_reply_to_tweet_id=prev_id,
+                    alt_texts=params.media_alt_texts, in_reply_to_tweet_id=prev_id,
                     execution_context=execution_context,
                 )
                 prev_id = tweet.get("id")
@@ -2278,14 +2231,14 @@ class TwitterTool(BaseTool):
             extra = {"since_id": params.since_id} if params.since_id else {}
             resp = await self._make_request(func=self.client.get_users_mentions, endpoint_type="tweets",
                                             id=me_id, max_results=params.max_results, user_fields=["username"],
-                                            tweet_fields=["created_at", "text", "author_id",
-                                                          "conversation_id"],
-                                            expansions=["author_id"], **extra)
+                                            **full_read_kwargs(["created_at", "text", "author_id",
+                                                                "conversation_id"], ["author_id"]), **extra)
             users = {str(u.id): u.username for u in ((getattr(resp, "includes", None) or {}).get("users") or [])}
             items = [{"id": str(t.id), "text": t.text, "author_id": str(t.author_id) if t.author_id else None,
                       "author_username": users.get(str(t.author_id)),
                       "conversation_id": str(getattr(t, "conversation_id", "") or "") or None,
-                      **_storefront_mark(t)} for t in (getattr(resp, "data", None) or [])]
+                      **_storefront_mark(t), **tweet_extras(t, getattr(resp, "includes", None))}
+                     for t in (getattr(resp, "data", None) or [])]
             return self._ok(f"🐦 Mentions:\n{json.dumps(items, indent=2)}")
         except Exception as e:
             return self._err(f"Error getting mentions: {e}")
@@ -2720,7 +2673,7 @@ class TwitterTool(BaseTool):
 _LATE_MODELS = {
     "twitter_post": "TwitterPostAction", "twitter_reply": "TwitterReplyAction",
     "twitter_quote": "TwitterQuoteAction", "twitter_thread": "TwitterThreadAction",
-    "twitter_dm": "TwitterDMAction",
+    "twitter_dm": "TwitterDMAction", "twitter_article": "TwitterArticleAction",
 }
 
 

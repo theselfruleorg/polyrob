@@ -169,6 +169,12 @@ _ROWS: Dict[str, ChainRow] = {
                  "for tokens that only exist here, or when depth matters more "
                  "than fees."),
         usdc="0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        # Tether USD. decimals() = 6, read on chain 2026-11-13. DexScreener prices a
+        # token from the pools where it is the BASE, and USDT is the quote almost
+        # everywhere, so it never graded "high": a 3,600 USDT owner send showed
+        # "NO spend-grade price" and needed the extra 'anyway' step (prod 11-12).
+        stables=(("0xdAC17F958D2ee523a2206206994597C13D831ec7", "USDT",
+                  "Tether USD", 6),),
         univ3_router="0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",   # SwapRouter02
         univ3_quoter="0x61fFE014bA17989E743c5F6cB21bF9697530B21e",   # QuoterV2
         wrapped_native="0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",  # WETH9

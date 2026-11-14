@@ -158,7 +158,7 @@ def step_6_assert_deltas(c: GuardContext) -> Optional[Decision]:
     elif intent.is_liquidity_op:
         from core.wallet import liquidity_guard
         try:
-            position_token_id = liquidity_guard.assert_deltas(intent, deltas, _tg._NATIVE_DUST_WEI)
+            position_token_id = liquidity_guard.assert_deltas(intent, deltas, _tg._NATIVE_DUST_WEI, tx)
         except (ValueError, TypeError) as exc:
             return Decision(False, f"refused: {exc}")
     elif intent.token:

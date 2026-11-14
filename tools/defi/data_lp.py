@@ -44,8 +44,8 @@ class LpReadsMixin:
         return self._ar(content="\n".join(out["lines"]))
 
     def _lp_v4_read(self, render, chain: str):
-        """048 phase 3 (core handoff W6): a v4 read on a Pons PoolKey. The
-        pool is derived from the Pons factory record, never from the caller."""
+        """A v4 read. The pool is the Pons factory record's (048 phase 3), a
+        position's own, or a PoolKey the caller names in full (117 W5)."""
         from tools.defi import lp_reads, lp_v4
         try:
             return self._ar(content="\n".join(render(lp_v4, self._lp_rpc_for(chain))))
@@ -64,8 +64,13 @@ class LpReadsMixin:
 
     def _lp_positions_sync(self, params: LpPositionsParams, execution_context=None):
         from tools.defi.data_tool import _operator_read_refusal  # call-time
-        if params.protocol != "v3":
+        if params.protocol not in ("v3", "v4"):
             return self._ar(error=_LP_V4_NOT_YET)
+        if params.protocol == "v4" and params.token_id is not None:
+            from tools.defi.lp_reads import decimals
+            return self._lp_v4_read(lambda lp_v4, rpc: lp_v4.position_lines(
+                rpc, params.chain, params.token_id,
+                lambda t: decimals(rpc, params.chain, t)), params.chain)
         address = params.address
         if not address:
             refusal = _operator_read_refusal(execution_context)
@@ -85,6 +90,8 @@ class LpReadsMixin:
         from tools.defi import lp_reads
 
         rpc = self._lp_rpc_for(params.chain)
+        if params.protocol == "v4":
+            return self._lp_v4_positions(params.chain, address, rpc)
         try:
             ids = lp_reads.owned_position_ids(rpc, params.chain, address)
         except lp_reads.LpReadError as exc:
@@ -108,10 +115,58 @@ class LpReadsMixin:
             return self._ar(error=_lp_read_error_text(exc))
         return self._ar(content="\n".join(lines))
 
+    def _lp_v4_positions(self, chain: str, address: str, rpc):
+        """117 W6: the v4 positions of *address*. A v4 PositionManager cannot be
+        enumerated from a node, so the ids come from the indexer and EVERY owner
+        is re-read on chain: the chain's answer is the proof, the indexer only
+        names candidates. No indexer = said plainly, never "no positions"."""
+        from core.wallet import dex_registry
+        from tools.defi import lp_reads, lp_v4, nft_verbs
+        from tools.defi.lp_reads import decimals
+        row = dex_registry.row_for(chain, "v4")
+        if row is None or not row.position_manager:
+            return self._ar(error=f"chain {chain!r} has no pinned Uniswap v4 deployment")
+        npm = row.position_manager
+        # The count is the proof (one call); the ids come from the manager's own
+        # Transfer logs, then the indexer — the same finder the holdings report uses.
+        from tools.defi import lp_abi
+        try:
+            held = int(lp_reads.view(rpc, npm, lp_abi.NPM_BALANCE_OF, [address]))
+        except Exception as exc:
+            return self._ar(error=(f"the v4 position count of {address} was NOT READ ({exc}); "
+                                   f"this is not 'no positions'. A position you know by id "
+                                   f"still reads with token_id=…"))
+        if held == 0:
+            return self._ar(content=(f"{address} on {chain}: holds no Uniswap v4 position "
+                                     f"(balanceOf on the pinned PositionManager is 0, read now)"))
+        ids = self._v4_position_ids(rpc, chain, npm, address, held)
+        if not ids:
+            return self._ar(error=(
+                f"{address} holds {held} Uniswap v4 position(s) on {chain}, but their ids could "
+                f"NOT be found (the log scan and the indexer gave none). Read one by id with "
+                f"lp_positions(protocol='v4', token_id=…)."))
+        lines = [f"{address} on {chain} — holds {held} Uniswap v4 position(s); {len(ids)} "
+                 f"id(s) found, each read on chain:"]
+        if len(ids) < held:
+            lines.append(f"⚠️ {held - len(ids)} more are held but their ids were NOT found; "
+                         f"they are not shown below")
+        for token_id in ids[:25]:
+            try:
+                lines.extend(lp_v4.position_lines(rpc, chain, token_id,
+                                                  lambda t: decimals(rpc, chain, t), holder=address))
+            except lp_reads.LpReadError as exc:
+                lines.append(f"v4 position #{token_id}: NOT READ ({_lp_read_error_text(exc)})")
+        if len(ids) > 25:
+            lines.append(f"… and {len(ids) - 25} more; read one with token_id=…")
+        return self._ar(content="\n".join(lines))
+
     def _lp_pool_info_sync(self, params: LpPoolInfoParams, execution_context=None):
         if params.protocol == "v4":
+            from tools.defi.lp_reads import decimals
             return self._lp_v4_read(lambda lp_v4, rpc: lp_v4.pool_info_lines(
-                rpc, params.chain, params.token_a, params.token_b), params.chain)
+                rpc, params.chain, params.token_a, params.token_b, fee=params.fee,
+                tick_spacing=params.tick_spacing, hooks=params.hooks, token_id=params.token_id,
+                decimals_fn=lambda t: decimals(rpc, params.chain, t)), params.chain)
         if params.protocol != "v3":
             return self._ar(error=_LP_V4_NOT_YET)
 
@@ -160,7 +215,9 @@ class LpReadsMixin:
             return self._lp_v4_read(lambda lp_v4, rpc: lp_v4.quote_lines(
                 rpc, params.chain, params.token_a, params.token_b, params.amount_a,
                 params.amount_b, params.range,
-                lambda t: decimals(rpc, params.chain, t)), params.chain)
+                lambda t: decimals(rpc, params.chain, t), fee=params.fee,
+                tick_spacing=params.tick_spacing, hooks=params.hooks,
+                initial_price=params.initial_price), params.chain)
         if params.protocol != "v3":
             return self._ar(error=_LP_V4_NOT_YET)
 

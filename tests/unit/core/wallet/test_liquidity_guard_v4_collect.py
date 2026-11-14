@@ -99,7 +99,8 @@ def test_encoder_bytes_round_trip():
     data = V.encode_modify_liquidities(unlock, 1234)
     assert data.startswith("0xdd46508f")
     assert G.decode_v4_collect({"data": data}) == {
-        "token_id": POS, "currency0": ZERO, "currency1": TKN, "recipient": ACCT}
+        "token_id": POS, "currency0": ZERO, "currency1": TKN, "recipient": ACCT,
+        "liquidity": 0, "min0": 0, "min1": 0}
 
 
 # -- the shape the guard allows --------------------------------------------------
@@ -304,3 +305,64 @@ def test_a_v3_liquidity_call_through_an_account_still_refuses(guard_env):
              "data": erc6551.encode_execute(npm3, 0, "0x00", 0)}
     d = _authorize(intent, outer)
     assert not d.allowed and "collect the fees of a v4 position" in d.reason
+
+
+# -- 117 W7: the withdrawal is the same two actions with a positive decrease ------
+
+W_LIQ = 10 ** 18
+
+
+def _withdraw_tx(liquidity=W_LIQ, min0=5, min1=7, to=HOLDER):
+    return _tx(unlock=_unlock([0x01, 0x11], [_decrease(liquidity=liquidity, min0=min0, min1=min1),
+                                             _take(to=to)]))
+
+
+def _withdraw_intent(**kw):
+    pm = dex_registry.row_for("robinhood", "v4").pool_manager
+    base = dict(lp_inflows=((None, 5), (TKN, 7)),
+                expected_events=((pm, G.TOPIC_V4_MODIFY_LIQUIDITY),))
+    base.update(kw)
+    return _intent(**base)
+
+
+def test_a_withdrawal_with_minimums_passes():
+    G.structural(_withdraw_intent(), _withdraw_tx(), holder=HOLDER)
+    assert G.decode_v4_collect(_withdraw_tx())["liquidity"] == W_LIQ
+
+
+def test_a_withdrawal_needs_an_on_chain_minimum_a_declared_receipt_and_the_event():
+    with pytest.raises(ValueError, match="positive on-chain minimum"):
+        G.structural(_withdraw_intent(), _withdraw_tx(min0=0, min1=0), holder=HOLDER)
+    with pytest.raises(ValueError, match="positive minimum receipt"):
+        G.structural(_withdraw_intent(lp_inflows=((None, 0), (TKN, 0))), _withdraw_tx(), holder=HOLDER)
+    with pytest.raises(ValueError, match="ModifyLiquidity event"):
+        G.structural(_withdraw_intent(expected_events=()), _withdraw_tx(), holder=HOLDER)
+
+
+def test_a_withdrawal_pays_the_holder_only_and_never_rides_an_account():
+    with pytest.raises(ValueError, match="not the holder"):
+        G.structural(_withdraw_intent(), _withdraw_tx(to=OTHER), holder=HOLDER)
+    import dataclasses
+    through = dataclasses.replace(_withdraw_intent(), via_account=ACCT)
+    with pytest.raises(ValueError, match="only to collect fees"):
+        G.structural(through, _withdraw_tx(to=ACCT), holder=ACCT)
+
+
+def _modify_log(delta, salt=POS):
+    row = dex_registry.row_for("robinhood", "v4")
+    data = b"\x00" * 64 + delta.to_bytes(32, "big", signed=True) + salt.to_bytes(32, "big")
+    return {"address": row.pool_manager, "data": "0x" + data.hex(),
+            "topics": [G.TOPIC_V4_MODIFY_LIQUIDITY, "0x" + "7" * 64,
+                       "0x" + row.position_manager[2:].lower().rjust(64, "0")]}
+
+
+def test_the_withdrawal_event_removes_exactly_the_signed_liquidity():
+    intent, tx = _withdraw_intent(), _withdraw_tx()
+    G.assert_position_events(intent, [_modify_log(-W_LIQ)], POS, tx)
+    for logs in ([], [_modify_log(-W_LIQ + 1)], [_modify_log(W_LIQ)],
+                 [_modify_log(-W_LIQ), _modify_log(-W_LIQ)]):
+        with pytest.raises(ValueError, match="exactly one"):
+            G.assert_position_events(intent, logs, POS, tx)
+    # a collect is still a change of 0, with or without the signed bytes
+    with pytest.raises(ValueError, match="may not change"):
+        G.assert_position_events(_intent(), [_modify_log(-1)], POS, _tx())

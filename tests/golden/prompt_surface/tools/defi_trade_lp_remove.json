@@ -1,6 +1,6 @@
 {
   "function": {
-    "description": "Withdraw a percentage of your v3 position and collect both tokens; optionally burn the empty NFT at 100%. Both receipts are asserted. dry_run defaults true.",
+    "description": "Withdraw a percentage of your v3 or v4 position and collect both tokens; v3 may burn the empty NFT at 100% (v4 keeps it). Both receipts are asserted. dry_run defaults true.",
     "name": "defi_trade_lp_remove",
     "parameters": {
       "additionalProperties": false,
@@ -34,7 +34,7 @@
         },
         "protocol": {
           "default": "v3",
-          "description": "'v3' only.",
+          "description": "'v3', or 'v4' (burn must stay false: a v4 position NFT is kept).",
           "type": "string"
         },
         "slippage_bps": {

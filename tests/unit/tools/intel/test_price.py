@@ -38,10 +38,10 @@ def test_one_source_keeps_its_own_grade_and_price():
     assert q.spread_pct is None and q.sources == (("dexscreener", 1.0),)
 
 
-def test_the_quote_is_the_median_of_the_sources():
+def test_the_value_is_the_primary_price_and_the_others_only_grade_it():
     q = P.aggregate([_ds(1.00), SourceAnswer("geckoterminal", usd=1.01),
                      SourceAnswer("jupiter", usd=1.005)])
-    assert q.usd == pytest.approx(1.005)
+    assert q.usd == pytest.approx(1.00) and q.primary_usd == pytest.approx(1.00)
     assert q.confidence == HIGH
     assert q.spread_pct == pytest.approx(0.01 / 1.005 * 100)
 
@@ -69,7 +69,7 @@ def test_one_outvoted_secondary_does_not_dispute():
     q = P.aggregate([_ds(1.00, liq=5_000_000), SourceAnswer("geckoterminal", usd=1.002),
                      SourceAnswer("jupiter", usd=1.40)])
     assert q.confidence == HIGH and "jupiter is an outlier" in q.note
-    assert q.usd == pytest.approx(1.001)
+    assert q.usd == pytest.approx(1.00)
 
 
 def test_the_primary_is_never_the_excused_outlier():
@@ -239,3 +239,20 @@ def test_the_cache_is_bounded():
 
 def test_quote_is_a_price_quote():
     assert isinstance(P.aggregate([]), PriceQuote)
+
+
+def test_a_secondary_that_drops_out_does_not_move_the_value():
+    """Prod 2026-11-13 ("the value is not stable"): the value was the median of
+    DexScreener and GeckoTerminal, so a GT 429 on every other read moved every
+    holding by half the gap. The primary's price is the value; GT only grades."""
+    both = P.aggregate([_ds(1.00, conf=LOW, liq=60_000), SourceAnswer("geckoterminal", usd=1.15)])
+    alone = P.aggregate([_ds(1.00, conf=LOW, liq=60_000),
+                         SourceAnswer("geckoterminal", error="HTTPStatusError")])
+    assert both.usd == alone.usd == 1.00
+    assert both.note and "geckoterminal" in alone.reason
+
+
+def test_with_no_primary_price_the_value_is_the_median_and_low():
+    q = P.aggregate([SourceAnswer("dexscreener", usd=None, confidence=UNKNOWN, pool_count=0),
+                     SourceAnswer("geckoterminal", usd=2.0), SourceAnswer("jupiter", usd=2.2)])
+    assert q.usd == pytest.approx(2.1) and q.confidence == LOW

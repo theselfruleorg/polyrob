@@ -145,16 +145,17 @@ def _record_out(ctx: Any, text: str) -> None:
 def h_cards(ctx) -> Any:
     args = list(getattr(ctx, "args", None) or [])
     if not args:
-        ctx.emit(cards.list_reply(_tenant(ctx)), title="cards")
+        from core.surfaces.card_list import list_reply
+        ctx.emit(list_reply(_tenant(ctx)), title="cards")
         return None
-    if len(args) != 2 or args[1].lower() not in cards.ACTS:
-        ctx.emit("usage: /cards  |  /cards <id> ok|no|re|1-6", title="cards")
+    if len(args) != 2 or cards.parse_act(args[1]) is None:
+        ctx.emit("usage: /cards  |  /cards <id> confirm|cancel|quote|1-6", title="cards")
         return None
     registry = getattr(ctx, "registry", None)
     if registry is None:
         from cli.ui.commands.handlers import build_default_registry
         registry = build_default_registry()
-    return _press(registry, args[0].lower(), args[1].lower(), ctx)
+    return _press(registry, args[0].lower(), cards.parse_act(args[1]), ctx)
 
 
 def wrap_quote(verb: str, ctx: Any) -> Optional[Any]:

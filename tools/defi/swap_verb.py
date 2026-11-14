@@ -7,6 +7,7 @@ reaches this code.
 """
 from __future__ import annotations
 
+import asyncio
 import time
 
 
@@ -163,11 +164,12 @@ async def perform_swap(tool, params, execution_context=None):
     from tools.defi.identity_gate import trusted_buy
     out_trusted = trusted_buy(id_out, chain=params.chain, token_out=token_out,
                               execution_context=execution_context)
-    sanity_verdict, sanity_note = tool._route_sanity(params.chain, route,
-                                                     id_in, id_out,
-                                                     slippage_bps=slippage,
-                                                     held_balance_raw=held_balance_raw,
-                                                     out_trusted=out_trusted)
+    # Off the event loop: the price lookup inside blocks on a thread-pool
+    # future, and run inline it froze every turn 17-26 s per swap (2026-11-12).
+    sanity_verdict, sanity_note = await asyncio.to_thread(
+        tool._route_sanity, params.chain, route, id_in, id_out,
+        slippage_bps=slippage, held_balance_raw=held_balance_raw,
+        out_trusted=out_trusted)
     # Dry run included: a dry run that reports "authorized" for a send this
     # check will refuse told a 2026-10-10 scheduled buy to go, then refused it.
     # 085 EV-2: the $5 ticket tests trust on the asset AT RISK. For a sell

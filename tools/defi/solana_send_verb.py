@@ -44,6 +44,7 @@ from typing import Optional
 from pydantic import Field
 
 from tools.defi.account_mode import NoAccountMode
+from tools.defi.send_order import fmt_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -318,7 +319,7 @@ async def perform_solana_transfer(tool, params, execution_context=None):
         return refuse(f"the simulation did not pass ({reason}){hint}. A "
                       f"simulation that did not run is not one that passed")
 
-    header = (f"solana transfer {params.amount:g} {shown} -> {to}\n")
+    header = (f"solana transfer {fmt_tokens(float(params.amount))} {shown} -> {to}\n")
     check = _assert_deltas(deltas, native=native, mint=mint, to=to,
                            amount_raw=amount_raw)
     if isinstance(check, str):
@@ -345,6 +346,11 @@ async def perform_solana_transfer(tool, params, execution_context=None):
             "  guard: refused — SOL could not be priced, so the outflow cannot "
             f"be held to any cap\n  {_NOT_SENT}"))
     amount_usd = lamports_out / 1e9 * float(sol_px)
+    # What the send MOVES, without the fee and the rent: the number the declared
+    # max_spend_usd and a seat's `$` bound are held to (the EVM rule, WAL-6);
+    # the caps are charged ``amount_usd``. None = not valued (a placeholder).
+    sent_usd = (amount_raw / 1e9 * float(sol_px)) if native else None
+    placeholder = False
     unverified = False
     if not native:
         if mint == tool._solana_usdc_mint():
@@ -380,23 +386,34 @@ async def perform_solana_transfer(tool, params, execution_context=None):
                 charge = (tx_guard.autonomous_max_usd(*tx_guard.ceiling_scope(
                     execution_context)) + tx_guard._UNVALUED_GRANT_EPSILON_USD)
                 amount_usd += charge
+                placeholder = True
                 header += (f"  value check: {UNVERIFIED_MARK} — no source prices "
                            f"this token; the caps charge ${charge:.2f} as a "
                            f"placeholder. Check what this token is before you send "
                            f"it.\n")
         if token_px:
-            amount_usd += amount_raw / (10 ** decimals) * float(token_px)
+            sent_usd = amount_raw / (10 ** decimals) * float(token_px)
+            amount_usd += sent_usd
     from core.money.valuation import usd_ceiling
+    from core.wallet.tx_guard_steps.value import SENT_VALUE_LABEL
     amount_usd = usd_ceiling(amount_usd)
     declared = float(params.max_spend_usd)
-    header += f"  simulated value: ${amount_usd:.4f}\n"
-    if amount_usd > declared:
+    if placeholder:
+        # A placeholder is a cap charge, never a value a seat may read.
+        header += f"  simulated value: unknown (the caps charge ${amount_usd:.4f})\n"
+    else:
+        header += f"  simulated value: ${amount_usd:.4f}\n"
+    if sent_usd is not None:
+        sent_usd = usd_ceiling(sent_usd)
+        header += f"  {SENT_VALUE_LABEL} ${sent_usd:.4f} (without the network fee and rent)\n"
+    held_to = sent_usd if sent_usd is not None else amount_usd
+    if held_to > declared:
         return tool._ar(content=header + (
-            f"  guard: refused — ${amount_usd:.4f} exceeds the declared "
+            f"  guard: refused — ${held_to:.4f} exceeds the declared "
             f"max_spend_usd ${declared:.4f}\n  {_NOT_SENT}"))
 
     idem = _idem(mint, to, amount_raw, execution_context)
-    label = f"{params.amount:g} {'SOL' if native else mint[:8] + '…'}"
+    label = f"{fmt_tokens(float(params.amount))} {'SOL' if native else mint[:8] + '…'}"
     async with gate.reserve():
         # tx_guard step 0: a genuine owner turn is not bound by the pause or the
         # autonomous ceiling; an owner grant for this call clears the ceiling.

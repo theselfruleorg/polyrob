@@ -244,7 +244,18 @@ def h_cancel(ctx) -> None:
     ⚠️ ``/cancel`` must be reachable WHILE a turn runs, so it is in
     ``cli.ui.input_policy.LIVE_COMMANDS`` — otherwise the input the owner typed
     to stop the turn would be rejected by the turn he is trying to stop.
+
+    ``/cancel <card id>`` and ``/cancel cards`` cancel CARDS instead (the same
+    rule as Telegram, ``core.surfaces.card_list.cancel_reply``).
     """
+    words = list(getattr(ctx, "args", None) or [])
+    if words:
+        from core.surfaces.card_list import cancel_reply
+        from cli.ui.commands.h_cards import _tenant
+        card_reply = cancel_reply(_tenant(ctx), words)
+        if card_reply is not None:
+            ctx.emit(card_reply, title="cancel")
+            return
     ctrl = current_turn_controller()
     if ctrl is None:
         ctx.emit(f"{candy.GUTTER}this REPL has no interruptible turn loop "

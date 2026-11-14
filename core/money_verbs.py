@@ -28,7 +28,7 @@ MONEY_VERBS: tuple = (
          background="Launch"),
     Verb("/deploy", "money", "Deploy a fixed-supply token",
          background="Deploy"),
-    Verb("/lp", "money", "Liquidity positions: inspect, quote, add, remove, or collect fees",
+    Verb("/lp", "money", "Liquidity positions: inspect, quote, add, remove, collect fees, or declare a new pool",
          background="Liquidity move"),
     Verb("/claim", "money", "Collect the creator fees a launchpad already owes me",
          background="Claim"),

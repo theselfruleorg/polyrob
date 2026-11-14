@@ -76,4 +76,4 @@ def register(reg, Command) -> None:
     )
 
     reg.register(Command("lp", h_lp, "Uniswap liquidity (dry-run unless go)",
-                         usage="positions|pool|quote|add|remove|collect", group="money"))
+                         usage="positions|pool|quote|add|remove|collect|seed", group="money"))

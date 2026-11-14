@@ -1,6 +1,6 @@
 {
   "function": {
-    "description": "Read a Uniswap v3 pool's live state: tokens, fee tier, current tick, price and liquidity. Give a pool address, OR token_a + token_b + fee to locate one. A pair with no pool yet is reported, not invented. Read-only. protocol='v4' reads a Pons graduated pool (token_a/token_b = 'native' + the Pons token).",
+    "description": "Read a Uniswap v3 pool's live state: tokens, fee tier, current tick, price and liquidity. Give a pool address, OR token_a + token_b + fee to locate one. A pair with no pool yet is reported, not invented. Read-only. protocol='v4' reads ANY v4 pool: by token_id (the pool of that position), by the full PoolKey (token_a, token_b, fee, tick_spacing, hooks), or a launchpad pool by its token; it adds the fees and the last 24 hours of swaps, volume and LP fees.",
     "name": "defi_data_lp_pool_info",
     "parameters": {
       "additionalProperties": false,
@@ -15,6 +15,12 @@
           "nullable": true,
           "type": "integer"
         },
+        "hooks": {
+          "default": null,
+          "description": "v4 only: the PoolKey's hook address; omit for a pool with no hook.",
+          "nullable": true,
+          "type": "string"
+        },
         "pool": {
           "default": null,
           "description": "Pool address, OR give token_a+token_b+fee.",
@@ -23,8 +29,15 @@
         },
         "protocol": {
           "default": "v3",
-          "description": "v3, or v4 for a Pons graduated pool (give token_a + token_b; the other side is 'native').",
+          "description": "v3, or v4. A v4 pool has no address: give token_id (the pool of that position), OR the full PoolKey (token_a + token_b + fee + tick_spacing, and hooks when it has one), OR only token_a + token_b for a Pons graduated pool (the other side is 'native').",
           "type": "string"
+        },
+        "tick_spacing": {
+          "default": null,
+          "description": "v4 only: the PoolKey's tick spacing. Giving it names the PoolKey in full.",
+          "minimum": 1,
+          "nullable": true,
+          "type": "integer"
         },
         "token_a": {
           "default": null,
@@ -35,6 +48,13 @@
           "default": null,
           "nullable": true,
           "type": "string"
+        },
+        "token_id": {
+          "default": null,
+          "description": "v4 only: read the pool of this position NFT.",
+          "minimum": 0,
+          "nullable": true,
+          "type": "integer"
         }
       },
       "required": [

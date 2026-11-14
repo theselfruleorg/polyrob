@@ -35,7 +35,7 @@ from this list; never invent a verb that is not on it. Pack verbs (such as
 - `/asks` — What I need from you to unblock work; /asks <id> opens one in full
 - `/missed` — Messages I could not deliver live: capped, paused, or undelivered
 - `/fulfill` — Mark an ask fulfilled so its work can continue (not inside a group)
-- `/cards` — Open action cards: confirm a quote, answer a choice, or cancel; /cards <id> reopens one in full (not inside a group)
+- `/cards` — Open action cards: confirm, get a quote, answer, or cancel; /cards <id> reopens one in full (not inside a group)
 
 ## work
 
@@ -59,7 +59,7 @@ from this list; never invent a verb that is not on it. Pack verbs (such as
 - `/bridge` — Move value between chains: ETH/native or USDC in; native, WETH or USDC out
 - `/launch` — Launch a token on the launchpad
 - `/deploy` — Deploy a fixed-supply token
-- `/lp` — Liquidity positions: inspect, quote, add, remove, or collect fees
+- `/lp` — Liquidity positions: inspect, quote, add, remove, collect fees, or declare a new pool
 - `/claim` — Collect the creator fees a launchpad already owes me
 - `/nft` — Collectibles I hold: look, trust a collection, send one, make one ready for sale, or revoke an approval
 - `/dapp` — Web pages my wallet is connected to, and how to cut one off
@@ -73,7 +73,7 @@ from this list; never invent a verb that is not on it. Pack verbs (such as
 
 ## control
 
-- `/cancel` (also /stop) — Stop the task I am running now
+- `/cancel` (also /stop) — Stop the task I am running now; /cancel <card id> or /cancel cards cancels cards
 - `/pause` (also /halt) — Stop autonomous work now, all of it or one scope (not inside a group)
 - `/resume` — Lift the pause (not inside a group)
 - `/run` — Pause, resume or stop one background run (not inside a group)

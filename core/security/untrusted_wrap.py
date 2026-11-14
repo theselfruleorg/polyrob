@@ -77,7 +77,7 @@ UNTRUSTED_TOOL_PREFIXES = ("browser_", "mcp_", "web_")
 #: post receipt led a run to tell the owner the post did not go out (prod 2026-11-06).
 OWN_RECEIPT_ACTIONS = frozenset({
     "filesystem_write_file", "filesystem_append_file", "filesystem_jsonl_append",
-    "twitter_post", "twitter_reply", "twitter_quote", "twitter_thread",
+    "twitter_post", "twitter_reply", "twitter_quote", "twitter_thread", "twitter_article",
 })
 
 

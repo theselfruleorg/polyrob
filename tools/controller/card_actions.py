@@ -25,6 +25,7 @@ run cannot wait for a person, so it raises the durable ask instead.
 import asyncio
 import logging
 import re
+import time
 from typing import List, Optional, Tuple
 
 from pydantic import BaseModel, Field
@@ -310,13 +311,21 @@ async def _send_value(words, why: str) -> Tuple[Optional[str], str]:
                           f"be read now; the quote converts it and shows the count.")
         return None, (f"Value: {send_order.fmt_tokens(order['amount'])} tokens — not priced "
                       f"now; the quote shows the value.")
+    # The card body is frozen text that a /cards list shows for up to a day, so
+    # it names WHEN the price was read, never "now".
+    read_at = time.strftime("%H:%MZ", time.gmtime())
     if order.get("usd") is not None:
         if px is None:
             return send_order.NO_PRICE_FOR_USD.format(usd=order["usd"]), ""
-        order, _, _ = send_order.resolve_usd(order, lambda c, a: px)
+        priced, _, why_not = await asyncio.to_thread(
+            send_order.resolve_usd, order, lambda c, a: px)
+        if priced is None:
+            return why_not, ""
+        order = priced
         value = order["usd"]
         line = (f"Value: ${value:,.2f} = {send_order.fmt_tokens(order['amount'])} tokens "
-                f"at {send_order.fmt_price(px)} (spend-grade, now; the quote re-converts).")
+                f"at {send_order.fmt_price(px)} (spend-grade, read {read_at}; the quote "
+                f"converts again at its own price).")
     elif px is None:
         line = (f"Value: {send_order.fmt_tokens(order['amount'])} tokens — NO "
                 f"spend-grade price, so the USD value is not verified.")
@@ -330,7 +339,7 @@ async def _send_value(words, why: str) -> Tuple[Optional[str], str]:
         value = order["amount"] * px
         line = (f"Value: {send_order.fmt_tokens(order['amount'])} tokens = "
                 f"{send_order.fmt_price(value) if value > 0 else '$0.00'} "
-                f"at {send_order.fmt_price(px)} (spend-grade, now).")
+                f"at {send_order.fmt_price(px)} (spend-grade, read {read_at}).")
     stated = _why_dollars(why)
     if stated and value > 0 and min(max(d, value) / min(d, value)
                                      for d in stated) > _MISMATCH_FACTOR:
@@ -421,6 +430,27 @@ def register_card_actions(controller) -> None:
             "What you will do once the owner has decided every card you raised in this "
             "conversation. You are woken with each card's outcome; this text is shown "
             "back to you then."))
+
+    class CardsRead(BaseModel):
+        hours: float = Field(24.0, ge=1, le=168, description=(
+            "How far back to list the decided cards (default 24 h)."))
+
+    @controller.registry.action(
+        "Read YOUR action cards from the card store: every open card (id, exact "
+        "command, reason) and every card decided in the last hours with its outcome "
+        "(sent, cancelled, replaced, expired). Use it before you tell the owner what "
+        "is open, paid or owed, and before you raise or replace a card. Nothing changes.",
+        param_model=CardsRead,
+    )
+    async def cards_read(params: CardsRead, execution_context=None) -> ActionResult:
+        from tools.controller.owner_ask_action import _user
+        user_id = _user(controller, execution_context)
+        why = _refusal(controller, execution_context, user_id)
+        if why:
+            return ActionResult(error=why, include_in_memory=True)
+        from core.surfaces.card_list import agent_view
+        text = await asyncio.to_thread(agent_view, user_id, hours=params.hours)
+        return ActionResult(extracted_content=text, include_in_memory=True)
 
     @controller.registry.action(
         "Propose a money action to the OWNER as a card. Nothing moves: the owner taps "

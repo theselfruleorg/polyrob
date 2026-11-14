@@ -249,11 +249,7 @@ def test_every_remedy_text_names_the_actor_its_row_names():
     # 095 W2: every credential-gate row (core + a pack's register_credential_gate)
     # names a REMEDIES key, so its text is held to the same row.
     from tools.tool_disclosure import CREDENTIAL_GATED_TOOLS
-    try:
-        from polyrob_x.registration import TWITTER_CREDENTIAL_GATE
-        rows = list(CREDENTIAL_GATED_TOOLS.values()) + [TWITTER_CREDENTIAL_GATE]
-    except ImportError:
-        rows = list(CREDENTIAL_GATED_TOOLS.values())
+    rows = list(CREDENTIAL_GATED_TOOLS.values())
     for _kind, key in rows:
         assert key in REMEDIES, key
         assert REMEDY_ACTORS[key].who == "operator-env", key

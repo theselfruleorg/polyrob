@@ -1,10 +1,9 @@
 """2026-09-19 — the X API answered `402 Payment Required` ("credits depleted") on every
 read/follow from 10:24Z; outreach round 15 burned its whole step budget rediscovering it
 (52 hits in 15 min) and the self-review asked for a pre-flight. Mirror of the SMTP-535
-verdict: a 402 is REMEMBERED (`core.credential_verdicts`, kind "twitter_api") and every
-API call for the next window is refused locally, in one line, with the remedy — no
-network round-trip, no rate-limit slot, no step burned per endpoint. A successful call
-clears it, so a top-up is picked up on the next real request."""
+verdict: a 402 is REMEMBERED (`core.credential_verdicts`, kind "twitter_api") so status
+shows it, and the error names the remedy. 2026-11-12 (owner): a 402 NEVER blocks the
+tool — every call reaches the API, so a top-up works on the very next call."""
 import pytest
 
 pytest.importorskip("polyrob_x")
@@ -57,7 +56,7 @@ def _clean():
 
 
 @pytest.mark.asyncio
-async def test_a_402_is_remembered_and_the_next_call_is_refused_locally():
+async def test_a_402_is_remembered_and_the_next_call_still_reaches_the_api():
     t = _tool()
     calls = []
 
@@ -73,10 +72,21 @@ async def test_a_402_is_remembered_and_the_next_call_is_refused_locally():
     with pytest.raises(Exception) as ei2:
         await t._make_request(lambda: None, "users")
     msg = str(ei2.value)
-    assert "credits depleted" in msg.lower() or "402" in msg
-    assert "developer.x.com" in msg
-    assert "not retrying" in msg.lower()
-    assert len(calls) == 1, "the second call must not reach the network"
+    assert "credits depleted" in msg.lower() and "402" in msg
+    assert "developer.x.com" in msg and "x_browser.x_post" in msg
+    assert len(calls) == 2, "a 402 verdict never refuses a call locally"
+
+
+@pytest.mark.asyncio
+async def test_a_top_up_works_on_the_next_call_while_the_verdict_stands():
+    t = _tool()
+    cv.record_rejection("twitter_api", t._credit_verdict_key(), code="402")
+
+    async def _ok(func, *a, **kw):
+        return {"ok": True}
+    t._execute_request = _ok
+    assert await t._make_request(lambda: None, "post") == {"ok": True}
+    assert cv.active("twitter_api") == []
 
 
 @pytest.mark.asyncio
@@ -165,16 +175,15 @@ async def test_the_verdict_survives_a_restart():
     cv._FALLBACK.clear()
     cv._WARNED.clear()
     cv._READY.clear()
-    assert _tool()._credit_preflight_refusal() is not None
+    assert cv.active("twitter_api"), "status still shows the standing 402"
 
 
-@pytest.mark.asyncio
-async def test_the_refusal_names_since_and_the_fallback_rail():
-    cv.record_rejection("twitter_api", "users", code="402")
-    refusal = _tool()._credit_preflight_refusal()
-    assert "since" in refusal
-    assert "x_browser.x_post" in refusal
-    assert "developer.x.com" in refusal
+def test_the_twitter_tool_has_no_credential_gate():
+    """A 402 never gates the tool in the catalog nor skips a cron job."""
+    from polyrob_x.registration import register_twitter_tool
+    from tools.tool_disclosure import CREDENTIAL_GATED_TOOLS
+    register_twitter_tool(force=True)
+    assert "twitter" not in CREDENTIAL_GATED_TOOLS
 
 
 def test_the_refusal_result_carries_a_structured_fallback_field():

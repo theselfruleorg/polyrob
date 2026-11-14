@@ -14,9 +14,18 @@ in [Who may write on X](#who-may-write-on-x).
   `twitter_get_user`, `twitter_search`, `twitter_whoami`, `twitter_poll_results`
   and `twitter_get_dms`.
 - **Writes:** `twitter_post`, `twitter_thread`, `twitter_reply`, `twitter_quote`,
-  `twitter_dm`, `twitter_delete_tweet`, and the account actions (retweet, like,
+  `twitter_article`, `twitter_dm`, `twitter_delete_tweet`, and the account actions (retweet, like,
   follow, mute, block and their undo forms). X allows `twitter_block` only on the
   Enterprise tier; use mute on the other tiers.
+
+**Media and Articles.** `twitter_post`, `twitter_reply` and `twitter_thread` attach
+up to four images, or one GIF or video, from the agent's working files through the X v2
+media API (video uses the chunked upload and waits for X to process it), with
+optional `media_alt_texts`. `twitter_article` publishes an X Article: a title, a body
+in light markdown (headings, lists, quotes, bold and italic) and an optional cover
+image; `publish=false` keeps it a draft on X. Media and Article writes use the
+OAuth 1.0a keys. A tweet read returns the full text of a post over 280 characters,
+the Article it carries, and its media (type, URL, alt text, best video URL).
 
 Each mention carries `author_id` and `author_username`, so a reply goes to the
 account that wrote the mention. Each tweet read carries `reposts_and_quotes`

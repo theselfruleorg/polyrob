@@ -105,6 +105,15 @@ polyrob config check
 
 ## 3. Version notes
 
+### Upgrading to 1.7.10
+
+No database migration. A new store, `lp_seeds.db` (the owner's v4 pool declarations), is created on first use.
+
+- **Restart the remote signer too** (`polyrob-signer`) on a host that runs it: the guard learned the v4 seed shape (create a pool and mint its first deposit in one transaction).
+- **Cards say Cancel, not Dismiss.** `/cards <id>` also takes the button words (`cancel`, `confirm`, `quote`). `/cancel <card id>` and `/cancel cards` cancel cards; a bare `/cancel` still stops the running task.
+- **An `active` group answers less.** A line nobody addressed reaches the agent marked `→ the room`, and the agent answers it only when it is plainly for the agent.
+- **A token's value is the primary pool price.** The other sources grade it and no longer move it, so a holding's value can differ a little from the earlier median.
+
 ### Upgrading to 1.7.9
 
 No database migration.

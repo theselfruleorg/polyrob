@@ -74,4 +74,4 @@ def test_the_spaced_set_is_derived_from_the_policy_rows():
     """W4: the write rows minus the reply, plus the repost — not a hand list."""
     from polyrob_x.post_spacing import spaced_actions
     assert spaced_actions() == {"twitter_post", "twitter_thread", "twitter_quote",
-                                "twitter_retweet"}
+                                "twitter_retweet", "twitter_article"}

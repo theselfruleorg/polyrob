@@ -118,7 +118,8 @@ def room_turn_text(task_agent: Any, result: Any) -> Tuple[Any, str]:
                                chat_name=chat_title(container, result.inbound),
                                # 044 T17: how much of the room the model is
                                # shown is the room's own setting.
-                               context_lines=int(getattr(policy, "context_lines", 30)))
+                               context_lines=int(getattr(policy, "context_lines", 30)),
+                               to_you=line_is_to_agent(policy, result.inbound, role))
     except Exception as e:
         logger.warning("room turn build failed (%s) — answering without context", e)
         turn = RoomTurn(
@@ -129,6 +130,27 @@ def room_turn_text(task_agent: Any, result: Any) -> Tuple[Any, str]:
     if role not in ("owner", "admin"):
         turn = turn.with_attachment(member_media_note(result.inbound))
     return turn, role
+
+
+def line_is_to_agent(policy: Any, inbound: Any, role: str) -> bool:
+    """Whether this room line addressed the agent — the gate's own rule
+    (``chat_policy.is_addressed``), so an ``active`` room's turn can say
+    ``→ the room`` for a line nobody aimed at the agent.
+
+    Fail-open to True: with no readable policy the line keeps the old
+    ``→ you`` framing rather than silencing a real question.
+    """
+    if policy is None:
+        return True
+    try:
+        from core.surfaces.chat_policy import is_addressed, wake_word_hit
+        text = getattr(inbound, "text", None) or ""
+        return is_addressed(mentioned=getattr(inbound, "mentions_bot", None) is True,
+                            role=role, wake_hit=wake_word_hit(policy, text),
+                            is_command=text.lstrip().startswith("/"))
+    except Exception as e:  # pragma: no cover - fail-open probe
+        logger.debug("room line address check failed (%s) — treating as addressed", e)
+        return True
 
 
 def member_media_note(inbound: Any) -> str:

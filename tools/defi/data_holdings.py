@@ -16,11 +16,15 @@ from typing import Any, Dict, List, Optional
 from tools.defi.data_params import PortfolioParams, WalletHoldingsParams
 from tools.defi.data_render import (
     _excluded_value_text, _fmt_amount, _fmt_usd, _holding_md, _holdings_metadata,
-    _holdings_rest_lines, _ticker_collision_lines, _total_line, _valued_lines)
+    _holdings_rest_lines, _is_finite, _ticker_collision_lines, _total_line, _valued_lines)
 from tools.defi.providers import alchemy_index
+from tools.intel.price import counts_in_total
 from tools.defi.token_screen import quoted
 
 logger = logging.getLogger("tools.defi.data_tool")
+
+#: Wall-clock bound of the liquidity positions block of one holdings report.
+LP_BLOCK_BUDGET_SEC = 20.0
 
 
 class HoldingsReadsMixin:
@@ -67,6 +71,7 @@ class HoldingsReadsMixin:
 
         from core.wallet.tokens import canonical_token
         valued, unpriced_known, total = [], [], 0.0
+        indicative: List[float] = []
         ours_unvalued, other_unvalued = [], []
         read_failed_other = zero_rows = 0
         # (symbol, address) for every row, so one symbol held under two
@@ -141,7 +146,9 @@ class HoldingsReadsMixin:
             amount = units / (10 ** ident.decimals)
             priced_count += 1
             info = self._row_price(chain, addr, prefetch, ours=ours)
-            if info.price_usd is None or info.confidence != "high":
+            if info.price_usd is None or not counts_in_total(info.confidence):
+                if (known or ours) and _is_finite(info.price_usd):
+                    indicative.append(amount * info.price_usd)
                 sink.append(
                     f"  {addr}  {_fmt_amount(amount)} {quoted(ident.symbol) or '?'}  "
                     f"{_excluded_value_text(amount, info, ours=ours)}")
@@ -160,6 +167,9 @@ class HoldingsReadsMixin:
         native_out: Dict[str, Any] = {}
         lines += self._gas_lines(holder, chain, native_out=native_out) + [""]
         lines += _valued_lines(valued)
+        lp = self._lp_holdings_block(chain, holder)
+        if lp["lines"]:
+            lines += [""] + lp["lines"]
         # 079 W1: below the valued rows — the money is read first. Still above
         # the total, so it arrives before any decision made off this screen.
         lines += _ticker_collision_lines(symbols_seen)
@@ -168,6 +178,11 @@ class HoldingsReadsMixin:
         lines += [""] + _totals_with_native(
             _total_line(total, reads=reads, failed=failed_reads), total,
             all_failed=bool(reads and failed_reads >= reads), native=native_out)
+        lines += _indicative_line(indicative)
+        from tools.defi import lp_holdings
+        lines += lp_holdings.total_lines(
+            lp, None if (reads and failed_reads >= reads)
+            else total + (native_out.get("usd") or 0.0))
         # Immediately after the total, because the total is the number a reader
         # acts on and it is INCOMPLETE whenever this section is non-empty.
         lines += _holdings_rest_lines(
@@ -178,7 +193,35 @@ class HoldingsReadsMixin:
             complete=(indexed is not None and index_complete) and not budget_skipped,
             total_usd=total, rows=md_rows)
         md["native_usd"] = native_out.get("usd")
+        md["lp_positions"] = lp["positions"]
+        md["lp_usd"] = lp["counted_usd"]
+        md["lp_complete"] = lp["complete"]
         return self._ar(content="\n".join(lines), metadata=md)
+
+    def _v4_position_ids(self, rpc, chain: str, npm: str, holder: str, want: int) -> List[int]:
+        """Candidate ids of the v4 positions *holder* owns (the ONE finder: the
+        manager's Transfer logs, then the indexer). The caller re-reads owners."""
+        from tools.defi import lp_holdings
+        return lp_holdings._v4_ids(self, rpc, chain, npm, holder, want, None)
+
+    def _lp_holdings_block(self, chain: str, holder: str) -> Dict[str, Any]:
+        """The liquidity positions of *holder* (``tools.defi.lp_holdings``). A
+        report built on injected balance seams with no ``lp_rpc`` reads no chain
+        (the block is empty); production always reads. Never raises."""
+        from tools.defi import lp_holdings
+        empty = {"lines": [], "counted_usd": 0.0, "indicative_usd": 0.0,
+                 "complete": True, "positions": []}
+        if self._lp_rpc is None and (self._index_fn is not None
+                                     or self._balances_fn is not None):
+            return empty
+        try:
+            return lp_holdings.build(self, self._lp_rpc_for(chain), chain, holder,
+                                     deadline=time.monotonic() + LP_BLOCK_BUDGET_SEC)
+        except Exception as exc:
+            logger.warning("portfolio: liquidity positions block failed on %s: %s", chain, exc)
+            return dict(empty, complete=False, lines=[
+                "liquidity positions: NOT READ — the read failed. This is NOT "
+                "'no positions'; value in a position is missing from every total here."])
 
     def _own_addresses(self) -> List[str]:
         out: List[str] = []
@@ -339,6 +382,7 @@ class HoldingsReadsMixin:
         lines.append("")
 
         valued, total = [], 0.0
+        indicative: List[float] = []
         ours_unvalued, other_unvalued = [], []
         budget_skipped: List[tuple] = []
         priced = 0
@@ -380,7 +424,9 @@ class HoldingsReadsMixin:
             sol_ours = _valuation_priority(chain, h.mint, sol_pinned) == 0
             info = self._row_price(chain, h.mint, sol_prefetch, ours=sol_ours)
             priced += 1
-            if info.price_usd is None or info.confidence != "high" or amount is None:
+            if info.price_usd is None or not counts_in_total(info.confidence) or amount is None:
+                if own and sol_ours and amount is not None and _is_finite(info.price_usd):
+                    indicative.append(amount * info.price_usd)
                 (ours_unvalued if sol_ours else other_unvalued).append(
                     f"  {h.mint}  {shown}{t22}  "
                     f"{_excluded_value_text(amount, info, ours=own and sol_ours)}")
@@ -393,6 +439,7 @@ class HoldingsReadsMixin:
         lines += _valued_lines(valued)
         lines += [""] + _totals_with_native(_total_line(total, reads=0, failed=0), total,
                                             all_failed=False, native=sol_native)
+        lines += _indicative_line(indicative)
         lines += _holdings_rest_lines(
             own=own, known=[], ours=ours_unvalued, others=other_unvalued,
             budget_rows=budget_skipped, priced=priced)
@@ -521,6 +568,16 @@ class HoldingsReadsMixin:
                     f"is spendable and the gas tank is nearly EMPTY — fund it before "
                     f"an entry or an EXIT on {chain}")
         return f"  {label} {format(native, fmt)} {worth} — {tail}."
+
+
+def _indicative_line(values: List[float]) -> List[str]:
+    """The sum of the holdings a total leaves out (tools.intel.price.counts_in_total),
+    right under it, so a price that drops below ``high`` shows as a moved line
+    and never as value that vanished from the total."""
+    if not values:
+        return []
+    return [f"NOT in the total: {len(values)} holding(s) at a low-confidence price, "
+            f"indicative ≈ {_fmt_usd(sum(values))}"]
 
 
 def _totals_with_native(token_line: str, token_total: float, *, all_failed: bool,

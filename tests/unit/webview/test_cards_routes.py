@@ -75,7 +75,7 @@ def client(rig):
 
 def _quote_card(user="alice"):
     reply = (f"transfer\n  RESULT: DRY RUN\n\nTo send it: /send 1 native to {ADDR} "
-             f"on base max 105.01 go")
+             f"on base max 125.01 go")
     return cards.quote_card(user, "/send", ["1", "native", "to", ADDR, "on", "base"],
                             reply)[1]
 
@@ -136,7 +136,7 @@ def test_the_chat_box_quote_is_a_card_and_confirm_runs_in_the_background(rig):
     card = asyncio.run(_go())
     assert cards.store().get(card.card_id).state == cards.S_DONE
     live = [p for p in rig.tool.calls if not p.dry_run]
-    assert len(live) == 1 and live[0].max_spend_usd == pytest.approx(105.01)
+    assert len(live) == 1 and live[0].max_spend_usd == pytest.approx(125.01)
     assert any("SENT" in n for n in rig.notices)
 
 

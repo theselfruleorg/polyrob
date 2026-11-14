@@ -5,9 +5,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-#: The 057 WS-A credential verdict for the X API tool (``tools.tool_disclosure``).
-TWITTER_CREDENTIAL_GATE = ("twitter_api", "api-credits")
-
 
 def register_twitter_tool(force: bool = False) -> bool:
     """The descriptor and class ``tools/descriptors.py`` / ``tools/__init__.py``
@@ -20,8 +17,8 @@ def register_twitter_tool(force: bool = False) -> bool:
         logger.debug("twitter tool not registered: %s", exc)
         return False
     from tools.descriptors import ToolCategory, ToolDescriptor, register_optional_tool
-    from tools.tool_disclosure import register_credential_gate
-    register_credential_gate("twitter", *TWITTER_CREDENTIAL_GATE)
+    # No credential gate (2026-11-12): a 402 never gates the tool or skips a cron
+    # job; the API answers each call, so a credit top-up works at once.
     return register_optional_tool(
         "twitter", TwitterTool,
         ToolDescriptor(
