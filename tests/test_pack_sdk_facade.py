@@ -76,7 +76,6 @@ DIRECT_HOST_MODULES = frozenset({
     "tools.mcp.security",
     "tools.oauth.file_store",
     "tools.shell.remote_executor",
-    "tools.tool_disclosure",
     "utils.rate_limit_manager",
 })
 
