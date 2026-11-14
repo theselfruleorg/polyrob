@@ -44,10 +44,11 @@ class SourceAnswer:
 class PriceQuote:
     """One agreed price for ``(chain, address)``.
 
-    ``usd`` is the median of the sources that answered. ``primary_usd`` is the
-    pool-backed number of the primary source (DexScreener) — the figure the
-    spend path has always used, so adding sources can only make it STRICTER
-    (a dispute removes the price), never move a cap.
+    ``usd`` is the primary source's pool-backed price (``primary_usd``,
+    DexScreener) whenever it priced the token, else the median of the sources
+    that answered. The other sources grade it and never move it, so one source
+    that drops out does not change a value; adding sources can only make the
+    quote STRICTER (a dispute removes the price), never move a cap.
 
     The ``price_usd`` / ``priced_pool_address`` properties keep the shape of
     ``tools.defi.providers.base.PriceInfo`` so every existing reader works.

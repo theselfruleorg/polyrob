@@ -76,7 +76,7 @@ def test_go_quotes_then_sends_once_bounded_by_the_quote():
         "owner", ["0.997", "native", "to", ADDR, "on", "ethereum", "go"], tool=tool))
     assert [p.dry_run for p, _ in tool.calls] == [True, False]
     live = tool.calls[1][0]
-    assert live.max_spend_usd == pytest.approx(round(2680.0 * 1.05 + 0.01, 2))
+    assert live.max_spend_usd == pytest.approx(min(3000.0, round(2680.0 * 1.25 + 0.01, 2)))
     assert "SENT" in out
 
 

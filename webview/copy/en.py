@@ -233,7 +233,7 @@ STRINGS = {
     "money.move.quote": "Get a quote",
     "money.move.native": "native",
     "money.move.note": ("The quote shows the value and the caps. Confirm sends exactly that "
-                        "quote, at most the quote + 5%, once."),
+                        "quote, once: at most the quote + 5% (a send of a token count: + 25%)."),
     "money.move.unreadable": "Some choices could not be read; type the value instead.",
     "money.move.pickers_failed": "The console could not read the networks and tokens. Reload the page to try again.",
     "money.tab.cash": "Cash",

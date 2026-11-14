@@ -241,3 +241,49 @@ def test_a_failed_usdc_read_says_usdc_unknown_and_degrades_the_wallet(tmp_path, 
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
     sec = _wallet_section(str(tmp_path))
     assert sec.state == STATE_DEGRADED and "base" in sec.data["usdc_unknown_chains"]
+
+
+# --- liquidity positions (prod 2026-11-13: value in a position was in no line) ---
+
+def test_a_chain_row_names_the_positions_the_wallet_owns():
+    from types import SimpleNamespace
+    from core.wallet import balance_cache as bc
+    wallet = SimpleNamespace(address="0x1111111111111111111111111111111111111111",
+                             solana_address=None)
+    counts = {"robinhood": 1, "base": None}
+    snap = bc.collect(wallet, evm_reader=lambda a, c: (1.0, 0.0),
+                      lp_reader=lambda a, c: counts.get(c, 0))
+    text = "\n".join(bc.render_lines(snap))
+    assert "robinhood: 1 ETH · 0.00 USDC · 1 liquidity position(s)" in text
+    assert "NOT in these balances" in text
+    base = next(line for line in text.splitlines() if "base:" in line)
+    assert base.endswith("liquidity positions unknown")      # a failed count is not zero
+    other = next(line for line in text.splitlines() if "ethereum:" in line)
+    assert "liquidity" not in other
+
+
+def test_the_position_count_sums_the_pinned_managers_and_fails_to_unknown():
+    from core.wallet import balance_cache as bc
+    asked = []
+
+    def rpc(method, params):
+        asked.append(params[0]["to"])
+        return hex(1)
+
+    addr = "0x1111111111111111111111111111111111111111"
+    assert bc.lp_position_count(addr, "robinhood", rpc=rpc) == len(asked) >= 1
+
+    def dead(method, params):
+        raise OSError("rpc down")
+
+    assert bc.lp_position_count(addr, "robinhood", rpc=dead) is None
+
+
+def test_a_snapshot_written_before_the_count_still_reads(tmp_path):
+    import json
+    from core.wallet import balance_cache as bc
+    (tmp_path / "wallet_balances.json").write_text(json.dumps({
+        "address": "0x1", "taken_at": 1.0,
+        "chains": [{"chain": "base", "symbol": "ETH", "native": 1.0, "usdc": 2.0}]}))
+    snap = bc.read(str(tmp_path))
+    assert snap.chains[0].lp_positions is None and not snap.chains[0].lp_expected

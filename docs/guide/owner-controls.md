@@ -452,7 +452,8 @@ card with **Confirm**, **Refresh** and **Cancel** buttons (Telegram), the same
 buttons in the console chat and Inbox, and the typed tokens in the terminal
 (`/card_<id>_ok`). Confirm runs the exact line the quote showed — the stored
 address, never a re-typed one — once, and for `/send` and `/swap` at most the
-quote + 5%: if the price moved further, nothing moves and the card says so. A
+quote + 5% (a `/send` of a token count: + 25%, because the count is fixed): if the
+price moved further, nothing moves and the card says so. A
 decided card loses its buttons. In the console, Money › Moves › *Make a move* builds a
 send or swap from pickers (chain, a token I trust, a recent recipient) and answers with
 the same card. The agent uses cards too: `propose_action` puts a

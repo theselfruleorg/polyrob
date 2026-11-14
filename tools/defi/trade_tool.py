@@ -1143,8 +1143,9 @@ class DefiTradeTool(SolanaRailMixin, WalletHolderMixin, BaseTool):
     @BaseTool.action(
         "Provide Uniswap v3 liquidity, creating the pool when initial_price is supplied, "
         "or increase your token_id. Needs exact token approvals first. Both legs are "
-        "bounded by the guard. A Pons graduated v4 pool pays LP fee 0; v3 is a separate "
-        "market. dry_run defaults true.", param_model=LpAddParams)
+        "bounded by the guard. protocol='v4': a launchpad's graduated pool (full range, "
+        "LP fee 0), or a NEW pool / custom range that the owner declares on a card first "
+        "(see protocol). dry_run defaults true.", param_model=LpAddParams)
     async def lp_add(self, params: LpAddParams, execution_context=None):
         from core.wallet.buy_target import acquisition_refusal
         _why = acquisition_refusal(execution_context, chain=getattr(params, "chain", "solana"),
@@ -1155,8 +1156,9 @@ class DefiTradeTool(SolanaRailMixin, WalletHolderMixin, BaseTool):
         return await perform_lp_add(self, params, execution_context)
 
     @BaseTool.action(
-        "Withdraw a percentage of your v3 position and collect both tokens; optionally "
-        "burn the empty NFT at 100%. Both receipts are asserted. dry_run defaults true.",
+        "Withdraw a percentage of your v3 or v4 position and collect both tokens; v3 may "
+        "burn the empty NFT at 100% (v4 keeps it). Both receipts are asserted. dry_run "
+        "defaults true.",
         param_model=LpRemoveParams)
     async def lp_remove(self, params: LpRemoveParams, execution_context=None):
         from tools.defi.lp_verbs import perform_lp_remove

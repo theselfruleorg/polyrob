@@ -125,7 +125,7 @@ def test_the_native_key_is_the_live_pool(fork):
 
 
 def test_permit2_grant_to_the_pinned_posm_is_allowed_and_another_is_refused(fork):
-    amount = 10 ** 24
+    amount = 10 ** 22                    # small: a grant is priced, and the price moves
     _send(TREASURY, TOKEN, "0x095ea7b3" + ROW.permit2[2:].lower().rjust(64, "0")
           + format(amount, "064x"))          # the owner's one ERC-20 allowance to Permit2
     d = _authorize(*_grant(amount), fork["price"])
@@ -139,7 +139,7 @@ def _plan(eth=0.01, tok=1_000_000):
     from tools.defi.lp_v4_verbs import prepare_add_v4
     p = SimpleNamespace(chain="robinhood", token_a="native", token_b=TOKEN, amount_a=eth,
                         amount_b=tok, range="full", initial_price=None, token_id=None,
-                        slippage_bps=100, max_spend_usd=200.0)
+                        slippage_bps=100, max_spend_usd=200.0, dry_run=True)
     return prepare_add_v4(p, _rpc, TREASURY, ROW.position_manager, price_fn=None)
 
 
@@ -171,3 +171,180 @@ def test_lp_add_through_the_guard_and_on_the_fork(fork):
     assert str(owner).lower() == TREASURY.lower()
     from core.wallet import liquidity_guard
     liquidity_guard.assert_position_events(plan.intent, rc["logs"], next_id)
+
+
+# ---- 117: a pool the owner declares — seed, read, withdraw -------------------
+
+SEED_FEE, SEED_SPACING = 3000, 60         # a key next to the live one; no hook
+
+
+def _declared(fork, monkeypatch, *, eth=0.01):
+    """A CONFIRMED declaration of a fresh TOKEN/native key at the live pool's
+    price, with a custom range around it."""
+    from core.wallet import lp_seed as S
+    from tools.defi import lp_v4_seed
+    st = fork["state"]
+    s = st.sqrt_price_x96 / 2 ** 96
+    p = SimpleNamespace(chain="robinhood", protocol="v4", token_a="native", token_b=TOKEN,
+                        amount_a=eth, amount_b=eth * s * s * 3, fee=SEED_FEE,
+                        tick_spacing=SEED_SPACING, hooks=None, token_id=None,
+                        range=f"ticks:{(st.tick - 30000) // 60 * 60},{(st.tick + 30000) // 60 * 60}",
+                        initial_price=s * s, slippage_bps=100)
+    fields = lp_v4_seed.build_fields(p, _rpc, source="owner")
+    if V.pool_state(_rpc, "robinhood", fields["pool_id"]).sqrt_price_x96:
+        pytest.skip("the test key is already initialised on this fork")
+    ref, f = S.propose("owner", fields, origin="owner_seat")
+    S.confirm(ref, user_id="owner")
+    monkeypatch.setattr(lp_v4_seed, "_uid", lambda ctx: "owner")
+    run = SimpleNamespace(chain="robinhood", seed=ref, dry_run=False, max_spend_usd=300.0)
+    return ref, f, run
+
+
+def _allow_permit2(amount=10 ** 26):
+    _send(TREASURY, TOKEN, "0x095ea7b3" + ROW.permit2[2:].lower().rjust(64, "0")
+          + format(amount, "064x"))
+    _send(TREASURY, ROW.permit2, _grant(amount)[1]["data"])
+
+
+def test_a_declared_pool_is_seeded_in_one_transaction_and_reads_back(fork, monkeypatch):
+    from core.wallet import liquidity_guard, lp_seed as S
+    from tools.defi import lp_v4_seed
+    from tools.defi.lp_verbs import receipt_position
+    ref, f, run = _declared(fork, monkeypatch)
+    _allow_permit2()
+    plan = lp_v4_seed.prepare_seed_v4(run, _rpc, TREASURY, ROW.position_manager,
+                                      lp_v4_seed.load(run, None))
+    assert plan.seed["creates"]
+    tx = {"to": ROW.position_manager, "from": TREASURY, "value": plan.value,
+          "data": plan.data, "chainId": 4663}
+    next_id = int(lp_reads.view(_rpc, ROW.position_manager, V.POSM_NEXT_TOKEN_ID))
+
+    d = _authorize(plan.intent, tx, fork["price"])
+    assert d.allowed and d.position_token_id == next_id, d.reason
+    # the token has NO independent price: the guard values it through the signed price
+    eth_only = lambda chain, addr: ETH_USD if addr.lower() != TOKEN.lower() else None
+    d2 = _authorize(plan.intent, tx, eth_only)
+    assert d2.allowed and d2.amount_usd > 0, d2.reason
+    # a bare initializePool is refused: it would leave an empty pool at a free price
+    from core.wallet import abi
+    bare = abi.encode_call(V.POSM_INITIALIZE_POOL["name"], V.POSM_INITIALIZE_POOL["inputs"],
+                           [V._key_tuple(S.key_of(f)), int(f["sqrt_price_x96"])])
+    d3 = _authorize(plan.intent, dict(tx, data=bare, value=0), fork["price"])
+    assert not d3.allowed and "initializePool" in d3.reason, d3.reason
+
+    # not vacuous: the same bytes create the pool and mint the predicted id
+    lp_v4_seed.claim(plan.seed)
+    rc = _send(TREASURY, ROW.position_manager, plan.data, value=plan.value)
+    token_id = receipt_position(plan, rc, TREASURY)
+    assert token_id == next_id
+    liquidity_guard.assert_position_events(plan.intent, rc["logs"], token_id, {"data": plan.data})
+    text = lp_v4_seed.settle(plan.seed, _rpc, "robinhood", tx_hash=rc["transactionHash"],
+                             holder=TREASURY, token_id=token_id, reverted=False)
+    assert "SEEDED" in text and "MISMATCH" not in text and "UNVERIFIED" not in text, text
+    assert S.get(ref, user_id="owner")["state"] == S.SEEDED
+
+    # the reads (W5/W6) see the new pool and the position
+    lines = "\n".join(V.position_lines(_rpc, "robinhood", token_id, lambda t: 18, holder=TREASURY))
+    assert f["pool_id"] in lines and "(this wallet)" in lines and "in range" in lines
+    info = "\n".join(V.pool_info_lines(_rpc, "robinhood", "native", TOKEN, fee=SEED_FEE,
+                                       tick_spacing=SEED_SPACING, decimals_fn=lambda t: 18))
+    assert f["pool_id"] in info and "NOT initialized" not in info
+
+    # a second declaration on the pool that now exists is a plain mint (no initialise)
+    ref2, _, run2 = _declared_again(f, monkeypatch)
+    plan2 = lp_v4_seed.prepare_seed_v4(run2, _rpc, TREASURY, ROW.position_manager,
+                                       lp_v4_seed.load(run2, None))
+    assert not plan2.seed["creates"]
+    d4 = _authorize(plan2.intent, dict(tx, data=plan2.data, value=plan2.value), fork["price"])
+    assert d4.allowed, d4.reason
+
+    # the withdrawal (W7): half of the position, the NFT stays
+    from tools.defi.lp_v4_verbs import prepare_remove_v4
+    rm = SimpleNamespace(chain="robinhood", token_id=token_id, liquidity_pct=50, slippage_bps=100,
+                         burn=False, dry_run=False, max_spend_usd=5.0)
+    out = prepare_remove_v4(rm, _rpc, TREASURY, ROW.position_manager, price_fn=fork["price"])
+    rtx = {"to": ROW.position_manager, "from": TREASURY, "value": 0, "data": out.data,
+           "chainId": 4663, "maxFeePerGas": 10 ** 9}   # an exit is valued by its fee alone
+    d5 = _authorize(out.intent, rtx, fork["price"])
+    assert d5.allowed, d5.reason
+    before = V.position(_rpc, "robinhood", token_id).liquidity
+    rc2 = _send(TREASURY, ROW.position_manager, out.data)
+    liquidity_guard.assert_position_events(out.intent, rc2["logs"], token_id, {"data": out.data})
+    after = V.position(_rpc, "robinhood", token_id)
+    assert after.liquidity == before - before * 50 // 100 and after.owner == TREASURY.lower()
+
+
+def _declared_again(f, monkeypatch):
+    from core.wallet import lp_seed as S
+    fields = {k: f[k] for k in S.FIELDS}
+    ref, f2 = S.propose("owner", fields, origin="owner_seat")
+    S.confirm(ref, user_id="owner")
+    return ref, f2, SimpleNamespace(chain="robinhood", seed=ref, dry_run=False, max_spend_usd=300.0)
+
+
+# ---- the statistics are the chain's own numbers --------------------------------
+
+#: A live v4 position to check the reads against (its owner is impersonated on the
+#: fork). From the env, never pinned here.
+LIVE_POSITION = os.environ.get("LP_V4_FORK_POSITION", "")
+
+
+def _balances(owner, key):
+    native = int(_rpc("eth_getBalance", [owner, "latest"]), 16)
+    token = int(lp_reads.view(_rpc, key["currency1"], {"name": "balanceOf",
+                "inputs": [{"type": "address"}], "outputs": [{"type": "uint256"}]}, [owner]))
+    return native, token
+
+
+def _impersonated(owner, to, data):
+    """Send with a zero gas price, so a native balance delta is the receipt alone."""
+    _rpc("anvil_impersonateAccount", [owner])
+    _rpc("anvil_setNextBlockBaseFeePerGas", ["0x0"])
+    h = _rpc("eth_sendTransaction", [{"from": owner, "to": to, "data": data, "value": "0x0",
+                                      "gas": hex(2_000_000), "gasPrice": "0x0"}])
+    for _ in range(50):
+        rc = _rpc("eth_getTransactionReceipt", [h])
+        if rc:
+            assert int(rc["status"], 16) == 1, rc
+            return rc
+        time.sleep(0.1)
+    raise AssertionError("no receipt")
+
+
+@pytest.mark.skipif(not LIVE_POSITION, reason="set LP_V4_FORK_POSITION=<a live v4 position id>")
+def test_fees_owed_and_holdings_equal_what_a_collect_and_a_withdrawal_pay(fork):
+    token_id = int(LIVE_POSITION)
+    pos = V.position(_rpc, "robinhood", token_id)
+    assert pos.key["currency0"] == V.ZERO, "the check assumes a native currency0"
+    st = V.pool_state(_rpc, "robinhood", pos.pool_id)
+    fees = V.position_fees(_rpc, "robinhood", pos)
+    from core.wallet import univ3_math as M
+    holds = M.amounts_for_liquidity(st.sqrt_price_x96, M.sqrt_price_at_tick(pos.tick_lower),
+                                    M.sqrt_price_at_tick(pos.tick_upper), pos.liquidity)
+
+    # 1. the fees read == what a collect pays, to the wei
+    before = _balances(pos.owner, pos.key)
+    unlock = V.encode_collect_unlock(token_id, pos.key["currency0"], pos.key["currency1"], pos.owner)
+    _impersonated(pos.owner, ROW.position_manager,
+                  V.encode_modify_liquidities(unlock, int(time.time()) + 600))
+    after = _balances(pos.owner, pos.key)
+    paid = (after[0] - before[0], after[1] - before[1])
+    assert paid == fees, (paid, fees)
+    assert V.position_fees(_rpc, "robinhood", V.position(_rpc, "robinhood", token_id)) == (0, 0)
+
+    # 2. "holds now" == what a full withdrawal pays (the pool rounds down: at most 1 wei less)
+    unlock = V.encode_decrease_unlock(token_id, pos.liquidity, 0, 0, pos.key["currency0"],
+                                      pos.key["currency1"], pos.owner)
+    _impersonated(pos.owner, ROW.position_manager,
+                  V.encode_modify_liquidities(unlock, int(time.time()) + 600))
+    final = _balances(pos.owner, pos.key)
+    out = (final[0] - after[0], final[1] - after[1])
+    for got, want in zip(out, holds):
+        assert 0 <= want - got <= 1, (out, holds)
+
+    # 3. the LP part of every Swap log since the mint == the fees (when this
+    #    position was the pool's only liquidity the whole time)
+    act = V.pool_activity(_rpc, "robinhood", pos.pool_id, hours=72, protocol_fee=st.protocol_fee)
+    if st.liquidity == pos.liquidity:
+        for summed, owed in zip((act["lp_fees0"], act["lp_fees1"]), fees):
+            assert abs(summed - owed) <= max(act["swaps"] * 2, owed // 10_000), (act, fees)

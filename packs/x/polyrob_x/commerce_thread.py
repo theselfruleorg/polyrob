@@ -110,9 +110,6 @@ class XThreadChannel:
         tool = await self._ready_tool()
         if not getattr(tool, "_enabled", True) or getattr(tool, "client", None) is None:
             raise ThreadUnavailable("x: the API is not configured here")
-        refusal = tool._credit_preflight_refusal()
-        if refusal:
-            raise ThreadUnavailable("x api: 402 (credits depleted); replies wait")
         me = await self._me_id(tool)
         if not me:
             raise ThreadUnavailable("x api: the agent's own account could not be read (401?)")

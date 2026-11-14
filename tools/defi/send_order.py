@@ -21,6 +21,12 @@ ANYWAY = "anyway"
 #: for the price to move between the two (the bridge's own tolerance). A
 #: dollar amount (``$22``) is held to the same room when no ``max`` is typed.
 PRICE_ROOM = 1.05
+#: The room a TOKEN-COUNT send's confirm line carries (max <quote + 25%>). The
+#: count is fixed, so a move only changes its dollar value: 5% refused a thin
+#: token's bounty payout "the price moved" on an 8% move (prod card
+#: 6f3ea59c10, 2026-11-13), while a pump of the token still stops it. The
+#: thin-pool dispute band (``tools.intel.price.DISPUTE_PCT_THIN``) is the same 25%.
+TOKEN_COUNT_ROOM = 1.25
 
 USAGE = ("Usage: /send <amount|$usd> <native|token-address> to <address> on <chain> "
          "[max <usd>] [anyway] [go]\n"
@@ -227,13 +233,42 @@ def unit_price(chain: str, token: str,
     return px
 
 
-def round_tokens(amount: float, digits: int = 6) -> float:
+def round_tokens(amount: float, digits: int = 6,
+                 decimals: Optional[int] = None) -> float:
     """*amount* to *digits* significant digits: the count the quote shows IS
-    the count that is sent (never a float tail the owner did not see)."""
+    the count that is sent (never a float tail the owner did not see).
+
+    With the token's *decimals* known, the count never carries more places
+    than the token has (cut DOWN, so the dollars are never exceeded): $5 of a
+    $95,000 token with 8 decimals is 0.00005263, not 0.0000526316 — the exact
+    raw conversion refused the longer count on every send."""
     if not (amount > 0) or not math.isfinite(amount):
         return amount
-    places = digits - int(math.floor(math.log10(amount))) - 1
-    return round(amount, max(0, min(18, places)))
+    places = max(0, min(18, digits - int(math.floor(math.log10(amount))) - 1))
+    if decimals is not None and 0 <= int(decimals) < places:
+        from decimal import ROUND_DOWN, Decimal
+        q = Decimal(1).scaleb(-int(decimals))
+        return float(Decimal(repr(round(amount, places))).quantize(q, rounding=ROUND_DOWN))
+    return round(amount, places)
+
+
+def token_decimals(chain: str, token: str) -> Optional[int]:
+    """The decimals of *token* on *chain*, or None when not known without
+    doubt. Native = the chain row's; Solana's pinned USDC = 6; an EVM token =
+    its frozen identity read. Never raises."""
+    try:
+        from core.wallet import chains
+        row = chains.get(chain)
+        if row is None:
+            return None
+        if token == _NATIVE:
+            return int(row.native_decimals)
+        if row.family == "svm":
+            return 6 if getattr(row, "usdc", None) == token else None
+        from core.wallet.tokens import bounded_decimals, get_token_identity
+        return bounded_decimals(get_token_identity(chain, token).decimals)
+    except Exception:
+        return None
 
 
 def fmt_tokens(amount: float) -> str:
@@ -265,7 +300,8 @@ NO_PRICE_FOR_USD = ("No spend-grade price for this token, so I cannot turn "
 
 
 def resolve_usd(order: dict,
-                price_fn: Optional[Callable[[str, str], Optional[float]]] = None
+                price_fn: Optional[Callable[[str, str], Optional[float]]] = None,
+                decimals_fn: Optional[Callable[[str, str], Optional[int]]] = None
                 ) -> Tuple[Optional[dict], Optional[float], Optional[str]]:
     """``(order, unit_price, None)`` or ``(None, None, refusal)``.
 
@@ -280,7 +316,11 @@ def resolve_usd(order: dict,
     if px is None:
         return None, None, NO_PRICE_FOR_USD.format(usd=usd)
     out = dict(order)
-    out["amount"] = round_tokens(usd / px)
+    dec = (decimals_fn or token_decimals)(order["chain"], order["token"])
+    out["amount"] = round_tokens(usd / px, decimals=dec)
+    if not out["amount"] > 0:
+        return None, None, (f"${usd:,.2f} is less than one unit of this token at "
+                            f"{fmt_price(px)}. Nothing was sent.")
     if out.get("max_usd") is None:
         out["max_usd"] = implied_max(usd)
     return out, px, None

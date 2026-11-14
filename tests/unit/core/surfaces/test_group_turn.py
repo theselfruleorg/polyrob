@@ -47,6 +47,13 @@ def test_addressed_block():
     assert out == "<addressed>\n@bob|9911 (admin) → you: which chains?\n</addressed>"
 
 
+def test_an_unaddressed_line_is_marked_to_the_room():
+    out = render_addressed(_r(2, "hello all", name="@bob", sender="9911"),
+                           role="member", to_you=False)
+    assert out == ("<addressed>\n@bob|9911 (member) → the room (not addressed to you): "
+                   "hello all\n</addressed>")
+
+
 def test_thread_is_rendered_when_present():
     out = render_context([_r(1, "hi")], chat_name="Den", surface="telegram",
                          thread="4242", exclude_message_id=None)

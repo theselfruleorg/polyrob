@@ -433,6 +433,24 @@ def _identity_unpinned(
         frozen_symbol = _clean_text(frozen_symbol, MAX_SYMBOL_CHARS)
         frozen_name = _clean_text(frozen_name, MAX_NAME_CHARS)
         frozen_decimals = _bounded_decimals(frozen_decimals)
+        # A field the FIRST read could not get (an RPC failure froze NULL) is
+        # filled by the first good read — that is the first observation, not a
+        # mutation. Before 2026-11-13 a NULL froze forever and every good read
+        # after it only raised change_count, so the holding stayed "decimals
+        # unknown" and out of every total.
+        fill = {col: fresh for col, frozen, fresh in (
+                    ("symbol", frozen_symbol, fresh_symbol),
+                    ("name", frozen_name, fresh_name),
+                    ("decimals", frozen_decimals, fresh_decimals))
+                if frozen is None and fresh is not None}
+        for col, fresh in fill.items():
+            conn.execute(f"UPDATE tokens SET {col} = ? WHERE chain = ? AND address = ? "
+                         f"AND {col} IS NULL", (fresh, chain, address))
+        if fill:
+            conn.commit()
+            frozen_symbol = fill.get("symbol", frozen_symbol)
+            frozen_name = fill.get("name", frozen_name)
+            frozen_decimals = fill.get("decimals", frozen_decimals)
         changed = any((
             fresh_decimals is not None and fresh_decimals != frozen_decimals,
             fresh_symbol is not None and fresh_symbol != frozen_symbol,

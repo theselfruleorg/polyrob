@@ -548,3 +548,30 @@ def test_the_account_verbs_are_the_ones_that_declare_account():
     from tools.defi.trade_tool import CallParams, LpCollectParams, SwapParams, TransferParams
     for m in (CallParams, LpCollectParams, SwapParams, TransferParams):
         assert {"account", "nft"} <= set(m.model_fields)
+
+
+@pytest.mark.asyncio
+async def test_a_slow_route_sanity_never_blocks_the_event_loop(env, no_side_checks, monkeypatch):
+    """2026-11-12: the sync price lookup inside ``_route_sanity`` froze the
+    whole loop 17-26 s on every swap (owner chat included). It runs off-loop."""
+    import asyncio
+    import time as _t
+
+    def slow(self, *a, **k):
+        _t.sleep(0.4)
+        return ("consistent", "route check: test")
+    monkeypatch.setattr(DefiTradeTool, "_route_sanity", slow)
+    ticks = []
+
+    async def ticker():
+        while True:
+            ticks.append(_t.monotonic())
+            await asyncio.sleep(0.02)
+    task = asyncio.create_task(ticker())
+    tool, _gate, _seen = _tool(env, route_fn=_route_fn([]))
+    res = await tool.swap(SwapParams(chain="base", token_in=USDC, token_out=WETH, amount_in=1.0,
+                                     max_spend_usd=2.0, nft=str(ID), dry_run=False))
+    task.cancel()
+    assert res.error is None, res.error
+    gaps = [b - a for a, b in zip(ticks, ticks[1:])]
+    assert len(ticks) > 5 and max(gaps) < 0.25, f"loop blocked: {len(ticks)} ticks"

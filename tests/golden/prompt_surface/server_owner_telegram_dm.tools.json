@@ -109,6 +109,10 @@
       "sha": "b0d4a83e3e43"
     },
     {
+      "name": "cards_read",
+      "sha": "1a33b0223606"
+    },
+    {
       "name": "delegate_task",
       "sha": "24cec158d9c4"
     },

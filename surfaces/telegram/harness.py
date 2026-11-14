@@ -195,7 +195,7 @@ _USAGE = {
     "/settle": "<id> [tx]",
     "/trade": "start|status|pause|resume|stop|release", "/offer": "list|show|orders|quote|resolve|pause|resume|retire",
     "/bridge": "<from> <to> <amount> [from usdc] [as <asset>] [go]",
-    "/lp": "positions|pool|quote|add|remove|collect",
+    "/lp": "positions|pool|quote|add|remove|collect|seed",
     "/launch": "<SYMBOL> <name…> [logo <url>] [desc <text>] [buy <amount>] [go]",
     "/deploy": "<SYMBOL> <supply> <name…> [on <chain>] [decimals <n>] [go]",
     "/claim": "<token> [go]",
@@ -1410,6 +1410,13 @@ async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver
     if cmd == "/cancel":
         if not _lifecycle_permitted(result):
             return _UNAUTHORIZED_TEXT
+        words = (result.inbound.text or "").split()[1:]
+        if words and _is_admin_owner(result.inbound.identity.user_id):
+            # `/cancel <card id>` / `/cancel cards`: a CARD, not the task.
+            from core.surfaces.card_list import cancel_reply
+            card_reply = cancel_reply(result.inbound.identity.user_id, words)
+            if card_reply is not None:
+                return card_reply
         sid = result.decision.session_id
         if sid:
             # A16/O17: name the reach, and never claim a stop that did not happen.

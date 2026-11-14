@@ -58,7 +58,7 @@ column is a summary, and `/help <verb>` on your seat is the full form.
 | `/asks [<id>]` | What I need from you to unblock work; /asks &lt;id&gt; opens one in full | every seat |
 | `/missed [n]` | Messages I could not deliver live: capped, paused, or undelivered | every seat |
 | `/fulfill <id> [what you want to tell the run]` | Mark an ask fulfilled so its work can continue | every seat, not in a room |
-| `/cards [<id> [ok\|no\|re\|1-6]]` | Open action cards: confirm a quote, answer a choice, or cancel; /cards &lt;id&gt; reopens one in full | every seat, not in a room |
+| `/cards [<id> [ok\|no\|re\|1-6]]` | Open action cards: confirm, get a quote, answer, or cancel; /cards &lt;id&gt; reopens one in full | every seat, not in a room |
 
 ### Work
 
@@ -86,7 +86,7 @@ column is a summary, and `/help <verb>` on your seat is the full form.
 | `/bridge <from> <to> <amount> [from usdc] [as <asset>] [go]` | Move value between chains: ETH/native or USDC in; native, WETH or USDC out | every seat |
 | `/launch <SYMBOL> <name…> [logo <url>] [desc <text>] [buy <amount>] [go]` | Launch a token on the launchpad | every seat |
 | `/deploy <SYMBOL> <supply> <name…> [on <chain>] [decimals <n>] [go]` | Deploy a fixed-supply token | every seat |
-| `/lp positions\|pool\|quote\|add\|remove\|collect` | Liquidity positions: inspect, quote, add, remove, or collect fees | every seat |
+| `/lp positions\|pool\|quote\|add\|remove\|collect\|seed` | Liquidity positions: inspect, quote, add, remove, collect fees, or declare a new pool | every seat |
 | `/claim <token> [go]` | Collect the creator fees a launchpad already owes me | every seat |
 | `/nft [send <id> <to> [go]]\|list\|info <contract> <id>\|account [<id>]\|transfer <contract> <id> <to> [go]\|revoke <contract> <operator> [go]\|trust <collection>\|untrust <collection>\|ready <id>\|unready <id>` | Collectibles I hold: look, trust a collection, send one, make one ready for sale, or revoke an approval | every seat |
 | `/dapp list\|revoke <id>` | Web pages my wallet is connected to, and how to cut one off | every seat |
@@ -102,7 +102,7 @@ column is a summary, and `/help <verb>` on your seat is the full form.
 
 | Command | What it does | Runs on |
 |---|---|---|
-| `/cancel` (`/stop`) | Stop the task I am running now | every seat |
+| `/cancel` (`/stop`) | Stop the task I am running now; /cancel &lt;card id&gt; or /cancel cards cancels cards | every seat |
 | `/pause [word…] [for 6h]` (`/halt`) | Stop autonomous work now, all of it or one scope | every seat, not in a room |
 | `/resume [word…]` | Lift the pause | every seat, not in a room |
 | `/run [pause\|resume\|stop <n>]` | Pause, resume or stop one background run | every seat, not in a room |
@@ -199,7 +199,7 @@ you to approve an action, answer with a slash token: `/once`, `/session`,
 `/launch`, `/lp`, `/claim` and `/nft` only quote until you add `go`. A quote is
 an action card: on Telegram you tap its button; on any seat you can type its
 token (`/card_<id>_ok`), which does the same. A confirmed card executes exactly
-that quote, at most the quote + 5%. Your own command passes the autonomous
+that quote, at most the quote + 5% (a `/send` of a token count: + 25%). Your own command passes the autonomous
 ceiling and the pause; the per-transaction and daily caps still apply. The money
 model: [payments.md](payments.md).
 

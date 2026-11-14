@@ -96,7 +96,7 @@
     {
       "name": "/cards",
       "group": "needs you",
-      "help": "Open action cards: confirm a quote, answer a choice, or cancel; /cards <id> reopens one in full",
+      "help": "Open action cards: confirm, get a quote, answer, or cancel; /cards <id> reopens one in full",
       "aliases": []
     },
     {
@@ -188,7 +188,7 @@
     {
       "name": "/lp",
       "group": "money",
-      "help": "Liquidity positions: inspect, quote, add, remove, or collect fees",
+      "help": "Liquidity positions: inspect, quote, add, remove, collect fees, or declare a new pool",
       "aliases": []
     },
     {
@@ -254,7 +254,7 @@
     {
       "name": "/cancel",
       "group": "control",
-      "help": "Stop the task I am running now",
+      "help": "Stop the task I am running now; /cancel <card id> or /cancel cards cancels cards",
       "aliases": [
         "/stop"
       ]

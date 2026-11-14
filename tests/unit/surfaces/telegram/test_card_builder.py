@@ -93,7 +93,7 @@ def test_send_is_built_with_buttons_then_quoted_then_confirmed(env):
     assert isinstance(quote, CommandReply) and quote.card_id != cid
     assert [p.dry_run for p in env.tool.calls] == [True]   # a quote, nothing sent
     q = cards.store().get(quote.card_id)
-    assert q.confirm_line == f"/send 1 native to {ADDR} on base max 105.01 go"
+    assert q.confirm_line == f"/send 1 native to {ADDR} on base max 125.01 go"
     assert cards.store().get(cid).state == cards.S_REPLACED
 
     sent = _run(env, f"/card_{quote.card_id}_ok")          # the ONLY step that moves money
@@ -144,4 +144,4 @@ def test_the_repl_builds_the_same_way(env):
     assert card.kind == cards.KIND_BUILDER and f"/card_{card.card_id}_1" in out[-1]
     for pick in ("1", "1", "1", "2"):
         asyncio.run(reg.dispatch(f"/card_{card.card_id}_{pick}", ctx))
-    assert any("max 105.01 go" in o for o in out)          # the quote card, typed tokens
+    assert any("max 125.01 go" in o for o in out)          # the quote card, typed tokens

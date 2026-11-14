@@ -31,12 +31,12 @@ def _container(tmp_path, ledger=None):
         get_service=lambda n: svc.get(n))
 
 
-def _inbound(text="hi", *, title="Telegram's Own Title", message_id=9):
+def _inbound(text="hi", *, title="Telegram's Own Title", message_id=9, mentions_bot=True):
     src = SessionSource(surface_id="telegram", chat_id=_CHAT, chat_type="supergroup")
     ident = Identity(user_id="u1", source=src, raw_user_id="u1")
     raw = {"message": {"message_id": message_id, "chat": {"id": _CHAT, "title": title},
                        "from": {"id": 1, "username": "someone"}}}
-    return InboundMessage(text=text, identity=ident, raw=raw, mentions_bot=True)
+    return InboundMessage(text=text, identity=ident, raw=raw, mentions_bot=mentions_bot)
 
 
 def test_the_owners_name_beats_the_telegram_title(tmp_path):
@@ -90,3 +90,35 @@ def test_a_zero_context_budget_answers_with_no_room_context(tmp_path):
     turn, _ = room_turn_text(agent, types.SimpleNamespace(inbound=_inbound()))
     assert turn.context == ""
     assert "hi" in turn.addressed   # the addressed line always survives
+
+
+# An `active` room triggers on every line. The turn must say which lines nobody
+# addressed to the agent, or the model answers every greeting and every aside
+# between members (prod 2026-11-12: "Hello everyone" got a welcome reply).
+
+def _turn(tmp_path, **kw):
+    agent = types.SimpleNamespace(container=_container(tmp_path))
+    turn, _ = room_turn_text(agent, types.SimpleNamespace(inbound=_inbound(**kw)))
+    return turn.addressed
+
+
+def test_an_unaddressed_line_in_an_active_room_reads_to_the_room(tmp_path):
+    ok, msg = set_pol(tmp_path, _OWNER, "telegram", _CHAT, "chat.mode", "active")
+    assert ok, msg
+    body = _turn(tmp_path, text="Hello everyone", mentions_bot=False)
+    assert "→ the room (not addressed to you): Hello everyone" in body
+    assert "→ you:" not in body
+
+
+def test_a_mention_or_reply_to_the_agent_still_reads_to_you(tmp_path):
+    set_pol(tmp_path, _OWNER, "telegram", _CHAT, "chat.mode", "active")
+    assert "→ you: what is POLYROB?" in _turn(tmp_path, text="what is POLYROB?",
+                                               mentions_bot=True)
+
+
+def test_a_wake_word_addresses_the_agent(tmp_path):
+    set_pol(tmp_path, _OWNER, "telegram", _CHAT, "chat.mode", "active")
+    ok, msg = set_pol(tmp_path, _OWNER, "telegram", _CHAT, "chat.wake_words", [r"\bnova\b"])
+    assert ok, msg
+    assert "→ you:" in _turn(tmp_path, text="nova, which task is open?", mentions_bot=False)
+    assert "→ the room" in _turn(tmp_path, text="supernova", mentions_bot=False)

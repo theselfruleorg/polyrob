@@ -116,6 +116,16 @@ BARE_CONFIRMABLE_VERBS = frozenset({"/restart", "/update"})
 _ID_HEX = 10
 _CARD_TOKEN_RE = re.compile(r"^/card_([0-9a-f]{10})_(ok|no|re|[1-6])$")
 ACTS = ("ok", "no", "re") + tuple(str(i) for i in range(1, MAX_OPTIONS + 1))
+#: The words a person types for an act (`/cards <id> cancel`): the button's own
+#: label, so the typed form and the button say the same thing.
+ACT_WORDS = {"cancel": "no", "confirm": "ok", "quote": "re", "refresh": "re"}
+
+
+def parse_act(word: str) -> Optional[str]:
+    """The act a typed word names (``ok|no|re|1-6`` or a button word), else None."""
+    w = str(word or "").strip().lower()
+    w = ACT_WORDS.get(w, w)
+    return w if w in ACTS else None
 
 #: One argument of a carded command line: no whitespace, no control bytes, no
 #: backtick or angle bracket (a usage placeholder like ``<max_usd>`` is not an
@@ -150,6 +160,8 @@ JOB_CARD_SUBCOMMANDS = {
     "/trade": frozenset({"start", "release", "stop"}),
     # 099: an offer's setup budget, its go-live (pinned by the manifest hash), a dispute.
     "/offer": frozenset({"setup", "live", "resolve"}),
+    # 117: a v4 pool seed declaration, only as ``/lp seed confirm <ref>``.
+    "/lp": frozenset({"seed"}),
 }
 #: The most words one job card line holds (a task is prose).
 MAX_JOB_WORDS = 400
@@ -245,13 +257,13 @@ def card_actions(card: Card) -> list:
                 Action("Cancel", card_token(cid, "no"), "danger")]
     if card.kind in LINE_KINDS:
         return [Action("Confirm", card_token(cid, "ok"), "primary"),
-                Action("Dismiss", card_token(cid, "no"), "danger")]
+                Action("Cancel", card_token(cid, "no"), "danger")]
     if card.kind == KIND_PROPOSAL:
         if card.origin == ORIGIN_SYSTEM and is_ack_step(card.args):
             return [Action("I understand — continue", card_token(cid, "re"), "primary"),
                     Action("Cancel", card_token(cid, "no"), "danger")]
         return [Action("Get a quote", card_token(cid, "re"), "primary"),
-                Action("Dismiss", card_token(cid, "no"), "danger")]
+                Action("Cancel", card_token(cid, "no"), "danger")]
     out = [Action(_short(opt, 40), card_token(cid, str(i)))
            for i, opt in enumerate(card.options[:MAX_OPTIONS], start=1)]
     if card.kind == KIND_BUILDER:
@@ -330,14 +342,14 @@ def render_text(card: Card, *, full: bool = False) -> str:
                          f"   Cancel: {card_token(cid, 'no')}")
             lines.append(f"(the quote can be confirmed for {mins} min, once)")
         elif card.kind in LINE_KINDS:
-            lines.append(f"Confirm: {card_token(cid, 'ok')}   Dismiss: {card_token(cid, 'no')}")
+            lines.append(f"Confirm: {card_token(cid, 'ok')}   Cancel: {card_token(cid, 'no')}")
             lines.append("(Confirm runs the command above as if you typed it — nothing is "
                          "written before)")
         elif card.kind == KIND_PROPOSAL and card.origin == ORIGIN_SYSTEM and is_ack_step(card.args):
             lines.append(f"I understand: {card_token(cid, 're')}   Cancel: {card_token(cid, 'no')}")
             lines.append("(nothing moves from this card — the next quote has the Confirm)")
         elif card.kind == KIND_PROPOSAL:
-            lines.append(f"Quote it: {card_token(cid, 're')}   Dismiss: {card_token(cid, 'no')}")
+            lines.append(f"Get a quote: {card_token(cid, 're')}   Cancel: {card_token(cid, 'no')}")
             lines.append("(nothing moves from this card — the quote comes first)")
         else:
             picks = "  ".join(card_token(cid, str(i)) for i in range(1, len(card.options) + 1))
@@ -484,6 +496,18 @@ class CardStore:
             conn.close()
         now = time.time()
         return [c for c in (self._row(r) for r in rows) if not c.expired(now)]
+
+    def changed_since(self, user_id: str, since: float, limit: int = 60) -> List[Card]:
+        """Every card of *user_id* that changed at or after *since*, newest first:
+        the agent's own read of what it raised and what the owner decided."""
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM cards WHERE user_id=? AND updated_at>=? "
+                "ORDER BY updated_at DESC LIMIT ?", (user_id, float(since), int(limit))).fetchall()
+        finally:
+            conn.close()
+        return [self._row(r) for r in rows]
 
     def sweep_stuck(self, user_id: str, older_than_s: float = STUCK_AFTER_S) -> List[Card]:
         """A card left ``confirmed`` (a crash, a restart, a run that reported
@@ -1070,7 +1094,10 @@ def job_card(user_id: str, words: List[str], *, title: str, body: str = "",
     shape = JOB_CARD_SUBCOMMANDS.get(verb)
     if shape is None or len(words) < 3 or words[1].lower() not in shape:
         raise ValueError("a job card carries only /goal new|grant, /job new|edit, "
-                         "/trade start|release|stop or /offer setup|live|resolve")
+                         "/trade start|release|stop, /offer setup|live|resolve or "
+                         "/lp seed confirm")
+    if verb == "/lp" and (len(words) != 4 or words[2].lower() != "confirm"):
+        raise ValueError("a job card carries /lp only as /lp seed confirm <ref>")
     if verb == "/job" and words[1].lower() == "edit" and (
             len(words) < 5 or words[3].lower() != "grant"):
         raise ValueError("a job card edits a job only as /job edit <id> grant …")
@@ -1331,28 +1358,6 @@ def sweep(*, st: Optional[CardStore] = None) -> int:
     return len(moved)
 
 
-def list_reply(user_id: str, *, st: Optional[CardStore] = None) -> str:
-    """``/cards`` — the owner's open cards, newest first."""
-    try:
-        st = st or store()
-        for stuck in st.sweep_stuck(str(user_id)):
-            _notify(stuck)
-        cards = st.open_cards(str(user_id))
-    except Exception:
-        logger.warning("/cards: store unreadable", exc_info=True)
-        return "I could not read the card store, so I cannot say what is open."
-    if not cards:
-        return "No open cards."
-    out = ["Open cards:"]
-    for c in cards:
-        who = "agent" if c.origin == ORIGIN_AGENT else "you"
-        out.append(f"• {_short(c.title, MAX_TITLE_CHARS)} ({c.kind}, from {who})"
-                   + (f" — read it: {read_token(c.card_id)}" if read_token(c.card_id) else ""))
-        for a in card_actions(c):
-            out.append(f"    {a.label}: {a.command}")
-    return "\n".join(out)
-
-
 def read_reply(user_id: str, card_id: str, *, st: Optional[CardStore] = None) -> str:
     """``/cards <id>`` or the tapped ``/card_<id>``: ONE card in full, in its
     current state (an open card keeps its typed tokens). A read: nothing is
@@ -1476,7 +1481,8 @@ __all__ = [
     "ACTS", "CONFIRMABLE_VERBS", "Card", "CardStore", "TEXT_REPLY_RESULT", "KIND_BUILDER", "KIND_CHOICE",
     "KIND_PROPOSAL",
     "KIND_QUOTE", "Press", "add_listener", "card_actions", "card_token", "choice_card", "close_choices_for_text",
-    "confirm_line_in", "finish", "list_reply", "parse_card_token", "press",
+    "confirm_line_in", "finish",
+    "parse_act", "parse_card_token", "press",
     "read_reply", "read_token",
     "proposal_card", "push", "quote_card", "refused_quote", "remove_listener", "render_text",
     "set_store", "store", "tap_line", "wait_for_answer", "with_go_hint",

@@ -174,7 +174,8 @@ agent writes the job for you.
 A job can wait for your answer. When a run asks you a question and marks it as
 the job's own (`owner_ask(holds_this_job=true)`), the job does not run again until you answer. A job is also held
 after 3 runs in a row that did nothing (`idle` or `unverified`) while its question was open;
-the hold also ends when the question expires. `/status`
+the hold also ends when the question expires. A one-time job that asked such a question stays
+scheduled until you answer; it does not end with the run that asked. `/status`
 prints `held by your question` with the question; `/fulfill <id>` starts the job
 again.
 

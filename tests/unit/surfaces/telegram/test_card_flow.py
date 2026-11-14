@@ -81,14 +81,14 @@ def test_quote_is_a_card_and_confirm_sends_the_quoted_line_once(env):
     reply = _run(agent, f"/send 1 native to {ADDR} on ethereum")
     assert isinstance(reply, CommandReply) and reply.card_id
     card = cards.store().get(reply.card_id)
-    assert card.confirm_line == f"/send 1 native to {ADDR} on ethereum max 105.01 go"
+    assert card.confirm_line == f"/send 1 native to {ADDR} on ethereum max 125.01 go"
     assert f"/card_{card.card_id}_ok" in reply.text
     assert [p.dry_run for p, _ in env.tool.calls] == [True]
 
     out = _run(agent, f"/card_{card.card_id}_ok")
     assert "SENT" in reply_text(out)
     live = [p for p, _ in env.tool.calls if not p.dry_run]
-    assert len(live) == 1 and live[0].max_spend_usd == pytest.approx(105.01)
+    assert len(live) == 1 and live[0].max_spend_usd == pytest.approx(125.01)
     assert live[0].to == ADDR                       # the stored address, not re-typed
     assert cards.store().get(card.card_id).state == cards.S_DONE
 
@@ -212,3 +212,14 @@ def test_the_owner_thread_keeps_sends_swaps_and_card_taps():
 def test_the_console_form_and_the_builder_offer_the_same_chains():
     from surfaces.card_builder import chain_choices
     assert "solana" in chain_choices("/send")
+
+
+def test_a_token_count_survives_an_ordinary_price_move(env):
+    """Prod card 6f3ea59c10 (2026-11-13): a fixed PNL count refused "the price
+    moved" on an 8% move. A token count's confirm line carries the quote + 25%."""
+    agent = _agent(env.dir)
+    reply = _run(agent, f"/send 1 native to {ADDR} on ethereum")
+    env.tool.usd = 108.0
+    out = _run(agent, f"/card_{reply.card_id}_ok")
+    assert "price moved" not in reply_text(out)
+    assert len([p for p, _ in env.tool.calls if not p.dry_run]) == 1

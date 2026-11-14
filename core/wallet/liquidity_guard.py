@@ -9,10 +9,21 @@ on a PoolKey whose hook is pinned by code hash, with empty hookData. The one
 other v4 shape is the fee COLLECT (115 W4): exactly DECREASE_LIQUIDITY of 0 +
 TAKE_PAIR to the holder, on the position's own PoolKey as the PositionManager
 reports it — the only liquidity shape a token-bound account may carry
-(:func:`may_ride_account`). Increase/withdrawal/burn on v4 refuse. Its ERC-20 leg moves
+(:func:`may_ride_account`). The WITHDRAWAL (117 W7) is the same two actions with
+a positive decrease and a positive on-chain minimum, from the wallet only.
+Increase and burn on v4 refuse. Its ERC-20 leg moves
 through Permit2, so the one Permit2 grant a verb may declare — an exact,
 short-lived grant to the pinned v4 PositionManager — is recognised here too
 (``permit2_grant_declared``); every other Permit2 grant still refuses.
+
+The SEED (117) is the mint shape with one more call in front of it:
+``multicall([initializePool(key, sqrtPriceX96), modifyLiquidities(mint)])`` on
+the same pinned PositionManager, ONE transaction, the two keys equal. An
+initialised pool with no liquidity has a free price, so "initialise" and "mint"
+are never two transactions here: a bare ``initializePool`` refuses. The price
+is bounded by the SIGNED bytes (:func:`_assert_price_bound`): each signed
+maximum is at most what the signed liquidity needs at the signed price plus
+``SEED_MAX_GAP_BPS``, so the PositionManager itself reverts at any other price.
 """
 import time
 from math import isfinite
@@ -29,6 +40,18 @@ PERMIT2_GRANT_MAX_TTL_S = 3600
 #: ``ModifyLiquidity(bytes32,address,int24,int24,int256,bytes32)`` from the
 #: v4 PoolManager; v4 PositionManager emits no Increase/Decrease events.
 TOPIC_V4_MODIFY_LIQUIDITY = "0xf208f4912782fd25c7f114ca3723a2d5dd6f3bcc3ac8db5af63baa85f711d5ec"
+
+#: ``Initialize(bytes32 indexed id, address indexed currency0, address indexed
+#: currency1, uint24 fee, int24 tickSpacing, address hooks, uint160
+#: sqrtPriceX96, int24 tick)`` from the v4 PoolManager (measured on 4663).
+TOPIC_V4_INITIALIZE = "0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438"
+#: The widest gap between a signed maximum and the amount the signed liquidity
+#: needs: at the SIGNED price for a seed, at the pool's own price for a mint
+#: into an initialised pool (the verb's slippage maximum plus rounding).
+SEED_MAX_GAP_BPS = 500
+MINT_MAX_GAP_BPS = 1100
+V4_DYNAMIC_FEE_FLAG = 0x800000
+V4_MAX_LP_FEE = 1_000_000
 
 _V4_MINT_SHAPE = bytes([0x02, 0x0D, 0x14])   # MINT_POSITION, SETTLE_PAIR, SWEEP
 _V4_COLLECT_SHAPE = bytes([0x01, 0x11])      # DECREASE_LIQUIDITY, TAKE_PAIR
@@ -64,6 +87,36 @@ def protocol_of(intent) -> str:
     return "v3"
 
 
+def v4_pool_id(key) -> str:
+    """``keccak(abi.encode(PoolKey))`` for a ``(c0, c1, fee, spacing, hooks)`` tuple."""
+    from eth_utils import keccak
+    return "0x" + keccak(abi.encode([_POOL_KEY], [tuple(key)])).hex()
+
+
+def _v4_seed_split(tx):
+    """``(mint calldata, seed)`` of the signed transaction. ``seed`` is None for a
+    plain ``modifyLiquidities``; for the seed shape it is ``(key, sqrtPriceX96)``
+    of the ``initializePool`` that runs first in the SAME transaction. A
+    multicall of any other length or content, and a bare ``initializePool``,
+    raise ValueError."""
+    from core.wallet.abi import selector
+    data = str(tx.get("data") or "").lower()
+    init_sel = selector("initializePool((address,address,uint24,int24,address),uint160)")
+    if data.startswith(init_sel):
+        raise ValueError("a bare initializePool is refused: an initialised pool with no "
+                         "liquidity has a free price; the seed initialises and mints in ONE "
+                         "transaction")
+    if not data.startswith(selector("multicall(bytes[])")):
+        return data, None
+    (inner,) = abi.decode([{"type": "bytes[]"}], "0x" + data[10:])
+    calls = ["0x" + _raw(c).hex() for c in inner]
+    if len(calls) != 2 or not calls[0].startswith(init_sel):
+        raise ValueError("a v4 seed is exactly multicall([initializePool, modifyLiquidities]); "
+                         "any other multicall is refused")
+    key, sqrt_price = abi.decode([_POOL_KEY, {"type": "uint160"}], "0x" + calls[0][10:])
+    return calls[1], (tuple(key), int(sqrt_price))
+
+
 def _v4_unlock(tx):
     """``(actions, params)`` of the signed ``modifyLiquidities``; ValueError otherwise."""
     from core.wallet.abi import selector
@@ -89,25 +142,28 @@ def may_ride_account(intent) -> bool:
 
 
 def decode_v4_collect(tx) -> dict:
-    """The v4 fee collect, decoded from the transaction that will be signed:
-    exactly DECREASE_LIQUIDITY(tokenId, 0, 0, 0, "") + TAKE_PAIR(c0, c1, to).
-    Raises ValueError on anything else — a decrease of more than 0 is a
-    withdrawal, and v4 builds none."""
+    """The v4 exit, decoded from the transaction that will be signed: exactly
+    DECREASE_LIQUIDITY(tokenId, L, min0, min1, "") + TAKE_PAIR(c0, c1, to).
+    ``L == 0`` is the fee collect and carries minimums of 0. ``L > 0`` is a
+    withdrawal (117 W7) and must carry a positive on-chain minimum: a decrease
+    with no floor accepts any price. Raises ValueError on anything else."""
     actions, params = _v4_unlock(tx)
     if actions != _V4_COLLECT_SHAPE or len(params) != 2:
         raise ValueError("a v4 fee collect is exactly DECREASE_LIQUIDITY + TAKE_PAIR; "
                          "any other action sequence is refused")
     token_id, liquidity, min0, min1, hook_data = abi.decode(_DECREASE_PARAMS, _raw(params[0]))
     c0, c1, recipient = abi.decode(_TAKE_PAIR, _raw(params[1]))
-    if int(liquidity) != 0:
-        raise ValueError(f"a v4 fee collect removes no liquidity; DECREASE_LIQUIDITY of "
-                         f"{int(liquidity)} is a withdrawal, which v4 does not build")
-    if int(min0) or int(min1):
+    liquidity, min0, min1 = int(liquidity), int(min0), int(min1)
+    if liquidity == 0 and (min0 or min1):
         raise ValueError("a v4 fee collect carries amount minimums of 0")
+    if liquidity > 0 and min0 + min1 <= 0:
+        raise ValueError(f"DECREASE_LIQUIDITY of {liquidity} is a withdrawal and must carry "
+                         f"a positive on-chain minimum")
     if _raw(hook_data):
         raise ValueError("v4 hookData must be empty")
     return {"token_id": int(token_id), "currency0": str(c0).lower(),
-            "currency1": str(c1).lower(), "recipient": str(recipient).lower()}
+            "currency1": str(c1).lower(), "recipient": str(recipient).lower(),
+            "liquidity": liquidity, "min0": min0, "min1": min1}
 
 
 def read_v4_position_key(rpc, chain, token_id) -> dict:
@@ -124,10 +180,25 @@ def read_v4_position_key(rpc, chain, token_id) -> dict:
             "tickSpacing": int(spacing), "hooks": str(hooks).lower()}
 
 
+def read_v4_sqrt_price(rpc, chain, pool_id) -> int:
+    """``sqrtPriceX96`` of *pool_id* from the PINNED PoolManager's own storage
+    (``extsload`` of ``keccak(id, 6)``); 0 = not initialised. Unreadable raises."""
+    from eth_utils import keccak
+    pm = dex_registry.row_for(chain, "v4").pool_manager
+    slot = keccak(bytes.fromhex(pool_id[2:]) + (6).to_bytes(32, "big"))
+    raw = rpc("eth_call", [{"to": pm, "data": abi.encode_call(
+        "extsload", [{"type": "bytes32"}], [slot])}, "latest"])
+    if raw in (None, "", "0x"):
+        raise ValueError(f"the v4 PoolManager returned nothing for pool {pool_id}")
+    return int(str(raw), 16) & (2 ** 160 - 1)
+
+
 def decode_v4_mint(tx) -> dict:
     """The v4 mint shape, decoded from the transaction that will be signed.
-    Raises ValueError on anything else."""
-    actions, params = _v4_unlock(tx)
+    Raises ValueError on anything else. ``seed_sqrt_price`` is the price the
+    same transaction initialises the pool at (the seed shape), else None."""
+    mint_data, seed = _v4_seed_split(tx)
+    actions, params = _v4_unlock({"data": mint_data})
     if actions != _V4_MINT_SHAPE or len(params) != 3:
         raise ValueError("v4 builds exactly MINT_POSITION + SETTLE_PAIR + SWEEP; "
                          "any other action sequence is refused")
@@ -143,10 +214,42 @@ def decode_v4_mint(tx) -> dict:
         raise ValueError("SWEEP must return currency0 to the position owner")
     if not int(liq) > 0:
         raise ValueError("v4 mint must add liquidity")
-    return {"currency0": str(c0).lower(), "currency1": str(c1).lower(), "fee": int(fee),
-            "tickSpacing": int(spacing), "hooks": str(hooks).lower(), "tick_lower": int(lo),
-            "tick_upper": int(hi), "liquidity": int(liq), "amount0_max": int(a0max),
-            "amount1_max": int(a1max), "owner": str(owner).lower()}
+    from core.wallet import univ3_math as M
+    lo, hi, spacing = int(lo), int(hi), int(spacing)
+    if spacing < 1 or not M.MIN_TICK <= lo < hi <= M.MAX_TICK or lo % spacing or hi % spacing:
+        raise ValueError(f"v4 ticks [{lo}, {hi}] must be ordered, inside the v4 bounds and "
+                         f"multiples of the tick spacing {spacing}")
+    m = {"currency0": str(c0).lower(), "currency1": str(c1).lower(), "fee": int(fee),
+         "tickSpacing": spacing, "hooks": str(hooks).lower(), "tick_lower": lo,
+         "tick_upper": hi, "liquidity": int(liq), "amount0_max": int(a0max),
+         "amount1_max": int(a1max), "owner": str(owner).lower(), "seed_sqrt_price": None}
+    m["pool_id"] = v4_pool_id((m["currency0"], m["currency1"], m["fee"], spacing, m["hooks"]))
+    if seed is not None:
+        s_key, sqrt_price = seed
+        if v4_pool_id((str(s_key[0]).lower(), str(s_key[1]).lower(), int(s_key[2]),
+                       int(s_key[3]), str(s_key[4]).lower())) != m["pool_id"]:
+            raise ValueError("initializePool and MINT_POSITION must name the same PoolKey")
+        if m["fee"] & V4_DYNAMIC_FEE_FLAG or m["fee"] > V4_MAX_LP_FEE:
+            raise ValueError("a v4 seed needs a static fee; a dynamic-fee PoolKey is refused")
+        if not M.sqrt_price_at_tick(M.MIN_TICK) <= sqrt_price < M.sqrt_price_at_tick(M.MAX_TICK):
+            raise ValueError("the initial sqrtPriceX96 is outside the v4 price bounds")
+        m["seed_sqrt_price"] = sqrt_price
+    return m
+
+
+def _assert_price_bound(m, sqrt_price, gap_bps, where):
+    """Each signed maximum is at most what the signed liquidity needs at
+    *sqrt_price*, plus *gap_bps*. With both maxima bound, the PositionManager
+    reverts (MaximumAmountExceeded) at any pool price outside the band."""
+    from core.wallet import univ3_math as M
+    need0, need1 = M.amounts_for_liquidity(
+        int(sqrt_price), M.sqrt_price_at_tick(m["tick_lower"]),
+        M.sqrt_price_at_tick(m["tick_upper"]), m["liquidity"])
+    for name, cap, need in (("amount0", m["amount0_max"], need0), ("amount1", m["amount1_max"], need1)):
+        allowed = need * (10000 + gap_bps) // 10000 + 1
+        if cap > allowed:
+            raise ValueError(f"{name} maximum {cap} is more than the signed liquidity needs at "
+                             f"{where} ({need}) plus {gap_bps} bps; the price is not bounded")
 
 
 def _check_expected_events(intent, emitters):
@@ -180,6 +283,18 @@ def _structural_v4_collect(intent, tx, holder, row, npm):
         raise ValueError("a v4 fee collect declares exactly the two currencies TAKE_PAIR takes")
     if any(not isinstance(n, int) or isinstance(n, bool) or n < 0 for n in incoming.values()):
         raise ValueError("invalid liquidity leg amount")
+    if c["liquidity"]:
+        # 117 W7: a withdrawal. From the wallet only, with a declared positive
+        # receipt and the PoolManager's event required.
+        if intent.via_account:
+            raise ValueError("a token-bound account changes v4 liquidity only to collect fees")
+        if not any(n > 0 for n in incoming.values()):
+            raise ValueError("a withdrawal must declare a positive minimum receipt; "
+                             "a minimum of nothing asserts nothing")
+        pm = row.pool_manager.lower()
+        if (pm, TOPIC_V4_MODIFY_LIQUIDITY) not in {(e.lower(), t.lower())
+                                                   for e, t in intent.expected_events}:
+            raise ValueError("a v4 withdrawal must require the PoolManager's ModifyLiquidity event")
     _check_expected_events(intent, (npm, row.pool_manager.lower()))
 
 
@@ -195,13 +310,23 @@ def _structural_v4(intent, tx, holder=None):
     if intent.via_account:
         raise ValueError("a token-bound account changes v4 liquidity only to collect fees")
     if intent.lp_position_effect != "mint" or intent.lp_inflows:
-        raise ValueError("v4 builds a new-position MINT only, and a fee COLLECT; increase, "
-                         "withdrawal and burn are refused")
+        raise ValueError("v4 builds a new-position MINT only, a fee COLLECT and a "
+                         "withdrawal that keeps the position; increase and burn are refused")
     if not intent.lp_position or intent.lp_position[0].lower() != npm or intent.lp_position[1] is not None:
         raise ValueError("liquidity must declare the pinned v4 position manager and an unknown id")
     m = decode_v4_mint(tx)
     if not dex_registry.hook_pinned(intent.chain, m["hooks"]):
         raise ValueError(f"v4 hook {m['hooks']} has no pinned code hash; an unreviewed hook runs inside the add")
+    if holder and m["owner"] != str(holder).lower():
+        raise ValueError(f"the position is minted to {m['owner']}, not the holder {holder} — refused")
+    seeded = m["seed_sqrt_price"] is not None
+    if seeded:
+        _assert_price_bound(m, m["seed_sqrt_price"], SEED_MAX_GAP_BPS, "the signed initial price")
+    declares_init = (row.pool_manager.lower(), TOPIC_V4_INITIALIZE) in {
+        (e.lower(), t.lower()) for e, t in intent.expected_events}
+    if seeded != declares_init:
+        raise ValueError("the PoolManager's Initialize event is required by a seed and by "
+                         "nothing else")
     out = legs(intent.lp_outflows)
     if len(intent.lp_outflows) > 2 or len(out) != len(intent.lp_outflows):
         raise ValueError("liquidity requires at most two distinct legs per direction")
@@ -233,7 +358,17 @@ def verify_pins(rpc, intent, tx):
     if protocol != "v4":
         return
     if not is_v4_collect(intent):
-        dex_registry.verify_hook(rpc, intent.chain, decode_v4_mint(tx)["hooks"])
+        m = decode_v4_mint(tx)
+        dex_registry.verify_hook(rpc, intent.chain, m["hooks"])
+        sqrt_price = read_v4_sqrt_price(rpc, intent.chain, m["pool_id"])
+        if m["seed_sqrt_price"] is None:
+            if sqrt_price == 0:
+                raise ValueError(f"v4 pool {m['pool_id']} is not initialised; a mint into it "
+                                 f"needs the seed shape")
+            _assert_price_bound(m, sqrt_price, MINT_MAX_GAP_BPS, "the pool price")
+        elif sqrt_price != 0:
+            raise ValueError(f"v4 pool {m['pool_id']} is already initialised; a seed would "
+                             f"mint at a price it did not set")
         return
     c = decode_v4_collect(tx)
     key = read_v4_position_key(rpc, intent.chain, c["token_id"])
@@ -424,7 +559,7 @@ def structural(intent, tx, holder=None):
     _structural_v3_calldata(intent, tx, holder)
 
 
-def assert_deltas(intent, deltas, dust):
+def assert_deltas(intent, deltas, dust, tx=None):
     outgoing, incoming = legs(intent.lp_outflows), legs(intent.lp_inflows)
     measured = {t.lower(): n for t, n in deltas.token_deltas.items()}
     measured[None] = deltas.native_delta
@@ -458,14 +593,15 @@ def assert_deltas(intent, deltas, dust):
     for emitter, topic in intent.expected_events:
         if (emitter.lower(), topic.lower()) not in observed:
             raise ValueError(f"required event {topic} was not emitted by {emitter}")
-    assert_position_events(intent, deltas.logs, minted_id if effect == "mint" else token_id)
+    assert_position_events(intent, deltas.logs, minted_id if effect == "mint" else token_id, tx)
     return minted_id
 
 
-def assert_position_events(intent, logs, token_id):
-    """A pinned event about SOMEBODY ELSE's position is not our receipt."""
+def assert_position_events(intent, logs, token_id, tx=None):
+    """A pinned event about SOMEBODY ELSE's position is not our receipt. With
+    the signed *tx*, a v4 mint's events must also equal the signed bytes."""
     if protocol_of(intent) == "v4":
-        return _assert_v4_position_events(intent, logs, token_id)
+        return _assert_v4_position_events(intent, logs, token_id, tx)
     from eth_utils import keccak
     signatures = {
         "increase": "IncreaseLiquidity(uint256,uint128,uint256,uint256)",
@@ -502,7 +638,7 @@ def price_outflows(intent, deltas, price_fn, fallback_price_fn, decimals_fn):
     held = legs(intent.lp_held_balances)
     measured = {t.lower(): n for t, n in deltas.token_deltas.items()}
     measured[None] = deltas.native_delta
-    values = []
+    values, raws, prices, decs = [], [], [], []
     for token, _maximum in intent.lp_outflows:
         key = token.lower() if token else None
         raw = -measured[key]
@@ -520,7 +656,11 @@ def price_outflows(intent, deltas, price_fn, fallback_price_fn, decimals_fn):
         if decimals is None:
             raise ValueError("liquidity token decimals unknown")
         values.append(None if price is None else raw / 10 ** decimals * price)
+        raws.append(raw); prices.append(price); decs.append(decimals)
     implied = any(v is None for v in values)
+    seeded = _seed_values(intent, deltas, values, raws, prices, decs)
+    if seeded is not None:
+        return sum(seeded), implied
     if implied:
         # Only two-sided deposits permit the paired-leg valuation.
         known = [v for v in values if v is not None]
@@ -542,13 +682,66 @@ def price_outflows(intent, deltas, price_fn, fallback_price_fn, decimals_fn):
 
 
 def creates_pool(intent):
-    """True when the intent REQUIRES the pinned factory's PoolCreated event."""
+    """True when the intent REQUIRES the event that creates its pool: the pinned
+    v3 factory's PoolCreated, or the pinned v4 PoolManager's Initialize (117)."""
     from eth_utils import keccak
     topic = "0x" + keccak(text="PoolCreated(address,address,uint24,int24,address)").hex()
     row = dex_registry.row_for(intent.chain, "v3")
     factory = (getattr(row, "factory", "") or "").lower()
-    return any(str(e).lower() == factory and str(t).lower() == topic
-               for e, t in intent.expected_events)
+    v4 = dex_registry.row_for(intent.chain, "v4")
+    pm = (getattr(v4, "pool_manager", "") or "").lower()
+    wanted = {(factory, topic), (pm, TOPIC_V4_INITIALIZE)} - {("", topic), ("", TOPIC_V4_INITIALIZE)}
+    return any((str(e).lower(), str(t).lower()) in wanted for e, t in intent.expected_events)
+
+
+def _v4_initialize_log(intent, logs):
+    """``(pool id, currency0, currency1, sqrtPriceX96)`` of the ONE Initialize the
+    pinned PoolManager emitted, or None when it emitted none. Two raise."""
+    row = dex_registry.row_for(intent.chain, "v4")
+    pm = (getattr(row, "pool_manager", "") or "").lower()
+    found = []
+    for log in logs or ():
+        ts = log.get("topics", [])
+        if (not pm or str(log.get("address", "")).lower() != pm or not ts
+                or str(ts[0]).lower() != TOPIC_V4_INITIALIZE):
+            continue
+        raw = bytes.fromhex(str(log.get("data", ""))[2:])
+        if len(ts) != 4 or len(raw) != 160:
+            raise ValueError("malformed Initialize event")
+        found.append((str(ts[1]).lower(), "0x" + str(ts[2])[-40:].lower(),
+                      "0x" + str(ts[3])[-40:].lower(), int.from_bytes(raw[96:128], "big")))
+    if len(found) > 1:
+        raise ValueError("more than one pool was initialised in this transaction")
+    return found[0] if found else None
+
+
+def _seed_values(intent, deltas, values, raws, prices, decimals):
+    """117: the legs of a pool THIS transaction creates on v4. A leg with no
+    price of its own is worth its amount through the price the pool was
+    initialised at (the signed one: the event assertions bind it), in the
+    priced leg's currency; a leg that has both takes the larger. A native leg is
+    the anchor: it needs its own price and is never revalued. None when the
+    transaction initialises no v4 pool."""
+    init = _v4_initialize_log(intent, getattr(deltas, "logs", None))
+    if init is None or len(values) != 2:
+        return None
+    _pid, c0, _c1, sqrt_price = init
+    keys = [(t.lower() if t else ZERO) for t, _ in intent.lp_outflows]
+    out = list(values)
+    native = [k == ZERO for k in keys]
+    if any(native) and prices[native.index(True)] is None:
+        raise ValueError("a seed needs a trustworthy price for its native leg")
+    for i, j in ((0, 1), (1, 0)):
+        # The native leg is the anchor: it keeps its own price and values the other.
+        if prices[j] is None or sqrt_price <= 0 or native[i]:
+            continue
+        # raw of leg i expressed as raw of leg j at P = currency1 per currency0
+        num, den = (sqrt_price ** 2, 2 ** 192) if keys[i] == c0 else (2 ** 192, sqrt_price ** 2)
+        through = raws[i] * num / den / 10 ** decimals[j] * prices[j]
+        out[i] = through if out[i] is None else max(out[i], through)
+    if any(v is None for v in out):
+        raise ValueError("a seed needs a trustworthy price for at least one leg")
+    return out
 
 
 def _v4_position_deltas(intent, logs, token_id):
@@ -577,9 +770,43 @@ def _v4_position_deltas(intent, logs, token_id):
     return ours
 
 
-def _assert_v4_position_events(intent, logs, token_id):
+def _assert_v4_signed_events(intent, logs, token_id, tx):
+    """117: the events of a v4 mint equal the SIGNED bytes. Our ModifyLiquidity
+    names the signed pool id, ticks and liquidity; a seed's Initialize names the
+    same pool id and the signed price; a plain mint initialises nothing."""
+    m = decode_v4_mint(tx)
+    row = dex_registry.row_for(intent.chain, "v4")
+    pm, npm = row.pool_manager.lower(), row.position_manager.lower()
+    signed32 = lambda b: int.from_bytes(b, "big", signed=True)
+    for log in logs:
+        ts = log.get("topics", [])
+        if (str(log.get("address", "")).lower() != pm or len(ts) != 3
+                or str(ts[0]).lower() != TOPIC_V4_MODIFY_LIQUIDITY or int(ts[2], 16) != int(npm, 16)):
+            continue
+        raw = bytes.fromhex(str(log.get("data", ""))[2:])
+        if int.from_bytes(raw[96:128], "big") != int(token_id):
+            continue
+        if str(ts[1]).lower() != m["pool_id"]:
+            raise ValueError("ModifyLiquidity names a pool other than the signed PoolKey")
+        if (signed32(raw[0:32]), signed32(raw[32:64])) != (m["tick_lower"], m["tick_upper"]):
+            raise ValueError("ModifyLiquidity names ticks other than the signed ones")
+        if signed32(raw[64:96]) != m["liquidity"]:
+            raise ValueError("ModifyLiquidity adds a liquidity other than the signed one")
+    init = _v4_initialize_log(intent, logs)
+    if m["seed_sqrt_price"] is None:
+        if init is not None:
+            raise ValueError("a plain v4 mint may not initialise a pool")
+        return
+    if init is None or init[0] != m["pool_id"] or init[3] != m["seed_sqrt_price"]:
+        raise ValueError("the seed's Initialize event does not name the signed PoolKey and price")
+
+
+def _assert_v4_position_events(intent, logs, token_id, tx=None):
     """Exactly one PoolManager ModifyLiquidity whose sender is the pinned v4
     PositionManager, salted with OUR minted id, adding liquidity.
+
+    A withdrawal (117 W7, known only with the signed *tx*): exactly one, about
+    OUR position, removing exactly the signed liquidity.
 
     A collect (115 W4): at most one, about OUR position, with a liquidity change
     of exactly 0 — a non-zero change is a deposit or a withdrawal. Its PRESENCE
@@ -587,6 +814,12 @@ def _assert_v4_position_events(intent, logs, token_id):
     of a zero decrease, and the collect is bound by its signed calldata, the
     owner read and the measured deltas (inflows only, no NFT moved)."""
     ours = _v4_position_deltas(intent, logs, token_id)
+    removed = decode_v4_collect(tx)["liquidity"] if (tx is not None and is_v4_collect(intent)) else 0
+    if removed:
+        if ours != [-removed]:
+            raise ValueError(f"a v4 withdrawal of {removed} must show exactly one "
+                             f"ModifyLiquidity of -{removed} for position {token_id}; saw {ours}")
+        return
     if is_v4_collect(intent):
         if any(d != 0 for d in ours):
             raise ValueError("a v4 fee collect may not change the position's liquidity")
@@ -598,3 +831,5 @@ def _assert_v4_position_events(intent, logs, token_id):
         raise ValueError("a v4 deposit may not withdraw liquidity")
     if len(ours) != 1:
         raise ValueError(f"expected exactly one ModifyLiquidity for position {token_id}, saw {len(ours)}")
+    if tx is not None:
+        _assert_v4_signed_events(intent, logs, token_id, tx)

@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import Annotated, Any, List, Literal, Optional
 
 from pydantic import (BaseModel, BeforeValidator, Field, PlainSerializer,
-                      WithJsonSchema)
+                      WithJsonSchema, model_validator)
 
 from tools.defi.account_mode import ACCOUNT_DESC_FULL as _ACCOUNT_DESC_FULL
 from tools.defi.account_mode import ACCOUNT_DESC_SHORT as _ACCOUNT_DESC, NFT_DESC as _NFT_DESC
@@ -350,15 +350,18 @@ class SolanaDeployTokenParams(NoAccountMode):
 class LpAddParams(NoAccountMode):
     chain: ChainName = Field(..., description=_chain_field_description("manage the Uniswap v3 position"))
     protocol: str = Field("v3", description=(
-        "'v3', or 'v4' for a new FULL-RANGE position on a Pons graduated pool "
-        "(token_a/token_b = 'native' + the Pons token; needs an ERC-20 allowance "
-        "to Permit2 and approve_token(via='permit2') first; capped by LP_ETH_CAP)."))
-    token_a: str = Field(..., description="Contract address or 'native'.")
-    token_b: str = Field(..., description="Contract address or 'native'.")
-    amount_a: float = Field(..., ge=0, allow_inf_nan=False,
-                            description="Most of token_a to deposit, in whole token units (not raw).")
-    amount_b: float = Field(..., ge=0, allow_inf_nan=False,
-                            description="Most of token_b to deposit, in whole token units (not raw).")
+        "'v3', or 'v4'. v4 has three forms: a new FULL-RANGE position on a Pons graduated "
+        "pool (token_a/token_b = 'native' + the Pons token); a pool the OWNER must declare "
+        "— name the PoolKey in full (fee + tick_spacing, hooks if any, range, both amounts, "
+        "initial_price) and the call sends NOTHING, it puts one card to the owner; and "
+        "seed=<ref> to build that declared position. Every v4 add needs an ERC-20 "
+        "allowance to Permit2 and approve_token(via='permit2') first; capped by LP_ETH_CAP."))
+    token_a: Optional[str] = Field(None, description="Contract address or 'native'. Omit only with seed=.")
+    token_b: Optional[str] = Field(None, description="Contract address or 'native'. Omit only with seed=.")
+    amount_a: Optional[float] = Field(None, ge=0, allow_inf_nan=False, description=(
+        "Most of token_a to deposit, in whole token units (not raw). Omit only with seed=."))
+    amount_b: Optional[float] = Field(None, ge=0, allow_inf_nan=False, description=(
+        "Most of token_b to deposit, in whole token units (not raw). Omit only with seed=."))
     fee: int = Field(3000, description="Millionths: 100, 500, 3000 or 10000. 3000 = 0.3%.")
     range: str = Field("full", description="full, low,high prices in token_b/token_a, or ticks:low,high in sorted token order.")
     initial_price: Optional[float] = Field(None, gt=0, allow_inf_nan=False, description=(
@@ -372,14 +375,37 @@ class LpAddParams(NoAccountMode):
     fragment: bool = Field(False, description=(
         "Set true ONLY to knowingly open a separate pool for a Pons token still on its "
         "bonding curve (that fragments its market); otherwise such a deposit is refused."))
+    tick_spacing: Optional[int] = Field(None, ge=1, le=32767, description=(
+        "v4 only: the PoolKey's tick spacing. Giving it names a PoolKey in full and makes "
+        "this call a PROPOSAL to the owner (a card), never a transaction. Here range is "
+        "'full' or 'ticks:lo,hi', and slippage_bps is the allowed price gap (max 500)."))
+    hooks: Optional[str] = Field(None, description=(
+        "v4 only, with tick_spacing: the PoolKey's hook address; omit for a pool with no hook."))
+    seed: Optional[str] = Field(None, min_length=4, max_length=24, pattern=r"^s[0-9a-f]+$", description=(
+        "v4 only: the id of a pool declaration (from the proposal). The pool, range, "
+        "amounts and price come from the declaration and nothing else you pass is read "
+        "but chain, max_spend_usd and dry_run. A live send needs the owner's Confirm."))
     max_spend_usd: float = Field(..., gt=0, allow_inf_nan=False,
                                  description="The most USD both legs plus gas may cost.")
     dry_run: bool = Field(True, description="TRUE (default) simulates and asserts without broadcasting.")
 
+    @model_validator(mode="after")
+    def _a_pair_or_a_declaration(self):
+        if self.seed is not None:
+            if self.protocol != "v4":
+                raise ValueError("seed= is a v4 declaration; pass protocol='v4'")
+            return self
+        if self.token_a is None or self.token_b is None or self.amount_a is None or self.amount_b is None:
+            raise ValueError("give token_a, token_b, amount_a and amount_b (or seed= for a "
+                             "declared v4 pool)")
+        if (self.tick_spacing is not None or self.hooks is not None) and self.protocol != "v4":
+            raise ValueError("tick_spacing and hooks name a v4 PoolKey; pass protocol='v4'")
+        return self
+
 
 class _LpPositionParams(NoAccountMode):
     chain: ChainName = Field(..., description=_chain_field_description("manage the Uniswap v3 position"))
-    protocol: str = Field("v3", description="'v3' only.")
+    protocol: str = Field("v3", description="'v3', or 'v4' (burn must stay false: a v4 position NFT is kept).")
     token_id: int = Field(..., ge=0, description="Your position NFT id.")
     max_spend_usd: float = Field(5.0, gt=0, allow_inf_nan=False, description="Maximum gas fee in USD.")
     dry_run: bool = Field(True, description="TRUE (default) simulates and asserts without broadcasting.")

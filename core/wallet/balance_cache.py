@@ -69,13 +69,43 @@ class ChainBalance:
     #: The reader asked for USDC on this chain (every EVM row): a None ``usdc``
     #: is then a FAILED read — "USDC unknown" — not a chain with no USDC read.
     usdc_expected: bool = False
+    #: Liquidity positions (Uniswap v3 + v4 NFTs) the wallet owns on this chain.
+    #: Value inside a position is in NO balance on this row (prod 2026-11-13:
+    #: "all balances" left out a position holding half the native coin). None
+    #: with ``lp_expected`` is a failed count, not zero.
+    lp_positions: Optional[int] = None
+    lp_expected: bool = False
 
     @property
     def usdc_unknown(self) -> bool:
         return self.usdc_expected and self.usdc is None and not self.error
 
 
-_FIELDS = frozenset(("chain", "symbol", "native", "usdc", "error", "usdc_expected"))
+_FIELDS = frozenset(("chain", "symbol", "native", "usdc", "error", "usdc_expected",
+                     "lp_positions", "lp_expected"))
+
+
+def lp_position_count(address: str, chain: str, *, rpc=None) -> Optional[int]:
+    """How many position NFTs *address* owns on the chain's pinned Uniswap
+    position managers (``balanceOf``, one call each). 0 when the chain pins
+    none; None when a read failed (unknown is not zero)."""
+    from core.wallet import dex_registry
+    managers = [row.position_manager for row in
+                (dex_registry.row_for(chain, p) for p in ("v3", "v4"))
+                if row is not None and row.position_manager]
+    if not managers:
+        return 0
+    try:
+        if rpc is None:
+            from core.wallet.onchain import _rpc, rpc_url_for_chain
+            url = rpc_url_for_chain(chain)
+            rpc = lambda method, params: _rpc(url, method, params, 8.0)  # noqa: E731
+        data = "0x70a08231" + "0" * 24 + address.lower()[2:]
+        return sum(int(rpc("eth_call", [{"to": m, "data": data}, "latest"]), 16)
+                   for m in managers)
+    except Exception:
+        logger.debug("balance cache: position count unread on %s", chain, exc_info=True)
+        return None
 
 
 @dataclass
@@ -137,7 +167,7 @@ def write(snapshot: BalanceSnapshot, data_home: Optional[str] = None) -> None:
             pass
 
 
-def collect(wallet: Any, *, evm_reader=None, solana_reader=None,
+def collect(wallet: Any, *, evm_reader=None, solana_reader=None, lp_reader=None,
             now=time.time) -> BalanceSnapshot:
     """Read every chain value can move on, plus Solana. Network-bound.
 
@@ -150,6 +180,9 @@ def collect(wallet: Any, *, evm_reader=None, solana_reader=None,
     address = getattr(wallet, "address", None)
     snap = BalanceSnapshot(address=address, taken_at=now())
 
+    if lp_reader is None:
+        # An injected balance reader (a test) reads no chain for positions either.
+        lp_reader = lp_position_count if evm_reader is None else None
     if evm_reader is None:
         from core.wallet.onchain import balances as evm_reader  # noqa: N813
 
@@ -160,7 +193,9 @@ def collect(wallet: Any, *, evm_reader=None, solana_reader=None,
             native, usdc = evm_reader(address, row.name)
             snap.chains.append(ChainBalance(
                 chain=row.name, symbol=row.native_symbol or "ETH",
-                native=native, usdc=usdc, usdc_expected=True))
+                native=native, usdc=usdc, usdc_expected=True,
+                lp_positions=lp_reader(address, row.name) if lp_reader else None,
+                lp_expected=lp_reader is not None))
         except Exception as exc:
             snap.chains.append(ChainBalance(
                 chain=row.name, symbol=row.native_symbol or "ETH",
@@ -225,6 +260,11 @@ def render_lines(snapshot: Optional[BalanceSnapshot]) -> List[str]:
             part += f" · {row.usdc:,.2f} USDC"
         elif row.usdc_unknown:
             part += " · USDC unknown"
+        if row.lp_positions:
+            part += (f" · {row.lp_positions} liquidity position(s): their value is NOT in "
+                     f"these balances (defi_data.portfolio lists it)")
+        elif row.lp_expected and row.lp_positions is None:
+            part += " · liquidity positions unknown"
         lines.append(part)
     return lines
 

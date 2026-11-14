@@ -127,12 +127,9 @@ def _default_json_fetch(url: str):
 #: the budget could never produce its partial answer: measured on prod, a
 #: `portfolio` read was cut by `asyncio.wait_for` at exactly 60.0 s and the caller
 #: got nothing — the outcome this budget exists to prevent.
-_PRICE_BUDGET_DEFAULT_SEC = 40.0
-
-
-def _pricing_budget_sec() -> float:
-    from core.env import float_env
-    return float_env("DEFI_PORTFOLIO_PRICE_BUDGET_SEC", _PRICE_BUDGET_DEFAULT_SEC)
+from tools.defi.data_render import (  # noqa: E402,F401 — defined there: no import back into this module
+    _PRICE_BUDGET_DEFAULT_SEC, _pricing_budget_sec,
+)
 
 
 def _budget_spent(started: float, now: float) -> bool:
@@ -994,8 +991,11 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
                       "quote": _quote_metadata(info)})
 
     @BaseTool.action(
-        "The agent wallet's own token holdings on ONE chain, USD-valued, with "
-        "explicit coverage. Holdings on other chains are NOT included — ask per "
+        "The agent wallet's own holdings on ONE chain, USD-valued, with explicit "
+        "coverage: the native coin, the tokens, and the liquidity positions it "
+        "owns (Uniswap v3 and v4; the value inside a position is listed apart "
+        "from the balances and has its own sum — report it with the balances). "
+        "Holdings on other chains are NOT included — ask per "
         "chain. Reveals own funds — treated as high-impact. For SOMEONE ELSE's "
         "wallet use wallet_holdings.",
         param_model=PortfolioParams)
@@ -1305,10 +1305,10 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
         return await asyncio.to_thread(self._pool_metrics_sync, params, execution_context)
 
     @BaseTool.action(
-        "List this address's Uniswap v3 liquidity positions: pool, range, "
+        "List this address's Uniswap v3 or v4 liquidity positions: pool, range, "
         "whether it is in range right now, current holdings and uncollected "
-        "fees. Defaults to your own wallet. Read-only. Uniswap v4 lands in a "
-        "later phase.",
+        "fees. Defaults to your own wallet. Read-only. protocol='v4': give "
+        "token_id to read one position from the chain, or omit it for the list.",
         param_model=LpPositionsParams)
     async def lp_positions(self, params: LpPositionsParams, execution_context=None):
         # Blocking body on a worker thread — see the note on `token_info`.
@@ -1321,8 +1321,10 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
         "Read a Uniswap v3 pool's live state: tokens, fee tier, current tick, "
         "price and liquidity. Give a pool address, OR token_a + token_b + "
         "fee to locate one. A pair with no pool yet is reported, not "
-        "invented. Read-only. protocol='v4' reads a Pons graduated pool "
-        "(token_a/token_b = 'native' + the Pons token).",
+        "invented. Read-only. protocol='v4' reads ANY v4 pool: by token_id (the "
+        "pool of that position), by the full PoolKey (token_a, token_b, fee, "
+        "tick_spacing, hooks), or a launchpad pool by its token; it adds the fees "
+        "and the last 24 hours of swaps, volume and LP fees.",
         param_model=LpPoolInfoParams)
     async def lp_pool_info(self, params: LpPoolInfoParams, execution_context=None):
         # Blocking body on a worker thread — see the note on `token_info`.
@@ -1336,8 +1338,8 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
         "amounts and a price range, compute the liquidity this would mint "
         "and the exact paired amounts. Works against an existing pool (its "
         "live price is read) or a not-yet-created one (give initial_price). "
-        "Read-only — never deposits. protocol='v4' quotes a full-range "
-        "deposit into a Pons graduated pool.",
+        "Read-only — never deposits. protocol='v4' quotes a launchpad pool "
+        "(full range), or any PoolKey named in full with a custom tick range.",
         param_model=LpQuoteParams)
     async def lp_quote(self, params: LpQuoteParams, execution_context=None):
         # Blocking body on a worker thread — see the note on `token_info`.

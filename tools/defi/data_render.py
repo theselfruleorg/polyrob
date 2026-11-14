@@ -12,6 +12,14 @@ from typing import Any, Dict, List, Optional
 from tools.defi.providers.base import PriceInfo
 from tools.defi.token_screen import quoted
 
+_PRICE_BUDGET_DEFAULT_SEC = 40.0
+
+
+def _pricing_budget_sec() -> float:
+    """The time budget of one portfolio pricing loop (`data_tool` re-exports it)."""
+    from core.env import float_env
+    return float_env("DEFI_PORTFOLIO_PRICE_BUDGET_SEC", _PRICE_BUDGET_DEFAULT_SEC)
+
 #: token_resolve rows listed before the rest is stated as a count (all of them
 #: stay in the result metadata).
 _RESOLVE_ROWS_SHOWN = 10
@@ -34,7 +42,6 @@ def _budget_exhausted_lines(rows, *, priced: int, total: int,
     holding is listed with its amount, or counted out loud, and the reason is
     stated ONCE: it is missing a VALUE, not a balance.
     """
-    from tools.defi.data_tool import _pricing_budget_sec  # call-time
     if not rows:
         return []
     out = ["", f"holdings NOT priced — time budget ran out ({priced} of {total} "
@@ -250,8 +257,7 @@ _LP_MAX_RAW = 2 ** 128 - 1
 
 #: The one honest refusal for an LP read this tier cannot do (v4 positions, an
 #: unknown protocol) — never a stub answer.
-_LP_V4_NOT_YET = ("this Uniswap v4 read is not built — phase 3 of proposal 048 ships only "
-                  "lp_pool_info and lp_quote on a Pons PoolKey; v3 only for this read")
+_LP_V4_NOT_YET = "unknown protocol for this read; use 'v3' or 'v4'"
 
 
 def _lp_read_error_text(exc: Exception) -> str:

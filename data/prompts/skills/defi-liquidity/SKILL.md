@@ -42,8 +42,29 @@ A v4 add is `lp_add(protocol='v4', range='full')` — a NEW position only, in
 three steps: the owner's one ERC-20 `approve_token(token, spender=Permit2)`, then
 your `approve_token(token, spender=<v4 PositionManager>, amount, via='permit2')`
 (exact, expires in 15 min), then the add. `LP_ETH_CAP` (0 by default) must be
-set by the owner first. v4 remove and collect are not built. Never promise that
-generic `call` can bypass a missing liquidity shape.
+set by the owner first. `lp_remove(protocol='v4', token_id=…)` withdraws a
+percentage and keeps the position NFT (no burn on v4); it returns NATIVE for a
+native leg. Any other v4 pool reads too: `lp_positions(protocol='v4',
+token_id=…)` reads one position from the chain (owner, PoolKey, ticks,
+liquidity, what it holds now, the fees owed), without `token_id` it counts the
+positions on chain, finds their ids and reads each one; a pool read adds the
+fee and the last 24 hours of swaps, volume and LP fees; `lp_pool_info`/`lp_quote` take `token_id`,
+or the full PoolKey (token_a, token_b, fee, tick_spacing, hooks when it has
+one). A v4 pool has no address: its id is the hash of those five fields.
+
+A NEW v4 pool, or a custom range on a pool that is not the launchpad's, is the
+OWNER's declaration — never yours alone. Call `lp_add(protocol='v4', token_a,
+token_b, amount_a, amount_b, fee, tick_spacing, range='full'|'ticks:lo,hi',
+initial_price, hooks if any)`: it sends NOTHING, stores the declaration and
+puts one card to the owner (pool id, range, price, both amounts, the value).
+`slippage_bps` is the allowed price gap there (max 500). Show the plan with
+`lp_add(protocol='v4', seed=<ref>, dry_run=true)`. After the owner confirms
+(one use, one hour), make the two approvals the refusal names, then
+`lp_add(protocol='v4', seed=<ref>, dry_run=false)`: the pool is created and
+the position minted in ONE transaction (an empty pool has no safe price), or a
+plain mint when the pool exists within the gap of the confirmed price. The
+result reads the position and the pool back; say only what it verified. Never
+promise that generic `call` can bypass a missing liquidity shape.
 
 A separate pool for a curve-phase token fragments the market and creates an
 arbitrage spread. When you are the sole LP, sellers trade against your capital.

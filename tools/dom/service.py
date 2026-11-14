@@ -1,3 +1,4 @@
+import asyncio
 import gc
 import logging
 from importlib import resources
@@ -19,6 +20,9 @@ from agents.task.loop_types.dom_views import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Nodes parsed between event-loop yields in _build_dom_tree.
+_YIELD_EVERY = 100
 
 
 class DomService:
@@ -284,7 +288,11 @@ class DomService:
 			# Only log node count at debug level, not keys
 			logger.debug(f"Processing {len(js_node_map)} DOM nodes")
 
-			for id, node_data in js_node_map.items():
+			for n_parsed, (id, node_data) in enumerate(js_node_map.items()):
+				# Pure-Python parse of a big page blocks the event loop for seconds;
+				# hand control back regularly so chat/goal turns keep moving.
+				if n_parsed and n_parsed % _YIELD_EVERY == 0:
+					await asyncio.sleep(0)
 				try:
 					node, children_ids = self._parse_node(node_data)
 					if node is None:
@@ -302,7 +310,9 @@ class DomService:
 			logger.debug(f"Building parent-child relationships")
 
 			# Build parent-child relationships
-			for id, node in node_map.items():
+			for n_linked, (id, node) in enumerate(node_map.items()):
+				if n_linked and n_linked % _YIELD_EVERY == 0:
+					await asyncio.sleep(0)
 				if not isinstance(node, DOMElementNode):
 					continue
 					

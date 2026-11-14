@@ -61,7 +61,8 @@ async def test_direct_collect_builds_the_plain_position_manager_call():
     assert tx["to"] == NPM and tx["value"] == 0
     assert tx["data"].startswith(abi.selector("modifyLiquidities(bytes,uint256)"))
     assert G.decode_v4_collect(tx) == {"token_id": 42, "currency0": ZERO,
-                                       "currency1": TKN, "recipient": HOLDER.lower()}
+                                       "currency1": TKN, "recipient": HOLDER.lower(),
+                                       "liquidity": 0, "min0": 0, "min1": 0}
     assert intent.via_account is None and "account_rpc" not in kw
     assert intent.lp_position == (NPM, 42) and intent.lp_position_effect == "hold"
     assert intent.lp_inflows == ((None, 0), (TKN, 0)) and not intent.lp_outflows
@@ -137,13 +138,80 @@ async def test_account_on_v3_collect_refuses(held):
     assert "protocol='v4' only" in res.error and not captured
 
 
+# ---- 117 W7: the v4 withdrawal (DECREASE_LIQUIDITY + TAKE_PAIR, the NFT stays) ----
+
+LIQ = 10 ** 21
+
+
+@pytest.fixture
+def position(monkeypatch):
+    pos = {"owner": HOLDER.lower(), "liquidity": LIQ, "sqrt": 2 ** 96}
+    pid = R.pool_id(KEY)
+    monkeypatch.setattr(V4, "position", lambda rpc, chain, token_id: V4.V4Position(
+        token_id, pos["owner"], dict(KEY), pid, -200, 200, pos["liquidity"]))
+    monkeypatch.setattr(V4, "pool_state", lambda *a: V4.V4PoolState(
+        pid, pos["sqrt"], 0, 0, 10000, LIQ, "state_view"))
+    monkeypatch.setattr(dex_registry, "verify_hook", lambda *a: None)
+    return pos
+
+
+def _remove(**kw):
+    return LpRemoveParams(**(dict(chain="robinhood", token_id=42, protocol="v4") | kw))
+
+
 @pytest.mark.asyncio
-async def test_v4_remove_still_refuses():
+async def test_v4_remove_builds_a_decrease_that_keeps_the_position(position):
+    captured = []
+    t, gate = _tool(captured)
+    res = await t.lp_remove(_remove(liquidity_pct=50))
+    assert "DRY RUN" in res.extracted_content, res.error
+    assert "the position NFT stays" in res.extracted_content
+    intent, tx, kw = captured[0]
+    assert tx["to"] == NPM and tx["value"] == 0
+    d = G.decode_v4_collect(tx)
+    assert d["token_id"] == 42 and d["liquidity"] == LIQ // 2
+    assert d["recipient"] == HOLDER.lower()
+    assert d["min0"] > 0 and d["min1"] > 0
+    assert intent.lp_position == (NPM, 42) and intent.lp_position_effect == "hold"
+    assert intent.lp_inflows == ((None, d["min0"]), (TKN, d["min1"]))
+    assert not intent.lp_outflows and intent.via_account is None
+    # the plan the verb built is the one withdrawal shape the guard allows
+    G.structural(intent, dict(tx, chainId=4663), holder=HOLDER)
+    assert not _Rail.last.sent and not gate.recorded
+
+
+@pytest.mark.asyncio
+async def test_v4_remove_minima_follow_the_slippage(position):
     captured = []
     t, _ = _tool(captured)
-    res = await t.lp_remove(LpRemoveParams(chain="robinhood", token_id=42, protocol="v4"))
-    assert "withdrawal is not built" in res.error and not captured
+    await t.lp_remove(_remove(slippage_bps=0))
+    await t.lp_remove(_remove(slippage_bps=1000))
+    tight, loose = (G.decode_v4_collect(c[1]) for c in captured)
+    assert loose["min0"] == tight["min0"] * 9000 // 10000
+    assert loose["min1"] == tight["min1"] * 9000 // 10000
+
+
+@pytest.mark.asyncio
+async def test_v4_remove_refuses_a_burn_another_owner_and_an_empty_position(position):
+    captured = []
+    t, _ = _tool(captured)
+    assert "v4 builds no burn" in (await t.lp_remove(_remove(burn=True))).error
+    position["owner"] = ACCT
+    assert "does not own" in (await t.lp_remove(_remove())).error
+    position["owner"] = HOLDER.lower()
+    position["liquidity"] = 0
+    assert "lp_collect" in (await t.lp_remove(_remove())).error
+    assert not captured
     assert "account" not in LpRemoveParams.model_fields
+
+
+@pytest.mark.asyncio
+async def test_v4_remove_refuses_a_pool_price_away_from_the_independent_one(position):
+    captured = []
+    t, _ = _tool(captured)
+    position["sqrt"] = 2 ** 96 * 2            # the pool says 4, the independent price says 1
+    res = await t.lp_remove(_remove())
+    assert res.error and not captured
 
 
 @pytest.mark.asyncio

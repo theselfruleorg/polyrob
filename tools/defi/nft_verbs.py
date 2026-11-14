@@ -212,7 +212,8 @@ class EnumerationUnavailable(RuntimeError):
 
 def enumerate_holdings(*, chain: str, address: str,
                        api_key: Optional[str] = None,
-                       fetch: Optional[Any] = None) -> List[Dict[str, Any]]:
+                       fetch: Optional[Any] = None,
+                       contracts: tuple = ()) -> List[Dict[str, Any]]:
     """Every NFT ``address`` holds on ``chain``.
 
     ⚠️ A plain JSON-RPC node CANNOT answer this — there is no such method — so it
@@ -236,7 +237,8 @@ def enumerate_holdings(*, chain: str, address: str,
         raise EnumerationUnavailable(
             f"chain {chain!r} has no pinned enumeration endpoint")
     url = (f"https://{host}/nft/v3/{key}/getNFTsForOwner"
-           f"?owner={_norm_addr(address, 'address')}&withMetadata=true&pageSize=100")
+           f"?owner={_norm_addr(address, 'address')}&withMetadata=true&pageSize=100"
+           + "".join(f"&contractAddresses[]={_norm_addr(c, 'contract')}" for c in contracts))
     payload = fetch(url)
     out: List[Dict[str, Any]] = []
     for item in (payload or {}).get("ownedNfts", []) or []:

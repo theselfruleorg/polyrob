@@ -20,7 +20,7 @@ COMMON_TOOLS_FIRST: Tuple[str, ...] = (
 	"filesystem_", "web_fetch_",
 	# most rigs
 	"agent_status", "insights", "load_tool", "message", "tool_call",
-	"agent_avatar", "autonomy_control", "contact_history", "delegate_task", "offer_manage",
+	"agent_avatar", "autonomy_control", "cards_read", "contact_history", "delegate_task", "offer_manage",
 	"order_deliver", "owner_ask", "owner_doc_manage", "preferences", "propose_action",
 	"room_moderate", "room_read", "self_context_manage", "skill_manage", "trade_mandate_propose",
 )

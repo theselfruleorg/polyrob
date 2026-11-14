@@ -392,13 +392,22 @@ def mode_allows_trigger(policy: ChatPolicy, *, mentioned: bool, role: str,
         muted = False
     if muted or _in_quiet_hours(policy.quiet_hours, now):
         mode = "listen"
-    addressed = mentioned or wake_hit or (
-        is_command and (role in ("owner", "admin") or granted_command))
+    addressed = is_addressed(mentioned=mentioned, role=role, wake_hit=wake_hit,
+                             is_command=is_command, granted_command=granted_command)
     if mode == "listen":
         return role in ("owner", "admin") and addressed
     if mode == "active":
         return True
     return addressed   # mention — the owner and an admin must be addressed too
+
+
+def is_addressed(*, mentioned: bool, role: str, wake_hit: bool,
+                 is_command: bool = False, granted_command: bool = False) -> bool:
+    """Did this room line reach for the agent? The ONE definition: the mode gate
+    above and the ``active`` turn's ``→ the room`` marker both read it, so the
+    model is told "not to you" for exactly the lines the gate calls unaddressed."""
+    return bool(mentioned or wake_hit or (
+        is_command and (role in ("owner", "admin") or granted_command)))
 
 
 def wake_word_hit(policy: ChatPolicy, text: Optional[str]) -> bool:
@@ -416,5 +425,5 @@ def wake_word_hit(policy: ChatPolicy, text: Optional[str]) -> bool:
     return False
 
 
-__all__ = ["MODES", "ChatPolicy", "chat_preferences_path", "load", "load_for_chat",
+__all__ = ["MODES", "ChatPolicy", "chat_preferences_path", "is_addressed", "load", "load_for_chat",
            "mode_allows_trigger", "set", "unset", "wake_word_hit"]

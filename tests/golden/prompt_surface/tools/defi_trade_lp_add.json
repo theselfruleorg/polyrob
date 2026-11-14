@@ -1,18 +1,22 @@
 {
   "function": {
-    "description": "Provide Uniswap v3 liquidity, creating the pool when initial_price is supplied, or increase your token_id. Needs exact token approvals first. Both legs are bounded by the guard. A Pons graduated v4 pool pays LP fee 0; v3 is a separate market. dry_run defaults true.",
+    "description": "Provide Uniswap v3 liquidity, creating the pool when initial_price is supplied, or increase your token_id. Needs exact token approvals first. Both legs are bounded by the guard. protocol='v4': a launchpad's graduated pool (full range, LP fee 0), or a NEW pool / custom range that the owner declares on a card first (see protocol). dry_run defaults true.",
     "name": "defi_trade_lp_add",
     "parameters": {
       "additionalProperties": false,
       "properties": {
         "amount_a": {
-          "description": "Most of token_a to deposit, in whole token units (not raw).",
+          "default": null,
+          "description": "Most of token_a to deposit, in whole token units (not raw). Omit only with seed=.",
           "minimum": 0,
+          "nullable": true,
           "type": "number"
         },
         "amount_b": {
-          "description": "Most of token_b to deposit, in whole token units (not raw).",
+          "default": null,
+          "description": "Most of token_b to deposit, in whole token units (not raw). Omit only with seed=.",
           "minimum": 0,
+          "nullable": true,
           "type": "number"
         },
         "chain": {
@@ -34,6 +38,12 @@
           "description": "Set true ONLY to knowingly open a separate pool for a Pons token still on its bonding curve (that fragments its market); otherwise such a deposit is refused.",
           "type": "boolean"
         },
+        "hooks": {
+          "default": null,
+          "description": "v4 only, with tick_spacing: the PoolKey's hook address; omit for a pool with no hook.",
+          "nullable": true,
+          "type": "string"
+        },
         "initial_price": {
           "default": null,
           "description": "Only to CREATE a pool that does not exist yet: the starting price as token_b per token_a. Omit for an existing pool.",
@@ -48,12 +58,21 @@
         },
         "protocol": {
           "default": "v3",
-          "description": "'v3', or 'v4' for a new FULL-RANGE position on a Pons graduated pool (token_a/token_b = 'native' + the Pons token; needs an ERC-20 allowance to Permit2 and approve_token(via='permit2') first; capped by LP_ETH_CAP).",
+          "description": "'v3', or 'v4'. v4 has three forms: a new FULL-RANGE position on a Pons graduated pool (token_a/token_b = 'native' + the Pons token); a pool the OWNER must declare — name the PoolKey in full (fee + tick_spacing, hooks if any, range, both amounts, initial_price) and the call sends NOTHING, it puts one card to the owner; and seed=<ref> to build that declared position. Every v4 add needs an ERC-20 allowance to Permit2 and approve_token(via='permit2') first; capped by LP_ETH_CAP.",
           "type": "string"
         },
         "range": {
           "default": "full",
           "description": "full, low,high prices in token_b/token_a, or ticks:low,high in sorted token order.",
+          "type": "string"
+        },
+        "seed": {
+          "default": null,
+          "description": "v4 only: the id of a pool declaration (from the proposal). The pool, range, amounts and price come from the declaration and nothing else you pass is read but chain, max_spend_usd and dry_run. A live send needs the owner's Confirm.",
+          "maxLength": 24,
+          "minLength": 4,
+          "nullable": true,
+          "pattern": "^s[0-9a-f]+$",
           "type": "string"
         },
         "slippage_bps": {
@@ -63,12 +82,24 @@
           "minimum": 0,
           "type": "integer"
         },
+        "tick_spacing": {
+          "default": null,
+          "description": "v4 only: the PoolKey's tick spacing. Giving it names a PoolKey in full and makes this call a PROPOSAL to the owner (a card), never a transaction. Here range is 'full' or 'ticks:lo,hi', and slippage_bps is the allowed price gap (max 500).",
+          "maximum": 32767,
+          "minimum": 1,
+          "nullable": true,
+          "type": "integer"
+        },
         "token_a": {
-          "description": "Contract address or 'native'.",
+          "default": null,
+          "description": "Contract address or 'native'. Omit only with seed=.",
+          "nullable": true,
           "type": "string"
         },
         "token_b": {
-          "description": "Contract address or 'native'.",
+          "default": null,
+          "description": "Contract address or 'native'. Omit only with seed=.",
+          "nullable": true,
           "type": "string"
         },
         "token_id": {
@@ -81,10 +112,6 @@
       },
       "required": [
         "chain",
-        "token_a",
-        "token_b",
-        "amount_a",
-        "amount_b",
         "max_spend_usd"
       ],
       "type": "object"

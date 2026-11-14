@@ -10,6 +10,53 @@ short, user-facing notes for each release are on its GitHub Release page.
 
 ## [Unreleased]
 
+## [1.7.10] — 2026-11-14
+
+### Added
+
+- Uniswap v4 statistics: a position read shows the fees owed, a pool read shows the LP and protocol fee and
+  the last 24 hours of swaps, volume and LP fees; the holdings report counts the fees owed.
+- Uniswap v4 on any pool: `lp_remove(protocol='v4')` withdraws and keeps the position; `lp_positions`,
+  `lp_pool_info` and `lp_quote` read a position by id, a wallet's positions and a PoolKey named in full.
+- A new Uniswap v4 pool or a custom range: `/lp seed` (or `lp_add` with a full PoolKey) puts one card to
+  the owner; after Confirm, `lp_add(seed=…)` creates the pool and mints the position in one transaction.
+- `twitter_article` writes and publishes an X Article (title, headings, lists, cover image); media uploads use the
+  X v2 media API (images, GIFs, chunked video, `media_alt_texts`); tweet reads carry the full long-post text, the
+  Article and the attached media.
+
+### Fixed
+
+- The holdings report (`portfolio`, `wallet_holdings`) lists the Uniswap v3 and v4 positions the wallet owns, both
+  legs valued, with their own sum; before, value inside a position was in no row and no total. A position the
+  chain counts and the read cannot find is named, never dropped.
+- A one-time job that asked the owner a question it marked as its own (`holds_this_job`) stays scheduled until
+  the answer and then runs again; before, the run ended `done`, the approval re-armed nothing and no run read it.
+- Cards: `/cards` lists each open card in three short lines (what it does, why, its acts); every card names
+  its stop act **Cancel**, `/cancel <card id>` and `/cancel cards` cancel cards, and the agent reads its own
+  open and decided cards with `cards_read` instead of answering from its notes.
+- A token whose first metadata read failed no longer stays "decimals unknown" for ever: the first good read
+  fills the empty field (a changed value is still refused as a mutation).
+- The portfolio and the positions book count a holding by one rule (only a high-confidence price) and print
+  the rest as an indicative sum under the total, so a grade change moves a line, not the total by surprise.
+- USDT on Ethereum is a pinned dollar: it is valued at its peg (before, it had no spend-grade price, because
+  DexScreener prices only base-side pools, and a USDT send needed the extra "anyway" step); payable as `usdt-ethereum`.
+- A `/send` of a token count no longer refuses "the price moved" on an ordinary move of a thin token: its
+  confirm line carries the quote + 25% (the count is fixed); a `$` send keeps + 5%.
+- A `/send $<usd>` Confirm no longer refuses "the price moved" on the network fee or the Solana rent: the bound
+  is held to the value sent (the guard's `value_usd`); a `$` conversion fits the token's decimals, an EVM amount
+  converts exactly, and a proposal card names the time of its price.
+- A token's USD value no longer moves when a second price source drops out: the value is the primary pool
+  price, and GeckoTerminal/Jupiter only grade it (before, the value was the median, and a GeckoTerminal 429
+  moved every holding, total and card between two reads).
+- A swap no longer freezes the event loop: the route sanity check, whose price lookup blocked on a
+  thread-pool future, now runs off the loop (before, it stalled every turn 17-26 s per swap, owner chat included).
+- The browser no longer freezes the event loop on a heavy page: the DOM tree parse yields to the loop every
+  100 nodes (before, one parse blocked every turn for 2 s or more); the result is unchanged.
+- An X API 402 (credits depleted) no longer blocks the `twitter` tool: no local refusal, no catalog gate and no
+  skipped cron job, so a credit top-up works on the next call; status still shows the standing 402.
+- An `active` room no longer answers every line: a line nobody addressed reaches the agent
+  marked `→ the room`, and it answers only when the line is plainly for it (`[SILENT]` else).
+
 ## [1.7.9] — 2026-11-12
 
 ### Added

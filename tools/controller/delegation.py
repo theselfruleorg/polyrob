@@ -64,7 +64,7 @@ DELEGATION_ACTION_NAMES: frozenset = frozenset({
     # 2026-09-29 review F13: owner-facing moves. A leaf reports to its parent,
     # never to the owner — each refuses a leaf at call time; excluding them here
     # keeps the schemas (and the temptation) out of the child's tool list.
-    "owner_ask", "propose_action",
+    "owner_ask", "propose_action", "cards_read",
     "trade_mandate_propose",  # 086 W5: the mandate's intake card is the owner's
     "propose_setting",  # 093 D1: a setting card is the owner's
     "offer_manage", "order_deliver",  # 099: the owner's offers; the order's own run

@@ -31,6 +31,7 @@ from tools.defi.send_order import (  # noqa: F401  (the one parser, re-exported)
     _EVM_ADDR, _NATIVE, _SOL_ADDR, ANYWAY, USAGE, _checksum_ok, _native_on, parse,
 )
 from tools.defi.send_order import PRICE_ROOM as _PRICE_ROOM  # noqa: F401  (swap_ops)
+from tools.defi.send_order import TOKEN_COUNT_ROOM
 
 logger = logging.getLogger(__name__)
 
@@ -121,16 +122,23 @@ def _caps_line(tool) -> str:
 
 
 def _simulated_usd(result) -> Optional[float]:
+    """The value a bound is held to: the guard's ``value sent:`` line (no
+    network fee, the number the guard itself holds max_spend_usd to), else the
+    ``simulated value:`` line. Before 2026-11-13 the seat compared the
+    FEE-INCLUDED value with a `$` bound made from the dollars alone, so `/send $5`
+    of a pinned $1.00 USDC to a new Solana address refused "the price moved"
+    on its rent. The LAST match: the header prints the token's symbol (on-chain
+    text a contract controls) BEFORE the guard's own lines."""
+    from core.wallet.tx_guard_steps.value import SENT_VALUE_LABEL
     body = getattr(result, "extracted_content", None) or ""
-    # The LAST match: the header prints the token's symbol (on-chain text a
-    # contract controls) BEFORE the guard's own value line.
-    found = re.findall(r"simulated value:\s*\$([0-9][0-9,]*\.?[0-9]*)", body)
-    if not found:
-        return None
-    try:
-        return float(found[-1].replace(",", ""))
-    except ValueError:
-        return None
+    for label in (re.escape(SENT_VALUE_LABEL), r"simulated value:"):
+        found = re.findall(label + r"\s*\$([0-9][0-9,]*\.?[0-9]*)", body)
+        if found:
+            try:
+                return float(found[-1].replace(",", ""))
+            except ValueError:
+                return None
+    return None
 
 
 async def _run(tool, order: dict, ctx, *, dry_run: bool, max_spend_usd: float):
@@ -257,11 +265,12 @@ async def send_reply(user_id: Optional[str], args: List[str], *, tool: Any = Non
             return (usd_note + _owner_words(_render(quote)) + "\n" + caps
                     + f"\nTo send it: /send {' '.join(line)} go")
         bound = (min(cap, order["max_usd"]) if order.get("max_usd") is not None
-                 else min(cap, round(usd * _PRICE_ROOM + 0.01, 2)))
+                 else min(cap, round(usd * TOKEN_COUNT_ROOM + 0.01, 2)))
         basis = ("the dollars you named + 5%" if order.get("usd") is not None
                  and typed_order.get("max_usd") is None
                  else "your max" if typed_order.get("max_usd") is not None
-                 else "the quote + 5% for the price to move")
+                 else "the quote + 25%: the token count is fixed, so only a "
+                      "large price move stops it")
         return (usd_note + _owner_words(_render(quote)) + "\n" + caps
                 + _first_send_line(user_id, order["to"])
                 + f"  bound: the send may be worth at most ${bound:,.2f} ({basis})\n"
@@ -272,7 +281,7 @@ async def send_reply(user_id: Optional[str], args: List[str], *, tool: Any = Non
                 "send. Nothing was sent.\n" + caps)
     # An unpriced send (acknowledged above) is held to the per-tx cap; the guard
     # charges it a placeholder that never reads as free.
-    bound = cap if usd is None else min(cap, round(usd * _PRICE_ROOM + 0.01, 2))
+    bound = cap if usd is None else min(cap, round(usd * TOKEN_COUNT_ROOM + 0.01, 2))
     if order.get("max_usd") is not None:
         # The owner (or the card he confirmed) named the most this send may
         # be worth: the guard refuses a send that simulates above it.

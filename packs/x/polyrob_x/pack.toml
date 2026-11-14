@@ -71,6 +71,11 @@ effect = "social"
 outbound = "write"
 late_send = true
 subject = "tweet_id"
+# An X Article (long-form): draft + publish in one owner-gated act.
+[tools.twitter.verbs.twitter_article]
+effect = "social"
+outbound = "write"
+late_send = true
 [tools.twitter.verbs.twitter_retweet]
 effect = "social"
 [tools.twitter.verbs.twitter_unretweet]

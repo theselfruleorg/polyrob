@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import asyncio
 
+from core.wallet.tx_guard_steps.value import SENT_VALUE_LABEL
+from tools.defi.send_order import fmt_tokens
+
 
 def _value_check_line(basis, amount_usd) -> str:
     """The quote's line for a send valued below spend grade (the ``/send`` seat
@@ -46,7 +49,7 @@ async def perform_transfer(tool, params, execution_context=None):
         _shown_symbol, _unsupported_chain)
     from core.wallet import tx_guard
     from core.wallet.broadcast.evm import EvmRail
-    from core.wallet.tokens import get_token_identity, normalize_address
+    from core.wallet.tokens import get_token_identity, normalize_address, raw_amount
 
     chain_err = _unsupported_chain(params.chain)
     if chain_err:
@@ -77,7 +80,10 @@ async def perform_transfer(tool, params, execution_context=None):
         # the ERC-20 branch gives. EVM native is 18 decimals by definition.
         ident = None
         shown = native_symbol
-        amount_raw = int(round(params.amount * (10 ** 18)))
+        try:
+            amount_raw = raw_amount(params.amount, 18)
+        except ValueError as exc:
+            return tool._ar(error=f"{params.amount!r} is not a {shown} amount: {exc}")
     else:
         ident = get_token_identity(params.chain, token)
         if ident.decimals is None:
@@ -85,7 +91,12 @@ async def perform_transfer(tool, params, execution_context=None):
                 f"{token} does not report decimals — refusing to compute an "
                 f"amount for a token whose denomination is unknown"))
         shown = _shown_symbol(ident.symbol, token)
-        amount_raw = int(round(params.amount * (10 ** ident.decimals)))
+        # Exact (never a float tail the quote did not show): 1.1 * 10**18 in
+        # floats sends ...0128 wei more than the owner typed.
+        try:
+            amount_raw = raw_amount(params.amount, ident.decimals)
+        except ValueError as exc:
+            return tool._ar(error=f"{params.amount!r} is not a {shown} amount: {exc}")
 
     signer = wallet.operational_signer()
     gate = wallet.policy
@@ -149,10 +160,13 @@ async def perform_transfer(tool, params, execution_context=None):
         basis = getattr(decision, "valuation_basis", None)
         value = ("unknown" if decision.amount_usd is None or basis == "unpriced"
                  else f"${decision.amount_usd:.4f}")
-        header = (f"transfer {params.amount} {shown} -> {to}\n"
+        sent_value = getattr(decision, "value_usd", None)
+        header = (f"transfer {fmt_tokens(float(params.amount))} {shown} -> {to}\n"
                   + (account_mode.header_line(held) if held is not None else "")
                   + (_SYMBOL_NOTE if ident is not None and ident.symbol else "") +
                   f"  simulated value: {value}\n"
+                  + (f"  {SENT_VALUE_LABEL} ${sent_value:.4f} (without the network fee)\n"
+                     if sent_value is not None and value != "unknown" else "")
                   + _value_check_line(basis, decision.amount_usd) +
                   f"  guard: {decision.reason}\n"
                   f"  lane:  {decision.lane}\n")

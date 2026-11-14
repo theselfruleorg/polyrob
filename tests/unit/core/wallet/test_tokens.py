@@ -129,6 +129,35 @@ def test_unknown_token_freezes_first_seen_decimals(tmp_path):
     assert second.source == "frozen"
 
 
+def test_a_failed_first_read_is_filled_by_the_first_good_read(tmp_path):
+    """2026-11-13: a NULL frozen by an RPC failure stayed NULL forever, so the
+    holding read "decimals unknown" and stayed out of every total. The first
+    good read fills it (the first observation), and is not a mutation."""
+    db = str(tmp_path / "t.db")
+    state = {"up": False}
+
+    def rpc(method, params, chain):
+        if not state["up"]:
+            raise RuntimeError("rpc down")
+        data = params[0]["data"]
+        if data.startswith(_DECIMALS_SEL):
+            return _word(9)
+        if data.startswith(_SYMBOL_SEL):
+            return _abi_string("GOOD")
+        return _abi_string("Good Token")
+
+    first = T.get_token_identity("base", FAKE, db_path=db, rpc=rpc)
+    assert first.decimals is None
+    state["up"] = True
+    second = T.get_token_identity("base", FAKE, db_path=db, rpc=rpc)
+    assert second.decimals == 9 and second.symbol == "GOOD"
+    assert second.metadata_changed is False
+    # Filled once, then frozen like any other value.
+    state["up"] = False
+    third = T.get_token_identity("base", FAKE, db_path=db, rpc=rpc)
+    assert third.decimals == 9
+
+
 def test_stable_metadata_does_not_flag_changed(tmp_path):
     db = str(tmp_path / "t.db")
 

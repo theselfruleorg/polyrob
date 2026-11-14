@@ -219,13 +219,22 @@ def render(rows: List[PositionFigures], closed: List[dict], *,
             elif r.price_confidence == "disputed":
                 out.append("    ⚠ price DISPUTED: the sources disagree too much — no "
                            "value or P&L is computed until they agree")
-    priced = [r for r in rows if r.value_usd is not None]
+    from tools.intel.price import counts_in_total
+    priced = [r for r in rows if r.value_usd is not None
+              and counts_in_total(r.price_confidence)]
+    indicative = [r for r in rows if r.value_usd is not None
+                  and not counts_in_total(r.price_confidence)]
     if rows:
         total = sum(r.value_usd for r in priced)
         known_basis = [r for r in rows if r.unrealized_usd is not None]
-        out += ["", f"total value {_usd(total)} over {len(priced)} priced position(s)"
-                + (f"; {len(rows) - len(priced)} unpriced, NOT included"
-                   if len(priced) < len(rows) else "")]
+        unpriced = len(rows) - len(priced) - len(indicative)
+        out += ["", f"total value {_usd(total)} over {len(priced)} position(s) at a "
+                f"high-confidence price"
+                + (f"; {unpriced} unpriced, NOT included" if unpriced else "")]
+        if indicative:
+            # The same rule as the portfolio total (tools.intel.price.counts_in_total).
+            out.append(f"NOT in the total: {len(indicative)} position(s) at a low-confidence "
+                       f"price, indicative ≈ {_usd(sum(r.value_usd for r in indicative))}")
         dust = [r for r in rows if is_dust(r.value_usd)]
         if dust:
             out.append(f"{len(dust)} DUST position(s) under {_usd(DUST_USD)}: "

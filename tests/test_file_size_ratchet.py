@@ -105,7 +105,7 @@ CEILINGS = {
     # the row in the commit that splits the file, delete it once <= the default.
     "surfaces/telegram/harness.py":     2898,  # W9: admin verbs -> admin_verbs.py + *_ops.py
     "core/wallet/tx_guard.py": 1579,  # W6: _authorize -> core/wallet/tx_guard_steps/
-    "packs/x/polyrob_x/twitter_tool.py": 2759,
+    "packs/x/polyrob_x/twitter_tool.py": 2731,
     "packs/markets/polyrob_markets/polymarket/service.py": 2184,
     "packs/markets/polyrob_markets/hyperliquid/service.py": 1907,
     "webview/pages_new.py": 1858,

@@ -149,17 +149,26 @@ class NftInfoParams(BaseModel):
 
 class LpPositionsParams(BaseModel):
     chain: str = Field(..., description=_chain_field("read Uniswap v3 positions on"))
-    protocol: str = Field("v3", description="Uniswap protocol: v3 (v4 in a later phase).")
+    protocol: str = Field("v3", description=(
+        "v3, or v4: give token_id to read one position from the chain, or omit it to list "
+        "the v4 positions the indexer finds for the address (each owner is re-read on chain)."))
     address: Optional[str] = Field(None, description="Owner address; defaults to the agent wallet.")
+    token_id: Optional[int] = Field(None, ge=0, description="v4 only: one position NFT id.")
 
 
 class LpPoolInfoParams(BaseModel):
     chain: str = Field(..., description=_chain_field("read a Uniswap v3 pool on"))
-    protocol: str = Field("v3", description="v3, or v4 for a Pons graduated pool (give token_a + token_b; the other side is 'native').")
+    protocol: str = Field("v3", description=(
+        "v3, or v4. A v4 pool has no address: give token_id (the pool of that position), OR "
+        "the full PoolKey (token_a + token_b + fee + tick_spacing, and hooks when it has one), "
+        "OR only token_a + token_b for a Pons graduated pool (the other side is 'native')."))
     pool: Optional[str] = Field(None, description="Pool address, OR give token_a+token_b+fee.")
     token_a: Optional[str] = None
     token_b: Optional[str] = None
     fee: Optional[int] = Field(None, description="Fee tier in hundredths of a bip: 100, 500, 3000, 10000.")
+    tick_spacing: Optional[int] = Field(None, ge=1, description="v4 only: the PoolKey's tick spacing. Giving it names the PoolKey in full.")
+    hooks: Optional[str] = Field(None, description="v4 only: the PoolKey's hook address; omit for a pool with no hook.")
+    token_id: Optional[int] = Field(None, ge=0, description="v4 only: read the pool of this position NFT.")
 
 
 class PoolMetricsParams(BaseModel):
@@ -176,7 +185,12 @@ class PoolMetricsParams(BaseModel):
 
 class LpQuoteParams(BaseModel):
     chain: str = Field(..., description=_chain_field("quote a Uniswap v3 deposit on"))
-    protocol: str = Field("v3", description="v3, or v4 for a Pons graduated pool (full range only; the other side is 'native').")
+    protocol: str = Field("v3", description=(
+        "v3, or v4: a Pons graduated pool (full range only; the other side is 'native'), or a "
+        "PoolKey named in full with fee + tick_spacing (range 'full' or 'ticks:lo,hi'; "
+        "initial_price quotes the seed of a pool that has no price yet)."))
+    tick_spacing: Optional[int] = Field(None, ge=1, description="v4 only: the PoolKey's tick spacing. Giving it names the PoolKey in full.")
+    hooks: Optional[str] = Field(None, description="v4 only: the PoolKey's hook address; omit for a pool with no hook.")
     token_a: str
     token_b: str
     fee: int = Field(3000, description="100 | 500 | 3000 | 10000")

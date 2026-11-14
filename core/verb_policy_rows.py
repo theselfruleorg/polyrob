@@ -53,6 +53,9 @@ CORE_VERB_ROWS = {
         # action is the verb's quote on the owner's seat. Neither moves anything; both speak to
         # the owner as the agent, so a tainted or room turn reaches neither.
         "propose_action": dict(effect="none", correspondent_blocked=True, room_denied=True),
+        # 2026-11-13: the agent's read of its own cards (open + decided). Owner turn only,
+        # like the cards it reads.
+        "cards_read": dict(effect="none", correspondent_blocked=True, room_denied=True),
         # 086 W5: the trading mandate's intake card — a draft + ONE owner card; Confirm on
         # the owner's seat writes the mandate. Same reach as propose_action.
         "trade_mandate_propose": dict(effect="none", correspondent_blocked=True,

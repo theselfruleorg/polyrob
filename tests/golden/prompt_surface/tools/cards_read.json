@@ -1,0 +1,20 @@
+{
+  "function": {
+    "description": "Read YOUR action cards from the card store: every open card (id, exact command, reason) and every card decided in the last hours with its outcome (sent, cancelled, replaced, expired). Use it before you tell the owner what is open, paid or owed, and before you raise or replace a card. Nothing changes.",
+    "name": "cards_read",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "hours": {
+          "default": 24.0,
+          "description": "How far back to list the decided cards (default 24 h).",
+          "maximum": 168,
+          "minimum": 1,
+          "type": "number"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

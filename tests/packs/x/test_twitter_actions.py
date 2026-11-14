@@ -132,9 +132,10 @@ async def test_post_with_media_uploads_then_attaches(monkeypatch, _pm):
     assert t.client.create_tweet.call_args.kwargs["media_ids"] == ["999"]
     uploaded_path = t.api_v1.media_upload.call_args.kwargs["filename"]
     assert uploaded_path == str(ws / "a.png")
-    # Image path: no video-only kwargs added.
+    # The v2 upload was refused here (no OAuth 1.0a keys), so v1.1 is the fallback:
+    # an image goes up unchunked, with its category.
     assert "chunked" not in t.api_v1.media_upload.call_args.kwargs
-    assert "media_category" not in t.api_v1.media_upload.call_args.kwargs
+    assert t.api_v1.media_upload.call_args.kwargs["media_category"] == "tweet_image"
 
 
 @pytest.mark.asyncio
