@@ -48,11 +48,11 @@ def resolve_memory_backend(env: dict, local_on: bool) -> str:
 
 
 def python_version_line() -> str:
-    """Python-version floor check (O6): POLYROB targets Python >= 3.11."""
+    """Python-version floor check (O6): POLYROB targets Python >= 3.11.5."""
     v = sys.version_info
     line = f"python: {v.major}.{v.minor}.{v.micro}"
-    if (v.major, v.minor) < (3, 11):
-        line += "  ! POLYROB requires Python >= 3.11"
+    if (v.major, v.minor, v.micro) < (3, 11, 5):
+        line += "  ! POLYROB requires Python >= 3.11.5"
     return line
 
 

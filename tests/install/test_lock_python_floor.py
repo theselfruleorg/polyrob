@@ -19,7 +19,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 def _floor() -> str:
     with (_ROOT / "pyproject.toml").open("rb") as fh:
         spec = tomllib.load(fh)["project"]["requires-python"]
-    m = re.search(r">=\s*(\d+\.\d+)", spec)
+    m = re.search(r">=\s*(\d+\.\d+(?:\.\d+)?)", spec)
     assert m, f"requires-python has no >= floor: {spec!r}"
     return m.group(1)
 

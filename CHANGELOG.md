@@ -10,6 +10,17 @@ short, user-facing notes for each release are on its GitHub Release page.
 
 ## [Unreleased]
 
+## [1.7.12] — 2026-11-16
+
+### Changed
+
+- POLYROB needs Python 3.11.5 or later (`requires-python`). Python 3.11.0 to 3.11.4 refuses the
+  install; `install.sh` fetches a private Python when the machine has none, and `polyrob doctor` names it.
+
+### Security
+
+- The lock pins `soupsieve` 4.1.1 for every install (three advisories had no fix below Python 3.11.5).
+
 ## [1.7.11] — 2026-11-16
 
 ### Added

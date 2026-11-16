@@ -13,7 +13,7 @@
 #              tree in place (the developer path this script used to be)
 #
 # What it does:
-#   1. Finds Python >= 3.11, or fetches its own copy under the POLYROB home when
+#   1. Finds Python >= 3.11.5, or fetches its own copy under the POLYROB home when
 #      this machine has none (checksum-pinned uv; no sudo). Needs git in managed mode.
 #   2. Clones or reuses the source tree
 #   3. Creates a venv and installs polyrob hash-checked against requirements.lock
@@ -310,17 +310,15 @@ quietly() {  # quietly LABEL CMD... — the output goes to the log; a failure pr
 }
 
 # ---------------------------------------------------------------------------
-# 1. Python >= 3.11
+# 1. Python >= 3.11.5
 # ---------------------------------------------------------------------------
 CURRENT_STEP="python"
 PYTHON_BIN=""
 _check_python() {
-  local bin="$1" ver major minor
+  # The floor is 3.11.5 (pyproject.toml requires-python): 3.11.0 to 3.11.4 refuse.
+  local bin="$1"
   command -v "${bin}" >/dev/null 2>&1 || return 1
-  ver="$("${bin}" -c 'import sys; print("%d %d" % sys.version_info[:2])' 2>/dev/null || true)"
-  [[ -z "${ver}" ]] && return 1
-  major="${ver%% *}"; minor="${ver##* }"
-  if [[ "${major}" -gt 3 ]] || { [[ "${major}" -eq 3 ]] && [[ "${minor}" -ge 11 ]]; }; then
+  if "${bin}" -c 'import sys; sys.exit(0 if sys.version_info[:3] >= (3, 11, 5) else 1)' 2>/dev/null; then
     PYTHON_BIN="${bin}"; return 0
   fi
   return 1
@@ -403,7 +401,7 @@ provision_python() {
 
 no_python_remedy() {
   cat <<NOPY
-Python 3.11 or newer is required and a private copy could not be installed.
+Python 3.11.5 or newer is required and a private copy could not be installed.
 Install it from https://www.python.org/downloads/ or with your package manager:
   macOS:         brew install python@3.12
   Ubuntu/Debian: sudo apt install python3.12 python3.12-venv
@@ -415,7 +413,7 @@ for _c in python3.12 python3.11 python3.13 python3 python; do
   _check_python "${_c}" && break
 done
 if [[ -z "${PYTHON_BIN}" ]]; then
-  info "No Python 3.11+ found on this machine."
+  info "No Python 3.11.5+ found on this machine."
   provision_python || die "$(no_python_remedy)"
 fi
 

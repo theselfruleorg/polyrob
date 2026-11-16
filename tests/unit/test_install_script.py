@@ -91,6 +91,8 @@ def test_has_python_version_check():
     assert "3.11" in text, (
         "install.sh must reference Python 3.11 (minimum version check)"
     )
+    # The floor is the pyproject one, to the patch: 3.11.0 to 3.11.4 are refused.
+    assert "sys.version_info[:3] >= (3, 11, 5)" in text
     # Must also abort with a non-zero exit when python is missing / too old
     assert "die" in text or "exit 1" in text, (
         "install.sh must exit non-zero when Python requirement is not met"
