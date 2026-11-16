@@ -105,6 +105,12 @@ polyrob config check
 
 ## 3. Version notes
 
+### Upgrading to 1.7.12
+
+No database migration.
+
+- **Python 3.11.5 or later.** Check with `python --version` in the environment that runs the agent. On Python 3.11.0 to 3.11.4 the install refuses: get a newer Python first, then update. `install.sh` fetches a private Python 3.12 when the machine has no usable one. The reason is a set of security fixes in a library that no longer supports the older patch releases.
+
 ### Upgrading to 1.7.11
 
 No database migration and no new store.

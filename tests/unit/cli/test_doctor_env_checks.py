@@ -34,6 +34,18 @@ def test_python_version_warns_below_floor(monkeypatch):
     assert "requires Python >= 3.11" in python_version_line()
 
 
+def test_python_version_warns_on_an_early_3_11_patch(monkeypatch):
+    import cli.commands.doctor as d
+
+    class _V:
+        major, minor, micro = 3, 11, 4
+
+    monkeypatch.setattr(d.sys, "version_info", _V)
+    assert "requires Python >= 3.11.5" in python_version_line()
+    _V.micro = 5
+    assert "requires" not in python_version_line()
+
+
 def test_python_version_no_warning_at_floor():
     # The suite itself runs on >= 3.11, so the live line must not warn.
     assert "requires" not in python_version_line()

@@ -44,7 +44,7 @@ body:
     id: platform
     attributes:
       label: OS / platform
-      placeholder: "Ubuntu 24.04 / macOS 15 / Python 3.11"
+      placeholder: "Ubuntu 24.04 / macOS 15 / Python 3.12"
     validations:
       required: true
   - type: textarea

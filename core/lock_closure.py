@@ -334,7 +334,7 @@ def lock_command(root: Path) -> List[str]:
     root = Path(root)
     with (root / "pyproject.toml").open("rb") as fh:
         spec = tomllib.load(fh)["project"]["requires-python"]
-    m = re.search(r">=\s*(\d+\.\d+)", spec)
+    m = re.search(r">=\s*(\d+\.\d+(?:\.\d+)?)", spec)
     if not m:
         raise ValueError(f"requires-python has no >= floor: {spec!r}")
     return ["uv", "pip", "compile", "pyproject.toml", "--all-extras", "--universal",

@@ -5,7 +5,7 @@
 ### A self-hosted AI agent that works toward your goals, on your own machine.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/theselfruleorg/polyrob/blob/main/LICENSE)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11.5+](https://img.shields.io/badge/python-3.11.5+-blue.svg)](https://www.python.org/downloads/)
 [![PyPI](https://img.shields.io/pypi/v/polyrob.svg)](https://pypi.org/project/polyrob/)
 [![CI](https://github.com/theselfruleorg/polyrob/actions/workflows/ci.yml/badge.svg)](https://github.com/theselfruleorg/polyrob/actions)
 [![Stars](https://img.shields.io/github/stars/theselfruleorg/polyrob?style=social)](https://github.com/theselfruleorg/polyrob)
@@ -31,7 +31,7 @@ approval.
 
 ## Quick Start
 
-On Linux, macOS or WSL2 (no Python 3.11+? The installer fetches a private copy):
+On Linux, macOS or WSL2 (no Python 3.11.5+? The installer fetches a private copy):
 
 ```bash
 curl -fsSL https://polyrob.dev/install.sh | bash

@@ -16,7 +16,7 @@ polyrob doctor                      # catches a missing or malformed key first
 polyrob run "summarize https://example.com"
 ```
 
-The installer finds Python 3.11+ (or fetches a private copy), clones the source into `~/.polyrob/src`, builds
+The installer finds Python 3.11.5+ (or fetches a private copy), clones the source into `~/.polyrob/src`, builds
 a virtualenv, puts a `polyrob` command on your `PATH`, and runs a short setup
 inside the pipe (a key and a model; it reads `/dev/tty`, so it can still ask you; `polyrob setup` shows every option). Already
 a Python user? `pipx install polyrob && polyrob setup` does the same thing without
@@ -72,7 +72,7 @@ and the same file is in the repository root. Flags:
 It puts code in `~/.polyrob/src`, the virtualenv in `~/.polyrob/venv`, the command
 in `~/.local/bin/polyrob`, and your data — keys, memory, identity — in
 `~/.polyrob/`. Running it again updates in place. On a machine with no Python
-3.11+, or a Debian or Ubuntu Python without `venv`, it downloads a private Python
+3.11.5+, or a Debian or Ubuntu Python without `venv`, it downloads a private Python
 into `~/.polyrob/python` (no `sudo`), using a `uv` build it checks against a pinned
 checksum. It needs `git`. Windows without WSL2 is not supported; there is no
 PowerShell installer.
@@ -150,7 +150,7 @@ on the machine, only wheels install (no package build code runs). On a server th
 holds a seed, a separate installer unit does the install, and without it the miss
 is a refusal that names the extra. `LAZY_DEPS_MODE=off` seals it anywhere.
 
-Python 3.11 or newer. pipx works on macOS, Linux and Windows PowerShell alike;
+Python 3.11.5 or newer. pipx works on macOS, Linux and Windows PowerShell alike;
 on Windows a plain virtualenv (`python -m venv venv`) is equally fine.
 
 ---
