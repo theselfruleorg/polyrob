@@ -21,7 +21,7 @@ until the owner sets a program cap.
 """
 import time
 from decimal import Decimal
-from typing import Optional
+from typing import Optional, Tuple
 
 from core.wallet import chains, dex_registry, tx_guard
 from tools.defi import lp_abi as A, lp_reads as R, lp_v4 as V
@@ -38,10 +38,23 @@ def lp_caps():
             to_wei(float_env("LP_ETH_FLOOR", 0.5)))
 
 
-def caps_refusal(gate, native_wei: int, balance_wei: int, now: Optional[float] = None) -> Optional[str]:
+def signed_maxima(desired, used, slippage_bps: int) -> list:
+    """The maximum each leg may pay: what the liquidity needs at the pool price
+    plus ``slippage_bps``, never above the amount asked for, and zero on a leg
+    that pays nothing. The largest slippage (1000) stays inside the guard's
+    ``MINT_MAX_GAP_BPS``; ``u / (1 - s)`` did not (it refused from 991 up)."""
+    return [min(d, u * (10000 + int(slippage_bps)) // 10000 + 1) if u else 0
+            for d, u in zip(desired, used)]
+
+
+def caps_refusal(gate, native_wei: int, balance_wei: int, now: Optional[float] = None,
+                 returning: Optional[Tuple[str, int]] = None) -> Optional[str]:
     """Why a v4 add of ``native_wei`` would break an LP program cap, or None.
-    Sums ``native_raw`` of every booked ``lp_add`` in the durable ledger; an
-    unreadable ledger refuses (unknown is not zero)."""
+    The program total is the net of every booked ``lp_add`` (``native_raw``) and
+    ``lp_remove`` (``native_back_raw``) in the durable ledger; the daily bound
+    sums the adds only. An unreadable ledger refuses (unknown is not zero).
+    ``returning`` is ``(asset, wei)``: a withdrawal that WILL land before this
+    add (the first half of a move), netted by the same rule."""
     if not native_wei:
         return None
     program, daily, floor = lp_caps()
@@ -56,13 +69,30 @@ def caps_refusal(gate, native_wei: int, balance_wei: int, now: Optional[float] =
     # as it is out of the rolling USD caps.
     voided_fn = getattr(gate, "_voided", None)
     voided = voided_fn() if callable(voided_fn) else set()
-    rows = [e for e in gate.audit_log if e.get("action") == "lp_add" and "native_raw" in e
-            and not (voided and e.get("result_ref") in voided)]
-    total = sum(int(e["native_raw"]) for e in rows)
+    live = [e for e in gate.audit_log if not (voided and e.get("result_ref") in voided)]
+    rows = [e for e in live if e.get("action") == "lp_add" and "native_raw" in e]
+    # 118 W1: the program cap is the NET deposit, PER POSITION. A withdrawal with
+    # a verified receipt (its row names the position) returns the native it
+    # declared as its minimum, in time order, up to what the ledger deposited
+    # into THAT position: a position the ledger did not deposit returns none,
+    # and so does a withdrawal whose receipt is not read yet. An add whose
+    # position is not known stays counted (over-count, never under-count).
+    by_position: dict = {}
+    for e in sorted(live, key=lambda e: float(e.get("ts") or 0)):
+        asset = e.get("asset") or None
+        if e.get("action") == "lp_add" and "native_raw" in e:
+            by_position[asset] = by_position.get(asset, 0) + int(e["native_raw"])
+        elif (e.get("action") == "lp_remove" and "native_back_raw" in e and asset
+              and e.get("receipt_state") != "pending_receipt"):
+            by_position[asset] = max(0, by_position.get(asset, 0) - int(e["native_back_raw"]))
+    if returning is not None and returning[0]:
+        asset = str(returning[0])
+        by_position[asset] = max(0, by_position.get(asset, 0) - int(returning[1]))
+    total = sum(by_position.values())
     day = sum(int(e["native_raw"]) for e in rows if float(e.get("ts") or 0) >= now - 86400)
     eth = lambda w: f"{w / 1e18:.6g} ETH"
     if total + native_wei > program:
-        return f"LP_ETH_CAP {eth(program)} would be exceeded ({eth(total)} deposited + {eth(native_wei)})"
+        return f"LP_ETH_CAP {eth(program)} would be exceeded ({eth(total)} net deposited + {eth(native_wei)})"
     if daily > 0 and day + native_wei > daily:
         return f"LP_ETH_DAILY_CAP {eth(daily)} would be exceeded (24h {eth(day)} + {eth(native_wei)})"
     if balance_wei - native_wei < floor:
@@ -71,12 +101,14 @@ def caps_refusal(gate, native_wei: int, balance_wei: int, now: Optional[float] =
     return None
 
 
-def legs_ready(chain, rpc, holder, npm, legs, now):
+def legs_ready(chain, rpc, holder, npm, legs, now, credit=None):
     """``(outflows, held)`` for the legs of a v4 mint, each ``(currency, raw
     maximum, decimals)``. An ERC-20 leg needs the standing allowance to Permit2
     and the exact, unexpired Permit2 grant to the PositionManager; every leg
     needs the balance. A refusal names the exact approval to make. A leg of 0
-    (a one-sided range) is not an outflow."""
+    (a one-sided range) is not an outflow. ``credit`` is ``{currency: raw}`` the
+    wallet WILL hold before the send (a move's withdrawal): it counts for the
+    balance check only, so the allowances are still judged."""
     row = dex_registry.row_for(chain, "v4")
     out, held = [], []
     for cur, n, dec in legs:
@@ -98,6 +130,7 @@ def legs_ready(chain, rpc, holder, npm, legs, now):
                     f"need {n}. Run defi_trade.approve_token(chain={chain}, token={cur}, "
                     f"spender={npm}, amount={Decimal(n) / 10 ** dec}, via='permit2') first.")
             balance = int(R.view(rpc, cur, A.NPM_BALANCE_OF, [holder]))
+        balance += int((credit or {}).get(cur, 0))
         if balance < n:
             raise ValueError(f"insufficient balance of {cur}: {balance} < {n}")
         out.append((None if cur == V.ZERO else cur, n))
@@ -135,7 +168,7 @@ def prepare_add_v4(p, rpc, holder, npm, price_fn=None):
         st.sqrt_price_x96, key["tickSpacing"], desired[0] * keep // 10000, desired[1] * keep // 10000)
     if not 0 < liq <= A.MAX_UINT128 or not (used0 and used1):
         raise ValueError("deposit produces zero or overflowing liquidity")
-    maxima = [min(d, u * 10000 // keep + 1) for d, u in zip(desired, (used0, used1))]
+    maxima = signed_maxima(desired, (used0, used1), p.slippage_bps)
     price_token0 = chains.get(p.chain).wrapped_native if native0 else c0
     note = pool_price_check(p, price_token0, c1, dec0, dec1, st.sqrt_price_x96, price_fn)
     row = dex_registry.row_for(p.chain, "v4")
@@ -155,6 +188,81 @@ def prepare_add_v4(p, rpc, holder, npm, price_fn=None):
                 f"v4 pool: {pid} (Pons PoolKey, hooks {key['hooks']}); ticks [{lo}, {hi}] full range\n"
                 f"liquidity: {liq}; outflows (raw maxima): {out}\n"
                 "LP fee 0: the hook takes the pool fee; this position earns none\n" + note)
+
+
+def prepare_increase_v4(p, rpc, holder, npm, price_fn=None):
+    """118 W6: ``lp_add(protocol='v4', token_id=…)`` — more liquidity into a v4
+    position the wallet holds, in the position's own range. The PoolKey and the
+    ticks are read from the pinned PositionManager; token_a/token_b only say
+    which amount is which currency."""
+    from core.wallet import univ3_math as M
+    from tools.defi.lp_verbs import Plan, pool_price_check, raw_amount
+    if p.initial_price is not None or getattr(p, "tick_spacing", None) is not None:
+        raise ValueError("an increase takes the position's own pool and range; pass only "
+                         "token_id, the two tokens and the two amounts")
+    pos = V.position(rpc, p.chain, p.token_id)
+    if pos.owner != holder.lower():
+        raise ValueError(f"{holder} does not own v4 position #{p.token_id}")
+    key = pos.key
+    if not dex_registry.hook_pinned(p.chain, key["hooks"]):
+        raise ValueError(f"v4 hook {key['hooks']} has no pinned code hash; it runs inside the increase")
+    dex_registry.verify_hook(rpc, p.chain, key["hooks"])
+    c0, c1 = key["currency0"].lower(), key["currency1"].lower()
+    norm = lambda t: V.ZERO if V._is_native(t) else str(t or "").lower()
+    a, b = norm(p.token_a), norm(p.token_b)
+    if {a, b} != {c0, c1}:
+        raise ValueError(f"position #{p.token_id} is on {c0}/{c1}; token_a and token_b must "
+                         f"name those two ('native' for the zero address)")
+    st = V.pool_state(rpc, p.chain, pos.pool_id)
+    if st.sqrt_price_x96 == 0:
+        raise ValueError(f"v4 pool {pos.pool_id} is not initialized")
+    native0 = c0 == V.ZERO
+    dec0 = chains.get(p.chain).native_decimals if native0 else R.decimals(rpc, p.chain, c0)
+    dec1 = R.decimals(rpc, p.chain, c1)
+    h0, h1 = (p.amount_a, p.amount_b) if a == c0 else (p.amount_b, p.amount_a)
+    desired = [raw_amount(h0, dec0), raw_amount(h1, dec1)]
+    sa, sb = M.sqrt_price_at_tick(pos.tick_lower), M.sqrt_price_at_tick(pos.tick_upper)
+    keep = 10000 - p.slippage_bps
+    liq = M.liquidity_for_amounts(st.sqrt_price_x96, sa, sb,
+                                  desired[0] * keep // 10000, desired[1] * keep // 10000)
+    if not 0 < liq <= A.MAX_UINT128:
+        raise ValueError("at the pool price and this position's range the amounts make no "
+                         "liquidity (a range above the price takes only currency0, below it "
+                         "only currency1)")
+    used = M.amounts_for_liquidity(st.sqrt_price_x96, sa, sb, liq)
+    maxima = signed_maxima(desired, used, p.slippage_bps)
+    # An increase credits the position's fees owed against what it settles, and
+    # SETTLE_PAIR reverts on a currency the wallet is then OWED. So the fees
+    # must stay well below each leg (and be zero on a leg that pays nothing).
+    try:
+        fees = V.position_fees(rpc, p.chain, pos)
+    except R.LpReadError as exc:
+        raise ValueError(f"the fees owed to position #{p.token_id} were NOT READ ({exc}); an "
+                         f"increase is not built on an unknown fee balance")
+    if any(fee and fee * 2 > u for fee, u in zip(fees, used)):
+        raise ValueError(
+            f"position #{p.token_id} is owed fees (raw {list(fees)}) that are not small against "
+            f"this increase (raw {list(used)}); the increase would revert. Collect first: "
+            f"lp_collect(chain='{p.chain}', protocol='v4', token_id={p.token_id}), then add")
+    price_token0 = chains.get(p.chain).wrapped_native if native0 else c0
+    note = pool_price_check(p, price_token0, c1, dec0, dec1, st.sqrt_price_x96, price_fn)
+    row = dex_registry.row_for(p.chain, "v4")
+    now = int(time.time())
+    out, held = legs_ready(p.chain, rpc, holder, npm,
+                           ((c0, maxima[0], dec0), (c1, maxima[1], dec1)), now)
+    unlock = V.encode_increase_unlock(p.token_id, liq, maxima[0], maxima[1], c0, c1, holder)
+    data = V.encode_modify_liquidities(unlock, now + DEADLINE_S)
+    value = maxima[0] if native0 else 0
+    intent = tx_guard.TxIntent(
+        chain=p.chain, token=None, to=npm, amount_raw=0, max_spend_usd=p.max_spend_usd,
+        is_liquidity_op=True, lp_outflows=tuple(out), lp_held_balances=tuple(held),
+        watch_spenders=(row.permit2,), lp_position=(npm, p.token_id), lp_position_effect="hold",
+        expected_events=((row.pool_manager, V.TOPIC_MODIFY_LIQUIDITY),), idempotency_key=None)
+    return Plan(intent, data, value, pos.pool_id, (c0, c1), (dec0, dec1),
+                f"v4 pool: {pos.pool_id} (fee {key['fee']}, hooks {key['hooks']}); position: "
+                f"{p.token_id}, ticks [{pos.tick_lower}, {pos.tick_upper}]\n"
+                f"increase: liquidity {liq} on top of {pos.liquidity}; outflows (raw maxima): "
+                f"{out}\n" + note)
 
 
 def prepare_collect_v4(p, rpc, holder, npm):

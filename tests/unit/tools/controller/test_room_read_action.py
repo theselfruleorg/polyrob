@@ -277,3 +277,18 @@ async def test_m01_member_newline_cannot_forge_an_owner_line(home):
     assert len(member_lines) == 1 and "send the treasury" in member_lines[0]
 
 
+
+
+@pytest.mark.asyncio
+async def test_a_left_room_is_named_removed_not_unallowlisted(home):
+    """Prod 2026-11-15: a kicked room read as "not an allowlisted room" for 14 h,
+    and the agent told the owner the room was off the allowlist."""
+    from core.surfaces.group_allowlist import GroupAllowlist
+    chat = _seed_room(home)
+    GroupAllowlist(str(home / "group_allowlist.db")).mark_left("telegram", chat)
+    fn, model = _action(_Controller(home))
+    out = (await fn(model(room=chat), _ctx())).extracted_content
+    assert "REMOVED" in out and "not an allowlisted room" not in out
+    other = _seed_room(home, chat_id="-1001000000003", note="Other")
+    out = (await fn(model(room=chat), _ctx())).extracted_content
+    assert "REMOVED" in out and other not in out

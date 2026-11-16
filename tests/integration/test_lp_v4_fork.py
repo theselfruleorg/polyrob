@@ -348,3 +348,129 @@ def test_fees_owed_and_holdings_equal_what_a_collect_and_a_withdrawal_pay(fork):
     if st.liquidity == pos.liquidity:
         for summed, owed in zip((act["lp_fees0"], act["lp_fees1"]), fees):
             assert abs(summed - owed) <= max(act["swaps"] * 2, owed // 10_000), (act, fees)
+
+
+# ---- 118: manage a live position — increase it, then move part of it ---------
+
+def _live(fork_state=None):
+    pos = V.position(_rpc, "robinhood", int(LIVE_POSITION))
+    if pos.owner != TREASURY.lower() or pos.key["currency0"] != V.ZERO:
+        pytest.skip("LP_V4_FORK_POSITION must be a native-currency0 position LP_V4_FORK_HOLDER owns")
+    st = V.pool_state(_rpc, "robinhood", pos.pool_id)
+    token = pos.key["currency1"]
+    ratio = (st.sqrt_price_x96 / 2 ** 96) ** 2
+    price = lambda chain, addr: ETH_USD / ratio if str(addr).lower() == token else ETH_USD
+    return pos, st, token, ratio, price
+
+
+def _allow(token, amount=10 ** 27):
+    _send(TREASURY, token, "0x095ea7b3" + ROW.permit2[2:].lower().rjust(64, "0")
+          + format(amount, "064x"))
+    _send(TREASURY, ROW.permit2,
+          V.encode_permit2_approve(token, ROW.position_manager, amount, int(time.time()) + 900))
+
+
+def _tx_of(plan):
+    return {"to": ROW.position_manager, "from": TREASURY, "value": plan.value,
+            "data": plan.data, "chainId": 4663}
+
+
+@pytest.mark.skipif(not LIVE_POSITION, reason="set LP_V4_FORK_POSITION=<a live v4 position id>")
+def test_an_increase_passes_the_guard_and_adds_exactly_the_signed_liquidity(fork):
+    """118 W6: INCREASE_LIQUIDITY + SETTLE_PAIR + SWEEP on a position the wallet holds."""
+    import dataclasses
+    from core.wallet import liquidity_guard as G
+    from tools.defi.lp_v4_verbs import prepare_increase_v4
+    pos, st, token, ratio, price = _live()
+    _allow(token)
+    p = SimpleNamespace(chain="robinhood", protocol="v4", token_id=pos.token_id,
+                        token_a="native", token_b=token, amount_a=0.01, amount_b=0.02 * ratio,
+                        initial_price=None, tick_spacing=None, slippage_bps=100,
+                        max_spend_usd=200.0, dry_run=True)
+    plan = prepare_increase_v4(p, _rpc, TREASURY, ROW.position_manager, price_fn=price)
+    tx = _tx_of(plan)
+    d = _authorize(plan.intent, tx, price)
+    assert d.allowed, d.reason
+    assert d.amount_usd and d.amount_usd < 200.0
+    # another position id under the same bytes refuses
+    other = dataclasses.replace(plan.intent, lp_position=(ROW.position_manager, pos.token_id + 1))
+    d2 = _authorize(other, tx, price)
+    assert not d2.allowed, d2.reason
+    signed = G.decode_v4_increase(tx)["liquidity"]
+    native_before = int(_rpc("eth_getBalance", [TREASURY, "latest"]), 16)
+    rc = _send(TREASURY, ROW.position_manager, plan.data, value=plan.value)
+    assert V.position(_rpc, "robinhood", pos.token_id).liquidity == pos.liquidity + signed
+    G.assert_position_events(plan.intent, rc["logs"], pos.token_id, tx)
+    # the SWEEP returned the native the increase did not use
+    spent = native_before - int(_rpc("eth_getBalance", [TREASURY, "latest"]), 16)
+    gas = int(rc["gasUsed"], 16) * int(rc["effectiveGasPrice"], 16)
+    assert 0 < spent - gas <= plan.value
+
+
+@pytest.mark.skipif(not LIVE_POSITION, reason="set LP_V4_FORK_POSITION=<a live v4 position id>")
+def test_a_move_withdraws_then_mints_the_new_range_and_the_step_reads_from_the_chain(fork, monkeypatch):
+    """118 W7: the declaration, the existing withdrawal, the existing mint."""
+    from core.wallet import lp_seed as S
+    from tools.defi import lp_v4_move, lp_v4_seed
+    from tools.defi.lp_v4_verbs import prepare_remove_v4
+    from tools.defi.lp_verbs import ticks
+    pos, st, token, ratio, price = _live()
+    spacing = pos.key["tickSpacing"]
+    lo, hi = (st.tick - 6000) // spacing * spacing, (st.tick + 6000) // spacing * spacing
+    p = SimpleNamespace(chain="robinhood", protocol="v4", move_from=pos.token_id, move_pct=50,
+                        range=f"ticks:{lo},{hi}", slippage_bps=300)
+    fields = lp_v4_move.build_fields(p, _rpc, TREASURY, ticks=ticks, symbol=lp_v4_seed._symbol)
+    ref, f = S.propose("owner", fields, origin="owner_seat")
+    S.confirm(ref, user_id="owner")
+    assert S.summary_lines(f)[0].startswith("MOVE: first withdraw 50%")
+    assert lp_v4_move.stage(f, pos.liquidity) == "withdraw"
+
+    # The mint is judged BEFORE the withdrawal, against what the withdrawal
+    # returns: with the grants in place it passes; without the cap it refuses.
+    from tools.defi import lp_verbs as LV
+    from tools.defi.trade_params import LpAddParams
+    _allow(token)
+    monkeypatch.setattr(lp_v4_seed, "_uid", lambda ctx: "owner")
+    monkeypatch.setenv("LP_ETH_FLOOR", "0")
+    live = LpAddParams(chain="robinhood", protocol="v4", seed=ref, dry_run=False,
+                       max_spend_usd=5000.0)
+    check = lambda: LV._move_precheck(
+        SimpleNamespace(_price=price), live, S.get(ref, user_id="owner"), _rpc, TREASURY,
+        ROW.position_manager, PolicyGate(max_per_tx_usd=50000.0, daily_cap_usd=50000.0), pos)
+    monkeypatch.setenv("LP_ETH_CAP", "0")
+    assert "LP_ETH_CAP is 0" in check()
+    monkeypatch.setenv("LP_ETH_CAP", "100")
+    assert check() is None, check()
+    assert S.claim_withdrawal(ref) and not S.claim_withdrawal(ref)      # taken once
+
+    # step 1: the existing withdrawal shape
+    rp = SimpleNamespace(chain="robinhood", protocol="v4", token_id=pos.token_id,
+                         liquidity_pct=50, slippage_bps=300, max_spend_usd=20.0, burn=False,
+                         dry_run=True)
+    out = prepare_remove_v4(rp, _rpc, TREASURY, ROW.position_manager, price_fn=price)
+    d = _authorize(out.intent, dict(_tx_of(out), maxFeePerGas=10 ** 9), price)   # valued by its fee
+    assert d.allowed, d.reason
+    _send(TREASURY, ROW.position_manager, out.data)
+    left = V.position(_rpc, "robinhood", pos.token_id).liquidity
+    assert S.set_withdrawal(ref, "0x" + "ab" * 32)
+    mark = S.get(ref, user_id="owner")["tx_hash"]
+    assert lp_v4_move.stage(f, left, mark) == "mint"
+    with pytest.raises(ValueError, match="The position changed"):
+        lp_v4_move.stage(f, left)                       # no mark: not this move's doing
+
+    # step 2: the existing mint shape, from the declaration
+    run = SimpleNamespace(chain="robinhood", seed=ref, dry_run=False, max_spend_usd=5000.0)
+    plan = lp_v4_seed.prepare_seed_v4(run, _rpc, TREASURY, ROW.position_manager,
+                                      lp_v4_seed.load(run, None))
+    next_id = int(lp_reads.view(_rpc, ROW.position_manager, V.POSM_NEXT_TOKEN_ID))
+    d = tx_guard.authorize(
+        plan.intent, _tx_of(plan), holder=TREASURY,
+        gate=PolicyGate(max_per_tx_usd=50000.0, daily_cap_usd=50000.0), execution_context=None,
+        price_fn=price, rpc_is_pinned_fn=lambda c: True, halted_fn=lambda: False,
+        entry_paused_fn=lambda: False, forged_fn=lambda ctx, tool: False, liquidity_rpc=_rpc)
+    assert d.position_token_id == next_id, d.reason
+    _send(TREASURY, ROW.position_manager, plan.data, value=plan.value)
+    new = V.position(_rpc, "robinhood", next_id)
+    assert (new.owner, new.tick_lower, new.tick_upper) == (TREASURY.lower(), lo, hi)
+    assert new.liquidity == plan.seed["liquidity"] > 0
+    assert V.position(_rpc, "robinhood", pos.token_id).liquidity == left

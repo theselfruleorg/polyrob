@@ -55,6 +55,7 @@ V4_MAX_LP_FEE = 1_000_000
 
 _V4_MINT_SHAPE = bytes([0x02, 0x0D, 0x14])   # MINT_POSITION, SETTLE_PAIR, SWEEP
 _V4_COLLECT_SHAPE = bytes([0x01, 0x11])      # DECREASE_LIQUIDITY, TAKE_PAIR
+_V4_INCREASE_SHAPE = bytes([0x00, 0x0D, 0x14])   # INCREASE_LIQUIDITY, SETTLE_PAIR, SWEEP (118 W6)
 _POOL_KEY = {"type": "tuple", "components": [
     {"type": "address"}, {"type": "address"}, {"type": "uint24"},
     {"type": "int24"}, {"type": "address"}]}
@@ -133,6 +134,112 @@ def is_v4_collect(intent) -> bool:
     position (``hold``), nothing paid in. The signed bytes are judged apart."""
     return (protocol_of(intent) == "v4" and intent.lp_position_effect == "hold"
             and not intent.lp_outflows)
+
+
+def is_v4_increase(intent) -> bool:
+    """118 W6: the DECLARED v4 increase — the pinned v4 PositionManager, a held
+    position (``hold``), something paid in and nothing received."""
+    return (protocol_of(intent) == "v4" and intent.lp_position_effect == "hold"
+            and bool(intent.lp_outflows) and not intent.lp_inflows)
+
+
+def decode_v4_increase(tx) -> dict:
+    """The v4 increase, decoded from the transaction that will be signed:
+    exactly INCREASE_LIQUIDITY(tokenId, L, max0, max1, "") + SETTLE_PAIR(c0, c1)
+    + SWEEP(c0 → recipient). Raises ValueError on anything else."""
+    actions, params = _v4_unlock(tx)
+    if actions != _V4_INCREASE_SHAPE or len(params) != 3:
+        raise ValueError("a v4 increase is exactly INCREASE_LIQUIDITY + SETTLE_PAIR + SWEEP; "
+                         "any other action sequence is refused")
+    token_id, liquidity, max0, max1, hook_data = abi.decode(_DECREASE_PARAMS, _raw(params[0]))
+    s0, s1 = abi.decode(_PAIR, _raw(params[1]))
+    sweep_currency, sweep_to = abi.decode(_PAIR, _raw(params[2]))
+    if _raw(hook_data):
+        raise ValueError("v4 hookData must be empty")
+    if not int(liquidity) > 0:
+        raise ValueError("a v4 increase must add liquidity")
+    s0, s1 = str(s0).lower(), str(s1).lower()
+    if int(s0, 16) >= int(s1, 16):
+        raise ValueError("SETTLE_PAIR must name two different currencies, sorted")
+    if str(sweep_currency).lower() != s0:
+        raise ValueError("SWEEP must return currency0")
+    return {"token_id": int(token_id), "liquidity": int(liquidity), "amount0_max": int(max0),
+            "amount1_max": int(max1), "currency0": s0, "currency1": s1,
+            "recipient": str(sweep_to).lower()}
+
+
+def read_v4_position_range(rpc, chain, token_id):
+    """``(PoolKey, tickLower, tickUpper)`` of v4 position *token_id* from the
+    PINNED PositionManager. ``PositionInfo`` packs poolId (200 bits) | tickUpper
+    (24) | tickLower (24) | hasSubscriber (8)."""
+    npm = dex_registry.resolve_position_manager(chain, "v4")
+    spec = POSM_POOL_AND_POSITION_INFO
+    raw = rpc("eth_call", [{"to": npm, "data": abi.encode_call(
+        spec["name"], spec["inputs"], [int(token_id)])}, "latest"])
+    if raw in (None, "", "0x"):
+        raise ValueError(f"getPoolAndPositionInfo({token_id}) on {npm} returned nothing")
+    (c0, c1, fee, spacing, hooks), info = abi.decode(spec["outputs"], raw)
+    i24 = lambda x: (x & 0xFFFFFF) - (1 << 24 if x & 0x800000 else 0)
+    key = {"currency0": str(c0).lower(), "currency1": str(c1).lower(), "fee": int(fee),
+           "tickSpacing": int(spacing), "hooks": str(hooks).lower()}
+    return key, i24(int(info) >> 8), i24(int(info) >> 32)
+
+
+def _structural_v4_increase(intent, tx, holder, row, npm):
+    """118 W6: more liquidity into a position the wallet holds. The PoolKey, the
+    range and the price bound are read in :func:`verify_pins`; the owner is read
+    by the guard's ownership step (every effect but ``mint``)."""
+    token_id = intent.lp_position[1] if intent.lp_position else None
+    if (not intent.lp_position or intent.lp_position[0].lower() != npm
+            or not isinstance(token_id, int) or isinstance(token_id, bool) or token_id < 0):
+        raise ValueError("a v4 increase must declare the pinned v4 position manager and a position id")
+    if not holder:
+        raise ValueError("a v4 increase must know the holder that pays and is refunded")
+    c = decode_v4_increase(tx)
+    if c["token_id"] != token_id:
+        raise ValueError(f"INCREASE_LIQUIDITY names position {c['token_id']}, not the declared {token_id}")
+    if c["recipient"] != str(holder).lower():
+        raise ValueError(f"SWEEP pays {c['recipient']}, not the holder {holder} — refused")
+    out = legs(intent.lp_outflows)
+    if len(intent.lp_outflows) > 2 or len(out) != len(intent.lp_outflows):
+        raise ValueError("liquidity requires at most two distinct legs per direction")
+    if any(not isinstance(n, int) or isinstance(n, bool) or n < 1 for n in out.values()):
+        raise ValueError("invalid liquidity leg amount")
+    if set(out) - {None if cur == ZERO else cur for cur in (c["currency0"], c["currency1"])}:
+        raise ValueError("a declared liquidity leg is not a currency SETTLE_PAIR settles")
+    for cur, cap in ((c["currency0"], c["amount0_max"]), (c["currency1"], c["amount1_max"])):
+        declared = out.get(None if cur == ZERO else cur, 0)
+        if cap > declared:
+            raise ValueError(f"calldata may pay {cap} of {cur} but the intent declares {declared}")
+    if int(tx.get("value") or 0) != out.get(None, 0):
+        raise ValueError("native liquidity leg must equal tx.value")
+    pm = row.pool_manager.lower()
+    if (pm, TOPIC_V4_MODIFY_LIQUIDITY) not in {(e.lower(), t.lower()) for e, t in intent.expected_events}:
+        raise ValueError("a v4 increase must require the PoolManager's ModifyLiquidity event")
+    _check_expected_events(intent, (npm, pm))
+
+
+def _verify_v4_increase(rpc, intent, tx):
+    """The chain half of the increase: SETTLE_PAIR settles exactly the position's
+    own two currencies, its hook is pinned, its pool has a price, and each signed
+    maximum is bound to the pool price over the position's OWN range."""
+    c = decode_v4_increase(tx)
+    key, lo, hi = read_v4_position_range(rpc, intent.chain, c["token_id"])
+    if (key["currency0"], key["currency1"]) != (c["currency0"], c["currency1"]):
+        raise ValueError(f"SETTLE_PAIR settles {c['currency0']}/{c['currency1']}, but position "
+                         f"#{c['token_id']} is on {key['currency0']}/{key['currency1']}")
+    if not dex_registry.hook_pinned(intent.chain, key["hooks"]):
+        raise ValueError(f"v4 hook {key['hooks']} has no pinned code hash; an unreviewed hook "
+                         f"runs inside the increase")
+    dex_registry.verify_hook(rpc, intent.chain, key["hooks"])
+    pool_id = v4_pool_id((key["currency0"], key["currency1"], key["fee"], key["tickSpacing"],
+                          key["hooks"]))
+    sqrt_price = read_v4_sqrt_price(rpc, intent.chain, pool_id)
+    if sqrt_price == 0:
+        raise ValueError(f"v4 pool {pool_id} is not initialised")
+    _assert_price_bound({"tick_lower": lo, "tick_upper": hi, "liquidity": c["liquidity"],
+                         "amount0_max": c["amount0_max"], "amount1_max": c["amount1_max"]},
+                        sqrt_price, MINT_MAX_GAP_BPS, "the pool price")
 
 
 def may_ride_account(intent) -> bool:
@@ -309,9 +416,11 @@ def _structural_v4(intent, tx, holder=None):
         return _structural_v4_collect(intent, tx, holder, row, npm)
     if intent.via_account:
         raise ValueError("a token-bound account changes v4 liquidity only to collect fees")
+    if is_v4_increase(intent):
+        return _structural_v4_increase(intent, tx, holder, row, npm)
     if intent.lp_position_effect != "mint" or intent.lp_inflows:
-        raise ValueError("v4 builds a new-position MINT only, a fee COLLECT and a "
-                         "withdrawal that keeps the position; increase and burn are refused")
+        raise ValueError("v4 builds a new-position MINT, an INCREASE of a held position, a fee "
+                         "COLLECT and a withdrawal that keeps the position; burn is refused")
     if not intent.lp_position or intent.lp_position[0].lower() != npm or intent.lp_position[1] is not None:
         raise ValueError("liquidity must declare the pinned v4 position manager and an unknown id")
     m = decode_v4_mint(tx)
@@ -357,6 +466,8 @@ def verify_pins(rpc, intent, tx):
     dex_registry.verify_pins(rpc, intent.chain, protocol)
     if protocol != "v4":
         return
+    if is_v4_increase(intent):
+        return _verify_v4_increase(rpc, intent, tx)
     if not is_v4_collect(intent):
         m = decode_v4_mint(tx)
         dex_registry.verify_hook(rpc, intent.chain, m["hooks"])
@@ -831,5 +942,12 @@ def _assert_v4_position_events(intent, logs, token_id, tx=None):
         raise ValueError("a v4 deposit may not withdraw liquidity")
     if len(ours) != 1:
         raise ValueError(f"expected exactly one ModifyLiquidity for position {token_id}, saw {len(ours)}")
+    if is_v4_increase(intent):
+        # 118 W6: the one event adds exactly the SIGNED liquidity (no PoolKey is signed).
+        added = decode_v4_increase(tx)["liquidity"] if tx is not None else ours[0]
+        if ours != [added]:
+            raise ValueError(f"a v4 increase of {added} must show exactly one ModifyLiquidity "
+                             f"of +{added} for position {token_id}; saw {ours}")
+        return
     if tx is not None:
         _assert_v4_signed_events(intent, logs, token_id, tx)

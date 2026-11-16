@@ -78,11 +78,11 @@
       "tokens": 7488
     },
     "tools": {
-      "chars": 97858,
+      "chars": 98041,
       "count": 104,
-      "tokens": 24464
+      "tokens": 24510
     },
-    "total_tokens": 31952
+    "total_tokens": 31998
   },
   "goal": {
     "layers": {
@@ -128,11 +128,11 @@
       "tokens": 7484
     },
     "tools": {
-      "chars": 97858,
+      "chars": 98041,
       "count": 104,
-      "tokens": 24464
+      "tokens": 24510
     },
-    "total_tokens": 31948
+    "total_tokens": 31994
   },
   "leaf": {
     "layers": {
@@ -224,11 +224,11 @@
       "tokens": 7614
     },
     "tools": {
-      "chars": 76568,
+      "chars": 76619,
       "count": 93,
-      "tokens": 19142
+      "tokens": 19154
     },
-    "total_tokens": 26756
+    "total_tokens": 26769
   },
   "owner_telegram_dm": {
     "layers": {
@@ -274,11 +274,11 @@
       "tokens": 7798
     },
     "tools": {
-      "chars": 73745,
+      "chars": 73928,
       "count": 60,
-      "tokens": 18436
+      "tokens": 18482
     },
-    "total_tokens": 26234
+    "total_tokens": 26280
   },
   "prod_owner_telegram_dm": {
     "layers": {
@@ -299,8 +299,8 @@
         "tokens": 53
       },
       "skill_catalog": {
-        "chars": 8471,
-        "tokens": 2117
+        "chars": 8481,
+        "tokens": 2120
       },
       "step1:state_delta": {
         "chars": 3184,
@@ -320,15 +320,15 @@
       }
     },
     "system": {
-      "chars": 37043,
-      "tokens": 9260
+      "chars": 37053,
+      "tokens": 9263
     },
     "tools": {
-      "chars": 129857,
+      "chars": 130720,
       "count": 86,
-      "tokens": 32464
+      "tokens": 32680
     },
-    "total_tokens": 41725
+    "total_tokens": 41943
   },
   "room": {
     "layers": {
@@ -400,10 +400,10 @@
       "tokens": 7957
     },
     "tools": {
-      "chars": 35537,
+      "chars": 35588,
       "count": 37,
-      "tokens": 8884
+      "tokens": 8897
     },
-    "total_tokens": 16841
+    "total_tokens": 16854
   }
 }

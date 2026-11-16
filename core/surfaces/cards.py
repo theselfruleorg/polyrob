@@ -104,6 +104,7 @@ CONFIRMABLE_VERBS = frozenset({
     "/nft", "/identity", "/writeoff", "/unquarantine", "/wallet",
     "/restart", "/update",  # 077: restart / update the agent, quote -> owner confirm
     "/model",  # 094: a switch to a much pricier model is quoted first
+    "/lp",  # 118 W5: a liquidity write's dry run is its quote (add, remove, collect, seed run)
 })
 
 #: Confirmable verbs whose BARE form already quotes (``/restart`` → "To restart:
@@ -148,6 +149,9 @@ _PROPOSAL_SUBCOMMANDS = {
     "/wallet": frozenset({"trust", "untrust"}),
     "/nft": frozenset({"transfer", "revoke", "send"}),
     "/identity": frozenset({"register", "set-uri"}),
+    # 118 W5: only what RETURNS funds to the wallet. A deposit, a new pool or a move is
+    # the owner's declaration (``/lp seed``, ``/lp move``), never an agent proposal.
+    "/lp": frozenset({"remove", "collect"}),
 }
 
 

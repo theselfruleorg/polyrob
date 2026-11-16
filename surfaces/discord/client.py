@@ -41,8 +41,11 @@ class DiscordClient:
             return payload
 
     async def send_message(self, channel_id: str, text: str,
-                           reply_to: Optional[str] = None) -> dict:
+                           reply_to: Optional[str] = None,
+                           components: Optional[list] = None) -> dict:
         body: dict = {"content": text, "allowed_mentions": {"parse": [], "replied_user": False}}
+        if components:
+            body["components"] = components
         if reply_to:
             body["message_reference"] = {"message_id": str(reply_to),
                                          "fail_if_not_exists": False}
@@ -80,6 +83,17 @@ class DiscordClient:
         return await self._request(
             "PATCH", f"/channels/{channel_id}/messages/{message_id}",
             json={"content": text, "allowed_mentions": {"parse": [], "replied_user": False}})
+
+    async def ack_interaction(self, interaction_id: str, token: str) -> None:
+        """Answer a button press with DEFERRED_UPDATE_MESSAGE (type 6) so the
+        client stops its spinner; Discord wants it within 3 seconds. The
+        interaction token is a bearer secret: never logged."""
+        try:
+            await self._request(
+                "POST", f"/interactions/{interaction_id}/{token}/callback",
+                json={"type": 6})
+        except RuntimeError as e:
+            raise RuntimeError(str(e).replace(str(token), "<token>")) from None
 
     async def trigger_typing(self, channel_id: str) -> None:
         await self._request("POST", f"/channels/{channel_id}/typing")

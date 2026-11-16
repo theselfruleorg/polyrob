@@ -10,6 +10,48 @@ short, user-facing notes for each release are on its GitHub Release page.
 
 ## [Unreleased]
 
+## [1.7.11] — 2026-11-16
+
+### Added
+
+- `polyrob wallet lp` takes `--v4` on `positions`, `pool`, `remove` and `collect`, and gains `move`.
+  The console lists v4 positions; a position that was not read or not found is its own row.
+- `lp_add(protocol='v4', token_id=…)` adds liquidity to a v4 position the wallet holds, in the
+  position's own range. The guard reads the pool and the range from the position, not from the call.
+- A v4 liquidity position can be watched by a scheduled read with no model call: alert when it leaves
+  its range, or when its ETH or its value falls below a limit (`defi_data.lp_positions` by id).
+- A `/lp` dry run (add, remove, collect, seed run) is a card with Confirm, and the agent can propose a
+  liquidity withdrawal or fee collection on a card (`propose_action`); it cannot propose a plain deposit.
+- `/lp move <id> range …` and `lp_add(protocol='v4', move_from=…)` move a v4 position to a new range on
+  one owner card: the withdrawal, then the mint, as two guarded transactions. The mint is checked
+  first (pauses and limits included) and the withdrawal is sent once. Nothing is swapped.
+- A v4 position read shows its deposits, withdrawals and result against holding the deposit; a v4 pool
+  read shows its depth and who holds its liquidity. All from the pool's logs; a failed read says NOT READ.
+- Discord shows native buttons for approvals, cards and choices; a tap is the presser typing the card
+  line (same owner/tier checks as typing it). The text keeps the commands. No slash commands or menus yet.
+
+### Changed
+
+- The `defi-liquidity` skill covers Uniswap v4 and tells the agent how to judge a position: the result
+  against holding, size against volume, when to propose a smaller position, range choice, a range move.
+- `LP_ETH_CAP` is the program's net deposit, per position: a v4 withdrawal gives its ETH back (never
+  below zero; a deposit made outside the ledger returns none). `LP_ETH_DAILY_CAP` still sums deposits.
+- `AGENT_NFT_ENABLED` is an owner setting: `/config set AGENT_NFT_ENABLED true` from chat, and the
+  agent proposes it on a one-tap card instead of filing an operator request.
+
+### Fixed
+
+- A new v4 deposit with `slippage_bps` from 991 to 1000 no longer always refuses: its maximum
+  amounts stay inside the guard's price bound.
+- A Telegram room the bot was removed from turns active again when the bot is added back (it stayed
+  `left` and muted); the room tools say the bot was removed, not "not an
+  allowlisted room".
+
+### Security
+
+- The lock pins `opentelemetry-api` 1.45.2 and `soupsieve` 4.1.1 (advisory fixes). Python 3.11.0 to
+  3.11.4 gets `soupsieve` 2.10, the last release for it; use Python 3.11.5 or later for the fixes.
+
 ## [1.7.10] — 2026-11-14
 
 ### Added

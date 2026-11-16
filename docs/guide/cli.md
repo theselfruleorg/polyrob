@@ -671,7 +671,7 @@ polyrob wallet deploy-token SYMBOL SUPPLY NAME… --chain <chain> [--execute]
 polyrob wallet launch SYMBOL NAME… [--buy 0.1] [--logo URL] [--execute]
 polyrob wallet curve TOKEN [--buy N | --sell N]
 polyrob wallet claim TOKEN [--execute]          # creator fees the launchpad owes this wallet
-polyrob wallet lp positions|pool|quote|add|remove|collect … --chain <chain>   # Uniswap v3 liquidity
+polyrob wallet lp positions|pool|quote|add|remove|collect|move … --chain <chain> [--v4]   # Uniswap v3/v4 liquidity
 polyrob wallet nft list|info|transfer|revoke … --chain <chain>  # non-fungibles this wallet holds
 polyrob wallet asset add|list|verify …          # assets the treasury may be paid in
 polyrob wallet dapp list|revoke <session_id>    # web-dapp wallet sessions

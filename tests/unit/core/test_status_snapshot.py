@@ -25,6 +25,14 @@ from core.status_render import (
 OWNER = "alice"
 
 
+@pytest.fixture(autouse=True)
+def _no_dropped_rows_from_earlier_tests(monkeypatch):
+    """``core.event_log._drops`` counts for the whole process, so a row an
+    earlier test could not write made every snapshot here read ``degraded``."""
+    import core.event_log as event_log
+    monkeypatch.setattr(event_log, "_drops", {"n": 0, "last_error": "", "warned_at": 0.0})
+
+
 def _seed_goals(data_dir, *, ready=0, blocked=True, asks=True):
     from agents.task.goals.board import GoalBoard, STATUS_READY
     board = GoalBoard(os.path.join(data_dir, "goals.db"))

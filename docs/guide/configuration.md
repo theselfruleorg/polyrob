@@ -188,7 +188,8 @@ fills a key the environment does not set.
 
 When a feature is off, every hint names the fix the same way:
 `enable: `polyrob config set KEY true` (takes effect: restart)`, or the
-feature's own verb where it has one (`polyrob autonomy on`).
+feature's own verb where it has one (`polyrob autonomy on`). A setting you can change
+from chat names its chat line (`/config set KEY true`), and the agent proposes that line for one tap.
 
 ### Files and precedence
 

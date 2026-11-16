@@ -56,6 +56,20 @@
           "exclusiveMinimum": 0,
           "type": "number"
         },
+        "move_from": {
+          "default": null,
+          "description": "v4 only: MOVE your position with this id to a new range. Give range ('full', 'ticks:lo,hi', or 'low,high' prices in currency1 per currency0) and move_pct; no tokens or amounts. The call sends NOTHING: it puts one card to the owner. After Confirm, seed=<ref> withdraws that part and mints the new range from it (two transactions, nothing swapped).",
+          "minimum": 0,
+          "nullable": true,
+          "type": "integer"
+        },
+        "move_pct": {
+          "default": 100,
+          "description": "With move_from: percent of the position to move.",
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer"
+        },
         "protocol": {
           "default": "v3",
           "description": "'v3', or 'v4'. v4 has three forms: a new FULL-RANGE position on a Pons graduated pool (token_a/token_b = 'native' + the Pons token); a pool the OWNER must declare — name the PoolKey in full (fee + tick_spacing, hooks if any, range, both amounts, initial_price) and the call sends NOTHING, it puts one card to the owner; and seed=<ref> to build that declared position. Every v4 add needs an ERC-20 allowance to Permit2 and approve_token(via='permit2') first; capped by LP_ETH_CAP.",
@@ -104,7 +118,7 @@
         },
         "token_id": {
           "default": null,
-          "description": "Your existing position NFT id to ADD to. Omit to mint a new position.",
+          "description": "Your existing position NFT id to ADD to (v3, and v4 in the position's own range: give the pool's two tokens and both amounts). Omit to mint a new position.",
           "minimum": 0,
           "nullable": true,
           "type": "integer"

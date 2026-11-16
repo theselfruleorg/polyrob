@@ -143,7 +143,9 @@ class CronScheduleAction(BaseModel):
                     "'alert' (default) delivers only a result with an ALERT line or an error. "
                     "Verbs: defi_data.pool_metrics, defi_data.price, defi_data.token_info, "
                     "defi_data.wallet_holdings, defi_data.position_mark, "
-                    "defi_data.discovery_count (public on-chain reads only; a web page or "
+                    "defi_data.discovery_count, defi_data.lp_positions (protocol='v4' + "
+                    "token_id: fields in_range 'yes'|'no', currency0, currency1, value0, "
+                    "price, pool_share_pct) (public on-chain reads only; a web page or "
                     "any other source cannot be a read verb). A price/value watch adds "
                     "'alert': {'field': '<key of the verb result metadata>', 'below': n, "
                     "'above': n} — the verb compares, you never do; an unreadable value alerts.")

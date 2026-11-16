@@ -66,6 +66,11 @@ using rooms on Telegram:
 4. In the room, run `/groups allow here` (owner only) to allowlist it, then set a mode
    with `/groups mode here mention` (the default) or another mode.
 
+When the bot is removed from an allowed group, `/groups list` shows the group as `left`
+and the agent stops reading and posting there. Add the bot back and the group turns
+active again by itself; the agent tells you both times. Removing the bot never changes
+your permission: a group you denied stays denied when somebody adds the bot back.
+
 `TELEGRAM_BOT_USERNAME` overrides the bot's own handle for mention detection when
 `getMe` is unavailable at boot (the handle otherwise self-heals from the bot's own
 outbound messages).

@@ -49,7 +49,8 @@ _CONFLICT_BACKOFF_SEC = 30
 #: the dedup and routed as a fresh message — editing an old ``/send … go`` moved
 #: the money a second time. ``handle_update`` also drops an edit that arrives
 #: anyway (a webhook, an old subscription).
-_ALLOWED_UPDATES = ("message", "channel_post", "callback_query")
+#: ``my_chat_member``: the bot's own join/leave in a room (room_membership.py).
+_ALLOWED_UPDATES = ("message", "channel_post", "callback_query", "my_chat_member")
 _EDIT_UPDATE_KINDS = ("edited_message", "edited_channel_post")
 
 #: TG5: the offset lives in memory, so a crash after a long inline verb (a
@@ -195,7 +196,7 @@ _USAGE = {
     "/settle": "<id> [tx]",
     "/trade": "start|status|pause|resume|stop|release", "/offer": "list|show|orders|quote|resolve|pause|resume|retire",
     "/bridge": "<from> <to> <amount> [from usdc] [as <asset>] [go]",
-    "/lp": "positions|pool|quote|add|remove|collect|seed",
+    "/lp": "positions|pool|quote|add|remove|collect|seed|move",
     "/launch": "<SYMBOL> <name…> [logo <url>] [desc <text>] [buy <amount>] [go]",
     "/deploy": "<SYMBOL> <supply> <name…> [on <chain>] [decimals <n>] [go]",
     "/claim": "<token> [go]",
@@ -2355,6 +2356,9 @@ class TelegramHarness:
             return None
         from surfaces.telegram import room_migration
         if await room_migration.absorb(self, update):
+            return None
+        from surfaces.telegram import room_membership
+        if await room_membership.absorb(self, update):
             return None
         if "callback_query" in update:  # 064 F2: a button press = the presser typing it
             from surfaces.telegram.actions import accept_callback

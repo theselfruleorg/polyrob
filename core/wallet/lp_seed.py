@@ -74,8 +74,12 @@ CREATE TABLE IF NOT EXISTS lp_seeds (
 FIELDS = ("chain", "currency0", "currency1", "fee", "tick_spacing", "hooks", "pool_id",
           "tick_lower", "tick_upper", "amount0_raw", "amount1_raw", "dec0", "dec1",
           "sym0", "sym1", "sqrt_price_x96", "price_source", "gap_bps")
+#: 118 W7: a MOVE — the declaration's funds come from withdrawing ``from_pct``
+#: percent of position ``from_token_id``, which held ``from_liquidity`` when the
+#: declaration was made. All three or none.
+MOVE_FIELDS = ("from_token_id", "from_pct", "from_liquidity")
 
-PRICE_SOURCES = ("owner", "agent")
+PRICE_SOURCES = ("owner", "agent", "pool")
 _ZERO = "0x" + "0" * 40
 
 
@@ -127,7 +131,7 @@ def validate(fields: Dict[str, Any]) -> Dict[str, Any]:
     guard holds the signed bytes to (117 §4.1, §4.4), so a card is never made
     for a shape the guard refuses."""
     from core.wallet import dex_registry, liquidity_guard as G, univ3_math as M
-    unknown = sorted(set(fields) - set(FIELDS))
+    unknown = sorted(set(fields) - set(FIELDS) - set(MOVE_FIELDS))
     if unknown:
         raise SeedError(f"unknown declaration field(s): {', '.join(unknown)}")
     chain = str(fields.get("chain") or "").lower()
@@ -173,7 +177,17 @@ def validate(fields: Dict[str, Any]) -> Dict[str, Any]:
     if given != pid:
         raise SeedError("pool_id is not the hash of the five PoolKey fields")
     sym = lambda v: "".join(ch for ch in str(v or "?") if ch.isalnum() or ch in "._-$")[:16] or "?"
-    return {"chain": chain, "currency0": c0, "currency1": c1, "fee": fee,
+    move = {}
+    if any(k in fields for k in MOVE_FIELDS):
+        move = {k: _int(fields.get(k), k) for k in MOVE_FIELDS}
+        if move["from_token_id"] < 0 or not 1 <= move["from_pct"] <= 100 \
+                or not 0 < move["from_liquidity"] < 2 ** 128:
+            raise SeedError("a move names a position id, a percent 1..100 and the liquidity "
+                            "the position held")
+        if source != "pool":
+            raise SeedError("a move is declared at the pool's own price")
+        move["from_liquidity"] = str(move["from_liquidity"])
+    return {**move, "chain": chain, "currency0": c0, "currency1": c1, "fee": fee,
             "tick_spacing": spacing, "hooks": hooks, "pool_id": pid, "tick_lower": lo,
             "tick_upper": hi, "amount0_raw": str(a0), "amount1_raw": str(a1), "dec0": dec0,
             "dec1": dec1, "sym0": sym(fields.get("sym0")), "sym1": sym(fields.get("sym1")),
@@ -267,6 +281,31 @@ def release(ref: str, *, note: str = "", path: Optional[str] = None) -> bool:
     return _move(ref, CONFIRMED, (SENDING,), path, note=str(note)[:500])
 
 
+#: 118 W7: a MOVE declaration's ``tx_hash`` names its withdrawal until the mint
+#: closes the row: ``withdraw:sending`` from the claim, then ``withdraw:<hash>``.
+WITHDRAW_MARK = "withdraw:"
+
+
+def claim_withdrawal(ref: str, *, path: Optional[str] = None) -> bool:
+    """Take a move's ONE withdrawal, just before it is signed. False when it was
+    taken already (a second run, or a run in parallel) or the row is not CONFIRMED."""
+    from core.sqlite_util import execute_retry
+    return execute_retry(
+        path or db_path(), "UPDATE lp_seeds SET tx_hash=? WHERE ref=? AND state=? "
+        "AND (tx_hash IS NULL OR tx_hash='')",
+        (WITHDRAW_MARK + "sending", str(ref), CONFIRMED)) == 1
+
+
+def set_withdrawal(ref: str, tx_hash: str, *, path: Optional[str] = None) -> bool:
+    """Name the withdrawal's transaction, or give the claim back with ``""`` when
+    nothing was broadcast."""
+    from core.sqlite_util import execute_retry
+    value = WITHDRAW_MARK + str(tx_hash) if tx_hash else ""
+    return execute_retry(
+        path or db_path(), "UPDATE lp_seeds SET tx_hash=? WHERE ref=? AND tx_hash LIKE ?",
+        (value, str(ref), WITHDRAW_MARK + "%")) == 1
+
+
 def finish(ref: str, state: str, *, token_id: Any = None, tx_hash: str = "", note: str = "",
            path: Optional[str] = None, now: Optional[float] = None) -> bool:
     """``sending -> seeded | failed``."""
@@ -299,8 +338,9 @@ def summary_lines(f: Dict[str, Any]) -> list:
     hi = M.tick_to_price(f["tick_upper"], f["dec0"], f["dec1"])
     native = lambda c, s: f"{s} (native)" if c == _ZERO else f"{s} {c}"
     who = ("a number you typed" if f["price_source"] == "owner"
+           else "the pool's own price when this was declared" if f["price_source"] == "pool"
            else "a number the AGENT proposed — check it; no market set it")
-    return [
+    return move_lines(f) + [
         f"Uniswap v4 pool on {f['chain']}: {native(f['currency0'], f['sym0'])} / "
         f"{native(f['currency1'], f['sym1'])}",
         f"fee {f['fee'] / 10000:g}%, tick spacing {f['tick_spacing']}, "
@@ -313,6 +353,27 @@ def summary_lines(f: Dict[str, Any]) -> list:
         f"at most {_human(f['amount0_raw'], f['dec0'])} {f['sym0']} and "
         f"{_human(f['amount1_raw'], f['dec1'])} {f['sym1']}; the position goes to the wallet",
         f"allowed price gap: {f['gap_bps'] / 100:g}%",
+    ]
+
+
+def move_lines(f: Dict[str, Any]) -> list:
+    """118 W7: the two lines a MOVE adds — what is withdrawn first, and what the
+    new range takes of it (nothing is swapped, so the rest stays in the wallet)."""
+    if "from_token_id" not in f:
+        return []
+    from core.wallet import univ3_math as M
+    sqrt = int(f["sqrt_price_x96"])
+    sa, sb = M.sqrt_price_at_tick(f["tick_lower"]), M.sqrt_price_at_tick(f["tick_upper"])
+    out = (int(f["amount0_raw"]), int(f["amount1_raw"]))
+    used = M.amounts_for_liquidity(sqrt, sa, sb, M.liquidity_for_amounts(sqrt, sa, sb, *out))
+    rest = [max(0, o - u) for o, u in zip(out, used)]
+    h = lambda n, i: f"{_human(n, f['dec%d' % i])} {f['sym%d' % i]}"
+    return [
+        f"MOVE: first withdraw {f['from_pct']}% of position #{f['from_token_id']} (about "
+        f"{h(out[0], 0)} + {h(out[1], 1)} and its fees owed go to the wallet), then mint the "
+        f"range below from it — two transactions",
+        f"the new range takes about {h(used[0], 0)} + {h(used[1], 1)} at this price; about "
+        f"{h(rest[0], 0)} + {h(rest[1], 1)} stays in the wallet (nothing is swapped)",
     ]
 
 
@@ -331,13 +392,15 @@ def seed_card(user_id: str, ref: str, f: Dict[str, Any], *, origin: str,
     ``/lp seed confirm <ref>`` on the owner's seat."""
     from core.surfaces import cards
     return cards.job_card(user_id, ["/lp", "seed", "confirm", ref],
-                          title="Create a pool position — confirm the declaration",
+                          title=("Move a pool position — confirm the declaration"
+                                 if "from_token_id" in f else
+                                 "Create a pool position — confirm the declaration"),
                           body=card_body(f, notes=notes), session_id=session_id, st=st,
                           origin=cards.ORIGIN_AGENT if origin == "agent" else cards.ORIGIN_SYSTEM)
 
 
 __all__ = ["CONFIRMED", "CONFIRMED_TTL_S", "DB_NAME", "EXPIRED", "FAILED", "FIELDS",
-           "GAP_DEFAULT_BPS", "GAP_MAX_BPS", "MACHINE", "PROPOSED", "PROPOSED_TTL_S", "SEEDED",
+           "GAP_DEFAULT_BPS", "GAP_MAX_BPS", "MACHINE", "MOVE_FIELDS", "PROPOSED", "PROPOSED_TTL_S", "SEEDED",
            "SENDING", "SeedError", "SeedUnreadable", "card_body", "claim", "confirm", "db_path",
-           "finish", "get", "init_schema", "key_of", "price_of", "propose", "release",
+           "finish", "get", "init_schema", "key_of", "move_lines", "price_of", "propose", "release",
            "seed_card", "summary_lines", "validate"]

@@ -1,6 +1,6 @@
 {
   "function": {
-    "description": "Propose a money action to the OWNER as a card. Nothing moves: the owner taps 'Get a quote', sees the real simulated price and caps, and only then can Confirm. Use it instead of describing a command for the owner to type, and when the owner only ASKS about a money move (execute one only on an imperative line). Verbs: /send /swap /bridge /pay /claim /launch /deploy /nft /identity /writeoff /unquarantine /wallet (trust|untrust), and /restart or /update (your own background service: it finishes its work, restarts and reports back).",
+    "description": "Propose a money action to the OWNER as a card. Nothing moves: the owner taps 'Get a quote', sees the real simulated price and caps, and only then can Confirm. Use it instead of describing a command for the owner to type, and when the owner only ASKS about a money move (execute one only on an imperative line). Verbs: /send /swap /bridge /pay /claim /launch /deploy /nft /identity /writeoff /unquarantine /wallet (trust|untrust), /lp (remove|collect: `/lp remove v4 <id> pct 50`), and /restart or /update (your own background service: it finishes its work, restarts and reports back).",
     "name": "propose_action",
     "parameters": {
       "additionalProperties": false,

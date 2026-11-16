@@ -82,6 +82,8 @@ For an on-chain number, the tick can run with no model call:
 - `precheck={verb, params, alert?, move_pct?, field?, max_quiet_hours?}` — a quiet
   read skips the tick at $0; a crossed bound or a move runs the model with the read
   attached.
+- A liquidity position is watched this way too (`defi_data.lp_positions` by id; the
+  fields are in `defi-liquidity`).
 - ⚠️ Only the `defi_data` public reads named in the `read_verb` schema can run this
   way. A web page, a feed or any other source runs the model on every tick: tell the
   owner the cost per tick and pick a slow cadence.

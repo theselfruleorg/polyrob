@@ -368,7 +368,8 @@ class LpAddParams(NoAccountMode):
         "Only to CREATE a pool that does not exist yet: the starting price as token_b per "
         "token_a. Omit for an existing pool."))
     token_id: Optional[int] = Field(None, ge=0, description=(
-        "Your existing position NFT id to ADD to. Omit to mint a new position."))
+        "Your existing position NFT id to ADD to (v3, and v4 in the position's own range: "
+        "give the pool's two tokens and both amounts). Omit to mint a new position."))
     # CR-M12: capped at the swap rail's bound — LP minimums are a slippage
     # floor too, and 50% let a sandwich take half the deposit.
     slippage_bps: int = Field(100, ge=0, le=1000, description="Deposit minimums, in basis points (max 1000).")
@@ -385,12 +386,23 @@ class LpAddParams(NoAccountMode):
         "v4 only: the id of a pool declaration (from the proposal). The pool, range, "
         "amounts and price come from the declaration and nothing else you pass is read "
         "but chain, max_spend_usd and dry_run. A live send needs the owner's Confirm."))
+    move_from: Optional[int] = Field(None, ge=0, description=(
+        "v4 only: MOVE your position with this id to a new range. Give range ('full', "
+        "'ticks:lo,hi', or 'low,high' prices in currency1 per currency0) and move_pct; no "
+        "tokens or amounts. The call sends NOTHING: it puts one card to the owner. After "
+        "Confirm, seed=<ref> withdraws that part and mints the new range from it (two "
+        "transactions, nothing swapped)."))
+    move_pct: int = Field(100, ge=1, le=100, description="With move_from: percent of the position to move.")
     max_spend_usd: float = Field(..., gt=0, allow_inf_nan=False,
                                  description="The most USD both legs plus gas may cost.")
     dry_run: bool = Field(True, description="TRUE (default) simulates and asserts without broadcasting.")
 
     @model_validator(mode="after")
     def _a_pair_or_a_declaration(self):
+        if self.move_from is not None:
+            if self.protocol != "v4" or self.seed is not None:
+                raise ValueError("move_from is a v4 move; pass protocol='v4' and no seed=")
+            return self
         if self.seed is not None:
             if self.protocol != "v4":
                 raise ValueError("seed= is a v4 declaration; pass protocol='v4'")

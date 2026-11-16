@@ -166,7 +166,7 @@ def test_a_target_that_is_not_the_pinned_position_manager_refuses():
 
 def test_v4_withdrawal_and_mint_through_an_account_still_refuse():
     w = _intent(lp_position_effect="burn")
-    with pytest.raises(ValueError, match="MINT only"):
+    with pytest.raises(ValueError, match="burn is refused"):
         G.structural(w, _tx(), holder=HOLDER)
     assert not G.may_ride_account(w)
     assert not G.may_ride_account(_intent(lp_outflows=((None, 1),)))

@@ -657,18 +657,18 @@ state) and `lp_quote` (the liquidity a deposit would mint and the exact paired a
 `DEFI_LIQUIDITY_ENABLED=true` arms `defi_trade.lp_add`, `lp_remove` and `lp_collect`; all
 default to a dry run. The owner runs the same guarded actions with `polyrob wallet lp`
 (`positions`, `pool`, `quote`, `add`, `remove`, `collect`, each with `--chain`) in the
-terminal and `/lp` in chat (add `v4` to `positions`, `pool`, `quote`, `remove` or `collect` for Uniswap v4; the terminal command is v3). A short allowance refuses with the exact approval to make.
+terminal and `/lp` in chat. For Uniswap v4, add `v4` in chat to `positions`, `pool`, `quote`, `remove` or `collect`; in the terminal add `--v4` to `positions`, `pool`, `remove` or `collect`, and `move` declares a new range. The console lists the v3 and v4 pool deposits. A short allowance refuses with the exact approval to make.
 
 - **Uniswap v3** on Robinhood, Base, Ethereum, Arbitrum and Polygon: add (a new deposit, or more to an
   existing one), remove (a percentage, optionally burning the empty deposit NFT) and
   collect.
 - **Uniswap v4** on Robinhood only (the v4 contracts on Base, Ethereum, Arbitrum and Polygon
   are pinned for reads; pinned, hash-checked before each write; only a pool with no hook, or a pinned one, is accepted — the one pinned hook is Robinhood's): `lp_add(protocol='v4')` opens a new **full-range**
-  deposit in a Pons graduated pool. The token leg moves through Permit2: first a standing
+  deposit in a Pons graduated pool (a held deposit, a custom range and a move are below). The token leg moves through Permit2: first a standing
   allowance to Permit2, then `approve_token(via='permit2')`, ONE exact grant to the
   pinned v4 manager contract that expires in 15 minutes. A v4 deposit is held to
-  `LP_ETH_CAP` (the program total in ETH, default `0` — every v4 deposit refuses until
-  the owner sets it), `LP_ETH_DAILY_CAP` and `LP_ETH_FLOOR` (the ETH the wallet keeps).
+  `LP_ETH_CAP` (the program's net total in ETH — a withdrawal gives its ETH back to it —
+  default `0`: every v4 deposit of ETH refuses until the owner sets it), `LP_ETH_DAILY_CAP` and `LP_ETH_FLOOR` (the ETH the wallet keeps).
   `lp_collect(protocol='v4', token_id=…)` takes the fees of a v4 deposit and leaves its
   liquidity unchanged; no approval is needed. With `account=` or `nft=` it collects for a
   deposit that an NFT's account owns, and the fees land in that account. A v4 collect
@@ -676,11 +676,15 @@ terminal and `/lp` in chat (add `v4` to `positions`, `pool`, `quote`, `remove` o
   still costs gas, and the owner's entry pause holds it.
   `lp_remove(protocol='v4', token_id=…)` withdraws a percentage of a v4 deposit with a
   minimum for each side and keeps the deposit NFT (there is no burn on v4).
+  `lp_add(protocol='v4', token_id=…)` (`/lp add <token_a> <token_b> <amounts> max <usd> id <n> v4`)
+  adds to a v4 deposit you hold, in its own range; `LP_ETH_CAP` and your limits judge it.
 - **Any v4 pool reads.** A v4 pool has no address; its id is the hash of its two tokens,
   fee, tick spacing and hook. `lp_positions(protocol='v4', token_id=…)` reads one deposit
-  live (owner, pool, range, liquidity, what it holds now and the fees it is owed);
+  live (owner, pool, range, liquidity, what it holds now, the fees it is owed, and its result
+  against holding the deposit instead);
   without `token_id` it counts the wallet's deposits live, finds their ids and reads each
-  one. A pool read shows the fee, the price and the last 24 hours of swaps, volume and fees. `lp_pool_info` and
+  one. A pool read shows the fee, the price, the depth (what moves the price 2% and 10%), the
+  last 24 hours of swaps, volume and fees, and who holds its liquidity. `lp_pool_info` and
   `lp_quote` take `token_id`, or the five pool fields (`lp_quote` with `initial_price`
   quotes the first deposit of a pool that has no price yet).
 - **A new v4 pool, or a custom range, is your declaration.** `/lp seed <token_a> <token_b>
@@ -692,6 +696,20 @@ terminal and `/lp` in chat (add `v4` to `positions`, `pool`, `quote`, `remove` o
   can set; on a pool that exists it mints only while the pool is within your price gap
   (1% by default, 5% at most). Confirm raises no limit: the wallet's limits and `LP_ETH_CAP`
   still judge it. The result reads the deposit and the pool back from the network.
+- **A watch on a deposit costs nothing per check.** Ask the agent to watch a v4 deposit: a
+  scheduled read compares its typed fields (in range or not, the ETH left, its value) with
+  the limit you set, and only an alert or a failed read reaches you.
+- **A dry run is a decision you confirm.** `/lp add`, `remove`, `collect` and `seed run`
+  without `go` show the simulated result with a Confirm button. The agent can put a
+  withdrawal or a fee collection to you the same way. It cannot propose a plain deposit
+  this way; a new pool, a custom range and a move reach you as the declaration below.
+- **Move a v4 deposit to a new range.** `/lp move <id> range full|ticks:lo,hi|low,high [pct n]`
+  (or the agent's `lp_add(protocol='v4', move_from=…)`) sends nothing: one decision in your chat
+  names what is withdrawn, the new range, what the new range takes and what stays in the wallet
+  (nothing is swapped). After Confirm, `/lp seed run <ref> max <usd> go` withdraws that part and
+  mints the new range: two transactions. It checks the mint first, so a mint that would refuse
+  stops the move before the withdrawal. If the mint refuses later, the funds are in the wallet
+  and the same line continues. The mint meets your per-transaction limit and `LP_ETH_CAP`.
 
 The guard checks both asset legs, the pinned code and destination, who owns the deposit,
 and the mint, hold or burn of its NFT. Collect minimums use the actual read-only collect
@@ -726,6 +744,8 @@ every pre-flight read — the pinned code, the lock state (a kind with a lock), 
 wallet IS the NFT's owner — fails closed. A refused simulation names the contract's own error
 with its arguments (for example `NotListed()` from the sale, or `Refused(target, selector)`
 from the account).
+
+`AGENT_NFT_ENABLED` is an owner setting: turn it on from chat with `/config set AGENT_NFT_ENABLED true` and restart. When it is off, the agent proposes that line for you to confirm with one tap.
 
 Two account kinds are supported, each a standard:
 

@@ -94,6 +94,9 @@ def test_the_cron_read_verbs_are_the_rows():
                                       "discovery_count", "DiscoveryCountParams"),
         "defi_data.position_mark": ("tools.defi.data_tool", "DefiDataTool", "position_mark",
                                     "PositionMarkParams"),
+        # 118 W4: one liquidity position named by id.
+        "defi_data.lp_positions": ("tools.defi.data_tool", "DefiDataTool", "lp_positions",
+                                   "LpPositionsParams"),
         "defi_data.pool_metrics": ("tools.defi.data_tool", "DefiDataTool", "pool_metrics",
                                    "PoolMetricsParams"),
         "defi_data.price": ("tools.defi.data_tool", "DefiDataTool", "price", "TokenRefParams"),

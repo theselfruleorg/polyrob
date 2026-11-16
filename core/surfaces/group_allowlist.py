@@ -82,6 +82,21 @@ class GroupAllowlist:
         )
         return bool(rc)
 
+    def rejoin(self, surface: str, chat_id: str) -> bool:
+        """The bot is back IN a room it had left: ``left`` -> ``active``.
+
+        Only a ``left`` row moves. ``left`` never meant the owner withdrew
+        permission (that is ``revoked``), so a rejoin restores what the owner had
+        allowed and nothing more: a revoked or unknown room stays as it is
+        (default-deny). Returns True iff a row moved."""
+        rc = execute_retry(
+            self.db_path,
+            "UPDATE group_allowlist SET status='active', updated_at=?"
+            " WHERE surface=? AND chat_id=? AND status='left'",
+            (time.time(), surface, str(chat_id)),
+        )
+        return bool(rc)
+
     def is_allowed(self, surface: str, chat_id: str) -> bool:
         """Never raises — any fault reads as NOT allowed (fail-closed)."""
         try:

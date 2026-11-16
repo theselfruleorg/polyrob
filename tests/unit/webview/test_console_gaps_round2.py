@@ -119,8 +119,12 @@ def test_trust_flags_refused_remotely(key):
 #: widen no authority (40e56812b made them console-writable on purpose): the
 #: provider-failover switch, the outage notice text and the sent-notice hold.
 #: Adding a name here is a decision — it must not grant a spend, a cap or a key.
+#: ``AGENT_NFT_ENABLED`` is the owner's decision: it arms the agent-NFT tool from
+#: chat (the agent only proposes the line); every write of that tool still meets
+#: the guard, the limits and the owner's approval. It raises no cap and holds no key.
 _MONEY_GROUP_OPERATIONAL = frozenset({
     "BILLING_FAILOVER_ENABLED", "LLM_OUTAGE_NOTICE", "TX_NOTIFY_SENT_HOLD_SEC",
+    "AGENT_NFT_ENABLED",
 })
 
 

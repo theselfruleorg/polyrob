@@ -105,6 +105,17 @@ polyrob config check
 
 ## 3. Version notes
 
+### Upgrading to 1.7.11
+
+No database migration and no new store.
+
+- **Restart the remote signer too** (`polyrob-signer`) on a host that runs it: the guard learned to add liquidity to a v4 deposit the wallet holds. An older signer refuses that transaction.
+- **`LP_ETH_CAP` is a net total.** A v4 withdrawal gives its ETH back to that limit, so a deposit you close lets you make the next one. `LP_ETH_DAILY_CAP` still counts every deposit. With `LP_ETH_CAP` at `0`, a v4 deposit of ETH refuses.
+- **A liquidity dry run is a decision you confirm.** `/lp add`, `remove`, `collect` and a seed run print Confirm under the dry run. The agent can propose a withdrawal or a fee collection the same way. It cannot propose a plain deposit; a new pool or a move is a declaration you confirm.
+- **An emptied v4 deposit stays in the wallet.** A full withdrawal keeps the deposit NFT; this release does not burn it.
+- **Discord shows buttons.** An approval, a decision and a choice carry buttons, and a tap counts as you typing the command. The commands still work as text. There are no slash commands and no menus.
+- **`AGENT_NFT_ENABLED` is an owner setting.** Turn it on with `/config set AGENT_NFT_ENABLED true` and restart. An env line that sets it still works; while the service's env file sets another value, the chat line refuses and names that file.
+
 ### Upgrading to 1.7.10
 
 No database migration. A new store, `lp_seeds.db` (the owner's v4 pool declarations), is created on first use.

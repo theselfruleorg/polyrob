@@ -175,6 +175,12 @@ def allow_here(container: Any, surface: str, chat_id: str, title: str, *,
     chat_id = _norm_chat_id(chat_id)
     label = f"{surface}:{chat_id}"
     _allowlist(container).allow(surface, chat_id, note=title or "")
+    # A re-allow after a kick must also lift the send latch, or the room is
+    # active and still muted (core/surfaces/dead_targets.py::clear_dead_room).
+    from core.surfaces.dead_targets import clear_dead_room
+    from core.runtime_paths import store_db_path
+    clear_dead_room(container, store_db_path("dead_targets.db", _data_dir(container)),
+                    surface, chat_id)
     if title:
         from core.surfaces import chat_policy
         ok, msg = chat_policy.set(_data_dir(container), owner_uid, surface, chat_id,

@@ -49,6 +49,23 @@ class DiscordHarness(BaseHarness):
             return
         await self._route(inbound)
 
+    async def handle_interaction(self, d: dict) -> None:
+        """A button press (order 0016): ack at once (Discord wants it within 3 s,
+        and the client's spinner stops), then route the presser typing the command."""
+        from surfaces.discord.components import (INTERACTION_MESSAGE_COMPONENT,
+                                                 parse_interaction)
+        if not isinstance(d, dict) or d.get("type") != INTERACTION_MESSAGE_COMPONENT:
+            return
+        try:
+            await self._client.ack_interaction(str(d.get("id") or ""),
+                                               str(d.get("token") or ""))
+        except Exception as e:
+            logger.warning("discord button ack failed: %s", type(e).__name__)
+        inbound = parse_interaction(d, user_directory=self._user_directory)
+        if inbound is None or self._is_duplicate(inbound):
+            return
+        await self._route(inbound)
+
     async def _before_route(self, target) -> None:
         await self._client.trigger_typing(target)
 
@@ -107,7 +124,7 @@ class DiscordHarness(BaseHarness):
         return await fetch_capped(media.url, allowed_hosts=ATTACHMENT_HOSTS)
 
     async def run(self) -> None:
-        await self._gateway.run(self.handle_message_create)
+        await self._gateway.run(self.handle_message_create, self.handle_interaction)
 
     async def stop(self) -> None:
         await self._gateway.stop()

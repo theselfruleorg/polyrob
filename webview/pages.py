@@ -849,8 +849,8 @@ async def api_positions(request: Request, chain: str = "base"):
 async def api_liquidity(request: Request, chain: Optional[str] = None, onchain: bool = False):
     """Read the shared liquidity snapshot section; chain enumeration is opt-in.
 
-    No ``chain`` reads every chain with a pinned v3 position manager — core has
-    no default chain of its own."""
+    No ``chain`` reads every chain with a pinned v3 or v4 position manager — core
+    has no default chain of its own."""
     from dataclasses import asdict
     from core.instance import resolve_owner_user_id
     from core.status_snapshot import _guarded
@@ -862,22 +862,12 @@ async def api_liquidity(request: Request, chain: Optional[str] = None, onchain: 
             raise HTTPException(status_code=403, detail="Only the wallet owner can enumerate treasury positions")
         def enumerate_fn(**_):
             from core.wallet.factory import get_agent_wallet
-            from core.wallet.simulation import _default_rpc_for
-            from tools.defi.lp_reads import owned_position_ids, position
             wallet = get_agent_wallet()
             if wallet is None:
                 raise ValueError("agent wallet is not enabled")
-            from core.wallet import dex_registry
-            owner = wallet.operational_signer().address
-            chains = [chain] if chain else [
-                c for c in dex_registry.supported("v3")
-                if dex_registry.row_for(c, "v3").position_manager]
-            rows = []
-            for c in chains:
-                rpc = _default_rpc_for(c)
-                rows += [dict(asdict(position(rpc, c, i)), chain=c)
-                         for i in owned_position_ids(rpc, c, owner)]
-            return rows
+            # 118 W8: v3 and v4. A v4 id that was not found is a row with `note`.
+            from tools.defi.lp_holdings import held_position_rows
+            return held_position_rows(wallet.operational_signer().address, chain)
     section = await asyncio.to_thread(_guarded, "liquidity", liquidity_section,
                                       user_id, _data_dir(), enumerate_fn)
     return JSONResponse(asdict(section))

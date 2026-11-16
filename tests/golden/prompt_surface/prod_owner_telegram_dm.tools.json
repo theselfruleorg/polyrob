@@ -154,7 +154,7 @@
     },
     {
       "name": "propose_action",
-      "sha": "8adf404efe07"
+      "sha": "b722649fd2e6"
     },
     {
       "name": "room_moderate",
@@ -194,7 +194,7 @@
     },
     {
       "name": "cronjob_schedule",
-      "sha": "99199c8bdb7f"
+      "sha": "1b7dfcba4f05"
     },
     {
       "name": "cronjob_show",
@@ -222,7 +222,7 @@
     },
     {
       "name": "defi_trade_lp_add",
-      "sha": "f7e235a61e03"
+      "sha": "a5216c2914b4"
     },
     {
       "name": "defi_trade_lp_collect",

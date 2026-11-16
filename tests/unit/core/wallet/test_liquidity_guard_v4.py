@@ -57,9 +57,14 @@ def test_value_must_equal_the_native_leg():
         G.structural(_intent(), _tx(value=MAX0 - 1))
 
 
-def test_v4_refuses_everything_but_mint():
-    with pytest.raises(ValueError, match="MINT only"):
-        G.structural(_intent(lp_position=(NPM, 5), lp_position_effect="hold"), _tx())
+def test_a_mint_cannot_ride_a_held_position():
+    """A held position with outflows is the INCREASE shape (118 W6): mint bytes
+    under it refuse, and so does a burn."""
+    with pytest.raises(ValueError, match="INCREASE_LIQUIDITY \\+ SETTLE_PAIR \\+ SWEEP"):
+        G.structural(_intent(lp_position=(NPM, 5), lp_position_effect="hold"), _tx(), holder=HOLDER)
+    with pytest.raises(ValueError, match="burn is refused"):
+        G.structural(_intent(lp_position=(NPM, 5), lp_position_effect="burn",
+                             lp_outflows=(), lp_inflows=((None, 1),)), _tx())
 
 
 def test_another_action_sequence_refuses():

@@ -25,6 +25,7 @@ MAX_UINT128 = 2 ** 128 - 1
 MAX_UINT160 = 2 ** 160 - 1
 
 #: v4-periphery ``Actions`` ids (Actions.sol).
+ACTION_INCREASE_LIQUIDITY = 0x00
 ACTION_DECREASE_LIQUIDITY = 0x01
 ACTION_MINT_POSITION = 0x02
 ACTION_SETTLE_PAIR = 0x0D
@@ -207,6 +208,22 @@ def position_pool_key(rpc, chain: str, token_id: int) -> Dict[str, Any]:
         return read_v4_position_key(rpc, chain, token_id)
     except ValueError as exc:
         raise LpReadError(str(exc)) from exc
+
+
+def encode_increase_unlock(token_id, liquidity, amount0_max, amount1_max, currency0,
+                           currency1, owner) -> bytes:
+    """118 W6: INCREASE_LIQUIDITY(tokenId, liquidity, max0, max1, "") +
+    SETTLE_PAIR(currency0, currency1) + SWEEP(currency0 → owner): more liquidity
+    into a held position. The SWEEP returns the native the increase did not use."""
+    increase = abi.encode([{"type": "uint256"}, {"type": "uint256"}, {"type": "uint128"},
+                           {"type": "uint128"}, {"type": "bytes"}],
+                          [int(token_id), int(liquidity), int(amount0_max), int(amount1_max), b""])
+    pair = [{"type": "address"}, {"type": "address"}]
+    settle = abi.encode(pair, [currency0, currency1])
+    sweep = abi.encode(pair, [currency0, owner])
+    actions = bytes([ACTION_INCREASE_LIQUIDITY, ACTION_SETTLE_PAIR, ACTION_SWEEP])
+    return abi.encode([{"type": "bytes"}, {"type": "bytes[]"}],
+                      [actions, [increase, settle, sweep]])
 
 
 def encode_decrease_unlock(token_id, liquidity, min0, min1, currency0, currency1, recipient) -> bytes:
@@ -520,21 +537,56 @@ def position_lines(rpc, chain: str, token_id: int, decimals_fn: Callable,
                                      M.sqrt_price_at_tick(pos.tick_upper), pos.liquidity)
     in_range = pos.tick_lower <= st.tick < pos.tick_upper
     amt = _raw_text
+    owed = None
     try:
-        f0, f1 = position_fees(rpc, chain, pos)
+        f0, f1 = owed = position_fees(rpc, chain, pos)
         fees = (f"  fees owed (uncollected): {amt(f0, dec0)} currency0 + {amt(f1, dec1)} "
                 f"currency1 — lp_collect(protocol='v4', token_id={pos.token_id}) takes them")
     except Exception as exc:
         fees = f"  fees owed: NOT READ ({type(exc).__name__}: {str(exc)[:100]})"
+    from tools.defi import lp_v4_history as H      # 118 W3 (it imports this module)
+    result = H.result_lines(rpc, chain, pos, st, (a0, a1), owed, dec0, dec1) if pos.liquidity else []
     return lines + [
         f"  pool tick: {st.tick} ({'in range' if in_range else 'OUT of range'})   "
         f"price: {_price_text(st.sqrt_price_x96, dec0, dec1)}",
         f"  holds now: {amt(a0, dec0)} currency0 + {amt(a1, dec1)} currency1 "
         f"(from the pool price; the fees owed are a separate line)",
         fees,
+        *result,
         f"  {_fee_text(st.lp_fee, st.protocol_fee)}",
         "  source: the pinned PositionManager, PoolManager and StateView, read now",
     ]
+
+
+def position_facts(rpc, chain: str, token_id: int, decimals_fn: Callable) -> Dict[str, Any]:
+    """118 W4: one v4 position as TYPED fields, for a watch that compares
+    numbers and never reads prose. Amounts are whole-token floats. ``value0``
+    is both legs and the fees owed, in currency0 at the pool price; it is
+    absent when the fees could not be read (a part is not the whole)."""
+    pos = position(rpc, chain, token_id)
+    st = pool_state(rpc, chain, pos.pool_id)
+    if st.sqrt_price_x96 == 0:
+        raise LpReadError(f"v4 pool {pos.pool_id} is not initialized")
+    dec0, dec1 = _decimals_pair(pos.key, decimals_fn)
+    a0, a1 = M.amounts_for_liquidity(st.sqrt_price_x96, M.sqrt_price_at_tick(pos.tick_lower),
+                                     M.sqrt_price_at_tick(pos.tick_upper), pos.liquidity)
+    ratio = (st.sqrt_price_x96 / M.Q96) ** 2          # raw currency1 per raw currency0
+    facts = {"token_id": int(pos.token_id), "owner": pos.owner,
+             "in_range": "yes" if pos.tick_lower <= st.tick < pos.tick_upper else "no",
+             "tick": st.tick, "tick_lower": pos.tick_lower, "tick_upper": pos.tick_upper,
+             "liquidity": float(pos.liquidity),
+             "pool_share_pct": (pos.liquidity / st.liquidity * 100
+                                if st.liquidity and pos.tick_lower <= st.tick < pos.tick_upper
+                                else 0.0),
+             "currency0": a0 / 10 ** dec0, "currency1": a1 / 10 ** dec1,
+             "price": ratio * 10 ** dec0 / 10 ** dec1}
+    try:
+        f0, f1 = position_fees(rpc, chain, pos)
+    except Exception:
+        return facts
+    facts.update(fees0=f0 / 10 ** dec0, fees1=f1 / 10 ** dec1,
+                 value0=(a0 + f0 + (a1 + f1) / ratio) / 10 ** dec0)
+    return facts
 
 
 def pool_info_lines(rpc, chain: str, token_a=None, token_b=None, *, fee=None, tick_spacing=None,
@@ -558,7 +610,9 @@ def pool_info_lines(rpc, chain: str, token_a=None, token_b=None, *, fee=None, ti
     ]
     if key["hooks"] != ZERO and not st.lp_fee:
         lines.append("  LP fee 0: this pool pays its fee to the hook, not to a position")
-    return lines + activity_lines(rpc, chain, pid, st, dec0, dec1) + [f"  read via: {st.source}"]
+    from tools.defi import lp_v4_history as H      # 118 W3 (it imports this module)
+    return (lines + H.depth_lines(st, dec0) + activity_lines(rpc, chain, pid, st, dec0, dec1)
+            + H.holder_lines(rpc, chain, pid, st) + [f"  read via: {st.source}"])
 
 
 def quote_lines(rpc, chain: str, token_a, token_b, amount_a, amount_b,

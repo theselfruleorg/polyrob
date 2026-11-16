@@ -361,7 +361,8 @@ class AgentNftTool(WalletHolderMixin, BaseTool):
     def _gate(self, execution_context, verb: str, *, write: bool, dry_run: bool = True,
               entry: bool = True, needs_package: bool = True):
         if not agent_nft_enabled():
-            return f"agent NFTs are off — set {FLAG}=true to arm them. Nothing was broadcast."
+            from core.remedy import owner_flag_remedy
+            return f"agent NFTs are off — {owner_flag_remedy(FLAG)}. Nothing was broadcast."
         from core.money.authorize import SpendIntent, authorize_spend
         from tools.controller.turn_origin import (
             _is_forged_or_autonomous_turn as _owner_turn_probe)

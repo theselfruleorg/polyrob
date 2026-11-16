@@ -391,7 +391,10 @@ def test_upward_string_refs_only_shrink():
 # core/surfaces/quiet_hours.py (a module already inside the component).
 # +1 (115 W6): core/wallet/identity_card.py, the guard's rule for a registration through an
 # NFT account, beside core/wallet/tx_guard_account.py (reached from tx_guard_steps).
-LARGEST_CROSS_PACKAGE_SCC_CEILING = 148
+# +2 (118 W3, W7): tools/defi/lp_v4_history.py (the log reads of a position and its pool,
+# beside tools/defi/lp_v4.py) and tools/defi/lp_v4_move.py (the move declaration, beside
+# tools/defi/lp_v4_seed.py) — modules split out beside ones already inside the component.
+LARGEST_CROSS_PACKAGE_SCC_CEILING = 150
 _SCC_TIGHTNESS_SLACK = 10
 
 
