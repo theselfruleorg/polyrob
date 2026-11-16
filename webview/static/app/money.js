@@ -1247,9 +1247,14 @@ function bind() {
         const lines = section.state === "unavailable" ? [section.reason] : section.lines;
         for (const line of lines || []) liquidityPane.appendChild(el("p", "state-body", line));
         for (const position of (section.data && section.data.held) || []) {
-          liquidityPane.appendChild(el("p", "state-body",
-            `${position.chain} #${position.token_id}: ${position.token0} / ${position.token1}; ` +
-            `[${position.tick_lower}, ${position.tick_upper}]`));
+          // 118 W8: a v4 row names its protocol; a row with `note` is a
+          // position that was NOT read or NOT found — say so, never skip it.
+          const tag = position.protocol === "v4" ? " v4" : "";
+          const id = position.token_id == null ? "" : ` #${position.token_id}`;
+          liquidityPane.appendChild(el("p", "state-body", position.note
+            ? `${position.chain}${tag}${id}: ${position.note}`
+            : `${position.chain}${tag}${id}: ${position.token0} / ${position.token1}; ` +
+              `[${position.tick_lower}, ${position.tick_upper}]`));
         }
       })
       .catch((err) => {

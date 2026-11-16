@@ -83,7 +83,7 @@ def test_only_code_produced_notices_derive_buttons_from_their_text():
 
 @pytest.mark.asyncio
 async def test_a_surface_without_actions_sends_the_same_text():
-    from surfaces.discord.surface import DiscordSurface
+    from surfaces.slack.surface import SlackSurface
 
     sent = []
 
@@ -92,13 +92,13 @@ async def test_a_surface_without_actions_sends_the_same_text():
             sent.append((channel, text, tuple(sorted(kw))))
             return {"id": "1"}
 
-    s = DiscordSurface(_Client())
+    s = SlackSurface(_Client())
     assert s.capabilities.supports_actions is False
     body = "Approve? /approve_p_a1b2c3"
-    await s.send(OutboundMessage(session_key="agent:main:discord:dm:555", text=body))
+    await s.send(OutboundMessage(session_key="agent:main:slack:dm:555", text=body))
     plain = list(sent)
     sent.clear()
-    await s.send(OutboundMessage(session_key="agent:main:discord:dm:555", text=body,
+    await s.send(OutboundMessage(session_key="agent:main:slack:dm:555", text=body,
                                  actions=[Action("Approve", "/approve_p_a1b2c3")]))
     assert sent == plain
 

@@ -5,7 +5,7 @@
 # by hand — edit the extras line and rerun.
 #
 # extras: server,browser,crypto,solana,telegram,twitter,voice,docs,media,anysite,feishu
-# lock-digest: c84b9acc62c70351
+# lock-digest: 87a380b07c9587da
 #
 # docs (PDF/DOCX parsing) and media (invoice cards, GIFs) are NOT
 # optional for a production box. gemini/anthropic are deliberately absent: prod runs
@@ -3067,9 +3067,12 @@ solders==0.27.1 \
     --hash=sha256:d14f05a77dbbf7966fb26f255c81302e6127550bdb66c2fdc99f522043fdf376 \
     --hash=sha256:f3b787c29570a46d219c7a67543d8b0fadc73abda346653aa20e8eccd839e78b \
     --hash=sha256:f778eeab411acec0a765a01c7b772f8eca8a8543d98276bd83cb826960da211b
-soupsieve==2.9.2 \
-    --hash=sha256:4a55d8cf158a9c2e587fa4922f1bbb91d68ac829e2d6f25403a85747c71daf74 \
-    --hash=sha256:8089a26fd974ca7a1f30276d3d8492ab266ab15af581642dfe8aa162e0c1c823
+soupsieve==2.10 ; python_full_version < '3.11.5' \
+    --hash=sha256:49e9380d7d2905463583bafe285e818c7366a9ed7b3aee221c1ac79c905d8bc0 \
+    --hash=sha256:8596eb8967d744174820280fa62b4542a2e955bfaccca73ed8a13c6eb8e9b502
+soupsieve==4.1.1 ; python_full_version >= '3.11.5' \
+    --hash=sha256:8ff3422dab0b720fb667ee79864d80531a0e57994a13eb701697719ffcb751f6 \
+    --hash=sha256:b296bd2d2f65b1a78149f3d7bf6736a147d2c9e2dfbde0e4404639d748a02e03
 starlette==1.6.0 \
     --hash=sha256:a86dd39d14bb45f85a3d18525215a9ef0cfd1f192ac793220e72598c90335f0c \
     --hash=sha256:d4e3ac5e546444960c710297a3c9fc3f7ebae1b7e963f3d36173b49da535be9b

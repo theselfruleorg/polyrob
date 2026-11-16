@@ -196,7 +196,7 @@ surfaces, the web console and the programmatic API.
 | Telegram | `polyrob telegram` | aiogram; needs the `telegram` extra |
 | WhatsApp | `polyrob whatsapp` | WhatsApp Cloud API webhook; needs Meta credentials |
 | Email | `polyrob email` | IMAP poll in, SMTP out |
-| Discord | `polyrob discord` | |
+| Discord | `polyrob discord` | Text, files; approve / reject / answer buttons under a decision (a tap counts as you typing the command; the text keeps the commands). A tapped button stays on the message (a decision already made refuses a second tap). No slash commands yet |
 | Slack | `polyrob slack` | |
 | Signal | `polyrob signal` | |
 | X | — | DMs are read and sent by the agent's `twitter_get_dms` / `twitter_dm` tools over X Chat. The old `polyrob x` poller reads a DM endpoint X no longer delivers to and is obsolete. See [x-twitter.md](x-twitter.md) |

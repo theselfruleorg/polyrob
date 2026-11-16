@@ -347,3 +347,13 @@ async def test_standing_owner_job_may_name_the_room_by_its_title(home, monkeypat
     out = (await fn(M(room=CHAT, action="ban", target="555"),
                     execution_context=ctx)).extracted_content
     assert "banned" in out, out
+
+
+@pytest.mark.asyncio
+async def test_a_left_room_is_named_removed(home):
+    from core.surfaces.group_allowlist import GroupAllowlist
+    GroupAllowlist(str(home / "group_allowlist.db")).mark_left("telegram", CHAT)
+    bot = _Bot()
+    fn, M = _fn(_Controller(home, bot))
+    out = (await fn(M(room=CHAT, action="ban", target="555"))).extracted_content
+    assert "REMOVED" in out and not bot.calls

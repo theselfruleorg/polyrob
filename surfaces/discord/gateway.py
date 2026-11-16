@@ -142,6 +142,7 @@ class DiscordGatewayClient:
         self._token = token
         self._get_gateway_url = get_gateway_url
         self.bot_user_id: Optional[str] = None
+        self._on_interaction = None   # order 0016: the button-press handler
         self._stopped = asyncio.Event()
         #: OS3: in-flight MESSAGE_CREATE turns, held so the loop cannot GC them.
         self._handler_tasks: set = set()
@@ -149,10 +150,12 @@ class DiscordGatewayClient:
     async def stop(self) -> None:
         self._stopped.set()
 
-    async def run(self, handler: Callable[[dict], Awaitable[None]]) -> None:
+    async def run(self, handler: Callable[[dict], Awaitable[None]],
+                  on_interaction: Optional[Callable[[dict], Awaitable[None]]] = None) -> None:
         """Connect, consume, reconnect. The backoff resets only after a READY
         (a socket that opens and then closes at once must not reconnect every
         second). A fatal close code stops the loop and raises."""
+        self._on_interaction = on_interaction
         backoff = 1.0
         while not self._stopped.is_set():
             ready = False
@@ -257,6 +260,11 @@ class DiscordGatewayClient:
                         self.bot_user_id = str((d.get("user") or {}).get("id") or "")
                         ready = True
                         logger.info("discord gateway READY as %s", self.bot_user_id)
+                    elif event_type == "INTERACTION_CREATE" and self._on_interaction:
+                        # A button press (order 0016); acked inside the handler.
+                        from core.async_bridge import spawn_retained
+                        spawn_retained(self._run_handler(self._on_interaction, d),
+                                       self._handler_tasks)
                     elif event_type == "MESSAGE_CREATE":
                         # OS3: a turn can take minutes. Awaited inline it
                         # stopped this read loop, the HEARTBEAT_ACK went

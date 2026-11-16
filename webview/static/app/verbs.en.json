@@ -188,7 +188,7 @@
     {
       "name": "/lp",
       "group": "money",
-      "help": "Liquidity positions: inspect, quote, add, remove, collect fees, or declare a new pool",
+      "help": "Liquidity positions: inspect, quote, add, remove, collect fees, declare a new pool, or move a position",
       "aliases": []
     },
     {

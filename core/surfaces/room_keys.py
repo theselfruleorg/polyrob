@@ -83,3 +83,38 @@ def mark_room_left(data_dir: Optional[str], surface: str, chat_id: Any) -> bool:
     except Exception as e:
         logger.warning("could not mark room %s:%s left: %s", surface, chat_id, e)
         return False
+
+
+def restore_rejoined_room(container: Any, surface: str, chat_id: Any) -> bool:
+    """The bot was added back to a room it had LEFT: the row goes ``active`` and
+    the dead latch is dropped. A revoked or unknown room is never touched (see
+    ``GroupAllowlist.rejoin``). Returns True iff the room was restored. Fail-open."""
+    try:
+        from core.runtime_paths import container_data_home
+        home = container_data_home(container)
+        moved = _allowlist(home).rejoin(surface, str(chat_id))
+    except Exception as e:
+        logger.warning("could not restore room %s:%s: %s", surface, chat_id, e)
+        return False
+    if moved:
+        from core.surfaces.dead_targets import clear_dead_room
+        from core.runtime_paths import store_db_path
+        clear_dead_room(container, store_db_path("dead_targets.db", home), surface, chat_id)
+    return moved
+
+
+def left_room_hint(rows, want: str, matches) -> str:
+    """The refusal line for a room name that matches a room the bot LEFT.
+
+    ``left`` is not ``active``, so a room tool refuses it — but "not an
+    allowlisted room" is false for it, and prod 2026-11-15 repeated that false
+    line to the owner for 14 hours. *matches* is ``row -> bool``. Returns "" when
+    no left room matches."""
+    hit = [r for r in rows or [] if r.get("status") == "left" and matches(r)]
+    if not hit:
+        return ""
+    r = hit[0]
+    return (f"'{want}' is a room the bot was REMOVED from ({r['surface']}:{r['chat_id']}, "
+            f"status left) — the owner's permission is unchanged. When the bot is added "
+            f"back, the room turns active again by itself; if the bot is already back, "
+            f"the owner runs /groups allow here in that room.")

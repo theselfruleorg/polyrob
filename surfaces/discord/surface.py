@@ -44,6 +44,7 @@ class DiscordSurface(Surface):
             max_message_bytes=_DISCORD_MAX,
             markdown_flavor="none",    # Discord renders common markdown as-is
             media_out=True,            # 030 D6: uploads via multipart attachments
+            supports_actions=True,     # order 0016: explicit actions → buttons (components.py)
         )
 
     async def send(self, msg: OutboundMessage) -> SendResult:
@@ -52,9 +53,15 @@ class DiscordSurface(Surface):
         channel_id = channel_id_from_session_key(msg.session_key)
         last_id = None
         try:
-            for chunk in split_message(msg.text or "", _DISCORD_MAX):
+            from surfaces.discord.components import render_components
+            components = render_components(msg.actions)   # explicit actions only
+            chunks = split_message(msg.text or "", _DISCORD_MAX)
+            for i, chunk in enumerate(chunks):
+                # The buttons ride the LAST chunk; the text keeps the commands.
+                extra = ({"components": components}
+                         if components and i == len(chunks) - 1 else {})
                 sent = await self._client.send_message(
-                    channel_id, chunk, reply_to=msg.reply_to)
+                    channel_id, chunk, reply_to=msg.reply_to, **extra)
                 last_id = (sent or {}).get("id")
             if msg.media:
                 await self._send_media(channel_id, msg.media)

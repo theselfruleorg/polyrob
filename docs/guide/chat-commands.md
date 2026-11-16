@@ -86,7 +86,7 @@ column is a summary, and `/help <verb>` on your seat is the full form.
 | `/bridge <from> <to> <amount> [from usdc] [as <asset>] [go]` | Move value between chains: ETH/native or USDC in; native, WETH or USDC out | every seat |
 | `/launch <SYMBOL> <name…> [logo <url>] [desc <text>] [buy <amount>] [go]` | Launch a token on the launchpad | every seat |
 | `/deploy <SYMBOL> <supply> <name…> [on <chain>] [decimals <n>] [go]` | Deploy a fixed-supply token | every seat |
-| `/lp positions\|pool\|quote\|add\|remove\|collect\|seed` | Liquidity positions: inspect, quote, add, remove, collect fees, or declare a new pool | every seat |
+| `/lp positions\|pool\|quote\|add\|remove\|collect\|seed\|move` | Liquidity positions: inspect, quote, add, remove, collect fees, declare a new pool, or move a position | every seat |
 | `/claim <token> [go]` | Collect the creator fees a launchpad already owes me | every seat |
 | `/nft [send <id> <to> [go]]\|list\|info <contract> <id>\|account [<id>]\|transfer <contract> <id> <to> [go]\|revoke <contract> <operator> [go]\|trust <collection>\|untrust <collection>\|ready <id>\|unready <id>` | Collectibles I hold: look, trust a collection, send one, make one ready for sale, or revoke an approval | every seat |
 | `/dapp list\|revoke <id>` | Web pages my wallet is connected to, and how to cut one off | every seat |
@@ -197,7 +197,7 @@ you to approve an action, answer with a slash token: `/once`, `/session`,
 
 **Money commands quote first.** `/send`, `/swap`, `/bridge`, `/deploy`,
 `/launch`, `/lp`, `/claim` and `/nft` only quote until you add `go`. A quote is
-an action card: on Telegram you tap its button; on any seat you can type its
+an action card: on Telegram, Feishu and Discord you tap its button; on any seat you can type its
 token (`/card_<id>_ok`), which does the same. A confirmed card executes exactly
 that quote, at most the quote + 5% (a `/send` of a token count: + 25%). Your own command passes the autonomous
 ceiling and the pause; the per-transaction and daily caps still apply. The money

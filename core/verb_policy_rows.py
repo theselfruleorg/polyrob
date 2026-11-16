@@ -192,7 +192,11 @@ CORE_VERB_ROWS = {
         # 2026-09-15: the collectibles twin of the holdings read; a collection name is often
         # more identifying than a balance. defi_data_lp_positions: the same reconnaissance.
         "defi_data_nft_holdings": dict(correspondent_blocked=True, room_denied=True),
-        "defi_data_lp_positions": dict(correspondent_blocked=True, room_denied=True),
+        # 118 W4: a watch on ONE position named by id (protocol='v4', token_id) is public
+        # chain data with typed metadata; the form with no id still meets the owner probe
+        # in the verb, which a read job (no turn) does not pass.
+        "defi_data_lp_positions": dict(correspondent_blocked=True, room_denied=True,
+                                       read_job=True),
         "defi_data_reconcile": dict(correspondent_blocked=True, room_denied=True),
         # read_job: an EXPLICIT address is public chain data (the param is required, so it
         # never defaults to the operator wallet); a read job is scheduled only by the owner or

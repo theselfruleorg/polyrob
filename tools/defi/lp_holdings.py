@@ -93,6 +93,58 @@ def _v4_ids(tool, rpc, chain: str, npm: str, holder: str, want: int,
     return ids
 
 
+def v4_held_rows(tool, rpc, chain: str, holder: str) -> List[Dict[str, Any]]:
+    """118 W8: one row per v4 position *holder* owns on *chain*, for a surface
+    that lists positions. The count is ``balanceOf`` (the proof); an id that was
+    not found, or a position that did not read, is its OWN row with ``note`` —
+    never a shorter list. A failed count raises."""
+    row = dex_registry.row_for(chain, "v4")
+    if row is None or not row.position_manager:
+        return []
+    npm = row.position_manager
+    held = int(R.view(rpc, npm, A.NPM_BALANCE_OF, [holder]))
+    if not held:
+        return []
+    ids = _v4_ids(tool, rpc, chain, npm, holder, held, None)
+    rows: List[Dict[str, Any]] = []
+    for token_id in ids:
+        base = {"chain": chain, "protocol": "v4", "token_id": token_id}
+        try:
+            pos = V.position(rpc, chain, token_id)
+        except Exception as exc:
+            rows.append(dict(base, note=f"NOT READ ({type(exc).__name__}: {str(exc)[:80]})"))
+            continue
+        if str(pos.owner).lower() != holder.lower():
+            continue
+        rows.append(dict(base, token0=pos.key["currency0"], token1=pos.key["currency1"],
+                         fee=int(pos.key["fee"]), tick_lower=pos.tick_lower,
+                         tick_upper=pos.tick_upper, liquidity=str(pos.liquidity)))
+    found = len(rows)
+    if found < held:
+        rows.append({"chain": chain, "protocol": "v4", "token_id": None,
+                     "note": f"{held - found} more v4 position(s) are held but their ids "
+                             f"were NOT found; read one by id"})
+    return rows
+
+
+def held_position_rows(owner: str, chain: Optional[str] = None) -> List[Dict[str, Any]]:
+    """The v3 and v4 positions *owner* holds, one row each, for a surface's
+    list. No *chain* = every chain with a pinned position manager."""
+    from dataclasses import asdict
+    from core.wallet.simulation import _default_rpc_for
+    from tools.defi.data_tool import DefiDataTool
+    rows: List[Dict[str, Any]] = []
+    for c in ([chain] if chain else [c for c in dex_registry.supported("v3")
+                                     if dex_registry.row_for(c, "v3").position_manager]):
+        rpc = _default_rpc_for(c)
+        rows += [dict(asdict(R.position(rpc, c, i)), chain=c)
+                 for i in R.owned_position_ids(rpc, c, owner)]
+    tool = DefiDataTool()
+    for c in ([chain] if chain else dex_registry.supported("v4")):
+        rows += v4_held_rows(tool, _default_rpc_for(c), c, owner)
+    return rows
+
+
 def _leg(tool, chain: str, token: Optional[str], raw: int, decimals: Optional[int],
          native_symbol: str) -> Dict[str, Any]:
     """One leg of a position: amount, symbol, and its value by the total rule.

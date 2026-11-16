@@ -59,7 +59,7 @@ from this list; never invent a verb that is not on it. Pack verbs (such as
 - `/bridge` — Move value between chains: ETH/native or USDC in; native, WETH or USDC out
 - `/launch` — Launch a token on the launchpad
 - `/deploy` — Deploy a fixed-supply token
-- `/lp` — Liquidity positions: inspect, quote, add, remove, collect fees, or declare a new pool
+- `/lp` — Liquidity positions: inspect, quote, add, remove, collect fees, declare a new pool, or move a position
 - `/claim` — Collect the creator fees a launchpad already owes me
 - `/nft` — Collectibles I hold: look, trust a collection, send one, make one ready for sale, or revoke an approval
 - `/dapp` — Web pages my wallet is connected to, and how to cut one off

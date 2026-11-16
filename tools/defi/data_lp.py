@@ -43,14 +43,23 @@ class LpReadsMixin:
             return self._ar(error=_lp_read_error_text(exc))
         return self._ar(content="\n".join(out["lines"]))
 
-    def _lp_v4_read(self, render, chain: str):
+    def _lp_v4_read(self, render, chain: str, facts=None):
         """A v4 read. The pool is the Pons factory record's (048 phase 3), a
-        position's own, or a PoolKey the caller names in full (117 W5)."""
+        position's own, or a PoolKey the caller names in full (117 W5).
+        ``facts`` (118 W4) adds the read's typed metadata for a watch; when it
+        cannot be built the text still stands and the metadata is absent."""
         from tools.defi import lp_reads, lp_v4
         try:
-            return self._ar(content="\n".join(render(lp_v4, self._lp_rpc_for(chain))))
+            rpc = self._lp_rpc_for(chain)
+            text = "\n".join(render(lp_v4, rpc))
         except lp_reads.LpReadError as exc:
             return self._ar(error=_lp_read_error_text(exc))
+        if facts is None:
+            return self._ar(content=text)
+        try:
+            return self._ar(content=text, metadata=facts(lp_v4, rpc))
+        except Exception:
+            return self._ar(content=text)
 
     def _lp_symbol(self, chain: str, address: str) -> str:
         """Best-effort token symbol via the existing `_identity` seam — falls
@@ -70,7 +79,10 @@ class LpReadsMixin:
             from tools.defi.lp_reads import decimals
             return self._lp_v4_read(lambda lp_v4, rpc: lp_v4.position_lines(
                 rpc, params.chain, params.token_id,
-                lambda t: decimals(rpc, params.chain, t)), params.chain)
+                lambda t: decimals(rpc, params.chain, t)), params.chain,
+                facts=lambda lp_v4, rpc: lp_v4.position_facts(
+                    rpc, params.chain, params.token_id,
+                    lambda t: decimals(rpc, params.chain, t)))
         address = params.address
         if not address:
             refusal = _operator_read_refusal(execution_context)

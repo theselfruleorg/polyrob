@@ -36,9 +36,8 @@ modules whose callers may introspect param annotations.
 """
 import logging
 import time
-from typing import List, Optional
+from typing import Any, List, Optional
 
-from core.config_policy import dead_target_registry_enabled  # noqa: F401 (convenience re-export)
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +228,30 @@ _DEAD_PATTERNS = (
 #: those would be inferring a room departure from a user-level signal.
 ROOM_DEATH_REASONS = frozenset({"kicked", "chat_not_found", "write_forbidden",
                                 "not_a_member"})
+
+
+def clear_dead_room(container: Any, db_path: str, surface: str, chat_id: Any) -> None:
+    """Drop the outbound dead-target latch of a room the bot is back in.
+
+    ``publish`` latches a kicked room as dead AND marks it ``left``. Inbound
+    clears the latch, but a room that only receives the agent's posts sends
+    nothing in, so without this a rejoined room stayed muted for the latch's
+    TTL. *db_path* is the store's path, ``store_db_path("dead_targets.db", home)``:
+    the caller resolves it, to keep this module out of the import cycle through
+    ``core.runtime_paths``. Fail-open."""
+    try:
+        store = None
+        getter = getattr(container, "get_service", None)
+        if callable(getter):
+            store = getter("dead_targets")
+        if store is None:
+            import os
+            if not os.path.exists(db_path):
+                return
+            store = DeadTargetStore(db_path)
+        store.clear(surface, str(chat_id))
+    except Exception as e:
+        logger.warning("could not clear the dead mark of room %s:%s: %s", surface, chat_id, e)
 
 
 def classify_dead_error(surface_id: str, error_text: Optional[str]) -> Optional[str]:

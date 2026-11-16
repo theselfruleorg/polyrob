@@ -16,7 +16,7 @@ def _chat_key(update):
     callback = update.get("callback_query") or {}
     message = (update.get("message") or update.get("edited_message")
                or update.get("channel_post") or update.get("edited_channel_post")
-               or callback.get("message") or {})
+               or callback.get("message") or update.get("my_chat_member") or {})
     return str((message.get("chat") or {}).get("id")
                or (callback.get("from") or {}).get("id") or "unknown")
 

@@ -54,7 +54,9 @@ def test_a_stored_window_that_no_longer_parses_holds_the_job():
 _AUDIENCE_GATED_ONLY = {"defi_data.wallet_holdings",
                         # 086 W3: the mandate jobs' prechecks (one named book row; the
                         # public pools + the mandate's room for one more entry).
-                        "defi_data.position_mark", "defi_data.discovery_count"}
+                        "defi_data.position_mark", "defi_data.discovery_count",
+                        # 118 W4: one liquidity position named by id.
+                        "defi_data.lp_positions"}
 
 
 def test_only_allowlisted_reads_on_non_money_tools():

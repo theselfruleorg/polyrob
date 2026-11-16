@@ -152,15 +152,9 @@ def register_room_read_action(controller) -> None:
                 include_in_memory=True)
 
         from core.surfaces.room_targets import scoped_rooms
-        rooms = scoped_rooms(controller, [r for r in GroupAllowlist(
-            f"{home}/group_allowlist.db").list_all() if r.get("status") == "active"])
-        if not rooms:
-            return ActionResult(
-                extracted_content="room_read: no allowlisted rooms on this "
-                                  "deploy (the owner adds one with "
-                                  "`polyrob owner groups allow` or /groups "
-                                  "allow here). Nothing to read.",
-                include_in_memory=True)
+        all_rows = GroupAllowlist(f"{home}/group_allowlist.db").list_all()
+        rooms = scoped_rooms(controller, [r for r in all_rows if r.get("status") == "active"])
+        want = (params.room or "").strip()
 
         # 057 WS-D: a room's NAME is `chat.name` and nothing else; the owner's
         # allowlist `note` is a dated LABEL that renders AFTER the name. Before
@@ -197,7 +191,21 @@ def register_room_read_action(controller) -> None:
                 out.append(_line(r, seen))
             return out
 
-        want = (params.room or "").strip()
+        def _left_hint():
+            from core.surfaces.room_keys import left_room_hint
+            return left_room_hint(scoped_rooms(controller, all_rows), want,
+                                  lambda r: room_matches(r, want, _title(r)))
+
+        if not rooms:
+            hint = _left_hint() if want else ""
+            return ActionResult(
+                extracted_content=(f"room_read: {hint}" if hint else
+                                   "room_read: no allowlisted rooms on this "
+                                   "deploy (the owner adds one with "
+                                   "`polyrob owner groups allow` or /groups "
+                                   "allow here). Nothing to read."),
+                include_in_memory=True)
+
         if not want:
             from core.surfaces.group_ledger import GroupLedger
             ledger = GroupLedger(f"{home}/surfaces.db")
@@ -218,6 +226,10 @@ def register_room_read_action(controller) -> None:
 
         matches = [r for r in rooms if room_matches(r, want, _title(r))]
         if not matches:
+            hint = _left_hint()
+            if hint:
+                return ActionResult(extracted_content=f"room_read: {hint}",
+                                    include_in_memory=True)
             return ActionResult(
                 extracted_content=(
                     f"room_read: '{want}' is not an allowlisted room — I will "

@@ -75,9 +75,9 @@ def resolve(params, chain: str, treasury: str, rpc=None):
     from core.env import bool_env
     from core.wallet.nft_account import NftAccountError, resolve as _resolve
     if not bool_env("AGENT_NFT_ENABLED", False):
-        from core.remedy import flag_remedy
+        from core.remedy import owner_flag_remedy
         return None, (f"agent NFTs are off (AGENT_NFT_ENABLED), so nothing works from an NFT's "
-                      f"account — {flag_remedy('AGENT_NFT_ENABLED')}. Nothing was broadcast.")
+                      f"account — {owner_flag_remedy('AGENT_NFT_ENABLED')}. Nothing was broadcast.")
     try:
         held = _resolve(chain, rpc=rpc or default_rpc(chain), treasury=treasury,
                         account=getattr(params, "account", None), nft=getattr(params, "nft", None))

@@ -167,9 +167,8 @@ def register_room_moderate_action(controller) -> None:
         from core.surfaces.group_allowlist import GroupAllowlist
         from core.surfaces.room_label import room_name
         from core.surfaces.room_targets import scoped_rooms
-        rooms = scoped_rooms(controller, [
-            r for r in GroupAllowlist(f"{home}/group_allowlist.db").list_all()
-            if r.get("status") == "active"])
+        all_rows = GroupAllowlist(f"{home}/group_allowlist.db").list_all()
+        rooms = scoped_rooms(controller, [r for r in all_rows if r.get("status") == "active"])
 
         def _title(r):
             try:
@@ -180,6 +179,12 @@ def register_room_moderate_action(controller) -> None:
 
         want = (params.room or "").strip()
         matches = [r for r in rooms if want and room_matches(r, want, _title(r))]
+        if not matches and want:
+            from core.surfaces.room_keys import left_room_hint
+            hint = left_room_hint(scoped_rooms(controller, all_rows), want,
+                                  lambda r: room_matches(r, want, _title(r)))
+            if hint:
+                return _out(hint)
         if len(matches) != 1:
             listed = "; ".join(f"{_title(r)} ({r['surface']}:{r['chat_id']})"
                                for r in (matches or rooms)) or "none"

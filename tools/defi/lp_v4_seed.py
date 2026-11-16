@@ -37,7 +37,8 @@ _ROUNDING_BPS = 1
 def proposes(p) -> bool:
     """True when this ``lp_add`` names a v4 PoolKey in full and no declaration."""
     return (p.protocol == "v4" and getattr(p, "seed", None) is None
-            and getattr(p, "tick_spacing", None) is not None)
+            and (getattr(p, "tick_spacing", None) is not None
+                 or getattr(p, "move_from", None) is not None))
 
 
 def _symbol(rpc, chain: str, currency: str) -> str:
@@ -122,7 +123,7 @@ def _notes(f, rpc, price_fn) -> tuple:
     return tuple(notes)
 
 
-async def raise_card(tool, p, ctx, rpc):
+async def raise_card(tool, p, ctx, rpc, holder=None):
     """Store the proposed declaration and put its card to the owner. Sends no
     transaction and writes nothing but the PROPOSED row."""
     from core.surfaces import cards
@@ -137,7 +138,13 @@ async def raise_card(tool, p, ctx, rpc):
                               "tenant is not the owner. Nothing was proposed.")
     seat = (getattr(ctx, "metadata", None) or {}).get("owner_seat")
     try:
-        fields = build_fields(p, rpc, source="owner" if seat else "agent")
+        if getattr(p, "move_from", None) is not None:
+            from tools.defi import lp_v4_move
+            from tools.defi.lp_verbs import ticks
+            fields = lp_v4_move.build_fields(p, rpc, holder, ticks=ticks, symbol=_symbol)
+            fields["gap_bps"] = min(fields["gap_bps"], S.GAP_MAX_BPS)
+        else:
+            fields = build_fields(p, rpc, source="owner" if seat else "agent")
         ref, f = S.propose(user_id, fields, origin="owner_seat" if seat else "agent")
         sid = str(getattr(ctx, "session_id", "") or "") or None
         card = S.seed_card(user_id, ref, f, origin="owner_seat" if seat else "agent",
@@ -152,7 +159,7 @@ async def raise_card(tool, p, ctx, rpc):
     where = ("on the owner's chat" if outcome in ("sent", "queued")
              else "in the owner's /cards list (no live chat reached)")
     return tool._ar(content=(
-        f"NOT sent: this is a pool the owner must declare first. Declaration {ref} is "
+        f"NOT sent: this is a {'move' if 'from_token_id' in f else 'pool'} the owner must declare first. Declaration {ref} is "
         f"PROPOSED; card {card.card_id} is {where}.\n" + "\n".join(S.summary_lines(f)) + "\n"
         f"See the plan now with lp_add(chain='{p.chain}', protocol='v4', seed='{ref}', "
         f"max_spend_usd=…, dry_run=true). After the owner confirms, the same call with "
@@ -165,6 +172,15 @@ def _uid(ctx) -> str:
         return str(uid)
     from core.identity import resolve_identity
     return str(resolve_identity())
+
+
+def is_move(p, ctx) -> bool:
+    """118 W7: True when ``p.seed`` names a declaration that moves a position. A
+    row that cannot be read is not a move here: the plain path reports why."""
+    try:
+        return "from_token_id" in S.get(p.seed, user_id=_uid(ctx))["fields"]
+    except Exception:
+        return False
 
 
 def load(p, ctx) -> Dict[str, Any]:
@@ -185,7 +201,7 @@ def load(p, ctx) -> Dict[str, Any]:
     return row
 
 
-def prepare_seed_v4(p, rpc, holder, npm, row):
+def prepare_seed_v4(p, rpc, holder, npm, row, credit=None):
     """The plan of ``lp_add(protocol='v4', seed=<ref>)``. Everything but
     ``max_spend_usd`` and ``dry_run`` comes from the declaration row."""
     from core.wallet import liquidity_guard as G
@@ -222,7 +238,8 @@ def prepare_seed_v4(p, rpc, holder, npm, row):
     c0, c1 = key["currency0"], key["currency1"]
     now = int(time.time())
     out, held = legs_ready(p.chain, rpc, holder, npm,
-                           ((c0, maxima[0], f["dec0"]), (c1, maxima[1], f["dec1"])), now)
+                           ((c0, maxima[0], f["dec0"]), (c1, maxima[1], f["dec1"])), now,
+                           credit=credit)
     unlock = V.encode_mint_unlock(key, lo, hi, liq, maxima[0], maxima[1], holder)
     data = V.encode_modify_liquidities(unlock, now + DEADLINE_S)
     reg = dex_registry.row_for(p.chain, "v4")
@@ -337,5 +354,5 @@ def verify_lines(rpc, chain: str, seed: Dict[str, Any], token_id: Any, holder: s
     return lines
 
 
-__all__ = ["build_fields", "claim", "load", "prepare_seed_v4", "proposes", "raise_card",
+__all__ = ["build_fields", "claim", "is_move", "load", "prepare_seed_v4", "proposes", "raise_card",
            "settle", "unsent", "verify_lines"]

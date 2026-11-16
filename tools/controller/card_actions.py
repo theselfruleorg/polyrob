@@ -458,7 +458,8 @@ def register_card_actions(controller) -> None:
         "Confirm. Use it instead of describing a command for the owner to type, and when "
         "the owner only ASKS about a money move (execute one only on an imperative line). Verbs: "
         "/send /swap /bridge /pay /claim /launch /deploy /nft /identity "
-        "/writeoff /unquarantine /wallet (trust|untrust), and /restart or /update (your own background "
+        "/writeoff /unquarantine /wallet (trust|untrust), /lp (remove|collect: `/lp remove v4 "
+        "<id> pct 50`), and /restart or /update (your own background "
         "service: it finishes its work, restarts and reports back).",
         param_model=ProposeAction,
     )

@@ -16,8 +16,10 @@ USAGE = '''Usage: /lp positions [on chain] | /lp positions v4 [id n]
 /lp collect <id> [max usd] [go]
 /lp seed <token_a> <token_b> <amount_a> <amount_b> price <n> fee <n> spacing <n> [range full|ticks:lo,hi] [hooks 0x…] [gap bps]
 /lp seed run <ref> max <usd> [go]
+/lp move <id> range full|ticks:lo,hi|low,high [pct n] [gap bps]
 Add v4 to remove, collect or quote for a Uniswap v4 position. /lp seed declares a v4 pool, range, price and
-both amounts on a card; it sends nothing. After Confirm, /lp seed run sends it once.
+both amounts on a card; it sends nothing. After Confirm, /lp seed run sends it once. /lp move puts a v4
+position's move to a new range on the same kind of card; /lp seed run then withdraws and mints.
 All support on <chain>; default robinhood. Writes simulate unless go is supplied.
 Pons graduated pools pay LP fee 0; v3 creates a separate market. Removing your own liquidity removes depth for holders.'''
 
@@ -91,7 +93,7 @@ def _parse_seed(values, positional):
 
 def parse(args):
     action, *words = args
-    if action not in ('positions', 'pool', 'quote', 'add', 'remove', 'collect', 'seed'):
+    if action not in ('positions', 'pool', 'quote', 'add', 'remove', 'collect', 'seed', 'move'):
         raise ValueError('unknown liquidity command')
     values, positional = {}, []
     keys = {'on': ('chain', str), 'fee': ('fee', int), 'price': ('initial_price', float),
@@ -119,6 +121,14 @@ def parse(args):
     values.setdefault('chain', 'robinhood')
     if action == 'seed':
         return _parse_seed(values, positional)
+    if action == 'move':
+        # 118 W7: a move is a declaration too — the card, then /lp seed run.
+        if len(positional) != 1 or 'range' not in values \
+                or values.keys() - {'chain', 'range', 'liquidity_pct', 'slippage_bps'}:
+            raise ValueError('give /lp move <id> range full|ticks:lo,hi|low,high [pct n] [gap bps]')
+        return 'add', {'chain': values['chain'], 'protocol': 'v4', 'range': values['range'],
+                       'move_from': int(positional[0]), 'move_pct': values.get('liquidity_pct', 100),
+                       'slippage_bps': values.get('slippage_bps', 100), 'max_spend_usd': 1.0}
     v4 = values.get('protocol') == 'v4'
     if action in ('add', 'quote'):
         if len(positional) != 4:
@@ -194,6 +204,12 @@ async def lp_reply(user_id, args):
         if action == 'seed_confirm':
             return seed_confirm_reply(user_id, values['ref'])
         result = await dispatch(user_id, action, values)
-        return result.error or result.extracted_content or 'No report returned; transaction state unknown. Do not retry blindly.'
+        text = result.extracted_content
+        if (not result.error and text and 'RESULT: DRY RUN' in text and values.get('dry_run', True)
+                and args[0] in ('add', 'remove', 'collect', 'seed')):
+            # 118 W5: the dry run is the quote; this line is what its card confirms.
+            from core.surfaces import cards
+            text = cards.with_go_hint(text, '\nSend it: /lp ' + ' '.join(args) + ' go')
+        return result.error or text or 'No report returned; transaction state unknown. Do not retry blindly.'
     except Exception as exc:
         return f'Liquidity command error: {exc}\n{USAGE}'

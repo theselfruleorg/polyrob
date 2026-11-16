@@ -64,6 +64,14 @@ def flag_remedy(key: str, *, want: str = "true", scope_hint: bool = True) -> str
     return f"{action}: `{cmd}` (takes effect: restart)"
 
 
+def owner_flag_remedy(key: str, *, want: str = "true") -> str:
+    """The remedy line for a flag the OWNER sets from chat (Access ``console``): the agent
+    proposes it on a one-tap card instead of filing an operator request."""
+    line = f"/config set {key} {want}"
+    return (f"the owner sets it with `{line}` — propose it: "
+            f"propose_setting(command=\"{line}\"); it takes effect after a restart")
+
+
 def flags_remedy(*keys: str, want: str = "true", scope_hint: bool = True) -> str:
     """Several flags that must ALL be on — one line, commands joined by ``&&``."""
     cmds = " && ".join(flag_command(k, want, scope_hint=scope_hint) for k in keys)
@@ -72,4 +80,5 @@ def flags_remedy(*keys: str, want: str = "true", scope_hint: bool = True) -> str
     return f"{action}: `{cmds}` (takes effect: restart)"
 
 
-__all__ = ["FEATURE_VERBS", "flag_command", "flag_remedy", "flags_remedy"]
+__all__ = ["FEATURE_VERBS", "flag_command", "flag_remedy", "flags_remedy",
+           "owner_flag_remedy"]

@@ -76,7 +76,7 @@ non-forgeable surface except the two REPL-local panes (`/gates`, `/meter`), but 
 (`_is_admin_owner`) passes only the bound principal, and only Telegram maps a sender onto it
 (`owner_surface_alias`, owner decision 104 D6). So owner verbs run on Telegram, the terminal and
 the console; a Discord, Slack, Signal or WhatsApp sender gets "Owner only". Email is
-correspondent-only (`*`). Native menus/buttons per platform are separate stream orders.
+correspondent-only (`*`). Buttons: Telegram, Feishu and Discord render `OutboundMessage.actions` (Discord: `surfaces/discord/components.py`); native menus per platform are separate stream orders.
 
 ## Package structure
 
