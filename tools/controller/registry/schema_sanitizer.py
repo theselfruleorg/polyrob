@@ -22,8 +22,7 @@ backend couldn't use anyway):
   the params root (some strict backends reject them at the outermost level).
 * prune ``required`` entries not present in ``properties``.
 
-Gating: the whole pass is behind ``TOOL_SCHEMA_SANITIZE`` (default **on**; ``=false``
-restores the exact pre-port emitted bytes). It runs BEFORE the cache write and is
+The pass has no switch. It runs BEFORE the cache write and is
 composed downstream of ``DROP_TOOL`` (sanitize first → far fewer tools dropped).
 """
 

@@ -216,14 +216,11 @@ def test_both_reviewer_paths_drop_the_owner_and_self_doc_writers(review_on):
 
 def test_reviewer_child_registry_has_no_owner_or_self_doc_writer(monkeypatch):
     """078 D7 in code: the child controller built for the reviewer never holds the
-    writers, even when SUBAGENT_LEAST_PRIVILEGE is off (an exclusion forces a child)."""
+    writers."""
     import logging
     from agents.task.agent.sub_agent_manager import SubAgentManager
-    from agents.task.constants import TimeoutConfig
     from tools.controller.service import Controller
     from core.config_policy import AutonomyConfig
-    monkeypatch.setattr(TimeoutConfig, "get_subagent_least_privilege",
-                        classmethod(lambda cls: False))
     monkeypatch.setattr(AutonomyConfig, "owner_doc_writable", classmethod(lambda cls: True))
     monkeypatch.setattr(AutonomyConfig, "self_context_writable",
                         classmethod(lambda cls: True))
@@ -241,7 +238,7 @@ def test_reviewer_child_registry_has_no_owner_or_self_doc_writer(monkeypatch):
         return None
     monkeypatch.setattr(Controller, "load_tools_from_container", _no_load)
     child = asyncio.run(m._build_child_controller(
-        force=True, exclude_actions=br.REVIEWER_EXCLUDED_ACTIONS))
+        exclude_actions=br.REVIEWER_EXCLUDED_ACTIONS))
     actions = child.registry.registry.actions
     assert "owner_doc_manage" not in actions and "self_context_manage" not in actions
     assert "skill_manage" in actions or "load_skill" in actions

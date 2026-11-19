@@ -302,77 +302,33 @@ def read_token(card_id: str) -> str:
 
 
 def render_text(card: Card, *, full: bool = False) -> str:
-    """The card as text: every seat's fallback, and the body of every button
-    message. Each action's typed token is in the text, so nothing depends on a
-    button rendering.
-
-    ``full`` (``/card_<id>``, 096 C4): the whole stored title and body. Without
-    it a title over :data:`MAX_TITLE_CHARS` or a body over
-    :data:`MAX_BODY_CHARS` is cut WITH a marker that names the reopen tap."""
-    lines: List[str] = []
-    title = " ".join((card.title or "").split())
-    body = (card.body or "").rstrip()
-    cut = False
-    if not full and len(title) > MAX_TITLE_CHARS:
-        title, cut = _short(title, MAX_TITLE_CHARS), True
-    hidden = 0
-    if not full and len(body) > MAX_BODY_CHARS:
-        hidden = len(body) - MAX_BODY_CHARS
-        body, cut = body[:MAX_BODY_CHARS].rstrip(), True
-    head = title
-    if card.origin == ORIGIN_AGENT:
-        head = f"🤖 From the agent — {head}"
-    lines.append(head)
-    if body:
-        lines.append("")
-        lines.append(body + (f"… (+{hidden} chars)" if hidden else ""))
-    if cut:
-        tap = read_token(card.card_id)
-        if tap:
-            lines.append(f"(cut short — the whole card: {tap})")
-    if card.kind in (KIND_CHOICE, KIND_BUILDER) and card.options:
-        lines.append("")
-        for i, opt in enumerate(card.options, start=1):
-            lines.append(f"  {i}. {opt}")
-    if card.kind in (KIND_QUOTE, KIND_PROPOSAL, KIND_JOB, KIND_SETTING) and card.line:
-        lines.append("")
-        lines.append(f"Command: {card.confirm_line if card.kind == KIND_QUOTE else card.line}")
-    lines.append("")
-    if card.state == S_OPEN:
-        cid = card.card_id
-        if card.kind == KIND_QUOTE:
-            mins = max(1, int((card.expires_at - time.time()) // 60))
-            lines.append(f"Confirm: {card_token(cid, 'ok')}   Refresh: {card_token(cid, 're')}"
-                         f"   Cancel: {card_token(cid, 'no')}")
-            lines.append(f"(the quote can be confirmed for {mins} min, once)")
-        elif card.kind in LINE_KINDS:
-            lines.append(f"Confirm: {card_token(cid, 'ok')}   Cancel: {card_token(cid, 'no')}")
-            lines.append("(Confirm runs the command above as if you typed it — nothing is "
-                         "written before)")
-        elif card.kind == KIND_PROPOSAL and card.origin == ORIGIN_SYSTEM and is_ack_step(card.args):
-            lines.append(f"I understand: {card_token(cid, 're')}   Cancel: {card_token(cid, 'no')}")
-            lines.append("(nothing moves from this card — the next quote has the Confirm)")
-        elif card.kind == KIND_PROPOSAL:
-            lines.append(f"Get a quote: {card_token(cid, 're')}   Cancel: {card_token(cid, 'no')}")
-            lines.append("(nothing moves from this card — the quote comes first)")
-        else:
-            picks = "  ".join(card_token(cid, str(i)) for i in range(1, len(card.options) + 1))
-            if picks:
-                lines.append("Pick: " + picks)
-            if card.kind == KIND_BUILDER:
-                lines.append(f"Cancel: {card_token(cid, 'no')}")
-    else:
-        lines.append(_STATE_WORDS.get(card.state, card.state))
-        if card.answer:
-            lines.append(f"Picked: {card.answer}")
-        if card.result:
-            lines.append(_short_block(card.result, 700))
-    return "\n".join(lines)
+    """The card as text (``core.surfaces.card_text.render``): every seat's
+    fallback, and the body of every button message."""
+    from core.surfaces.card_text import render
+    return render(card, full=full)
 
 
 def _short_block(text: str, n: int) -> str:
     text = (text or "").strip()
     return text if len(text) <= n else text[: n - 1] + "…"
+
+
+#: The receipt lines of a money result (``core.surfaces.card_groups.receipt_facts``).
+RECEIPT_KEYS = ("RESULT:", "tx:", "sig:", "block:")
+
+
+def _stored_result(text: str, n: int = 1500) -> str:
+    """*text* cut to *n* characters for the store, with its receipt lines KEPT: a long
+    header must never cut the ``tx:`` line a transfer report prints near its end (the
+    agent then reads half a hash)."""
+    text = (text or "").strip()
+    if len(text) <= n:
+        return text
+    facts = "\n".join(ln.strip() for ln in text.splitlines()
+                      if ln.strip().startswith(RECEIPT_KEYS))[:600]
+    if not facts:
+        return _short_block(text, n)
+    return _short_block(text, n - len(facts) - 1) + "\n" + facts
 
 
 # ── the store ────────────────────────────────────────────────────────────────
@@ -1185,7 +1141,7 @@ SETTING_CARD_SUBCOMMANDS = {
     "/goal": frozenset({"grant"}),
     "/job": frozenset({"edit"}),
     "/model": frozenset({"default"}),   # 095 W1c: /model <name> default (3rd word)
-    "/groups": frozenset({"role", "tools"}),   # 101: core.setting_proposals._groups
+    "/groups": frozenset({"role", "tools", "mode"}),   # 101, 120 W5: setting_proposals._groups
 }
 MAX_SETTING_WORDS = 40
 
@@ -1204,7 +1160,7 @@ def setting_card(user_id: str, words: List[str], *, title: str, body: str = "",
     if (shape is None or len(words) < 3 or sub.lower() not in shape
             or (verb == "/model" and len(words) != 3)):
         raise ValueError("a setting card carries only /mcp add, /config set, "
-                         "/goal grant, /job edit <id> grant, /model default, /groups role|tools")
+                         "/goal grant, /job edit <id> grant, /model default, /groups role|tools|mode")
     if verb == "/job" and (len(words) < 5 or words[3].lower() != "grant"):
         raise ValueError("a setting card edits a job only as /job edit <id> grant …")
     args = words[1:]
@@ -1337,7 +1293,7 @@ def finish(card_id: str, result_text: str, *, st: Optional[CardStore] = None) ->
     new_state = S_FAILED if failed_result(text) else S_DONE
     outcome = outcome_of(text, new_state == S_FAILED)
     done = st.transition(card_id, frozenset({S_CONFIRMED}), new_state,
-                         result=_short_block(text, 1500), outcome=outcome)
+                         result=_stored_result(text), outcome=outcome)
     if done is None and text != _NO_RESULT:
         # AC2: ``sweep_stuck`` closes a card that reported nothing for 30 min
         # as "no result" — but a `/bridge … go` that waited on the owner's
@@ -1347,7 +1303,7 @@ def finish(card_id: str, result_text: str, *, st: Optional[CardStore] = None) ->
         if cur is not None and cur.state == S_FAILED and cur.result == _NO_RESULT:
             done = st.transition(card_id, frozenset({S_FAILED}), new_state,
                                  expect_updated_at=cur.updated_at,
-                                 result=_short_block(text, 1500), outcome=outcome)
+                                 result=_stored_result(text), outcome=outcome)
     if done:
         _notify(done)
     return done

@@ -66,8 +66,15 @@ def credit_reserver(balance, user_id: str, session_id=None):
                 user_id, amount, request_id, session_id, transaction_type="reservation"):
             available = (await balance.get_balance(user_id))["balance"]
             raise InsufficientCreditsError(user_id, amount, available)
-        note_open_hold(request_id, record, owned=owned)
+        note_open_hold(request_id, record, owned=owned, releaser=release)
         return request_id
+
+    async def release(request_id):
+        """The whole hold returns: the provider's answer proved it billed nothing."""
+        if asyncio.get_running_loop() is loop:
+            return await settle_reservation(balance, user_id, request_id, 0)
+        return await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(
+            settle_reservation(balance, user_id, request_id, 0), loop))
 
     async def reserve(model, provider):
         if asyncio.get_running_loop() is loop:

@@ -164,3 +164,24 @@ def test_a_fresh_provision_writes_the_tight_venue_cap(tmp_path):
     again = parse_signer_config(tomllib.loads(render_signer_toml(cfg)))
     assert again.x402_daily_usd == DEFAULT_X402_DAILY_USD
     assert again.x402_per_payment_usd == 5.0
+
+
+# -- [env]: the Solana pin is the name the code reads ---------------------------
+
+def test_the_env_table_takes_the_solana_pin_the_code_reads():
+    """The table accepted SOLANA_RPC_URL, which no code reads, and refused
+    DEFI_SOLANA_RPC, which every Solana read and guard uses. The old name still
+    loads so an existing signer.toml starts."""
+    data = _data({"per_tx_usd": 10.0, "daily_usd": 30.0})
+    data["env"] = {"DEFI_SOLANA_RPC": "https://rpc.example/sol",
+                   "SOLANA_RPC_URL": "https://rpc.example/old"}
+    cfg = parse_signer_config(data)
+    assert cfg.env["DEFI_SOLANA_RPC"] == "https://rpc.example/sol"
+
+
+def test_provisioning_copies_the_solana_pin_from_the_agent_env():
+    import inspect
+
+    from core.signer import provision
+    src = inspect.getsource(provision.build_config)
+    assert '"DEFI_SOLANA_RPC"' in src and "SOLANA_RPC_URL" not in src

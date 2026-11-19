@@ -72,7 +72,8 @@ def prepare(tx_hash, chain, holder, nonce, *, state='prepared', venue=None,
         db.execute('BEGIN IMMEDIATE')
         row = db.execute("SELECT tx_hash FROM submissions WHERE state NOT IN ('booked', 'rejected') LIMIT 1").fetchone()
         if row:
-            raise ValueError(f'unaccounted wallet submission {row[0]}; reconcile before another send')
+            raise ValueError(f'unaccounted wallet submission {row[0]}; no send until the operator settles it '
+                             f'(x402_pay_x402_wallet_status lists it)')
         db.execute('INSERT INTO submissions (tx_hash, chain, holder, nonce, created, state, '
                    'venue, idempotency_key) VALUES (?,?,?,?,?,?,?,?)',
                    (*values, time.time(), state, venue, idem))

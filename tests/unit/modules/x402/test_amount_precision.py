@@ -61,7 +61,6 @@ def test_format_invoice_amount(amount, expected):
 @pytest.mark.asyncio
 async def test_pay_text_carries_full_precision_when_jittered(tmp_path, monkeypatch):
     monkeypatch.setenv("X402_SETTLE_ONCHAIN_DETECT", "true")
-    monkeypatch.setenv("X402_INVOICE_AMOUNT_JITTER", "true")
     monkeypatch.setenv("INVOICE_QR_STYLE", "address")  # pin the text-only style under test
     db = await _setup_db(tmp_path)
     try:

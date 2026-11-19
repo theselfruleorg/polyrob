@@ -127,7 +127,7 @@ column is a summary, and `/help <verb>` on your seat is the full form.
 | Command | What it does | Runs on |
 |---|---|---|
 | `/more <token>` | The rest of a list or text I cut short | every seat, not in a room |
-| `/status` | Health first, then session, goals, loops, and wallet | every seat |
+| `/status` | Health first, then session, goals, loops, delivery, wallet and money (`/status all`: every section) | every seat |
 | `/files [n]` | Recent files I produced | every seat |
 | `/cwd` | The directory I am working in right now | every seat |
 | `/meter` (`/tokens`) | This turn's meter | terminal |
@@ -159,7 +159,7 @@ column is a summary, and `/help <verb>` on your seat is the full form.
 | `/workers [show\|approve\|remove\|stop\|steer] …` | Named helpers: approve them, and stop or steer a running one | terminal |
 | `/prefs [all]` (`/settings`) | The preferences you have set | every seat, not in a room |
 | `/mcp [add <id> <url>\|remove <id>\|test <id>]` | MCP servers I can use: add, remove, or test | every seat, not in a room |
-| `/model [<name> [default] [reasoning=<level>] \| reset \| aliases]` | The model this chat runs on — switch it live, set your default, pick reasoning | every seat, not in a room |
+| `/model [<name> [default] [reasoning=<level>] \| reset \| aliases \| heavy <name> \| light <name> \| choice free\|listed]` | The model this chat runs on — switch it live, set your default, pick reasoning; set the heavy and light models and what the agent may choose | every seat, not in a room |
 | `/auth` | The provider keys I have, and how to connect one | terminal |
 | `/persona [name-or-text]` | The personas, and the one new chats use | terminal |
 | `/profile` | Which agent this terminal runs, and where its files live | terminal |
@@ -170,7 +170,7 @@ column is a summary, and `/help <verb>` on your seat is the full form.
 
 | Command | What it does | Runs on |
 |---|---|---|
-| `/avatar [show \| set <file\|url> \| set nft <chain>:<contract>:<id>]` | This instance's avatar image — show, set, clear | every seat |
+| `/avatar [show \| set <file\|url> \| set nft <chain>:<contract>:<id> \| clear \| push [x] [telegram] [discord]]` | This instance's avatar image — show, set, clear, or push it to my account pictures | every seat |
 | `/identity register\|set-uri [go]` | My on-chain identity: register it, or update where it is published (spends gas) | every seat, not in a room |
 | `/brief` (`/quiet`) | Hide or show the step transcript | terminal |
 | `/verbose` | Show or hide the live trace | terminal |
@@ -197,7 +197,7 @@ you to approve an action, answer with a slash token: `/once`, `/session`,
 
 **Money commands quote first.** `/send`, `/swap`, `/bridge`, `/deploy`,
 `/launch`, `/lp`, `/claim` and `/nft` only quote until you add `go`. A quote is
-an action card: on Telegram, Feishu and Discord you tap its button; on any seat you can type its
+an action card: on Telegram, Feishu, Discord and Slack you tap its button; on any seat you can type its
 token (`/card_<id>_ok`), which does the same. A confirmed card executes exactly
 that quote, at most the quote + 5% (a `/send` of a token count: + 25%). Your own command passes the autonomous
 ceiling and the pause; the per-transaction and daily caps still apply. The money
@@ -212,6 +212,13 @@ title you stopped with `--forever`. Background work:
 **next** session; they do not change the tools or the voice of the session you
 are in. `/model` changes the model of the running session at once; add
 `default` to keep it for new sessions too.
+
+**The agent's own model choices.** The agent can start a helper, a goal or a scheduled job
+on a model that it names, and it gives its reason. `/model heavy <name>` and
+`/model light <name>` set the models for hard work and for bulk reads. `/model choice listed`
+limits the agent to the models you use or added with `/model alias`; `/model choice free`
+lets it name any model; it sees each price and names the price of its choice. `/model` alone
+shows the settings and the agent's last choices.
 
 **Pause and stop.** `/pause` stops autonomous work (all of it, or one word:
 `trading`, `background`, `messages`, `deploying`); `/halt` is `/pause` with no

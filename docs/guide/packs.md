@@ -104,6 +104,9 @@ polyrob pack search              # every indexed pack
 polyrob pack search twitter      # match on id, distribution, summary or capability
 ```
 
+When nothing it holds matches a need, the agent's `tool_search` lists the matching index rows
+with their state here (`not installed — the owner installs it`). The agent installs nothing.
+
 Each row names the pack id, distribution, pinned version, tier, summary,
 declared capabilities, the core versions it needs, and a homepage. First-party
 rows are generated from the packs in the POLYROB repository. A third-party row

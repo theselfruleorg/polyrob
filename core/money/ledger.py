@@ -261,7 +261,8 @@ class SpendLedger:
                 # journal that cannot be read (fail closed).
                 return PolicyDecision(False, "wallet submission journal unavailable; spending refused")
             if journal.unresolved():
-                return PolicyDecision(False, "unaccounted wallet submission; reconcile before further spending")
+                return PolicyDecision(False, "unaccounted wallet submission; spending refused until the operator settles it "
+                                               "(x402_pay_x402_wallet_status lists it)")
         except Exception:
             return PolicyDecision(False, "wallet submission journal unavailable; spending refused")
         # Both guards below (replay, rolling-24h caps) are computed from the audit

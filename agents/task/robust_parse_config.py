@@ -35,8 +35,6 @@ def resolve_base64_strip_mode(raw: Optional[str]) -> dict:
 class RobustParseConfig:
     """Configuration for robust parse improvements"""
 
-    # Feature flags
-    ENABLE_ROBUST_PARSE: bool = _bool_env("ENABLE_ROBUST_PARSE", True)
     # (Dead reads deleted 2026-08-27, 030 WS-F2: USE_LEGACY_DEEPSEEK and
     # PAGE_CONTENT_TRUNCATE_LENGTH had no consumer anywhere in the tree.)
 
@@ -58,7 +56,6 @@ class RobustParseConfig:
     FORGED_MESSAGE_KEEP_TAIL: int = 3000
     
     # ActionResult content limits - Coordinated with tool limits
-    # MAX_EXTRACTED_CONTENT_LENGTH: Target limit for tool outputs (browser, etc) - not currently enforced
     # MAX_EXTRACTED_CONTENT_SIZE: CRITICAL - content >this size offloaded to files
     # History: 300K chars (too aggressive) -> 500K chars (Nov 6, 2025, after the browser
     # accessibility fix stopped returning 1-2M char raw HTML).
@@ -74,7 +71,6 @@ class RobustParseConfig:
     #                                     test and together are 240K chars of context).
     # 0 disables either check. The offloaded content is never lost — it is a workspace file
     # the model reads back with read_file, named in the pointer.
-    MAX_EXTRACTED_CONTENT_LENGTH: int = int(os.getenv("MAX_EXTRACTED_CONTENT_LENGTH", "500000"))  # 500K chars - browser won't hit this
     MAX_EXTRACTED_CONTENT_SIZE: int = 100000  # 100K chars ~ 25K tokens, per result
     MAX_EXTRACTED_CONTENT_TURN_SIZE: int = 200000  # 200K chars ~ 50K tokens, per turn
     LARGE_CONTENT_PREVIEW_LENGTH: int = 15000  # 15K preview - better context when offloaded
@@ -85,7 +81,6 @@ class RobustParseConfig:
     MAX_SUCCESS_LENGTH: int = 100000  # 100K for successes (explicit limit)
     
     # Retry configuration - Balanced for reliability
-    ENABLE_JSON_TEMPLATE_RETRY: bool = _bool_env("ENABLE_JSON_TEMPLATE_RETRY", True)
     MAX_PARSE_RETRIES: int = int(os.getenv("MAX_PARSE_RETRIES", "3"))  # Increased for reliability
 
     # Backoff configuration - Quick but reliable
@@ -94,7 +89,6 @@ class RobustParseConfig:
     BACKOFF_MULTIPLIER: float = 1.5  # Moderate backoff
     
     # NEW: Context safety configuration - CRITICAL ADDITION
-    ENABLE_CONTEXT_OVERFLOW_GUARD: bool = _bool_env("ENABLE_CONTEXT_OVERFLOW_GUARD", True)
     # The PRE-CALL guard (token_counter.check_token_safety -> token_budget) prunes
     # at this share of the window. It is NOT a second compaction policy: it reads
     # the ladder's emergency band (agents/task/constants.py COMPACTION_EMERGENCY_PCT),
@@ -126,19 +120,11 @@ class RobustParseConfig:
     REQUIRE_SCHEMA_KEYS: bool = _bool_env("REQUIRE_SCHEMA_KEYS", False)  # Disabled by default for flexibility
     REQUIRED_KEYS: list = ["current_state", "action"]  # Keys that must be present when validation enabled
 
-    # NEW: Format hint management
-    INJECT_FORMAT_HINT_EARLY: bool = _bool_env("INJECT_FORMAT_HINT_EARLY", True)
-
     # NEW: Recalibration settings
-    FORCE_RECALIBRATE_AFTER_LARGE_ACTIONS: bool = _bool_env("FORCE_RECALIBRATE_AFTER_LARGE_ACTIONS", True)
     LARGE_ACTION_THRESHOLD: int = 500  # Chars that trigger recalibration
 
-    # File offloading - ENABLED for non-browser large content (Nov 6, 2025)
-    # NOTE (030 WS-F2): the LIVE offload path is result_offload.py, keyed on
-    # MAX_EXTRACTED_CONTENT_SIZE + LARGE_CONTENT_PREVIEW_LENGTH. The pair below
-    # only feeds should_store_content_as_file (pinned by
-    # tests/test_accessibility_snapshot.py; no production caller today).
-    STORE_LARGE_CONTENT_AS_FILES: bool = _bool_env("STORE_LARGE_CONTENT_AS_FILES", True)
+    # The offload path is result_offload.py, keyed on MAX_EXTRACTED_CONTENT_SIZE,
+    # MAX_EXTRACTED_CONTENT_TURN_SIZE and LARGE_CONTENT_PREVIEW_LENGTH.
 
     # NEW: Base64 image stripping — blunt parse-time strip; "false" disables,
     # anything else strips. (The unconsumed "anchor" mode attr was removed.)
@@ -158,11 +144,7 @@ class RobustParseConfig:
     @classmethod
     def should_retry_parse_error(cls, consecutive_failures: int) -> bool:
         """Check if we should retry on parse error"""
-        return (
-            cls.ENABLE_ROBUST_PARSE and 
-            cls.ENABLE_JSON_TEMPLATE_RETRY and 
-            consecutive_failures < cls.MAX_PARSE_RETRIES
-        )
+        return consecutive_failures < cls.MAX_PARSE_RETRIES
     
     @classmethod
     def get_json_template_hint(cls) -> str:
@@ -187,14 +169,6 @@ CRITICAL ACTION FIELD REQUIREMENTS:
 - Use only action names from your tool list; these are examples of the shape
 
 Use double quotes only. No text outside JSON. Follow field names EXACTLY as shown."""
-    
-    @classmethod
-    def should_store_content_as_file(cls, content: str) -> bool:
-        """Check if content should be stored as file instead of in memory"""
-        return (
-            cls.STORE_LARGE_CONTENT_AS_FILES and
-            len(content) > cls.MAX_EXTRACTED_CONTENT_LENGTH
-        )
     
     @classmethod
     def truncate_page_content(cls, content: str) -> str:
@@ -333,9 +307,6 @@ Use double quotes only. No text outside JSON. Follow field names EXACTLY as show
     def should_abort_context_overflow(cls, estimated_tokens: int, model_name: str,
                                       message_manager=None) -> bool:
         """Check if we should abort due to context overflow"""
-        if not cls.ENABLE_CONTEXT_OVERFLOW_GUARD:
-            return False
-
         usage_ratio = cls.estimate_context_usage(estimated_tokens, model_name,
                                                  message_manager=message_manager)
         return usage_ratio > cls.CONTEXT_OVERFLOW_THRESHOLD

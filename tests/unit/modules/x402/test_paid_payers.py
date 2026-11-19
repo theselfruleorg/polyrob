@@ -83,3 +83,14 @@ def test_the_default_path_is_the_one_bot_db(tmp_path, monkeypatch):
     monkeypatch.setenv("DB_PATH", str(tmp_path / "bot.db"))
     _db(tmp_path / "bot.db", [(A3, "base", "completed", {"kind": "agent_invoice"})])
     assert paid_payer_addresses() == frozenset({A3})
+
+
+def test_a_facilitator_pay_names_its_payer_by_the_authorization(tmp_path):
+    """``/pay`` records the settling authorization (``metadata.authorization``, its signer in
+    ``payer``) and no ``payer_address`` column: that signer is the paying client."""
+    path = _db(tmp_path / "bot.db", [
+        (None, "base", "completed", {"kind": "agent_invoice",
+                                     "authorization": {"payer": A3, "nonce": "0x" + "00" * 32}}),
+        (None, "base", "pending", {"kind": "agent_invoice", "authorization": {"payer": A4}}),
+    ])
+    assert paid_payer_addresses(db_path=path) == frozenset({A3})

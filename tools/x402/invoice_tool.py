@@ -53,8 +53,8 @@ class InvoiceParams(BaseModel):
     # it, so every invoice it minted was the default chain's canonical USDC no
     # matter what the payer could actually pay in.
     asset_id: Optional[str] = Field(
-        None, description="Which token this invoice is payable in (see `polyrob "
-                          "wallet asset list`). Unset = the chain's canonical "
+        None, description="Which token this invoice is payable in (see "
+                          "x402_invoice_x402_invoices with assets=true). Unset = the chain's canonical "
                           "USDC. An unknown id is REFUSED with the known ids, "
                           "never swapped for another asset.")
     chain: Optional[str] = Field(
@@ -67,6 +67,9 @@ class InvoiceListParams(BaseModel):
     status: Optional[str] = Field(
         None, description="Filter: pending|settling|completed|settled_no_tx|expired|refund_due "
                           "(default all; refund_due = a settled payment we owe back)")
+    assets: bool = Field(
+        False, description="True: list the asset ids an invoice may name (asset_id), "
+                           "not the invoices")
 
 
 class AccountingParams(BaseModel):
@@ -212,12 +215,23 @@ class X402InvoiceTool(BaseTool):
             "purpose": inv["purpose"],
         })
 
-    @BaseTool.action("List your x402 payment requests (invoices) and their status",
+    @BaseTool.action("List your x402 payment requests (invoices) and their status, or "
+                     "(assets=true) the assets an invoice may be paid in",
                      param_model=InvoiceListParams)
     async def x402_invoices(self, params: InvoiceListParams, execution_context=None):
         user_id, _ = _ctx_ids(execution_context)
         if not user_id:
             return self._ar(error=f"x402_invoices refused: {_ANON_REFUSED}")
+        if params.assets:
+            # 120 W4: the `polyrob wallet asset list` text, from the one renderer.
+            try:
+                from core.payments.assets import asset_lines
+                lines = asset_lines()
+            except Exception as e:
+                return self._ar(error=f"x402_invoices: the asset registry could not be read "
+                                      f"({type(e).__name__}) — not the same as no asset")
+            return self._ar(content="Assets an invoice may name (asset_id, symbol, chain, "
+                                    "decimals, rail, source):\n" + "\n".join(lines))
         try:
             from modules.x402.invoicing import INVOICE_STATUSES, list_payment_requests
             if params.status and params.status not in INVOICE_STATUSES:

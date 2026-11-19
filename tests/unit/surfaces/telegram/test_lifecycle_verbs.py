@@ -29,7 +29,7 @@ ORIGIN = {"surface": "telegram", "chat_id": "42", "user_id": "u1"}
 
 
 def test_bare_restart_quotes_and_cards(home, st):
-    from surfaces.telegram.lifecycle_ops import restart_reply
+    from core.lifecycle_ops import restart_reply
     text = restart_reply("u1", home, [], ORIGIN)
     assert "I finish my current work first" in text and text.rstrip().endswith("/restart go")
     shown, card = cards.quote_card("u1", "/restart", [], text, st=st)
@@ -39,14 +39,14 @@ def test_bare_restart_quotes_and_cards(home, st):
 
 
 def test_restart_now_cards_its_own_line(home, st):
-    from surfaces.telegram.lifecycle_ops import restart_reply
+    from core.lifecycle_ops import restart_reply
     text = restart_reply("u1", home, ["now"], ORIGIN)
     _, card = cards.quote_card("u1", "/restart", ["now"], text, st=st)
     assert card.confirm_line == "/restart now go"
 
 
 def test_confirm_writes_one_request_with_the_chat(home, st):
-    from surfaces.telegram.lifecycle_ops import restart_reply
+    from core.lifecycle_ops import restart_reply
     _, card = cards.quote_card("u1", "/restart", [], restart_reply("u1", home, [], ORIGIN),
                                st=st)
     p = cards.press(card.card_id, "ok", "u1", st=st)
@@ -61,7 +61,7 @@ def test_confirm_writes_one_request_with_the_chat(home, st):
 
 
 def test_restart_refuses_without_a_service(tmp_path, monkeypatch):
-    from surfaces.telegram.lifecycle_ops import restart_reply
+    from core.lifecycle_ops import restart_reply
     monkeypatch.delenv("INVOCATION_ID", raising=False)
     monkeypatch.delenv("XPC_SERVICE_NAME", raising=False)
     d = tmp_path / "d"
@@ -72,7 +72,7 @@ def test_restart_refuses_without_a_service(tmp_path, monkeypatch):
 
 
 def test_restart_rejects_unknown_words(home):
-    from surfaces.telegram.lifecycle_ops import RESTART_USAGE, restart_reply
+    from core.lifecycle_ops import RESTART_USAGE, restart_reply
     assert restart_reply("u1", home, ["everything"], ORIGIN) == RESTART_USAGE
 
 
@@ -86,7 +86,7 @@ def _check(**info):
 
 
 def test_update_quotes_then_requests(home, st):
-    from surfaces.telegram.lifecycle_ops import update_reply
+    from core.lifecycle_ops import update_reply
     text = asyncio.run(update_reply("u1", home, [], ORIGIN, check=_check()))
     assert "Update 1.3.0 → 1.4.0" in text and text.rstrip().endswith("/update go")
     _, card = cards.quote_card("u1", "/update", [], text, st=st)
@@ -98,27 +98,27 @@ def test_update_quotes_then_requests(home, st):
 
 
 def test_update_pre_channel_line(home, st):
-    from surfaces.telegram.lifecycle_ops import update_reply
+    from core.lifecycle_ops import update_reply
     text = asyncio.run(update_reply("u1", home, ["pre"], ORIGIN, check=_check()))
     _, card = cards.quote_card("u1", "/update", ["pre"], text, st=st)
     assert card.confirm_line == "/update pre go"
 
 
 def test_update_when_current(home):
-    from surfaces.telegram.lifecycle_ops import update_reply
+    from core.lifecycle_ops import update_reply
     out = asyncio.run(update_reply("u1", home, [], ORIGIN,
                                    check=_check(update_available=False, latest="1.3.0")))
     assert out.startswith("You are on the latest version")
 
 
 def test_update_on_an_install_that_does_not_update_itself(home):
-    from surfaces.telegram.lifecycle_ops import update_reply
+    from core.lifecycle_ops import update_reply
     out = asyncio.run(update_reply("u1", home, ["go"], ORIGIN, check=_check(method="pip")))
     assert "does not update itself" in out and lc.read_request(data_home=home) is None
 
 
 def test_update_check_failure_is_said(home):
-    from surfaces.telegram.lifecycle_ops import update_reply
+    from core.lifecycle_ops import update_reply
 
     async def _broken(channel):
         return None, "the update check did not answer within 60 s"
@@ -128,7 +128,7 @@ def test_update_check_failure_is_said(home):
 
 
 def test_origin_of_reads_the_inbound_source():
-    from surfaces.telegram.lifecycle_ops import origin_of
+    from core.lifecycle_ops import origin_of
     src = SimpleNamespace(surface_id="telegram", chat_id=42, chat_type="private")
     result = SimpleNamespace(inbound=SimpleNamespace(identity=SimpleNamespace(source=src)))
     assert origin_of(result, "u1") == {"user_id": "u1", "surface": "telegram",

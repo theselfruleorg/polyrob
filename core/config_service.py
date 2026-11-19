@@ -103,11 +103,13 @@ class SetResult:
 # ---------------------------------------------------------------------------
 
 def known_keys() -> list:
-    """Every describable key, prefs first then flags (for completers/pickers)."""
+    """Every describable key, prefs first then flags (for completers/pickers),
+    then each pattern-row name the process env sets (a set venue cap)."""
     from core.config_policy.members import MEMBER_FLAGS
-    from core.flags import REGISTRY
+    from core.flags import REGISTRY, set_pattern_names
     from core.prefs import PREF_SCHEMA
-    return list(PREF_SCHEMA.keys()) + list(REGISTRY.keys()) + sorted(MEMBER_FLAGS)
+    return (list(PREF_SCHEMA.keys()) + list(REGISTRY.keys()) + sorted(MEMBER_FLAGS)
+            + set_pattern_names(os.environ))
 
 
 def describe(key: str, *, user_id: Optional[str] = None,
@@ -408,10 +410,29 @@ def shadowed_write_refusal(key: str, value) -> Optional[str]:
 # search
 # ---------------------------------------------------------------------------
 
+class SearchHits(list):
+    """The :func:`search` result: the matching settings, in rank order, plus
+    ``unread`` — the matching keys that could not be described. A key that could
+    not be read is named, never left out in silence (as :func:`changed_settings`)."""
+
+    def __init__(self, infos=(), unread=()):
+        super().__init__(infos)
+        self.unread = list(unread)
+
+
+def unread_line(unread) -> str:
+    """The one line every printing caller adds for the keys it could not read."""
+    if not unread:
+        return ""
+    return (f"{len(unread)} setting(s) could not be read: {', '.join(unread[:10])}"
+            + (" …" if len(unread) > 10 else ""))
+
+
 def search(query: str, *, user_id: Optional[str] = None, home_dir=None,
-           limit: int = 50) -> list:
+           limit: int = 50) -> SearchHits:
     """Fuzzy search across BOTH namespaces (key, group, description). An empty
-    query lists everything (prefs first) up to *limit*."""
+    query lists everything (prefs first) up to *limit*. A matching key that
+    cannot be described is named in ``.unread``, not dropped."""
     import difflib
 
     from core.flags import REGISTRY
@@ -437,18 +458,21 @@ def search(query: str, *, user_id: Optional[str] = None, home_dir=None,
         s = _score(key, key.split(".", 1)[0], spec.description)
         if s is not None:
             scored.append((s, 0, key))
-    for key, flag in REGISTRY.items():
+    from core.flags import flag_for, set_pattern_names
+    named = [(k, flag_for(k)) for k in set_pattern_names(os.environ)]
+    for key, flag in (*REGISTRY.items(), *named):
         s = _score(key, flag.group, flag.default_doc)
         if s is not None:
             scored.append((s, 1, key))
     scored.sort()
-    out = []
+    out, unread = [], []
     for _s, _ns, key in scored[:limit]:
         try:
             out.append(describe(key, user_id=user_id, home_dir=home_dir))
-        except Exception:
-            continue
-    return out
+        except Exception:  # noqa: BLE001
+            logger.debug("config_service: %s unreadable for search", key, exc_info=True)
+            unread.append(key)
+    return SearchHits(out, unread)
 
 
 # ---------------------------------------------------------------------------
@@ -532,7 +556,12 @@ def _suggest(key: str, n: int = 3) -> list:
 
 
 def unknown_key_message(key: str) -> str:
-    """The ONE refusal for an unknown setting: names up to three close keys."""
+    """The ONE refusal for an unknown setting: names up to three close keys. A
+    retired name says so and names what replaced it, never a different setting."""
+    from core.config_policy.retired_flags import retired_note
+    note = retired_note(str(key or ""))
+    if note:
+        return f"{key} is retired: {note}. Delete the line if an env file still has it."
     hits = _suggest(key)
     if not hits:
         return f"unknown setting: {key} — not a documented flag or preference"
@@ -612,6 +641,9 @@ def _route_write(key: str, value: str, *, scope: Optional[str] = None,
         return SetResult(False, "invalid",
                          f"invalid value for {key}: a value must not contain "
                          "CR, LF or NUL")
+    from core.config_policy.retired_flags import retired_note
+    if not allow_unknown and key not in PREF_SCHEMA and retired_note(key):
+        return SetResult(False, "refused", unknown_key_message(key))
     if surface != "local" and remote_write_refused(key, value):
         return SetResult(
             False, "refused",
@@ -1015,14 +1047,22 @@ def parse_config_command(args) -> ConfigCommand:
     return ConfigCommand(verb, key=rest[0], value=value, confirm="--confirm" in rest[1:])
 
 
-def check_findings(*, user_id: Optional[str], home_dir) -> list:
+def check_findings(*, user_id: Optional[str], home_dir, keys_only: bool = False) -> list:
     """`/config check` on every seat: the home env file against the flag
-    catalog, and every invalid stored preference. Names keys, never values."""
+    catalog, and every invalid stored preference. Names keys, never values.
+
+    ``keys_only`` (the agent, 120 W6): a preference row names the key and not the
+    validation text, which can quote the stored value."""
     from core.paths import env_file_candidates
     from core.prefs import check_env_files, find_invalid_preferences
     findings = list(check_env_files([env_file_candidates()[0].path]))
     for key, err in find_invalid_preferences(home_dir, user_id):
-        findings.append(f"preferences.toml: {key}: {err}")
+        if not keys_only:
+            findings.append(f"preferences.toml: {key}: {err}")
+        elif key == "<file>":
+            findings.append("preferences.toml: unreadable — the last good values stay in force")
+        else:
+            findings.append(f"preferences.toml: {key}: dropped (an unknown key or an invalid value)")
     return findings
 
 
@@ -1052,3 +1092,149 @@ def unset_value(key: str, *, surface: str = "local") -> SetResult:
                          "does not load that file, so it has no effect — delete the line "
                          "by hand if you want it gone.")
     return SetResult(False, "invalid", f"{key} is not set in {path}")
+
+
+# ---------------------------------------------------------------------------
+# The chat texts of search / check / changed, and the preference unset (120 W6)
+# ---------------------------------------------------------------------------
+
+#: Rows one chat `/config search` lists.
+SEARCH_ROWS = 15
+
+#: Rows one `changed` answer lists before it says how many more there are.
+CHANGED_ROWS = 60
+
+
+def _as_is(_key, value):
+    return value
+
+
+def search_reply(query: str, *, user_id: Optional[str], home_dir, limit: int = SEARCH_ROWS,
+                 shown: Callable = _as_is,
+                 more: str = "One in full: /config explain <key>") -> str:
+    """`/config search <words>` as the chat seats and the agent print it, through
+    the ONE :func:`search`. Secrets arrive masked; *shown* masks again for the agent."""
+    try:
+        hits = search(query, user_id=user_id, home_dir=home_dir, limit=limit)
+    except Exception as exc:  # noqa: BLE001 — an unread setting is not "no match"
+        return f"I could not search the settings ({type(exc).__name__}: {str(exc)[:120]})."
+    unread = unread_line(getattr(hits, "unread", ()))
+    if not hits:
+        return "\n".join([f"No setting matches '{query}'."] + ([unread] if unread else []))
+    lines = [f"{len(hits)} setting(s) match '{query}':"]
+    lines += [f"• {i.key} = {shown(i.key, i.effective)} ({i.source})" for i in hits]
+    if unread:
+        lines.append(unread)
+    lines.append(more)
+    return "\n".join(lines)
+
+
+def check_reply(*, user_id: Optional[str], home_dir, keys_only: bool = False) -> str:
+    """`/config check` as the chat seats and the agent print it (:func:`check_findings`)."""
+    try:
+        findings = check_findings(user_id=user_id, home_dir=home_dir, keys_only=keys_only)
+    except Exception as exc:  # noqa: BLE001 — a check that did not run is not "no issues"
+        return f"I could not run the check ({type(exc).__name__}: {str(exc)[:120]})."
+    if not findings:
+        return "Config check: no issues found."
+    return "\n".join([f"Config check: {len(findings)} finding(s):"]
+                     + [f"• {f}" for f in findings])
+
+
+def is_changed(info) -> bool:
+    """True when the effective value comes from somewhere other than a default
+    (an env var, an env file, a posture bundle, or a written preference)."""
+    src = str(info.source or "")
+    return not (src.startswith("default") or src.startswith("built-in"))
+
+
+def changed_settings(*, user_id: Optional[str], home_dir) -> tuple:
+    """``(infos, unread)``: every setting away from its default, and the keys
+    that could not be read — an unread key is named, never left out in silence."""
+    infos, unread = [], []
+    for key in known_keys():
+        try:
+            info = describe(key, user_id=user_id, home_dir=home_dir)
+        except Exception:  # noqa: BLE001
+            logger.debug("config_service: %s unreadable for changed", key, exc_info=True)
+            unread.append(key)
+            continue
+        if is_changed(info):
+            infos.append(info)
+    return infos, unread
+
+
+def changed_reply(*, user_id: Optional[str], home_dir, shown: Callable = _as_is,
+                  limit: int = CHANGED_ROWS) -> str:
+    """The settings away from their default (``polyrob config list --changed``), and
+    an unreadable ``preferences.toml`` named first: its values are the last good copy."""
+    try:
+        infos, unread = changed_settings(user_id=user_id, home_dir=home_dir)
+    except Exception as exc:  # noqa: BLE001 — an unread list is not "nothing changed"
+        return f"I could not read the settings ({type(exc).__name__}: {str(exc)[:120]})."
+    lines = []
+    try:
+        from core.prefs import preferences_path
+        from core.prefs_io import unreadable
+        if unreadable(preferences_path(home_dir, user_id)):
+            lines.append("preferences.toml is UNREADABLE: the preference values below are "
+                         "the last good copy (/config check names it).")
+    except Exception:  # noqa: BLE001
+        lines.append("preferences.toml state could not be read.")
+    if not infos:
+        lines.append("Every setting is at its default.")
+    else:
+        lines.append(f"{len(infos)} setting(s) away from the default:")
+        lines += [f"• {i.key} = {shown(i.key, i.effective)} ({i.source})"
+                  for i in infos[:limit]]
+        if len(infos) > limit:
+            lines.append(f"… {len(infos) - limit} more; search narrows the list.")
+    if unread:
+        lines.append(unread_line(unread))
+    return "\n".join(lines)
+
+
+def unset_pref(key: str, *, user_id: Optional[str], home_dir,
+               instance_id: Optional[str] = None) -> SetResult:
+    """Remove a SAFE preference from ``preferences.toml``: its value falls back to
+    the operator's env value or the built-in default. Never raises.
+
+    A GUARDED preference is refused: a preference only tightens the operator's
+    value, so its removal can only widen it. An env flag is not a preference
+    (:func:`unset_value`). An unreadable file refuses (``locked_write``)."""
+    from core.prefs import (PREF_ALIASES, PREF_SCHEMA, SENSITIVITY_GUARDED, _CACHE,
+                            _render_toml, load_preferences, preferences_path)
+    from core.prefs_io import REMOVE, locked_write
+    key = PREF_ALIASES.get(str(key or "").strip(), str(key or "").strip())
+    spec = PREF_SCHEMA.get(key)
+    if spec is None:
+        return SetResult(False, "refused", unknown_key_message(key))
+    if spec.sensitivity == SENSITIVITY_GUARDED:
+        return SetResult(False, "refused",
+                         f"nothing removed: '{key}' is guarded, and a guarded preference only "
+                         "tightens — its removal can only widen it. Propose the value you want "
+                         "with set (it waits for the owner's review).")
+    path = preferences_path(home_dir, user_id, instance_id)
+    if path is None:
+        return SetResult(False, "refused", "empty or unsafe user_id refused (tenant scope)")
+    try:
+        stored = load_preferences(home_dir, user_id, instance_id, strict=True)
+    except Exception as exc:  # noqa: BLE001 — PrefsUnreadable: never "it is not set"
+        return SetResult(False, "invalid", str(exc))
+    if key not in stored:
+        return SetResult(False, "invalid", f"{key} is not set in {path}; nothing to remove")
+    ok, err = locked_write(
+        path, lambda: load_preferences(home_dir, user_id, instance_id, strict=True),
+        key, REMOVE, _render_toml, _CACHE)
+    if not ok:
+        return SetResult(False, "invalid", err)
+    from core.prefs_hooks import notify  # a live agent re-reads it
+    notify("prefs")
+    from core.prefs import display_effective
+    try:
+        shown, source = display_effective(key, user_id, home_dir, instance_id)
+    except Exception:  # noqa: BLE001 — the removal is done; the read is a courtesy
+        shown, source = "unknown", "unread"
+    return SetResult(True, "written",
+                     f"removed {key}: effective {shown} ({source}; applies: {spec.applies})",
+                     store=str(path), applies=spec.applies)

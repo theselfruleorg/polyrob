@@ -23,8 +23,7 @@ router = APIRouter()
 
 @router.get("/api/webgate/usage")
 async def api_usage(request: Request, days: str = "7"):
-    from core.status_economics import spend_view, spend_view_lines
-    from surfaces.telegram.usage_ops import parse_days
+    from core.status_economics import parse_days, spend_view, spend_view_lines
     from webview.pages import _data_dir, _effective_user_id
     user_id = str(_effective_user_id(request))
     n = parse_days([days])

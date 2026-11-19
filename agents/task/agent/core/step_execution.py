@@ -7,7 +7,6 @@ calls these via MRO.
 """
 from __future__ import annotations
 
-import os
 import time
 from typing import Any, Dict, List, Optional
 
@@ -25,15 +24,8 @@ MAX_TOOL_CALLS_PER_STEP = 5
 #: OR-4: how many consecutive empty-action steps before the strong "thinking loop"
 #: intervention fires. Default 2 (one step sooner than the legacy 3) so a model
 #: that answers in prose without a tool call — Grok/GPT-5 on content-gen — is
-#: pushed to act faster, wasting fewer steps. Set EMPTY_ACTION_FAST_ESCALATE=off
-#: to restore the legacy threshold of 3.
-_FAST_ESCALATE = os.getenv("EMPTY_ACTION_FAST_ESCALATE", "true").strip().lower() not in (
-    "0",
-    "false",
-    "off",
-    "no",
-)
-_EMPTY_ACTION_ESCALATE_AT = 2 if _FAST_ESCALATE else 3
+#: pushed to act faster, wasting fewer steps.
+_EMPTY_ACTION_ESCALATE_AT = 2
 
 
 def apply_step_cap(agent, actions: list) -> list:

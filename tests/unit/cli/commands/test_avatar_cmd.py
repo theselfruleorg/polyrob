@@ -94,7 +94,6 @@ def test_push_refuses_with_no_avatar(monkeypatch, tmp_path):
 
 def test_push_works_with_the_default(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
-    monkeypatch.setenv("PFP_PUSH_TWITTER", "true")
     calls = []
     monkeypatch.setattr("modules.avatar.push.push_twitter", lambda p: calls.append(p))
     res = CliRunner().invoke(avatar, ["push", "--twitter"])
@@ -109,17 +108,31 @@ def test_push_refuses_an_svg(monkeypatch, tmp_path):
     assert res.exit_code != 0 and "SVG" in res.output
 
 
-def test_push_is_flag_gated(monkeypatch, tmp_path):
+def test_push_has_no_switch_and_skips_an_account_with_no_credentials(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
-    monkeypatch.delenv("PFP_PUSH_TWITTER", raising=False)
+    from modules.avatar import push as push_mod
+
+    def missing(exc, text):
+        def _raise(*a, **k):
+            raise exc(text)
+        return _raise
+    monkeypatch.setattr(push_mod, "push_twitter",
+                        missing(push_mod.TwitterCredsMissing, "missing Twitter OAuth1 creds"))
+    monkeypatch.setattr(push_mod, "push_discord",
+                        missing(push_mod.DiscordCredsMissing, "missing DISCORD_BOT_TOKEN"))
+    monkeypatch.setattr(push_mod, "push_telegram_bot",
+                        missing(push_mod.TelegramCredsMissing, "missing TELEGRAM_BOT_TOKEN"))
     slot.set_avatar(tmp_path, "alice", PNG, source="x")
-    res = CliRunner().invoke(avatar, ["push", "--twitter"])
-    assert res.exit_code == 0 and "twitter: disabled" in res.output
+    res = CliRunner().invoke(avatar, ["push"])
+    assert res.exit_code == 0, res.output
+    for surface in ("twitter", "discord", "telegram"):
+        assert f"{surface}: not connected, skipped" in res.output
+    named = CliRunner().invoke(avatar, ["push", "--twitter"])
+    assert "missing Twitter OAuth1 creds" in named.output       # a named account says why
 
 
 def test_push_twitter_is_hash_idempotent(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
-    monkeypatch.setenv("PFP_PUSH_TWITTER", "true")
     slot.set_avatar(tmp_path, "alice", PNG, source="x")
     calls = []
     monkeypatch.setattr("modules.avatar.push.push_twitter", lambda p: calls.append(p))
@@ -131,15 +144,14 @@ def test_push_twitter_is_hash_idempotent(monkeypatch, tmp_path):
 
 def test_push_telegram_sets_the_bot_and_each_group_once(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
-    monkeypatch.setenv("PFP_PUSH_TELEGRAM", "true")
     slot.set_avatar(tmp_path, "alice", PNG, source="x")
     calls = []
     monkeypatch.setattr("modules.avatar.push.push_telegram_bot",
                         lambda p: calls.append(("bot", None)))
     monkeypatch.setattr("modules.avatar.push.push_telegram_chat",
                         lambda p, c: calls.append(("chat", c)))
-    r1 = CliRunner().invoke(avatar, ["push", "--telegram-chat", "-1001"])
-    r2 = CliRunner().invoke(avatar, ["push", "--telegram-chat", "-1001"])
+    r1 = CliRunner().invoke(avatar, ["push", "--telegram", "--telegram-chat", "-1001"])
+    r2 = CliRunner().invoke(avatar, ["push", "--telegram", "--telegram-chat", "-1001"])
     assert "bot photo updated" in r1.output and "chat -1001 photo updated" in r1.output, r1.output
     assert r2.output.count("unchanged, skipped") == 2, r2.output
     assert calls == [("bot", None), ("chat", "-1001")]
@@ -147,13 +159,12 @@ def test_push_telegram_sets_the_bot_and_each_group_once(monkeypatch, tmp_path):
 
 def test_push_telegram_failure_gives_the_manual_path(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
-    monkeypatch.setenv("PFP_PUSH_TELEGRAM", "true")
     slot.set_avatar(tmp_path, "alice", PNG, source="x")
 
     def boom(*a):
         raise RuntimeError("setChatPhoto: Bad Request: not enough rights")
     monkeypatch.setattr("modules.avatar.push.push_telegram_bot", boom)
     monkeypatch.setattr("modules.avatar.push.push_telegram_chat", boom)
-    res = CliRunner().invoke(avatar, ["push", "--telegram-chat", "-1001"])
+    res = CliRunner().invoke(avatar, ["push", "--telegram", "--telegram-chat", "-1001"])
     assert res.exit_code == 0, res.output
     assert "/setuserpic" in res.output and "admin" in res.output

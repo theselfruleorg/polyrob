@@ -26,6 +26,27 @@ def reserve_write(*, is_dm: bool = False, units: int = 1) -> bool:
         return False
 
 
+def refused_budget(*, is_dm: bool = False, units: int = 1) -> tuple:
+    """``(kind, seconds)`` for a write :func:`reserve_write` just refused: the bucket that
+    is full (``"writes"`` = the shared hourly cap, ``"DMs"`` = the DM cap) and the whole
+    seconds until it reopens a slot. A DM checks BOTH buckets, so the answer names the one
+    that refused, and the later reopening when both are full. ``seconds`` 0 = unknown or
+    unreadable — this is only wording for the refusal, never a gate."""
+    limits = {"x:writes": ("writes", int_env("TWITTER_WRITE_MAX_PER_HOUR", 15))}
+    if is_dm:
+        limits["x:dm"] = ("DMs", int_env("TWITTER_DM_MAX_PER_HOUR", 5))
+    try:
+        lim = PersistentWindowLimiter(_db_path(), window_seconds=3600)
+        full = [(lim.seconds_until_free(key), kind) for key, (kind, cap) in limits.items()
+                if lim.used(key) + units > cap]
+    except Exception:
+        return ("DMs" if is_dm else "writes"), 0
+    if not full:
+        return ("DMs" if is_dm else "writes"), 0
+    secs, kind = max(full)
+    return kind, int(secs + 0.999)
+
+
 #: 109: the part of the hour's X writes that CODE may use (the storefront's thread
 #: replies); the rest stays for the owner's and the model's own posts.
 COMMERCE_SHARE = 2 / 3

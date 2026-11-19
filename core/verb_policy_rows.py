@@ -21,7 +21,8 @@ CORE_VERB_ROWS = {
         # cross-session recall, owner state, outbound to other targets, money-adjacent reads,
         # self-modification, control.
         # W4: outbound/output are the ONE source of the outbound lists
-        # (approval_queue, evidence).
+        # (approval_queue, evidence). 120 W5: action=targets (who may be messaged) is a
+        # read under the same row; the scoped-reply exemption never covers it.
         "message": dict(effect="comms", correspondent_blocked=True, room_denied=True,
                         outbound="text", output=True),
         "skill_manage": dict(effect="self", correspondent_blocked=True, room_denied=True),
@@ -30,6 +31,7 @@ CORE_VERB_ROWS = {
         # guard keys on is_sub_agent/leaf/turn_kind, none of which correspondent injection sets.
         "owner_doc_manage": dict(effect="self", correspondent_blocked=True, room_denied=True),
         "agent_avatar": dict(effect="self", correspondent_blocked=True, room_denied=True),
+        # 120 W6: search / changed / check are reads and unset is set's twin, under this row.
         "preferences": dict(effect="self", correspondent_blocked=True, room_denied=True),
         # A self-service capability expansion.
         # A tainted turn must not widen the surface the next (untainted) turn inherits.
@@ -54,8 +56,12 @@ CORE_VERB_ROWS = {
         # the owner as the agent, so a tainted or room turn reaches neither.
         "propose_action": dict(effect="none", correspondent_blocked=True, room_denied=True),
         # 2026-11-13: the agent's read of its own cards (open + decided). Owner turn only,
-        # like the cards it reads.
+        # like the cards it reads. 120 W2: cancel=<id> closes an open card the AGENT raised
+        # (a narrowing write that runs nothing), so effect stays none.
         "cards_read": dict(effect="none", correspondent_blocked=True, room_denied=True),
+        # 120 W2: this session's background helpers — list, or cancel one id (narrowing;
+        # a leaf is refused in the action). The delegate_task gates.
+        "delegation_status": dict(effect="none", correspondent_blocked=True, room_denied=True),
         # 086 W5: the trading mandate's intake card — a draft + ONE owner card; Confirm on
         # the owner's seat writes the mandate. Same reach as propose_action.
         "trade_mandate_propose": dict(effect="none", correspondent_blocked=True,
@@ -79,17 +85,21 @@ CORE_VERB_ROWS = {
         "recent_activity": dict(effect="none", correspondent_blocked=True, room_denied=True),
         "insights": dict(effect="none", room_denied=True),
         # I-6: reveals wallet balance + tenant ledger (usage_summary: cost data and invoice-
-        # draft suggestions, a social-engineering target).
+        # draft suggestions, a social-engineering target). 120 W3: agent_status view=refusals
+        # and view=log (the gate's reasons, the event log) and the usage_summary breakdown are
+        # reads of the same class: the same row covers them.
         "agent_status": dict(effect="none", correspondent_blocked=True, room_denied=True),
         "usage_summary": dict(effect="none", correspondent_blocked=True, room_denied=True),
         "load_skill": dict(effect="none"),
         "read_skill_resource": dict(effect="none"),
         "tool_search": dict(effect="none"),
         # The group ledger holds the owner's own room lines: the disclosure class of
-        # contact_history.
+        # contact_history. 120 W5: audit=true (who ran the /admin tools) refuses a room turn
+        # in the action, since this row is not room_denied (the moderation bundle reads lines).
         "room_read": dict(effect="none", correspondent_blocked=True),
         # Mute/ban/delete a member: an act on an identified third party. Never from a room turn
-        # (a member line must not steer a ban) nor a tainted session.
+        # (a member line must not steer a ban) nor a tainted session. 120 W5: action=silence is
+        # the agent's narrowing write on itself (clamped, extend-only, never on a room turn).
         "room_moderate": dict(effect="comms", correspondent_blocked=True, room_denied=True),
         "worker_manage": dict(correspondent_blocked=True),
     },
@@ -165,6 +175,10 @@ CORE_VERB_ROWS = {
         "cronjob_edit": dict(room_denied=True),
         "cronjob_run_now": dict(room_denied=True),
         "cronjob_schedule": dict(room_denied=True),
+        # 120 W2: a narrowing write and its lift on the agent's own job (the resume rule
+        # reads payload.paused; tools/cron_job_controls.py).
+        "cronjob_pause": dict(room_denied=True),
+        "cronjob_resume": dict(room_denied=True),
     },
     "dapp_browser": {
         # Disconnect REVOKES the injected wallet; it never grants anything.
@@ -500,6 +514,8 @@ CORE_VERB_ROWS = {
         # stranger planted in a room.
         "goal_create": dict(room_denied=True),
         "goal_cancel": dict(room_denied=True),
+        # 120 W2: owner turn only (core.goal_owner_verbs.pause_goal).
+        "goal_pause": dict(room_denied=True),
     },
     "hf_deploy": {
         # hf_deploy_deploy is deliberately on NO approval lane: a blanket gate cannot tell a
@@ -581,6 +597,10 @@ CORE_VERB_ROWS = {
         # either.
         "self_env_read_source": dict(effect="none", correspondent_blocked=True),
         "self_env_restart_service": dict(
+            effect="self", approval=("posture2", "always_queued"), correspondent_blocked=True,
+        ),
+        # 120 W7: the update sibling — the same lane, the same owner approval.
+        "self_env_request_update": dict(
             effect="self", approval=("posture2", "always_queued"), correspondent_blocked=True,
         ),
     },

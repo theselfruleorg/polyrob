@@ -100,6 +100,23 @@ def test_result_is_zero_at_the_deposit_price_and_negative_after_a_move():
     assert "1 change(s)" in moved[0] and "withdrawn" not in moved[0]
 
 
+def test_a_withdrawal_is_named_apart_from_the_value_of_the_position_now():
+    # Prod 2026-11-18: the agent reported the 'path' sum (now + withdrawn) as
+    # "value now" — 3.96 ETH for a position that held 0.77. Each part has a name.
+    sa, sb = M.sqrt_price_at_tick(LO), M.sqrt_price_at_tick(HI)
+    rpc = _node([_init(), _change(10, 1, 10 ** 18), _swap(20, 0, S0),
+                 _change(20, 1, -8 * 10 ** 17)])
+    pos = _pos(2 * 10 ** 17)
+    held = M.amounts_for_liquidity(S0, sa, sb, 2 * 10 ** 17)
+    lines = H.result_lines(rpc, CHAIN, pos, SimpleNamespace(sqrt_price_x96=S0), held,
+                           (0, 0), 18, 18)
+    now = held[0] + H._in0(held[1], S0)
+    value = [l for l in lines if "value of the position now" in l]
+    assert value and V._raw_text(now, 18) in value[0]
+    assert "the position now + what was withdrawn + the fees owed" in lines[-1]
+    assert "the deposit held" in lines[-1]
+
+
 def test_an_unreadable_history_is_not_read_never_a_number():
     def rpc(method, params):
         raise RuntimeError("node down")

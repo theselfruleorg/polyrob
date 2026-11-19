@@ -143,10 +143,11 @@ def _fingerprint(params):
 
 
 def _lists_only(action_name, params):
-    """``message(action="posts")`` reads the post ledger. It sends nothing, so it is no act."""
+    """``message(action="posts")`` reads the post ledger and ``targets`` (120 W5) who may be
+    messaged. Neither sends anything, so neither is an act."""
     if action_name != "message":
         return False
-    return str(_params_dict(params).get("action") or "").strip().lower() == "posts"
+    return str(_params_dict(params).get("action") or "").strip().lower() in ("posts", "targets")
 
 
 def _outcome(result):

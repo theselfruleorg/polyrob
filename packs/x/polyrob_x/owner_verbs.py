@@ -20,7 +20,10 @@ from core.verbs import Verb
 
 logger = logging.getLogger(__name__)
 
-X_VERB = Verb("/x", "set up", "My X account: renew its login, or see its state")
+X_VERB = Verb("/x", "set up", "My X account: renew its login, or see its state",
+              agent="agent_status",
+              agent_partial="the login state (identity section); a login renewal is the "
+                            "owner's OAuth tap (credentials, 120 §8)")
 
 USAGE = ("Usage: /x login — a one-tap link that renews my X login\n"
          "       /x status — the state of my X login (no secrets)")

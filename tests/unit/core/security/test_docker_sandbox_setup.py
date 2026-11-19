@@ -137,7 +137,7 @@ def test_the_custody_refusal_prints_the_steps_for_this_user(custody):
 # -- polyrob doctor -----------------------------------------------------------
 
 def test_doctor_names_missing_settings_and_the_steps_under_custody(custody, monkeypatch, sock):
-    from cli.commands import doctor_sandbox as ds
+    from core.security import sandbox_doctor as ds
     env = {"DOCKER_HOST": f"unix://{sock}", "CODE_EXEC_BACKEND": "docker"}
     lines = ds.docker_sandbox_lines(env)
     text = "\n".join(lines)
@@ -149,7 +149,7 @@ def test_doctor_names_missing_settings_and_the_steps_under_custody(custody, monk
 
 
 def test_doctor_is_quiet_about_custody_without_a_file_seed(monkeypatch, sock):
-    from cli.commands import doctor_sandbox as ds
+    from core.security import sandbox_doctor as ds
     monkeypatch.setattr(he, "custody_file_gap", lambda: None)
     lines = ds.docker_sandbox_lines({"DOCKER_HOST": f"unix://{sock}"})
     assert len(lines) >= 1 and not any(l.startswith("custody sandbox") for l in lines)
@@ -157,7 +157,7 @@ def test_doctor_is_quiet_about_custody_without_a_file_seed(monkeypatch, sock):
 
 def test_doctor_reads_the_user_managers_groups(tmp_path, monkeypatch, sock):
     """doctor's own ssh login holds the new group; the user manager does not."""
-    from cli.commands import doctor_sandbox as ds
+    from core.security import sandbox_doctor as ds
     gid = os.stat(sock).st_gid
     uid = os.getuid()
     if uid == 0:
@@ -185,7 +185,7 @@ def test_doctor_reads_the_user_managers_groups(tmp_path, monkeypatch, sock):
 
 def test_doctor_registers_the_sandbox_checker():
     from cli.commands.doctor_host import _checkers
-    from cli.commands.doctor_sandbox import docker_sandbox_lines
+    from core.security.sandbox_doctor import docker_sandbox_lines
     assert docker_sandbox_lines in _checkers()
 
 

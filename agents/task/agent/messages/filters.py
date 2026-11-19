@@ -497,16 +497,14 @@ class FiltersMixin:
 		Creates a copy of the message to avoid mutating the original.
 		"""
 		import copy
-		from core.env import bool_env
 		from core.secret_scrub import scrub_secret_shapes
 
 		# Phase 0.5: pattern backstop for UNregistered secrets. The allowlist
 		# (self.sensitive_data) only redacts explicitly-registered values; an sk-/
 		# AKIA/Bearer/PEM leaking through a tool result would otherwise persist to
-		# message_history.json + compaction checkpoints in the clear. Default ON;
-		# HISTORY_SECRET_SCRUB=off restores allowlist-only. Conservative shapes only
-		# (no hex/base64 catch-all) so legitimate working content is never corrupted.
-		pattern_scrub_on = bool_env("HISTORY_SECRET_SCRUB", True)
+		# message_history.json + compaction checkpoints in the clear. It has no
+		# switch. Conservative shapes only (no hex/base64 catch-all) so legitimate
+		# working content is never corrupted.
 
 		def replace_sensitive(value: str) -> str:
 			if not isinstance(value, str):
@@ -514,8 +512,7 @@ class FiltersMixin:
 			if self.sensitive_data:
 				for key, val in self.sensitive_data.items():
 					value = value.replace(val, f'<secret>{key}</secret>')
-			if pattern_scrub_on:
-				value = scrub_secret_shapes(value)
+			value = scrub_secret_shapes(value)
 			return value
 
 		def scrub_dict(data: dict) -> dict:

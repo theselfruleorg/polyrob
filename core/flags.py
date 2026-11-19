@@ -23,7 +23,7 @@ their values in every resolution, so ``doctor --flags`` output is safe to paste.
 No behavior change to any flag consumer — same parsers underneath.
 """
 from dataclasses import dataclass, replace
-from typing import Callable, Optional
+from typing import Callable, Mapping, Optional
 
 from core.env import parse_bool
 from core.flags_catalog import ACCESS, CATALOG
@@ -220,6 +220,24 @@ def resolve_flag(name: str, env: dict, dynamic_default: Optional[DynamicDefault]
     return ResolvedFlag(name, flag.group, _default_value(flag.kind, flag.default_doc), "default")
 
 
+def set_pattern_names(env: Mapping[str, str]) -> list[str]:
+    """The concrete names *env* sets that only a ``<...>`` pattern row documents
+    (``WALLET_VENUE_DAILY_CAP_X402_USD``), sorted. A pattern row has no single
+    name to list, so a list view shows its family only through this: a set
+    money cap must not be absent from the view that says what is set."""
+    from core.config_policy.members import is_member
+    from core.config_policy.retired_flags import retired_note
+    # A posture member that a pattern also matches (EMAIL_SURFACE_ENABLED) is listed by the
+    # member rows, and its direct env line does nothing: never a second, "set" row.
+    return sorted(
+        n for n, v in env.items()
+        if isinstance(n, str) and n not in REGISTRY and str(v or "").strip()
+        and pattern_flag_for(n) is not None and retired_note(n) is None
+        and not is_member(n))
+
+
 def resolve_all(env: dict, dynamic_default: Optional[DynamicDefault] = None) -> list[ResolvedFlag]:
-    """Resolve every registered flag, in catalog (= documentation) order."""
-    return [resolve_flag(name, env, dynamic_default) for name in REGISTRY]
+    """Resolve every registered flag, in catalog (= documentation) order, then
+    each pattern-row name that *env* sets."""
+    return [resolve_flag(name, env, dynamic_default)
+            for name in (*REGISTRY, *set_pattern_names(env))]

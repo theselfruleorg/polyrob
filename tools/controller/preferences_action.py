@@ -27,12 +27,31 @@ logger = logging.getLogger(__name__)
 _MASKED = "(set, masked)"   # core.config_service already hid a secret flag
 
 
+#: An owner identifier (who the owner is on a surface, their mail, their wallets).
+#: The model reaches the owner by `target='owner'`, never by the raw value.
+_OWNER_ID_SUFFIXES = ("_ID", "_EMAIL", "_USERNAME", "_HANDLE", "_ADDRESSES", "_OWNER")
+_OWNER_ID_SET = "(set, the owner's identifier is not shown)"
+
+
+#: A list of people's ids (ALLOWED_TELEGRAM_USER_IDS, SURFACE_SUPER_ADMIN_USER_IDS): the
+#: owner's id is in it, so it is an owner identifier although its name has no OWNER.
+_PEOPLE_ID_SUFFIXES = ("_USER_IDS", "_USER_ID")
+
+
+def _is_owner_identifier(name) -> bool:
+	key = str(name or "").upper()
+	return ("OWNER" in key and key.endswith(_OWNER_ID_SUFFIXES)) or key.endswith(_PEOPLE_ID_SUFFIXES)
+
+
 def _shown(name, value):
 	"""095 W1c: a credential-shaped value (a secret key, or text the secret
-	scrubber would change) is shown only as its fingerprint."""
+	scrubber would change) is shown only as its fingerprint. An owner
+	identifier is shown only as set."""
 	text = "" if value is None else str(value)
 	if not text or text == _MASKED:
 		return value
+	if _is_owner_identifier(name):
+		return _OWNER_ID_SET
 	try:
 		from core.flags import is_secret_flag
 		from core.secret_scrub import scrub_secret_shapes
@@ -100,9 +119,13 @@ class PreferencesActionMixin:
 		_KEY_DOC = ("Setting key (e.g. 'style.verbosity'); explain also takes an env flag "
 		            "(e.g. 'TWITTER_ENABLED')")
 
+		_QUERY_DOC = "search only: words to match"
+
 		class PreferencesAction(BaseModel):
-			operation: _Literal["list", "get", "set", "explain"]
+			operation: _Literal["list", "get", "set", "unset", "explain", "search",
+			                    "changed", "check"]
 			key: Optional[str] = Field(None, description=_KEY_DOC)
+			query: Optional[str] = Field(None, description=_QUERY_DOC)
 			value: Optional[str] = Field(
 				None, description="set only: new value (coerced per the key's type)")
 			reason: Optional[str] = Field(
@@ -110,19 +133,23 @@ class PreferencesActionMixin:
 				                  "(shown when a guarded key waits for review)")
 
 		class ReadPreferences(BaseModel):
-			operation: _Literal["list", "get", "explain"]
+			operation: _Literal["list", "get", "explain", "search", "changed", "check"]
 			key: Optional[str] = Field(None, description=_KEY_DOC)
+			query: Optional[str] = Field(None, description=_QUERY_DOC)
 
 		_READS = ("operation='list' shows every preference (value/source/applies); 'get' "
 		          "with `key` shows one; 'explain' with `key` shows the provenance chain of "
-		          "ANY setting (preference or env flag) — use it to answer 'why is X off?'.")
+		          "ANY setting (preference or env flag) — use it to answer 'why is X off?'; "
+		          "'search' (`query`) finds a setting; 'changed' lists those off their "
+		          "default; 'check' names broken env or preference lines.")
 		if writes:
 			model, doc = PreferencesAction, (
 				"Read and change your typed preferences (approvals, budget caps, goal "
 				"quotas, digest/delivery, reply style, session defaults). " + _READS +
 				" 'set' with `key`+`value`: a SAFE key applies from your next step unless "
 				"the result says next session; a GUARDED key (budget/approval "
-				"ceiling) only queues a proposal for the owner (/pending). ")
+				"ceiling) only queues a proposal for the owner (/pending). 'unset' with "
+				"`key` removes a SAFE preference. ")
 		else:
 			model, doc = ReadPreferences, (
 				"Read your typed preferences and settings (read-only here). " + _READS +
@@ -139,7 +166,8 @@ class PreferencesActionMixin:
 			from core.instance import resolve_instance_id
 			instance_id = resolve_instance_id()
 
-			from core.prefs import PREF_SCHEMA, SENSITIVITY_GUARDED, display_effective, unknown_pref_error
+			from core.prefs import (CHAT_PREF_SCHEMA, PREF_SCHEMA, SENSITIVITY_GUARDED,
+			                        display_effective, unknown_pref_error)
 
 			if params.operation == "list":
 				lines: list = []
@@ -188,6 +216,34 @@ class PreferencesActionMixin:
 				return ActionResult(extracted_content=scrub_secret_shapes("\n".join(out)),
 				                    include_in_memory=True)
 
+			if params.operation in ("search", "changed", "check"):
+				# 120 W6: the owner seats' reads, through the ONE config service.
+				# Every value passes `_shown`; `check` names keys, never values.
+				from core import config_service
+				from core.instance import is_owner_uid
+				if not is_owner_uid(user_id):
+					return ActionResult(
+						error=(f"Refused: `{params.operation}` reads the operator's settings, "
+						       f"and that read is the owner's. Use operation='list' for your "
+						       f"own preferences."), include_in_memory=True)
+				if params.operation == "check":
+					text = config_service.check_reply(user_id=user_id, home_dir=data_dir,
+					                                  keys_only=True)
+				elif params.operation == "changed":
+					text = config_service.changed_reply(user_id=user_id, home_dir=data_dir,
+					                                    shown=_shown)
+				else:
+					query = (getattr(params, "query", None) or params.key or "").strip()
+					if not query:
+						return ActionResult(error="search requires `query` (words to match).",
+						                    include_in_memory=True)
+					text = config_service.search_reply(
+						query, user_id=user_id, home_dir=data_dir, shown=_shown,
+						more="One in full: operation='explain' with `key`.")
+				from core.secret_scrub import scrub_secret_shapes
+				return ActionResult(extracted_content=scrub_secret_shapes(text),
+				                    include_in_memory=True)
+
 			if params.operation == "get":
 				if not params.key:
 					return ActionResult(error="get requires `key`.", include_in_memory=True)
@@ -214,12 +270,41 @@ class PreferencesActionMixin:
 				execution_context, self, user_id,
 				kind="pref", source="preferences", created_by="agent")
 
-			if params.operation == "set":
-				from core.security.owner_turn import is_owner_driven, is_owner_standing_run
+			if params.operation in ("set", "unset"):
+				from core.security.owner_turn import is_owner_standing_run
 				if is_forged and not is_owner_standing_run(execution_context):
 					return ActionResult(
-						error=("preferences: set is refused on a delegated or forged turn."),
+						error=(f"preferences: {params.operation} is refused on a delegated or "
+						       "forged turn."),
 						include_in_memory=True)
+
+			if params.operation == "unset":
+				# 120 W6: the same refusals as set. An env flag is never written from a
+				# turn: this action never reaches a flag writer (024 §2.6, pinned by
+				# test_agent_unreachable). A guarded preference only tightens, so its
+				# removal is refused (config_service.unset_pref); a SAFE one falls back
+				# to its default.
+				if not params.key:
+					return ActionResult(error="unset requires `key`.", include_in_memory=True)
+				from core import config_service
+				if PREF_SCHEMA.get(params.key) is None:
+					if params.key in CHAT_PREF_SCHEMA:
+						return ActionResult(error=unknown_pref_error(params.key),
+						                    include_in_memory=True)
+					return ActionResult(
+						error=(f"unset of '{params.key}' runs on the box itself: the owner runs "
+						       f"`polyrob config unset {params.key}`. Nothing was changed."),
+						include_in_memory=True)
+				else:
+					res = config_service.unset_pref(params.key, user_id=user_id,
+					                                home_dir=data_dir, instance_id=instance_id)
+				if not res.ok:
+					return ActionResult(error=res.message, include_in_memory=True)
+				_self_mod_ev("unset", params.key, pending=False)
+				return ActionResult(extracted_content=res.message, include_in_memory=True)
+
+			if params.operation == "set":
+				from core.security.owner_turn import is_owner_driven
 				if not params.key or params.value is None:
 					return ActionResult(error="set requires `key` and `value`.",
 					                    include_in_memory=True)

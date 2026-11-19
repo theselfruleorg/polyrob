@@ -195,6 +195,36 @@ def test_search_reads_the_local_index(cli, tmp_path, monkeypatch):
     assert "no pack in the index matches" in cli("search", "zzz-none").output
 
 
+def _broken_index(tmp_path, monkeypatch):
+    path = tmp_path / "index.json"
+    path.write_text("{not json")
+    monkeypatch.setattr(index, "INDEX_FILE", path)
+
+
+def test_an_unreadable_index_is_named_to_a_reader_and_empty_to_the_boot(tmp_path, monkeypatch):
+    """120 W9 leftover: a caller that prints the list can say "could not be read";
+    the default (the boot, the reserved-name check) keeps reading it as empty."""
+    _broken_index(tmp_path, monkeypatch)
+    assert index.third_party_rows() == []
+    assert {r["id"] for r in index.rows()} == set(_FP)          # first-party rows remain
+    with pytest.raises(index.PackIndexError, match="could not be read"):
+        index.third_party_rows(strict=True)
+    with pytest.raises(index.PackIndexError, match="could not be read"):
+        index.search("x", strict=True)
+    with pytest.raises(index.PackIndexError, match="could not be read"):
+        index.find("x", strict=True)
+
+
+def test_search_and_install_name_an_unreadable_index(cli, tmp_path, monkeypatch):
+    _broken_index(tmp_path, monkeypatch)
+    r = cli("search")
+    assert r.exit_code != 0 and "could not be read" in r.output
+    assert "the pack index is empty" not in r.output
+    r = cli("install", "echo")
+    assert r.exit_code != 0 and "could not be read" in r.output
+    assert "is not in the pack index" not in r.output
+
+
 def test_enable_refuses_a_killed_pack(cli, tmp_path, monkeypatch):
     rec = state.record("echo")
     _kill(tmp_path, monkeypatch, _row("echo"))

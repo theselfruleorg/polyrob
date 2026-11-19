@@ -2,16 +2,16 @@ import importlib
 import agents.task.constants as C
 
 
-def test_untrusted_wrap_unknown_truthy_stays_on(monkeypatch):
-    monkeypatch.setenv("UNTRUSTED_TOOL_RESULT_WRAP", "enabled")
-    importlib.reload(C)
-    assert C.UNTRUSTED_TOOL_RESULT_WRAP is True  # falsey-set SSOT: only none/off/false/0/no/'' disable
+def test_unknown_truthy_stays_on(monkeypatch):
+    from core.env import bool_env
+    monkeypatch.setenv("FLAG_PARSER_SAMPLE", "enabled")
+    assert bool_env("FLAG_PARSER_SAMPLE", True) is True  # falsey-set SSOT: only none/off/false/0/no/'' disable
 
 
-def test_untrusted_wrap_off_values(monkeypatch):
-    monkeypatch.setenv("UNTRUSTED_TOOL_RESULT_WRAP", "off")
-    importlib.reload(C)
-    assert C.UNTRUSTED_TOOL_RESULT_WRAP is False
+def test_off_values(monkeypatch):
+    from core.env import bool_env
+    monkeypatch.setenv("FLAG_PARSER_SAMPLE", "off")
+    assert bool_env("FLAG_PARSER_SAMPLE", True) is False
 
 
 def test_decoy_constants_removed():

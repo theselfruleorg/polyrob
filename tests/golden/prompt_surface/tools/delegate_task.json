@@ -1,6 +1,6 @@
 {
   "function": {
-    "description": "Delegate work to sub-agent(s): one focused \"goal\", or 2-5 parallel \"tasks\". Expensive. Synchronous by default (blocks this turn until done). Set background=true (goal only) to run it detached and get the result as a new message later — durable across the turn but NOT across restart (use the scheduler for durable scheduled work). Set \"tier\" + \"why\" to pick the model: \"heavy\" for judgement that decides money or is hard to undo, \"light\" for bulk reads, \"default\" = yours (<environment> names each tier's model; at most 2 heavy per call). \"model\" = an owner alias. With \"tasks\", each task may set its own tier or model. Neither works with background=true.",
+    "description": "Delegate work to sub-agent(s): one focused \"goal\", or 2-5 parallel \"tasks\". Expensive. Synchronous by default (blocks this turn until done). Set background=true (goal only) to run it detached and get the result as a new message later — durable across the turn but NOT across restart (use the scheduler for durable scheduled work). Set \"tier\" + \"why\" to pick the model: \"heavy\" for judgement that decides money or is hard to undo, \"light\" for bulk reads, \"default\" = yours (<environment> names each tier's model; at most 2 heavy per call). \"model\" = any model id (agent_status view='models' lists the prices). With \"tasks\", each task may set its own tier or model. Neither works with background=true.",
     "name": "delegate_task",
     "parameters": {
       "$defs": {
@@ -10,7 +10,7 @@
           "properties": {
             "model": {
               "default": null,
-              "description": "Optional model for this sub-agent (e.g. 'claude-haiku-4-5' or an OpenRouter slug). Omit to inherit the parent's model (or the delegate_task-level model when used inside 'tasks').",
+              "description": "Optional model for this sub-agent: ANY model id of a provider that has a key (agent_status view='models' lists them with prices; choose by price). Give a one-line 'why'. Omit to inherit the parent's model (or the delegate_task-level model when used inside 'tasks').",
               "nullable": true,
               "title": "Model",
               "type": "string"
@@ -36,7 +36,7 @@
             },
             "tier": {
               "default": null,
-              "description": "Model tier for this sub-agent: 'light' = the cheap model, for bulk reads and summaries; 'heavy' = the strongest model, only for judgement that decides money or is hard to undo; 'default' = yours. The operator sets the model behind each tier (see <environment>); an absent tier is refused. Requires 'why'. Not with 'model'.",
+              "description": "Model tier for this sub-agent: 'light' = the cheap model, for bulk reads and summaries; 'heavy' = the strongest model, only for judgement that decides money or is hard to undo; 'default' = yours. The owner or the operator sets the model behind each tier (see <environment>); an absent tier is refused. Requires 'why'. Not with 'model'.",
               "enum": [
                 "default",
                 "heavy",
@@ -48,7 +48,7 @@
             },
             "why": {
               "default": null,
-              "description": "One line: why this tier. Required with 'tier'; recorded and shown in /status.",
+              "description": "One line: why this tier or model. Required with 'tier'; recorded and shown in /status.",
               "maxLength": 200,
               "nullable": true,
               "title": "Why",
@@ -116,7 +116,7 @@
         },
         "tier": {
           "default": null,
-          "description": "Model tier for the sub-agent (with 'tasks': the fallback for a task with no tier or model): 'light' = the cheap model, for bulk reads and summaries; 'heavy' = the strongest model, only for judgement that decides money or is hard to undo; 'default' = yours. The operator sets the model behind each tier (see <environment>); an absent tier is refused. Requires 'why'. Not with 'model'.",
+          "description": "Model tier for the sub-agent (with 'tasks': the fallback for a task with no tier or model): 'light' = the cheap model, for bulk reads and summaries; 'heavy' = the strongest model, only for judgement that decides money or is hard to undo; 'default' = yours. The owner or the operator sets the model behind each tier (see <environment>); an absent tier is refused. Requires 'why'. Not with 'model'.",
           "enum": [
             "default",
             "heavy",
@@ -127,7 +127,7 @@
         },
         "why": {
           "default": null,
-          "description": "One line: why this tier. Required with 'tier'; recorded and shown in /status.",
+          "description": "One line: why this tier or model. Required with 'tier'; recorded and shown in /status.",
           "maxLength": 200,
           "nullable": true,
           "type": "string"

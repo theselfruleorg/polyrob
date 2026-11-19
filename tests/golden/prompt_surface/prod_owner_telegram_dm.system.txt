@@ -295,7 +295,7 @@ Host executables visible to the open exec tools (shell): git, python3.
 Running version: <VERSION>. What shipped in a release comes from the CHANGELOG.md shipped with your code — read it with agent_status(release_notes='latest', 'unreleased' or '<version>'); never guess.
 Install: git, installed at v0.0.0-golden, 2026-01-01T00:00:00Z
 Autonomous run budget: AUTONOMOUS_RUN_BUDGET_USD=$2.00 provider spend per cron/goal run, sub-agents included — the run halts at the cap.
-Model tiers (the operator sets them; you pick by NAME): default = example/default-model, heavy = example/heavy-model, light = example/default-model. Pass tier= and a one-line why= to delegate_task, or — when the owner's chat asked for the work — to goal_create / cronjob_schedule: heavy for work that decides money or is hard to undo, light for bulk reads.
+Model tiers (the owner or the operator sets them; you pick by NAME): default = example/default-model, heavy = example/heavy-model, light = example/default-model. Pass tier= and a one-line why= to delegate_task, goal_create or cronjob_schedule: heavy for work that decides money or is hard to undo, light for bulk reads. A sub-agent, a goal or a job may also run on any model: pass model= and why= (agent_status view='models' lists the models and prices; choose by price, there is no price gate).
 For live status (steps/tools/context/budget/health) call agent_status. The latest <live-health> note carries the same health facts the owner's /status shows.
 </environment>
 

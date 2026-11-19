@@ -92,13 +92,61 @@ def test_an_unsafe_instance_id_does_not_traverse(tmp_path):
     assert tmp_path in d.parents and ".." not in d.parts
 
 
-def test_set_from_file(tmp_path):
+@pytest.mark.asyncio
+async def test_a_file_reference_needs_a_named_origin(tmp_path):
+    """120 W1: ONE reference branch. A file is read at the terminal, or from the
+    agent's workspace — never from a bare chat line."""
     f = tmp_path / "me.png"
     f.write_bytes(PNG)
-    st = avatar.set_avatar_from_file(tmp_path / "home", "alice", f)
-    assert st.is_set and st.source == "file:me.png"
+    data, source = await avatar_sources.image_from_ref(str(f), local_files=True)
+    assert (data, source) == (PNG, "file:me.png")
+    with pytest.raises(avatar.AvatarError, match="no such file"):
+        await avatar_sources.image_from_ref(str(tmp_path / "missing.png"), local_files=True)
+    with pytest.raises(avatar.AvatarError, match="cannot be read from here"):
+        await avatar_sources.image_from_ref(str(f))
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "in.png").write_bytes(PNG)
+    assert (await avatar_sources.image_from_ref("in.png", workspace=str(ws)))[1] == "file:in.png"
     with pytest.raises(avatar.AvatarError):
-        avatar.set_avatar_from_file(tmp_path / "home", "alice", tmp_path / "missing.png")
+        await avatar_sources.image_from_ref(str(f), workspace=str(ws))     # outside it
+
+
+@pytest.mark.asyncio
+async def test_the_reference_branch_routes_urls_and_nfts(monkeypatch):
+    seen = []
+
+    async def _nft(chain, contract, token_id):
+        seen.append(("nft", chain, token_id))
+        return PNG, "nft"
+
+    async def _url(url):
+        seen.append(("url", url))
+        return PNG, "url"
+
+    monkeypatch.setattr(avatar_sources, "image_from_nft", _nft)
+    monkeypatch.setattr(avatar_sources, "image_from_url", _url)
+    await avatar_sources.image_from_ref("nft:base:0x" + "ab" * 20 + ":7")
+    await avatar_sources.image_from_ref("ipfs://bafy/x.png")
+    await avatar_sources.image_from_ref("data:image/png;base64,AAAA")
+    assert seen == [("nft", "base", 7), ("url", "ipfs://bafy/x.png"),
+                    ("url", "data:image/png;base64,AAAA")]
+    with pytest.raises(avatar.AvatarError):
+        await avatar_sources.image_from_ref("  ")
+
+
+@pytest.mark.asyncio
+async def test_my_own_identity_token_cannot_be_the_source(monkeypatch):
+    monkeypatch.setenv("A2A_BASE_URL", "https://agent.example")
+    meta = json.dumps({"image": "https://agent.example/avatar.png"}).encode()
+
+    async def _fetch(url, **_kw):
+        return meta
+
+    monkeypatch.setattr(avatar_sources, "_token_uri", lambda c, a, t: "https://agent.example/eip8004/registration.json")
+    monkeypatch.setattr(avatar_sources, "fetch_bytes", _fetch)
+    with pytest.raises(avatar.AvatarError, match="own avatar slot"):
+        await avatar_sources.image_from_nft("base", "0x" + "ab" * 20, 1)
 
 
 @pytest.mark.asyncio
@@ -130,3 +178,94 @@ def test_parse_nft_ref():
     for bad in ("base:0xabc:1", "base:0x" + "ab" * 20, "base:0x" + "ab" * 20 + ":x"):
         with pytest.raises(avatar.AvatarError):
             avatar_sources.parse_nft_ref(bad)
+
+
+# --- 120 W0: the errors name the step, the host and the node -----------------
+
+class _Res:
+    def __init__(self, status, body=b"", final_url=""):
+        self.status, self.body, self.final_url = status, body, final_url
+
+
+@pytest.mark.asyncio
+async def test_a_refused_fetch_names_the_step_and_the_host(monkeypatch):
+    import tools.web_fetch.fetcher as fetcher
+
+    async def _fetch(url, **_kw):
+        return _Res(403, final_url=url)
+
+    monkeypatch.setattr(fetcher, "safe_fetch", _fetch)
+    with pytest.raises(avatar.AvatarError) as e:
+        await avatar_sources.fetch_bytes("https://meta.example/t/1.json",
+                                         what="the token metadata")
+    assert str(e.value) == "meta.example answered HTTP 403 for the token metadata"
+
+
+def test_a_node_that_cannot_be_read_is_named_not_reported_as_no_metadata(monkeypatch):
+    import core.wallet.onchain as onchain
+
+    def _rpc(url, method, args, timeout):
+        raise RuntimeError("HTTP Error 403: Forbidden")
+
+    monkeypatch.setattr(onchain, "_rpc", _rpc)
+    monkeypatch.setattr(onchain, "rpc_url_for_chain", lambda chain: "https://rpc.example/v1/key")
+    with pytest.raises(avatar.AvatarError) as e:
+        avatar_sources._token_uri("base", "0x" + "ab" * 20, 1)
+    text = str(e.value)
+    assert "node at rpc.example could not be read" in text and "403" in text
+    assert "key" not in text                       # the host only, never the URL path
+
+
+def test_a_token_with_no_uri_on_a_node_that_answered_says_so(monkeypatch):
+    import core.wallet.onchain as onchain
+    monkeypatch.setattr(onchain, "_rpc", lambda url, method, args, timeout: "0x")
+    monkeypatch.setattr(onchain, "rpc_url_for_chain", lambda chain: "https://rpc.example")
+    with pytest.raises(avatar.AvatarError) as e:
+        avatar_sources._token_uri("base", "0x" + "ab" * 20, 1)
+    assert "has no metadata URI" in str(e.value)
+
+
+def test_the_ipfs_gateway_has_one_reader(monkeypatch):
+    monkeypatch.setenv("IPFS_GATEWAY", "https://gw.example/ipfs")
+    assert avatar_sources._gateway("ipfs://bafy/1.png") == "https://gw.example/ipfs/bafy/1.png"
+    assert avatar_sources._gateway("ipfs://ipfs/bafy") == "https://gw.example/ipfs/bafy"
+    monkeypatch.delenv("IPFS_GATEWAY")
+    assert avatar_sources._gateway("ipfs://bafy") == "https://ipfs.io/ipfs/bafy"
+    from modules.eip8004.registration import get_eip8004_config
+    assert get_eip8004_config().ipfs_gateway == "https://ipfs.io/ipfs/"
+
+
+# --- 120 T2: one answer for every origin that serves /avatar.png -------------
+
+def test_image_response_parts(tmp_path, monkeypatch):
+    avatar.set_avatar(tmp_path, "alice", JPG, source="file:f.jpg")
+    path, media_type, headers = avatar.image_response_parts(tmp_path, "alice")
+    assert path.name == "avatar.jpg" and media_type == "image/jpeg"
+    assert headers["X-Content-Type-Options"] == "nosniff"
+    assert "Content-Security-Policy" not in headers
+    avatar.set_avatar(tmp_path, "alice", SVG, source="file:f.svg")
+    _p, media_type, headers = avatar.image_response_parts(tmp_path, "alice")
+    assert media_type == "image/svg+xml" and "sandbox" in headers["Content-Security-Policy"]
+    monkeypatch.setattr(avatar, "DEFAULT_AVATAR", tmp_path / "missing.png")
+    assert avatar.image_response_parts(tmp_path, "nobody") is None
+
+
+def test_the_api_serves_the_avatar_without_a_credential(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from api.auth_constants import is_public_path
+    from api.avatar_endpoint import router
+    import core.instance as instance
+    import core.runtime_paths as rp
+
+    monkeypatch.setattr(rp, "resolve_data_home", lambda *a, **k: tmp_path)
+    monkeypatch.setattr(instance, "resolve_instance_id", lambda *a, **k: "alice")
+    avatar.set_avatar(tmp_path, "alice", PNG, source="file:face.png")
+    app = FastAPI()
+    app.include_router(router)
+    res = TestClient(app).get("/avatar.png")
+    assert res.status_code == 200 and res.headers["content-type"] == "image/png"
+    assert res.content == PNG
+    assert TestClient(app).head("/avatar.png").status_code == 200
+    assert is_public_path("/avatar.png") and not is_public_path("/avatar.png/x")

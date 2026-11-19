@@ -668,7 +668,7 @@ class NextActionInternalMixin:
 
 		# Use ephemeral message API for format hints
 		format_hint_added = False
-		if RobustParseConfig.INJECT_FORMAT_HINT_EARLY and not will_use_native_tools:
+		if not will_use_native_tools:
 			# Only inject JSON format hint when NOT using native tools
 			formatting_message = HumanMessage(
 				content=f"""CRITICAL RESPONSE FORMAT:
@@ -698,8 +698,7 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 				self.logger.debug("Pushed early format hint for JSON response mode")
 			else:
 				self.logger.warning(f"Format hint too large, would exceed safe token limit")
-		elif will_use_native_tools and RobustParseConfig.INJECT_FORMAT_HINT_EARLY \
-				and not format_nag_exempt(self.model_name, provider):
+		elif not format_nag_exempt(self.model_name, provider):
 			# For native tools, remind about JSON brain state format — but only for
 			# families that need it (T1-10): the prompt is authored for Claude and the
 			# family-note design deliberately gives it none, so the per-step nag was

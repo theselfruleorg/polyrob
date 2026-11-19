@@ -1,7 +1,8 @@
-"""The `agent_avatar` action — the agent knows it has a face, sends it, and sets it.
+"""The `agent_avatar` action — the agent knows it has a face, sends it, sets it,
+clears it and pushes it to its own accounts.
 
 The avatar is ONE image slot per instance (`core/avatar.py`). Core generates no
-face; the image comes from a file, a URL, or an NFT's image. Three halves:
+face; the image comes from a file, a URL, or an NFT's image. The parts:
 
 - **read** — the instance and the slot: set (and from where) / not set /
   unreadable.
@@ -10,6 +11,10 @@ face; the image comes from a file, a URL, or an NFT's image. Three halves:
   exists.
 - **set** — `set_from` = a workspace image file, an https/ipfs/data URL, or
   `nft:chain:contract:id`. An identity change, so ONLY on an owner turn.
+- **clear** — back to the default mark. The same rule as `set_from`.
+- **push** — make the agent's own account pictures (X, Telegram, Discord) show
+  the slot: `modules.avatar.push.push_avatar`, the ONE procedure the CLI and the
+  chat `/avatar push` also run (no switch: the credentials decide; hash-idempotent). The same rule as `set_from`: it changes the public face.
 
 ⚠️ The copy is the design, not a shortcut. `core/surfaces/attachments.py::
 validate_media_paths` requires every media path to resolve INSIDE the session
@@ -17,7 +22,7 @@ workspace, and special-casing one blessed file would weaken that confinement
 rule for every caller. Materialising the file keeps exactly one rule. The same
 rule confines a `set_from` file path.
 
-⚠️ `set_from` refuses on a delegated, leaf, forged (self-wake / delegation
+⚠️ `set_from`, `clear` and `push` refuse on a delegated, leaf, forged (self-wake / delegation
 re-entry), autonomous (cron / goal) or non-owner turn
 (`core.security.owner_turn.owner_turn_refusal` + `is_autonomous_session`): a
 model turn nobody asked for must not change the agent's face.
@@ -34,7 +39,7 @@ delegator fails `tests/test_file_size_ratchet.py`. Same escape hatch
 import logging
 import shutil
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -47,8 +52,8 @@ WORKSPACE_STEM = "avatar"
 
 _NO_AVATAR = (
     "avatar: not set. That is a normal, optional state — the owner sets one with "
-    "`polyrob avatar set <image|url|nft:chain:contract:id>` or `/avatar set` in "
-    "the chat, or asks me to set it on an owner turn."
+    "`/avatar set <url|nft:chain:contract:id>` in the chat, or asks me to set it "
+    "(agent_avatar set_from) on an owner turn."
 )
 
 
@@ -65,50 +70,76 @@ def _workspace(controller, execution_context) -> Optional[str]:
     return None
 
 
-def _set_refusal(execution_context) -> Optional[str]:
+def _set_refusal(execution_context, verb: str = "set_from") -> Optional[str]:
+    """The ONE rule for every write of the face (set, clear, push)."""
     from core.security.owner_turn import owner_turn_refusal
     refusal = owner_turn_refusal(
-        execution_context, verb="agent_avatar set_from",
+        execution_context, verb=f"agent_avatar {verb}",
         does="changes the agent's face", public="change the agent's avatar")
     if refusal:
         return refusal
     from agents.task.session_class import is_autonomous_session
-    from core.security.owner_turn import is_owner_standing_run
-    if is_autonomous_session(getattr(execution_context, "session_id", None)) \
-            and not is_owner_standing_run(execution_context):
-        return ("agent_avatar set_from denied: an autonomous run that is not a standing "
-                "job never changes the agent's face")
+    if is_autonomous_session(getattr(execution_context, "session_id", None)):
+        return (f"agent_avatar {verb} denied: an autonomous run (a cron job or a goal, "
+                "also a standing one) never changes the agent's face; the owner asks "
+                "for it in a chat turn")
     return None
 
 
-async def _image_for(set_from: str, workspace: Optional[str]):
-    """``(bytes, source)`` for ``set_from``. Raises ``core.avatar.AvatarError``."""
-    from core.avatar import AvatarError, MAX_BYTES
-    from tools import avatar_sources
-    ref = set_from.strip()
-    if ref.startswith("nft:"):
-        chain, contract, token_id = avatar_sources.parse_nft_ref(ref[len("nft:"):])
-        return await avatar_sources.image_from_nft(chain, contract, token_id)
-    if ref.startswith(("https://", "http://", "ipfs://", "data:")):
-        return await avatar_sources.image_from_url(ref)
-    from core.surfaces.attachments import validate_media_paths
-    validated, err = validate_media_paths([ref], workspace)
-    if err:
-        raise AvatarError(err)
-    p = Path(validated[0])
-    if not p.is_file():
-        raise AvatarError(f"no such file in the workspace: {ref}")
-    if p.stat().st_size > MAX_BYTES:
-        raise AvatarError(f"{p.name} is {p.stat().st_size} bytes; the limit is {MAX_BYTES}")
-    return p.read_bytes(), f"file:{p.name}"
+def _registration_note() -> str:
+    """What the on-chain registration shows after a change — hosted (live) or a
+    snapshot. Never claims "now" for a snapshot (120 T6)."""
+    try:
+        from tools.defi.agent_registration import uri_is_hosted
+        hosted = uri_is_hosted()
+    except Exception:
+        return "the on-chain registration: could not tell if it follows the slot"
+    if hosted:
+        return ("an on-chain registration that points at my live registration file "
+                "shows it now")
+    return ("an on-chain registration made on this setup is a snapshot: it keeps the "
+            "old image until defi_trade set_agent_uri writes a new one")
+
+
+def _allowed_telegram_rooms(controller, home: str) -> set:
+    """Chat ids of the Telegram rooms the owner put me in (a push target must be
+    one of them). Raises when the allowlist cannot be read."""
+    from core.surfaces.group_allowlist import GroupAllowlist
+    from core.surfaces.room_targets import scoped_rooms
+    rows = GroupAllowlist(f"{home}/group_allowlist.db").list_all()
+    rooms = scoped_rooms(controller, [r for r in rows if r.get("status") == "active"])
+    return {str(r["chat_id"]) for r in rooms if r.get("surface") == "telegram"}
+
+
+async def _push(controller, home: str, instance_id: str, names) -> list:
+    """The lines of one push. ``telegram:<chat_id>`` names a room's photo."""
+    import asyncio
+    from modules.avatar import push as pushmod
+    surfaces, chats = [], []
+    for raw in names:
+        word = str(raw).strip()
+        if word.lower().startswith("telegram:") and word[len("telegram:"):].strip():
+            chats.append(word[len("telegram:"):].strip())
+        elif word:
+            surfaces.append(word)
+    if chats:
+        try:
+            allowed = _allowed_telegram_rooms(controller, home)
+        except Exception as e:
+            return [f"push: the room list could not be read ({type(e).__name__}: {e}); "
+                    f"no room photo was changed"]
+        strangers = [c for c in chats if c not in allowed]
+        if strangers:
+            return [f"push refused: {', '.join(strangers)} is not a Telegram room the owner "
+                    f"put me in (room_read lists them); nothing was pushed"]
+    results = await asyncio.to_thread(pushmod.push_avatar, home, instance_id,
+                                      surfaces=surfaces, telegram_chats=chats)
+    return ["push:"] + ["  " + line for r in results for line in r.text.splitlines()]
 
 
 def register_avatar_action(controller) -> None:
-    """Register the `agent_avatar` action (read / attach / set), gated
-    AVATAR_TOOL_ENABLED (default OFF; ON under POLYROB_LOCAL)."""
-    from core.config_policy import AutonomyConfig
-    if not AutonomyConfig.avatar_tool_enabled():
-        return
+    """Register the `agent_avatar` action (read / attach / set / clear / push). No
+    switch: a read is free and every write needs an owner turn."""
 
     class AgentAvatarAction(BaseModel):
         attach: bool = Field(
@@ -124,18 +155,32 @@ def register_avatar_action(controller) -> None:
                          "URL, or nft:chain:contract:token_id (the image its "
                          "metadata names). Only when the owner asks you to — it "
                          "is refused on any turn that is not the owner's."))
+        clear: bool = Field(
+            default=False,
+            description=("Remove the avatar image (the default mark comes back). "
+                         "Only when the owner asks you to."))
+        push: Optional[List[str]] = Field(
+            default=None,
+            description=("Make your own account pictures show the avatar. A list "
+                         "of: 'x', 'telegram', 'discord', or 'telegram:<chat_id>' "
+                         "for the photo of a room you are in; an empty list = each "
+                         "connected account. Each one answers updated / unchanged / "
+                         "not connected / failed. With "
+                         "set_from in the same call the new image is set first. "
+                         "Only when the owner asks you to."))
 
     @controller.registry.action(
         "Your avatar: the one image slot that is your face (console, chat, "
-        "on-chain registration; the X/Telegram profile photos follow it only when "
-        "the owner pushes it there). Reads whether it is set and "
+        "on-chain registration). Your X, Telegram and Discord account pictures "
+        "are copies: they change only on a push. Reads whether it is set and "
         "where it came from. With attach=true it also places the image in your "
         "workspace so you can send it with message(media_paths=[...]). With "
-        "set_from it replaces the image — only when the owner asks.",
+        "set_from it replaces the image, with clear it removes it, with push it "
+        "updates your account pictures — each only when the owner asks.",
         param_model=AgentAvatarAction,
     )
     async def agent_avatar(params: AgentAvatarAction, execution_context=None) -> ActionResult:
-        from core.avatar import AvatarError, describe, load_avatar, set_avatar
+        from core.avatar import AvatarError, clear_avatar, describe, load_avatar, set_avatar
         from core.instance import resolve_instance_id
 
         instance_id = resolve_instance_id()
@@ -148,12 +193,21 @@ def register_avatar_action(controller) -> None:
         ws = _workspace(controller, execution_context)
         lines = [f"instance: {instance_id}"]
 
-        if params.set_from:
-            refusal = _set_refusal(execution_context)
+        writes = [w for w, on in (("set_from", params.set_from), ("clear", params.clear),
+                                  ("push", params.push is not None)) if on]
+        if params.set_from and params.clear:
+            return ActionResult(error="agent_avatar: set_from and clear are opposites; "
+                                      "give one", include_in_memory=True)
+        if writes:
+            refusal = _set_refusal(execution_context, verb=writes[0])
             if refusal:
                 return ActionResult(error=refusal, include_in_memory=True)
+
+        if params.set_from:
             try:
-                data, source = await _image_for(params.set_from, ws)
+                from tools import avatar_sources
+                data, source = await avatar_sources.image_from_ref(
+                    params.set_from, workspace=ws or "")
                 st = set_avatar(home, instance_id, data, source=source)
             except AvatarError as e:
                 return ActionResult(error=f"agent_avatar set_from refused: {e}",
@@ -163,9 +217,21 @@ def register_avatar_action(controller) -> None:
                 return ActionResult(error=f"agent_avatar set_from failed: "
                                           f"{type(e).__name__}: {e}",
                                     include_in_memory=True)
-            lines.append(f"avatar: {describe(st)} — the console and the on-chain "
-                         f"registration show it now; the X/Telegram profile photos "
-                         f"keep the old image until the owner runs `polyrob avatar push`")
+            lines.append(f"avatar: {describe(st)} — the console and the chat show it now; "
+                         f"{_registration_note()}")
+            if params.push is None:
+                lines.append("my X, Telegram and Discord pictures keep the old image "
+                             "until a push (agent_avatar push=[])")
+        elif params.clear:
+            try:
+                removed = clear_avatar(home, instance_id)
+            except Exception as e:
+                logger.warning("agent_avatar: clear failed", exc_info=True)
+                return ActionResult(error=f"agent_avatar clear failed: "
+                                          f"{type(e).__name__}: {e}", include_in_memory=True)
+            st = load_avatar(home, instance_id)
+            lines.append(("avatar: cleared; " if removed else "avatar: there was none to "
+                          "clear; ") + f"it is {describe(st)}")
         else:
             st = load_avatar(home, instance_id)
             if st.state == "none":
@@ -175,6 +241,9 @@ def register_avatar_action(controller) -> None:
             lines.append(f"avatar: {describe(st)}")
             if st.is_set and st.set_at:
                 lines.append(f"set at: {st.set_at}")
+
+        if params.push is not None:
+            lines.extend(await _push(controller, home, instance_id, params.push))
 
         if params.attach:
             if not st.is_set:

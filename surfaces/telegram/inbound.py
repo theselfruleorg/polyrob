@@ -3,8 +3,7 @@
 The aiogram/FastAPI webhook handler is a thin shell over process_update: it hands the
 raw Telegram update dict here, gets back a routing decision (or None when the update
 is a redelivery / not a routable message), and then ACTS on the decision (STEER ->
-submit_user_message, TASK_AGENT -> create_session, COMMAND -> handler, CHAT_FASTPATH
--> chat agent). Keeping this as a pure function makes the whole inbound spine testable
+submit_user_message, TASK_AGENT -> create_session, COMMAND -> handler). Keeping this as a pure function makes the whole inbound spine testable
 without a bot or a network.
 
 Ordering is load-bearing (Fusion): dedup FIRST — before identify (which writes via
@@ -311,7 +310,6 @@ async def process_update(
     *,
     dedup: Any,
     user_directory: Any,
-    is_chitchat=None,
     transcribe_voice=None,
     now: Optional[float] = None,
     bot_username: Optional[str] = None,
@@ -371,5 +369,5 @@ async def process_update(
         inbound.media[0].transcript = voice_text
 
     # 3) ROUTE.
-    decision = await route_inbound(container, inbound, is_chitchat=is_chitchat)
+    decision = await route_inbound(container, inbound)
     return InboundResult(inbound=inbound, decision=decision)

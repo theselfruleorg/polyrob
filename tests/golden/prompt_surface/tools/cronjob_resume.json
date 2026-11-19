@@ -1,0 +1,20 @@
+{
+  "function": {
+    "description": "Resume a paused cron job at its next slot. A job you paused yourself resumes on any of your turns; a job the failure limit paused resumes only when the owner asks in this turn; an owner's pause only the owner lifts.",
+    "name": "cronjob_resume",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "description": "The id of the paused cron job to resume.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_id"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

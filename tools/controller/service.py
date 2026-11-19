@@ -177,8 +177,8 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, ToolCa
 		# in its own module (action_registration.py is at its size ceiling).
 		from tools.controller.autonomy_control_action import register_autonomy_control_action
 		register_autonomy_control_action(self)
-		# 2026-09-15: the agent's own face/voice (read + workspace attach), gated
-		# AVATAR_TOOL_ENABLED. Same reason it lives here rather than in
+		# The agent's own face (read, attach, and the owner-turn writes); no switch.
+		# Same reason it lives here rather than in
 		# action_registration.py: that file is AT its size ceiling.
 		from tools.controller.avatar_action import register_avatar_action
 		register_avatar_action(self)
@@ -214,6 +214,9 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, ToolCa
 		# 093 D1: a setting change as a one-tap owner card (same gates + owner turn).
 		from tools.controller.setting_actions import register_setting_actions
 		register_setting_actions(self)
+		# 120 W2: the agent's own background helpers — list, or cancel one id.
+		from tools.controller.delegation_status_action import register_delegation_status_action
+		register_delegation_status_action(self)
 
 		# NOTE: Backward compat aliases are registered LAZILY after task tool loads
 		# NOT here in __init__ - aliases to non-existent actions cause confusion

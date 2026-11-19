@@ -1,4 +1,5 @@
-"""112 W2: a tier on a goal/job — owner turn only, a reason required, checked at write time."""
+"""112 W2 / 121: a tier on a goal/job — from any turn, a reason required, checked at write
+time; a model the owner set is locked."""
 import inspect
 
 import pytest
@@ -18,9 +19,21 @@ def test_no_tier_writes_nothing():
     assert tier_payload(None, None, owner_turn=False) == ({}, None)
 
 
-def test_off_an_owner_turn_is_refused():
-    keys, err = tier_payload("heavy", "decides a payout", owner_turn=False)
-    assert keys == {} and "genuine owner turn" in err
+def test_an_unattended_run_sets_a_tier_but_not_over_the_owners_model():
+    keys, err = tier_payload("heavy", "decides a payout", owner_turn=False, provider="openrouter")
+    assert err is None and keys == {"tier": "heavy", "tier_why": "decides a payout"}
+    locked = {"model": "x/owner", "model_by": "owner", "provider": "openrouter"}
+    keys, err = tier_payload("heavy", "w", owner_turn=False, existing=locked)
+    assert keys == {} and "only the owner changes it" in err
+    assert tier_payload("heavy", "w", owner_turn=True, provider="openrouter", existing=locked)[1] is None
+
+
+def test_a_tier_replaces_a_stored_model():
+    """The run reads payload.model first, so a tier written beside it would do nothing."""
+    mine = {"model": "x/pick", "model_by": "agent", "model_why": "w", "provider": "openrouter"}
+    keys, err = tier_payload("light", "bulk read", owner_turn=False, existing=mine)
+    assert err is None and keys == {"tier": "light", "tier_why": "bulk read", "model": None,
+                                    "model_by": None, "model_why": None, "provider": None}
 
 
 def test_owner_turn_stores_tier_and_reason():

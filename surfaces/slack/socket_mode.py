@@ -62,6 +62,8 @@ def _internal_user_id(author_id: str, user_directory: Any = None) -> str:
 #: The Socket Mode envelope type of a slash command, and the type the consumer
 #: hands to the harness (the command body has no ``type`` of its own).
 SLASH_ENVELOPE = "slash_commands"
+#: A button press (Block Kit ``block_actions``); needs Interactivity on in the app.
+INTERACTIVE_ENVELOPE = "interactive"
 
 
 def slash_line(text: str) -> str:
@@ -212,6 +214,9 @@ class SlackSocketModeClient:
                 # 113 W7 F-01: the app's one command. Acked above with an empty
                 # body (Slack shows nothing); the answer is a normal message.
                 event = {"type": SLASH_ENVELOPE, "payload": payload.get("payload") or {}}
+            elif kind == INTERACTIVE_ENVELOPE:
+                # 0017: a Block Kit button press. Acked above; routed as the presser.
+                event = {"type": INTERACTIVE_ENVELOPE, "payload": payload.get("payload") or {}}
             if event is not None:
                 # Dispatch WITHOUT awaiting: a multi-second agent turn awaited
                 # inline blocks this read loop, so the NEXT envelope's ACK

@@ -79,7 +79,8 @@ class MessageTargetAction(BaseModel):
 		default="send",
 		description=("send | reply | posts (list what I posted, with ledger rows) | delete "
 		             "(my OWN post, owner's instruction only, telegram <48h: give post=<row>, "
-		             "or message_id + target, or last=N + target)"))
+		             "or message_id + target, or last=N + target) | targets (who I may "
+		             "message: the owner, the policy, the allowlist)"))
 	reply_to: Optional[str] = Field(default=None, description="Message id to reply to")
 	message_id: Optional[str] = Field(default=None, description="delete: the message id in target's chat")
 	post: Optional[int] = Field(default=None, description="delete: the post-ledger row a send receipt named")
@@ -383,9 +384,10 @@ class SubtaskAction(BaseModel):
 	)
 	model: Optional[str] = Field(
 		default=None,
-		description="Optional model for this sub-agent (e.g. 'claude-haiku-4-5' or an "
-		            "OpenRouter slug). Omit to inherit the parent's model (or the "
-		            "delegate_task-level model when used inside 'tasks')."
+		description="Optional model for this sub-agent: ANY model id of a provider that has a "
+		            "key (agent_status view='models' lists them with prices; choose by price). "
+		            "Give a one-line 'why'. Omit to inherit the parent's "
+		            "model (or the delegate_task-level model when used inside 'tasks')."
 	)
 	provider: Optional[str] = Field(
 		default=None,
@@ -398,13 +400,13 @@ class SubtaskAction(BaseModel):
 		default=None,
 		description=("Model tier for this sub-agent: 'light' = the cheap model, for bulk reads "
 		             "and summaries; 'heavy' = the strongest model, only for judgement that "
-		             "decides money or is hard to undo; 'default' = yours. The operator sets "
-		             "the model behind each tier (see <environment>); an absent tier is "
+		             "decides money or is hard to undo; 'default' = yours. The owner or the "
+		             "operator sets the model behind each tier (see <environment>); an absent tier is "
 		             "refused. Requires 'why'. Not with 'model'.")
 	)
 	why: Optional[str] = Field(
 		default=None, max_length=200,
-		description="One line: why this tier. Required with 'tier'; recorded and shown in /status."
+		description="One line: why this tier or model. Required with 'tier'; recorded and shown in /status."
 	)
 
 	@model_validator(mode="after")
@@ -414,7 +416,7 @@ class SubtaskAction(BaseModel):
 
 
 def _check_tier(action) -> None:
-	"""112 W2: a tier names its reason, and a tier and a raw model never meet."""
+	"""112 W2 / 121: a tier or a model names its reason, and the two never meet."""
 	if action.tier and not (action.why or "").strip():
 		raise ValueError("'tier' requires 'why' (one line: why this tier).")
 	if action.tier and action.model:
@@ -490,13 +492,13 @@ class DelegateTaskAction(BaseModel):
 		default=None,
 		description=("Model tier for the sub-agent (with 'tasks': the fallback for a task with no tier or model): 'light' = the cheap model, for bulk reads "
 		             "and summaries; 'heavy' = the strongest model, only for judgement that "
-		             "decides money or is hard to undo; 'default' = yours. The operator sets "
-		             "the model behind each tier (see <environment>); an absent tier is "
+		             "decides money or is hard to undo; 'default' = yours. The owner or the "
+		             "operator sets the model behind each tier (see <environment>); an absent tier is "
 		             "refused. Requires 'why'. Not with 'model'.")
 	)
 	why: Optional[str] = Field(
 		default=None, max_length=200,
-		description="One line: why this tier. Required with 'tier'; recorded and shown in /status."
+		description="One line: why this tier or model. Required with 'tier'; recorded and shown in /status."
 	)
 
 	@model_validator(mode="after")

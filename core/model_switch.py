@@ -1,5 +1,5 @@
-"""094: the ``/model`` grammar, the alias table, the reasoning levels and the
-price guard — the pure half of the hot model switch.
+"""094: the ``/model`` grammar, the alias table and the reasoning levels — the pure half of
+the hot model switch. (121: no price gate; ``go`` from an older confirm line is ignored.)
 
 Every seat (Telegram, console, REPL) parses ``/model`` here and resolves a name
 here; the switch itself (validate against the catalog, store the pin, swap at the
@@ -14,10 +14,12 @@ Grammar (any order after the name)::
     /model <name> default                   also the default for every new owner chat
     /model <name> reasoning=<level>         with a reasoning level (off|on|low|medium|high|<tokens>)
     /model reasoning=<level>                only the reasoning level, same model
-    /model <name> go                        confirm a switch the price guard quoted
     /model reset [default]                  back to the default (and clear the default)
     /model aliases                          list the aliases
     /model alias <name> <provider>/<model>  add an owner alias (`/model alias <name> -` removes it)
+    /model heavy <name> | /model light <name>   the owner's heavy / light model (121);
+                                            `/model heavy reset` clears it
+    /model choice [free|listed]             which models the AGENT may name (121)
 
 ``<name>`` is an alias, ``<provider>/<model>`` (``openrouter/anthropic/claude-sonnet-5.5``),
 a bare model id on the operator's provider (``anthropic/claude-sonnet-5.5`` on
@@ -59,25 +61,27 @@ BUILTIN_ALIASES: Dict[str, Tuple[str, ...]] = {
 AGGREGATORS = ("openrouter",)
 
 #: Names that resolve through the operator's env, not the table.
-SYMBOLIC_ALIASES = ("default", "heavy")
+SYMBOLIC_ALIASES = ("default", "heavy", "light")
 
 REASONING_LEVELS = ("off", "on", "low", "medium", "high")
 #: The most reasoning tokens a level may ask for.
 MAX_REASONING_TOKENS = 64000
 
 _ALIAS_CHARS = set("abcdefghijklmnopqrstuvwxyz0123456789-_.")
+#: Words of the retired price-gate confirm line (``/model <name> go``): ignored, so an old
+#: line or card still switches.
 _CONFIRM_WORDS = ("go", "confirm", "execute")
 
 
 @dataclass
 class ModelCommand:
     """One parsed ``/model`` line."""
-    action: str                      # show|set|reset|aliases|alias|reasoning|error
+    action: str                      # show|set|reset|aliases|alias|reasoning|choice|error
+    tier: str = ""                   # 121: "heavy" | "light" = the line sets that owner setting
     name: str = ""                   # the typed name (alias, id, provider/model)
     provider: str = ""               # an explicit provider (two-word form)
     default: bool = False            # also the owner default
     reasoning: Optional[str] = None  # a validated level, or None = unchanged
-    confirm: bool = False            # the owner said `go`
     alias_target: str = ""           # for `alias <name> <target>`
     error: str = ""
     words: List[str] = field(default_factory=list)
@@ -103,6 +107,18 @@ def parse_model_args(words: Sequence[str]) -> ModelCommand:
     if head == "aliases" and len(ws) == 1:
         cmd.action = "aliases"
         return cmd
+    if head == "choice":
+        # 121: the owner's switch for a model the AGENT names — free | listed.
+        if len(ws) > 2 or (len(ws) == 2 and ws[1].lower() not in ("free", "listed")):
+            return _err(cmd, "Usage: /model choice [free|listed]")
+        cmd.action, cmd.name = "choice", (ws[1].lower() if len(ws) == 2 else "")
+        return cmd
+    if (head in ("heavy", "light") and len(ws) > 1 and ws[1].lower() not in _CONFIRM_WORDS
+            and ws[1].lower() != "default" and not ws[1].lower().startswith("reasoning=")):
+        # 121: `/model heavy <name>` sets the owner's heavy (or light) model. `/model heavy`
+        # alone, or with go / default / reasoning=, still moves THIS chat to it (the 094
+        # symbolic alias).
+        cmd.tier, ws = head, ws[1:]
     if head == "alias":
         if len(ws) != 3:
             return _err(cmd, "Usage: /model alias <name> <provider>/<model>  (or `-` to remove it)")
@@ -116,7 +132,7 @@ def parse_model_args(words: Sequence[str]) -> ModelCommand:
     for w in ws:
         lw = w.lower()
         if lw in _CONFIRM_WORDS:
-            cmd.confirm = True
+            continue
         elif lw == "default":
             cmd.default = True
         elif lw.startswith("reasoning="):
@@ -131,6 +147,8 @@ def parse_model_args(words: Sequence[str]) -> ModelCommand:
     # `default` alone is the symbolic alias; `reset` is its own verb.
     if not rest and cmd.default and cmd.reasoning is None:
         rest, cmd.default = ["default"], False
+    if cmd.tier and (cmd.default or cmd.reasoning is not None):
+        return _err(cmd, f"Usage: /model {cmd.tier} <name> | /model {cmd.tier} reset")
     if rest and rest[0].lower() == "reset":
         if len(rest) > 1:
             return _err(cmd, "Usage: /model reset [default]")
@@ -209,12 +227,14 @@ def resolve_name(cmd_name: str, *, explicit_provider: str = "",
         served = ", ".join(sorted(row))
         return Resolved(error=f"'{low}' is served by {served}; no key for those here.")
     if low in SYMBOLIC_ALIASES:
-        from core.runtime_config import heavy_model_pin, operator_model_pin
-        model = operator_model_pin(env) if low == "default" else heavy_model_pin(env)
+        from core.runtime_config import tier_models
+        model = tier_models(op, env).get(low)
         if not model:
-            flag = "DEFAULT_MODEL" if low == "default" else "HEAVY_MODEL"
-            return Resolved(error=f"'{low}' needs {flag} in the operator env; it is not set.")
-        return Resolved(op, model, "DEFAULT_MODEL" if low == "default" else "HEAVY_MODEL")
+            how = {"default": "DEFAULT_MODEL in the operator env",
+                   "heavy": "HEAVY_MODEL or /model heavy <name>",
+                   "light": "/model light <name> or a cheap model of the operator's provider"}
+            return Resolved(error=f"'{low}' needs {how[low]}; it is not set.")
+        return Resolved(op, model, f"the {low} model")
     # On an aggregator (OpenRouter) a one-slash name is the aggregator's own id —
     # `anthropic/claude-sonnet-5.5` — not provider `anthropic`; the native provider
     # is the two-word form (`/model anthropic claude-sonnet-5-5`).

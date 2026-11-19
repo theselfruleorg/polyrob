@@ -55,7 +55,11 @@ CEILINGS = {
     # owner_doc_manage) moved to tools/controller/doc_authoring.py::DocAuthoringMixin.
     # Tightened 2026-10-30 (095 P0.2): the `preferences` action moved to
     # tools/controller/preferences_action.py::PreferencesActionMixin.
-    "tools/controller/action_registration.py": 1406,
+    # Tightened 2026-11-17 (120 W3): `usage_summary` moved to
+    # tools/controller/usage_summary_action.py.
+    # Tightened 2026-11-17 (120 W5): `contact_history` moved to
+    # tools/controller/contact_history_action.py.
+    "tools/controller/action_registration.py": 1296,
     "api/task_http_api.py": 1876,
     # Re-baselined 2026-07-25 (0.9.0 release cut): +3 net for the AUTONOMY_ENABLED
     # master state in `/autonomy` + `doctor`. The extraction debt on this file

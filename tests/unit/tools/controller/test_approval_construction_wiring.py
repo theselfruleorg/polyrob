@@ -90,3 +90,57 @@ async def test_provider_pref_can_only_get_stricter(tmp_path, monkeypatch):
 
     reason = await c._run_pre_tool_call_hooks("shell_run", {}, None)
     assert reason is not None  # still denied — the operator's "deny" wins (stricter)
+
+
+def test_the_deny_preference_is_the_standing_stop_too(tmp_path, monkeypatch):
+    """`operator_denies_approvals` guards the acts with no approval card (an X
+    post on the owner's turn, a publish, a deploy). It read the env value only,
+    so the owner's stricter `approvals.provider=deny` did not reach them."""
+    import core.admin_data_home as adh
+    import core.runtime_paths as rp
+    monkeypatch.setattr(adh, "admin_owner_principal", lambda: "u1")
+    monkeypatch.setattr(rp, "prefs_home_dir", lambda: str(tmp_path))
+    assert approval.operator_denies_approvals() is False
+    write_preference(tmp_path, "u1", "approvals.provider", "owner_queue")
+    assert approval.operator_denies_approvals() is False
+    write_preference(tmp_path, "u1", "approvals.provider", "deny")
+    assert approval.operator_denies_approvals() is True
+    monkeypatch.setenv("APPROVAL_PROVIDER", "deny")
+    write_preference(tmp_path, "u1", "approvals.provider", "auto")
+    assert approval.operator_denies_approvals() is True
+
+
+def test_a_refusal_names_the_cause_of_the_stop(tmp_path, monkeypatch):
+    """The refusal said `APPROVAL_PROVIDER=deny` when the owner's preference
+    was the cause, so an owner who read the env found nothing."""
+    import core.admin_data_home as adh
+    import core.runtime_paths as rp
+    monkeypatch.setattr(adh, "admin_owner_principal", lambda: "u1")
+    monkeypatch.setattr(rp, "prefs_home_dir", lambda: str(tmp_path))
+    assert approval.operator_deny_cause() == ""
+    write_preference(tmp_path, "u1", "approvals.provider", "deny")
+    assert approval.operator_deny_cause() == approval.PREF_DENY_CAUSE
+    assert "approvals.provider=deny" in approval.PREF_DENY_CAUSE
+    monkeypatch.setenv("APPROVAL_PROVIDER", "deny")
+    assert approval.operator_deny_cause() == approval.ENV_DENY_CAUSE
+
+
+def test_the_stop_holds_when_the_deployed_env_file_is_locked(tmp_path, monkeypatch):
+    """A service that cannot read the root-only deployed env file, with no owner
+    in its own env: the owner lookup raised and the stop answered "no"."""
+    import core.admin_data_home as adh
+    import core.runtime_paths as rp
+    for name in ("POLYROB_OWNER_USER_ID", "BOT_OWNER_USER_ID",
+                 "SURFACE_SUPER_ADMIN_USER_IDS", "POLYROB_LOCAL_OWNER"):
+        monkeypatch.delenv(name, raising=False)
+
+    def _locked(key):
+        raise adh.DeployedEnvUnreadable(f"{key}: not readable")
+    monkeypatch.setattr(adh, "deployed_env_value", _locked)
+    monkeypatch.setattr(rp, "prefs_home_dir", lambda: str(tmp_path))
+    from core.instance import resolve_owner_principal
+    write_preference(tmp_path, resolve_owner_principal(), "approvals.provider", "deny")
+    assert approval.operator_deny_cause() == approval.PREF_DENY_CAUSE
+    # Another tenant's preference is still not the stop.
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "owner2")
+    assert approval.operator_deny_cause() == ""

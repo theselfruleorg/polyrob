@@ -239,3 +239,10 @@ class DatabaseVersionManager:
                     print(f"    Execution: {item['execution_time_ms']}ms")
 
         print("=" * 60 + "\n")
+
+
+# 120 W8: the health slot (core/health_slot.py) prints the schema line for the
+# agent too; core may not import migrations, so this tier registers its HEAD.
+from core.health_slot import register_schema_head as _register_schema_head  # noqa: E402
+
+_register_schema_head(latest_migration_version)

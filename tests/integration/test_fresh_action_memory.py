@@ -47,7 +47,6 @@ class _GreedyModel:
 @pytest.fixture
 def store(tmp_path, monkeypatch):
 	monkeypatch.setenv("TASK_MAX_MESSAGES", "800")
-	monkeypatch.setenv("COMPACTION_CHECKPOINT", "false")
 	monkeypatch.setenv("TELEMETRY_EVENT_LOG_ENABLED", "false")
 	st = cards.CardStore(str(tmp_path / "cards.db"))
 	cards.set_store(st)

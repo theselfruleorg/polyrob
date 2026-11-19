@@ -223,3 +223,19 @@ def test_a_token_count_survives_an_ordinary_price_move(env):
     out = _run(agent, f"/card_{reply.card_id}_ok")
     assert "price moved" not in reply_text(out)
     assert len([p for p, _ in env.tool.calls if not p.dry_run]) == 1
+
+
+def test_the_room_mode_line_a_card_stores_changes_the_mode_on_the_seat(env):
+    """120 W5: the agent proposes `/groups mode <surface> _<chat_id> <mode>`; Confirm
+    re-runs that stored line on the seat, so the seat must take that exact form."""
+    from core.instance import resolve_owner_user_id
+    from core.setting_proposals import CARD, classify
+    from core.surfaces import chat_policy
+    from core.surfaces.group_allowlist import GroupAllowlist
+    chat = "-1001000000005"
+    GroupAllowlist(f"{env.dir}/group_allowlist.db").allow("telegram", chat, "The Lobby")
+    proposal = classify(f"/groups mode telegram _{chat[1:]} active")
+    assert proposal.outcome == CARD
+    reply = reply_text(_run(_agent(env.dir), proposal.line))
+    policy = chat_policy.load(env.dir, resolve_owner_user_id(), "telegram", chat)
+    assert policy.mode == "active", reply

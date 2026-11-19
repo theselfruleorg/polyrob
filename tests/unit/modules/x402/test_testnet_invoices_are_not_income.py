@@ -20,7 +20,7 @@ from modules.x402.income_chains import income_predicate, is_income_chain
 def _env(monkeypatch):
     monkeypatch.setenv("X402_PAYMENT_RECIPIENT", "0x" + "ab" * 20)
     for var in ("X402_DEFAULT_CHAIN", "X402_INVOICE_MAX_USD", "X402_INVOICE_DAILY_MAX",
-                "X402_SETTLE_ONCHAIN_DETECT", "X402_INVOICE_AMOUNT_JITTER",
+                "X402_SETTLE_ONCHAIN_DETECT",
                 "PAYMENT_DEFAULT_ASSET"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(invoicing, "_svm_treasury",

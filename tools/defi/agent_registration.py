@@ -139,6 +139,14 @@ def uri_mode() -> str:
     return mode if mode in ("auto", "data", "hosted") else "auto"
 
 
+def uri_is_hosted(base_url: Optional[str] = None) -> bool:
+    """Whether the `agentURI` points at the LIVE registration file (it then
+    follows every change), as opposed to a `data:` snapshot written once at
+    registration. The same decision :func:`build_agent_uri` makes."""
+    base_url = base_url if base_url is not None else os.environ.get("A2A_BASE_URL")
+    return uri_mode() in ("auto", "hosted") and _is_public(base_url)
+
+
 def build_agent_uri(document: Dict[str, Any],
                     base_url: Optional[str]) -> str:
     """The `agentURI` for *document*.

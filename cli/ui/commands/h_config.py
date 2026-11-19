@@ -34,7 +34,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Tuple
 
 from cli.ui import candy
 
@@ -87,18 +87,6 @@ def _cmd_unset(key: str) -> str:
 # ---------------------------------------------------------------------------
 # shared helpers
 # ---------------------------------------------------------------------------
-
-
-def _all_names() -> List[str]:
-    """Both namespaces ``/config set|get`` resolve against, for suggestions."""
-    from core.prefs import PREF_SCHEMA, catalog_names
-    return list(PREF_SCHEMA.keys()) + catalog_names()
-
-
-def _closest_match(key: str) -> Optional[str]:
-    from core.key_suggest import suggest_keys
-    hits = suggest_keys(key, _all_names(), n=1)
-    return hits[0] if hits else None
 
 
 def _approval_gate_enforcement_warning(ctx: ConfigCtx) -> str:
@@ -214,9 +202,8 @@ def _cmd_get(ctx: ConfigCtx, rest: List[str]) -> str:
             f"documented default: {documented_default}"
         )
 
-    hint = _closest_match(key)
-    suffix = f" (did you mean {hint}?)" if hint else ""
-    return f"unknown key: {key}{suffix}"
+    from core.config_service import unknown_key_message
+    return unknown_key_message(key)
 
 
 # ---------------------------------------------------------------------------
@@ -234,9 +221,8 @@ def _cmd_explain(ctx: ConfigCtx, rest: List[str]) -> str:
         info = config_service.explain(key, user_id=ctx.user_id,
                                       home_dir=ctx.home_dir)
     except KeyError:
-        hint = _closest_match(key)
-        suffix = f" (did you mean {hint}?)" if hint else ""
-        return f"unknown key: {key}{suffix}"
+        from core.config_service import unknown_key_message
+        return unknown_key_message(key)
     lines = [
         candy.kv_lines([(key, f"{info.effective}   ({info.source})"
                               + (f" · {info.gate_effective}" if info.gate_effective else ""))]),
@@ -260,15 +246,18 @@ def _cmd_search(ctx: ConfigCtx, rest: List[str]) -> str:
     from core import config_service
     hits = config_service.search(query, user_id=ctx.user_id,
                                  home_dir=ctx.home_dir, limit=25)
+    unread = config_service.unread_line(getattr(hits, "unread", ()))
     if not hits:
-        return candy.empty(f"settings matching {query!r}", yet=False)
+        empty = candy.empty(f"settings matching {query!r}", yet=False)
+        return f"{empty}\n{unread}" if unread else empty
     rows = []
     for info in hits:
         advisory = ", advisory" if info.enforcement == "advisory" else ""
         rows.append((info.key,
                      f"{info.effective}   ({info.source}, applies: "
                      f"{info.applies}{advisory})"))
-    return candy.kv_lines(rows)
+    body = candy.kv_lines(rows)
+    return f"{body}\n{unread}" if unread else body
 
 
 # ---------------------------------------------------------------------------
@@ -320,9 +309,8 @@ def _cmd_set(ctx: ConfigCtx, rest: List[str]) -> str:
 
     from core.prefs import catalog_lookup
     if catalog_lookup(key) is None:
-        hint = _closest_match(key)
-        suffix = f" (did you mean {hint}?)" if hint else ""
-        return f"unknown key: {key}{suffix}"
+        from core.config_service import unknown_key_message
+        return unknown_key_message(key)
 
     res = set_value(key, value, scope="global",
                     surface="local", live=True)

@@ -138,6 +138,6 @@ def build_discord_harness(container: Any, task_agent: Any, *,
     gateway = DiscordGatewayClient(token or os.getenv("DISCORD_BOT_TOKEN", ""),
                                    client.get_gateway_url)
     dedup = IdempotencyStore(os.path.join(data_dir, "discord_dedup.db"))
-    register_surface_and_sink(container, DiscordSurface(client), sink_name="discord_sink",
+    register_surface_and_sink(container, DiscordSurface(client, gateway), sink_name="discord_sink",
                               send=client.send_message, sink_label="DiscordSink")
     return DiscordHarness(container, task_agent, client, gateway, dedup)

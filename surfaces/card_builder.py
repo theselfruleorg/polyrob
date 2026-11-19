@@ -201,10 +201,10 @@ def _line(verb: str, draft: dict) -> str:
 
 
 def _body(verb: str, step: str, draft: dict, options: list) -> str:
-    lines = [f"So far: {_line(verb, draft)}", ""]
     if options:
-        lines.append(_PROMPT[(verb, step)])
+        lines = [f"So far: {_line(verb, draft)}", "", _PROMPT[(verb, step)]]
     else:
+        lines = []                      # the command is printed once, to fill in
         why = {"to": ("No recipients from earlier confirmed sends on this chain."
                       if verb == "/send" else "No trusted token to buy on this chain."),
                "amount": "I could not read the balance of that token.",

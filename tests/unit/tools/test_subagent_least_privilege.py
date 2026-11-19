@@ -161,10 +161,8 @@ def test_agentdeps_carries_controller_and_routes_via_from_params():
 
 # --- SubAgentManager._build_child_controller --------------------------------
 
-def _bare_manager(monkeypatch, *, flag, parent_tools=None):
+def _bare_manager(*, parent_tools=None):
     from agents.task.agent.sub_agent_manager import SubAgentManager
-    from agents.task.constants import TimeoutConfig
-    monkeypatch.setattr(TimeoutConfig, "get_subagent_least_privilege", classmethod(lambda cls: flag))
     m = object.__new__(SubAgentManager)
     m.logger = logging.getLogger("subagent-lp-test")
     parent_ctl = types.SimpleNamespace(list_tools=lambda: parent_tools or ["filesystem", "code_execution", "cronjob", "browser"])
@@ -173,16 +171,9 @@ def _bare_manager(monkeypatch, *, flag, parent_tools=None):
 
 
 @pytest.mark.asyncio
-async def test_build_child_controller_returns_none_when_flag_off(monkeypatch):
-    m = _bare_manager(monkeypatch, flag=False)
-    assert await m._build_child_controller() is None  # legacy: shared parent controller
-
-
-@pytest.mark.asyncio
 async def test_build_child_controller_narrows_and_excludes(monkeypatch):
-    """Flag ON: child Controller built with narrowed tool_ids + delegation exclusions."""
-    m = _bare_manager(monkeypatch, flag=True,
-                       parent_tools=["filesystem", "code_execution", "cronjob", "browser"])
+    """Child Controller built with narrowed tool_ids + delegation exclusions."""
+    m = _bare_manager(parent_tools=["filesystem", "code_execution", "cronjob", "browser"])
 
     captured = {}
 

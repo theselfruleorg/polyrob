@@ -21,7 +21,6 @@ from dataclasses import dataclass
 from typing import Any, Optional, Tuple
 
 from core import model_switch as ms
-from core.price_guard import guard_reason
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +37,6 @@ class Plan:
     context: int = 0
     verified: str = ""      # "" = verified; else why it was not
     reasoning_ok: bool = True   # the model takes a reasoning setting (OpenRouter list)
-    quote: str = ""         # non-empty = the price guard asks for `go`
 
 
 # --- reads ------------------------------------------------------------------
@@ -147,17 +145,6 @@ async def plan_switch(cmd: ms.ModelCommand, *, user_id: str,
     refused = _token_level_refused(res.provider, cmd.reasoning)
     if refused:
         return None, refused
-    if not cmd.confirm and current[1] and current[1] != res.model:
-        cur_price = (await _model_facts(current[0] or res.provider, current[1]))[0]
-        why = guard_reason(cur_price, price)
-        if why:
-            line = " ".join(["/model"] + [w for w in cmd.words if w.lower() not in ("go",)] + ["go"])
-            plan.quote = (f"Switch to {res.model} ({res.provider})? {why.capitalize()}.\n"
-                          f"Price: {ms.fmt_price(price, cached)}"
-                          f"{f' · context {context:,}' if context else ''}.\n"
-                          "The first message after the switch re-reads this chat once at the "
-                          "new price (the prompt cache belongs to the old model).\n"
-                          f"To switch: {line}")
     return plan, ""
 
 
@@ -337,6 +324,9 @@ async def model_command(task_agent: Any, *, user_id: str, words, chat_key: Optio
         if not ok:
             return f"❌ Alias not saved: {err}"
         return (f"✅ Alias {cmd.name} → {target}." if target else f"✅ Alias {cmd.name} removed.")
+    if cmd.action == "choice" or cmd.tier:   # 121: an owner setting, not this chat
+        from agents.task.model_settings import settings_command
+        return await settings_command(cmd, user_id, seat)
     sid = _bound_session_id(task_agent, chat_key, session_id)
     agent = _live_agent(task_agent, sid)
     if cmd.action == "show":
@@ -349,8 +339,6 @@ async def model_command(task_agent: Any, *, user_id: str, words, chat_key: Optio
     plan, err = await plan_switch(cmd, user_id=user_id, current=current)
     if plan is None:
         return err
-    if plan.quote:
-        return plan.quote
     return _apply(task_agent, user_id, sid, agent, chat_key, plan, current, seat)
 
 
@@ -492,7 +480,7 @@ async def _reset(task_agent, user_id, sid, agent, cmd, seat, chat_key=None) -> s
 async def _show(task_agent, user_id, sid, agent, chat_key) -> str:
     from agents.task.model_pin_state import peek_chat_pin, session_reasoning
     from core.model_pins import chat_runtime_for
-    from core.runtime_config import heavy_model_pin, resolve_default_provider
+    from core.runtime_config import resolve_default_provider
     lines = []
     if agent is not None or sid:
         provider, model = _current(task_agent, sid, agent)
@@ -516,9 +504,9 @@ async def _show(task_agent, user_id, sid, agent, chat_key) -> str:
     lines.append(f"New chats start on: {c_model or 'the provider default'} ({c_provider}) — {c_source}"
                  + (f", reasoning {c_reason}" if c_reason else ""))
     a_provider, a_model = resolve_default_provider()[:2]
-    heavy = heavy_model_pin()
-    lines.append(f"Autonomous runs: {a_model or 'the provider default'} ({a_provider})"
-                 f"; money-class: {heavy or 'HEAVY_MODEL unset'}")
+    lines.append(f"Autonomous runs: {a_model or 'the provider default'} ({a_provider})")
+    from agents.task.model_settings import settings_lines   # 121: heavy, light, choice
+    lines += settings_lines(user_id)
     # 095 W1c (SC-16): name the lever each form moves (two model levers exist).
     lines.append("Change: /model <name> (this chat) · /model <name> default (your default for "
                  "new chats; the operator's DEFAULT_MODEL stays the floor) · /model <name> "
@@ -550,46 +538,6 @@ def resolve_job_model(name: str, user_id: str) -> Tuple[Optional[dict], str]:
     # Always the provider too: the CLI's env may not be the service's env.
     out = {"model": plan.model, "provider": plan.provider}
     return out, (f"not verified: {plan.verified}" if plan.verified else "")
-
-
-async def child_model_refusal(parent_agent: Any, model: str, provider: Optional[str]) -> str:
-    """094: ``delegate_task(model=…)`` — a raw model the agent picks (112 adds named tiers,
-    ``tools/controller/delegate_tier.py``, which resolve to a model and pass here too).
-    It may pick: its own model, a model the owner already uses (``DEFAULT_MODEL``,
-    ``HEAVY_MODEL``, the owner's chat default or an owner alias), or one that costs
-    no more than its own (input AND output). Anything else is refused — a prompt
-    injection must not point a 150-step child at the priciest model. ``""`` = allowed."""
-    from core import model_pins
-    from core.model_pins import chat_pin_for
-    from core.runtime_config import heavy_model_pin, operator_model_pin
-    own = getattr(parent_agent, "model_name", None)
-    owner = getattr(parent_agent, "user_id", None)
-    allowed = {own, operator_model_pin(), heavy_model_pin()}
-    pin = chat_pin_for(owner)
-    if pin:
-        allowed.add(pin.get("model"))
-    for target in model_pins.aliases(owner).values():
-        allowed.add(target.split("/", 1)[1] if target.split("/", 1)[0] in _known_providers()
-                    else target)
-    own_provider = getattr(parent_agent, "llm_provider", None) or getattr(parent_agent, "provider_name", "")
-    if model in allowed:
-        # 112 F3: an owner-chosen model id is owner-chosen only on the owner's providers —
-        # the same id on another provider is a different price and a different account.
-        # (No 5x price quote here: the owner set these models; on prod HEAVY is 5.2x flash.)
-        if provider:
-            from core.runtime_config import canonicalize_provider, operator_provider_pin
-            mine_p = {canonicalize_provider(p) or p for p in (own_provider, operator_provider_pin()) if p}
-            if mine_p and (canonicalize_provider(provider) or provider) not in mine_p:
-                return (f"refused: '{model}' is allowed on your own provider "
-                        f"({', '.join(sorted(mine_p))}), not on '{provider}'.")
-        return ""
-    mine = (await _model_facts(own_provider or "", own or ""))[0]
-    theirs = (await _model_facts(provider or own_provider or "", model))[0]
-    if mine and theirs and theirs[0] <= mine[0] and theirs[1] <= mine[1]:
-        return ""
-    return (f"refused: a sub-agent may run on your model ({own}), a cheaper one, or a model "
-            f"the owner uses or listed (/model alias). '{model}' is none of these"
-            + ("" if theirs else " (its price is unknown)") + ".")
 
 
 def with_chat_pin(request_body: dict, user_id: Optional[str]) -> dict:

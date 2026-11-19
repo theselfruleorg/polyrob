@@ -71,7 +71,7 @@ def test_read_only_when_flag_off(monkeypatch, tmp_path):
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     c = _bare_controller(tmp_path)
     c._register_preferences_action()
-    assert _ops(c) == {"list", "get", "explain"}
+    assert _ops(c) == {"list", "get", "explain", "search", "changed", "check"}
     action = c.registry.registry.actions["preferences"]
     assert "'set'" not in action.description
     with pytest.raises(Exception):
@@ -96,7 +96,7 @@ def test_default_read_only_without_polyrob_local(monkeypatch, tmp_path):
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     c = _bare_controller(tmp_path)
     c._register_preferences_action()
-    assert _ops(c) == {"list", "get", "explain"}
+    assert _ops(c) == {"list", "get", "explain", "search", "changed", "check"}
 
 
 def test_writes_registered_when_flag_on(monkeypatch, tmp_path):
@@ -104,7 +104,7 @@ def test_writes_registered_when_flag_on(monkeypatch, tmp_path):
     c = _bare_controller(tmp_path)
     c._register_preferences_action()
     # 095 W10: contract_propose is gone — owner_doc_manage is the one rule writer.
-    assert _ops(c) == {"list", "get", "explain", "set"}
+    assert _ops(c) == {"list", "get", "explain", "search", "changed", "check", "set", "unset"}
     assert "contract_propose" not in c.registry.registry.actions["preferences"].description
     assert "apply immediately" not in c.registry.registry.actions["preferences"].description
 
@@ -436,3 +436,12 @@ async def test_get_clean_tone_renders_unchanged(monkeypatch, tmp_path):
     assert res.error is None
     assert "friendly and concise" in res.extracted_content
     assert "[BLOCKED" not in res.extracted_content
+
+
+def test_shown_masks_a_list_of_people_ids():
+    """120 review: ALLOWED_TELEGRAM_USER_IDS holds the owner's id but has no OWNER in its
+    name, so the settings reads gave the model the raw id."""
+    from tools.controller.preferences_action import _OWNER_ID_SET, _shown
+    assert _shown("ALLOWED_TELEGRAM_USER_IDS", "123456789") == _OWNER_ID_SET
+    assert _shown("SURFACE_SUPER_ADMIN_USER_IDS", "owner-1") == _OWNER_ID_SET
+    assert _shown("CHAT_TOOL_IDS", "task") == "task"

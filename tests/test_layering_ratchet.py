@@ -394,7 +394,11 @@ def test_upward_string_refs_only_shrink():
 # +2 (118 W3, W7): tools/defi/lp_v4_history.py (the log reads of a position and its pool,
 # beside tools/defi/lp_v4.py) and tools/defi/lp_v4_move.py (the move declaration, beside
 # tools/defi/lp_v4_seed.py) — modules split out beside ones already inside the component.
-LARGEST_CROSS_PACKAGE_SCC_CEILING = 150
+# +1 (120 W3): tools/controller/usage_summary_action.py, the usage_summary action split out
+# of tools/controller/action_registration.py (a module already inside the component).
+# +1 (120 W5): tools/controller/contact_history_action.py, the contact_history action split
+# out of tools/controller/action_registration.py (a module already inside the component).
+LARGEST_CROSS_PACKAGE_SCC_CEILING = 152
 _SCC_TIGHTNESS_SLACK = 10
 
 

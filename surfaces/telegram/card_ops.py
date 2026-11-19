@@ -112,8 +112,10 @@ async def handle(task_agent: Any, result: Any, spawn=None, deliver=None,
 
     async def _deliver_and_finish(out: str) -> None:
         await _recover(task_agent, card, out)
-        _finish(card.card_id, verb, out)
-        await deliver(out)
+        _finish(card.card_id, verb, out)      # the stored result keeps every line
+        from core.surfaces.money_report import owner_view
+        await deliver(owner_view(out))
+    _deliver_and_finish.stores_result = True
 
     try:
         with cards.lineage(card):
@@ -317,6 +319,9 @@ def install_editor(bot: Any) -> None:
         from core.surfaces.rendering import render_for_flavor, split_for_flavor
         from surfaces.telegram.actions import reply_markup_for
         source = cards.render_text(card)
+        if cards.card_actions(card):          # the same rule as the first send
+            from core.surfaces.card_text import without_taps
+            source = without_taps(source)
         # TG10: the first send renders markdown as Telegram HTML; the edit sent
         # the raw markdown with no parse_mode, so the owner saw backticks and
         # asterisks. One message, so only the first chunk; the plain retry

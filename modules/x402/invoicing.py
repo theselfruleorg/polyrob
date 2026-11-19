@@ -109,46 +109,17 @@ def x402_settle_onchain_detect_enabled() -> bool:
     return member_flag("X402_SETTLE_ONCHAIN_DETECT")
 
 
-def x402_invoice_amount_jitter_enabled() -> bool:
-    """Whether `create_payment_request` nudges a colliding amount (Task 11).
-    Default ON, but INERT unless on-chain detection is also enabled
-    (`x402_settle_onchain_detect_enabled`) — the jitter exists solely to keep
-    on-chain amount-matching unambiguous; with detection off it would just be
-    a pointless amount perturbation. See `_dedupe_amount_for_treasury`.
-
-    I2 safety fix (Task 11 review): this flag can no longer DISABLE jitter
-    while detection is ON — ``X402_SETTLE_ONCHAIN_DETECT=true`` +
-    ``X402_INVOICE_AMOUNT_JITTER=false`` is an unsafe combination (auto-
-    settlement from on-chain transfers with ZERO disambiguation), so
-    `create_payment_request` forces jitter on internally in that case and logs
-    a one-time-per-call notice. Setting this false only has effect (staying
-    truly inert) while detection is also off — see `_jitter_should_apply`."""
-    from core.env import bool_env
-    return bool_env("X402_INVOICE_AMOUNT_JITTER", True)
-
-
 def _jitter_should_apply(chain: Optional[str] = None) -> bool:
-    """The ACTUAL jitter gate `create_payment_request` uses (I2 fix): jitter
-    is forced ON whenever on-chain detection is on, regardless of the
-    ``X402_INVOICE_AMOUNT_JITTER`` value — logging a notice when the flag was
-    explicitly set to disable it. When detection is off, jitter stays fully
-    inert (byte-identical legacy amounts) exactly as before."""
+    """The jitter gate `create_payment_request` uses: jitter is ON whenever
+    on-chain detection is on (auto-settlement from on-chain transfers needs a
+    way to tell two same-amount pending invoices apart) and fully inert when
+    detection is off (byte-identical amounts). It has no switch of its own."""
     # Solana carries a per-invoice REFERENCE key, which is an exact correlator.
     # Jitter exists solely to disambiguate amount-matching on EVM, so applying it
     # here would perturb the amount for no benefit at all.
     if chain and _chain_family(chain) == "svm":
         return False
-    detect_on = x402_settle_onchain_detect_enabled()
-    if not detect_on:
-        return False
-    if not x402_invoice_amount_jitter_enabled():
-        logger.warning(
-            "X402_SETTLE_ONCHAIN_DETECT is on but X402_INVOICE_AMOUNT_JITTER "
-            "is explicitly off — forcing amount-collision jitter ON anyway: "
-            "on-chain auto-settlement with no jitter cannot disambiguate a "
-            "same-amount pending-invoice collision (Task 11 I2 safety fix)."
-        )
-    return True
+    return x402_settle_onchain_detect_enabled()
 from modules.x402._db import resolve_db as _resolve_db  # shared plumbing (one home)
 from modules.x402.invoice_sizing import _UNSET, _size_invoice_raw, scale_raw  # 046 §4.4
 
@@ -494,9 +465,8 @@ async def create_payment_request(
             raise
 
     # Task 11: keep on-chain amount-matching unambiguous. Inert (amount_usd
-    # untouched) unless on-chain detection is on (`_jitter_should_apply` —
-    # the I2 fix forces jitter on whenever detection is on, regardless of the
-    # jitter flag). I1 fix: the collision-check (SELECT) and the INSERT are
+    # untouched) unless on-chain detection is on (`_jitter_should_apply`).
+    # I1 fix: the collision-check (SELECT) and the INSERT are
     # two separate awaited DB calls — without a lock, two concurrent creates
     # for the SAME treasury+amount can both observe "no collision" before
     # either has inserted, so BOTH keep the exact amount (defeating the

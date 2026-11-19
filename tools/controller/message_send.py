@@ -177,12 +177,71 @@ def message_input_error(action: Optional[str], text: Optional[str],
     2026-10-28 met 69 empty sends with the cooldown text, which read like a
     delivered message."""
     act = (action or "send").strip().lower()
-    if act in ("delete", "posts"):
+    if act in ("delete", "posts", "targets"):
         return None
     if not (text or "").strip() and not media_paths:
         return ("message not sent: `text` is empty and there is no media_paths — "
                 "a send needs the message text (or a file to attach)")
     return None
+
+
+#: 120 W5: what each outbound policy lets a send reach beyond the owner.
+_POLICY_WORDS = {
+    "off": "nobody but the owner",
+    "allowlist": "the owner and the allowlist below",
+    "domains": "the owner, the allowlist below, and email addresses at: {domains}",
+    "open": "the owner, the allowlist below, and any other address (a daily limit applies)",
+}
+
+
+def message_targets_text(container, user_id: str) -> str:
+    """120 W5: `message(action="targets")` — who this tenant's `message` may reach.
+
+    A READ. The owner is named by surface only (`target='owner'`): the raw owner
+    address is never shown to the model. The allowlist is the `/allowlist` text
+    (``core.surfaces.outbound_allowlist.allowlist_reply``). Only the owner adds a
+    target; this answer widens nothing."""
+    owner_targets = build_owner_targets(container, user_id)
+    owner = (f"• the owner: target='owner' on {', '.join(sorted(owner_targets))}"
+             if owner_targets else "• the owner: no owner address is bound on any surface")
+    from core.surfaces.outbound_policy import resolve_outbound_policy
+    policy, domains = resolve_outbound_policy(user_id or "", "",
+                                              home_dir=_pref_home_dir(container))
+    reach = _POLICY_WORDS.get(policy, "the owner only (unknown policy)").format(
+        domains=", ".join(domains) or "none set")
+    store = None
+    if container is not None:
+        try:
+            store = container.get_service("outbound_allowlist")
+        except Exception:
+            store = None
+    from core.surfaces.outbound_allowlist import allowlist_reply
+    return "\n".join([
+        "Who I may message:",
+        owner,
+        f"• outbound policy {policy}: {reach}",
+        "• the rooms I am in: room_read lists them; a post there counts against the "
+        "room's hourly limit",
+        allowlist_reply(store, user_id or ""),
+        "Only the owner adds a target (/allow <surface> <target>).",
+    ])
+
+
+def message_targets_result(controller, execution_context):
+    """The `targets` value of the `message` action, before the send gates: it sends
+    nothing, so the autonomous send refusal and the resend cooldown do not apply.
+    A room turn never reads it (the `message` row is room_denied; checked here
+    too), and a correspondent-tainted session never reaches it (the scoped-reply
+    exemption covers a send only)."""
+    from agents.task.loop_types.controller_types import ActionResult
+    from core.security.owner_turn import is_room_turn
+    if is_room_turn(execution_context):
+        return ActionResult(error="message targets: the list is the owner's; a room turn "
+                                  "never reads it", include_in_memory=True)
+    user_id = (getattr(execution_context, "user_id", None)
+               or getattr(controller, "user_id", None) or "")
+    text = message_targets_text(getattr(controller, "container", None), str(user_id))
+    return ActionResult(extracted_content=text, include_in_memory=True)
 
 
 async def perform_message_action(*, action="send", text="", media_paths=None,

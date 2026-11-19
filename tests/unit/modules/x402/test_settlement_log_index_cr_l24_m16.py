@@ -21,7 +21,7 @@ def _env(monkeypatch):
     monkeypatch.setenv("X402_PAYMENT_RECIPIENT", TREASURY)
     monkeypatch.setenv("X402_DEFAULT_CHAIN", "base")
     for var in ("X402_INVOICE_MAX_USD", "X402_INVOICE_DAILY_MAX",
-                "X402_SETTLE_ONCHAIN_DETECT", "X402_INVOICE_AMOUNT_JITTER"):
+                "X402_SETTLE_ONCHAIN_DETECT"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(scan, "_own_evm_addresses", lambda: frozenset({OWN}))
 

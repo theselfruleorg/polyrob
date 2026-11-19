@@ -125,7 +125,6 @@ _DB_JOIN_ROOTS = ROOTS[:-1] + ("packs",)   # scripts/ are operator tools
 _DB_JOIN_ALLOWED = {"core/runtime_paths.py", "core/db_manifest.py"}
 
 DB_JOIN_BASELINE = {
-    "cli/commands/doctor.py": 1,
     "cli/commands/kb.py": 1,
     "cli/commands/owner.py": 1,
     "cli/commands/surface.py": 2,
@@ -158,7 +157,6 @@ DB_JOIN_BASELINE = {
     "surfaces/feishu/harness.py": 2,
     "surfaces/signal/harness.py": 1,
     "surfaces/slack/harness.py": 1,
-    "surfaces/telegram/contacts_ops.py": 1,
     "surfaces/telegram/harness.py": 2,
     "surfaces/whatsapp/harness.py": 2,
     "tools/controller/approval_queue.py": 3,

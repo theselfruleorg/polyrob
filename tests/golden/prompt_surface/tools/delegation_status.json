@@ -1,0 +1,25 @@
+{
+  "function": {
+    "description": "Your background helpers (delegate_task background=true) in this session: list them with their state, or stop one by id with cancel.",
+    "name": "delegation_status",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "cancel": {
+          "default": null,
+          "description": "A delegation id (deleg_NNNN) of THIS session to stop. A running helper is cancelled; a finished one that has not reported yet never reports. Omit to only list.",
+          "nullable": true,
+          "type": "string"
+        },
+        "reason": {
+          "default": "",
+          "description": "Why you stop it (kept in the log).",
+          "maxLength": 200,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

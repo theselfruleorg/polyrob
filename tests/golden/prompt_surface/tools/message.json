@@ -1,6 +1,6 @@
 {
   "function": {
-    "description": "Send a message — and any FILES you made — to a chat/recipient on a surface (telegram/email/slack/discord/signal/whatsapp/feishu/dingtalk/x). Attach with media_paths, one call per file; a path in text is NOT a delivery. Owner/allowlisted only. action=posts/delete: name/delete my own posts.",
+    "description": "Send a message — and any FILES you made — to a chat/recipient on a surface (telegram/email/slack/discord/signal/whatsapp/feishu/dingtalk/x). Attach with media_paths, one call per file; a path in text is NOT a delivery. Owner/allowlisted only. action=posts/delete: name/delete my own posts; action=targets: who I may message.",
     "name": "message",
     "parameters": {
       "additionalProperties": false,
@@ -8,7 +8,7 @@
       "properties": {
         "action": {
           "default": "send",
-          "description": "send | reply | posts (list what I posted, with ledger rows) | delete (my OWN post, owner's instruction only, telegram <48h: give post=<row>, or message_id + target, or last=N + target)",
+          "description": "send | reply | posts (list what I posted, with ledger rows) | delete (my OWN post, owner's instruction only, telegram <48h: give post=<row>, or message_id + target, or last=N + target) | targets (who I may message: the owner, the policy, the allowlist)",
           "type": "string"
         },
         "last": {

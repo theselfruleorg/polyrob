@@ -132,11 +132,12 @@ class PublishTool(BaseTool):
         # A slug already granted an address iterates without asking again.
         needs_approval = existing is None or existing.status != "live"
         from core.security.owner_turn import is_owner_driven
-        from tools.controller.approval import operator_denies_approvals
-        if needs_approval and operator_denies_approvals():
+        from tools.controller.approval import operator_deny_cause
+        stop = operator_deny_cause() if needs_approval else ""
+        if stop:
             # The operator's standing stop: no owner-turn rule passes it.
             return ActionResult(error=(
-                f"publish refused: APPROVAL_PROVIDER=deny stops every new public address "
+                f"publish refused: {stop} stops every new public address "
                 f"on this install ({params.slug!r} is not served)"))
         if needs_approval and not is_owner_driven(execution_context):
             approver = self._get_approval_provider()

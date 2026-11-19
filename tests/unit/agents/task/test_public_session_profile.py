@@ -102,7 +102,6 @@ def test_episodic_digest_behavioural_public_vs_private(monkeypatch):
 
 
 def test_live_health_behavioural_public_vs_private(monkeypatch):
-    monkeypatch.delenv("LIVE_HEALTH_CONTEXT", raising=False)
     monkeypatch.setattr(live_health, "build_live_health_text",
                         lambda *a, **k: "SENTINEL_HEALTH_TEXT")
 

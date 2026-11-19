@@ -270,7 +270,6 @@ def _mm(llm, max_input_tokens: int) -> MessageManager:
 
 @pytest.fixture(autouse=True)
 def _no_checkpoint(monkeypatch):
-	monkeypatch.setenv("COMPACTION_CHECKPOINT", "false")
 	monkeypatch.setenv("TASK_MAX_MESSAGES", "500")
 	yield
 

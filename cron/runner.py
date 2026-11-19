@@ -356,6 +356,17 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                 job.run_note = {"outcome": "failed", "reason": "the script failed"}
             return ok
         if not payload.get("wake_agent", True):
+            from core.cron_outcome import agent_armed
+            if agent_armed(payload):
+                # 535523bf1: a job the AGENT made with wake_agent=False (no digest, verb or
+                # script got here) runs nothing; it was a $0 tick recorded as done (prod
+                # 2026-11-18). It now fails, so the failure limit pauses it and tells the owner.
+                logger.warning("cron job %s: agent job with wake_agent=False runs nothing", job.id)
+                _cron_ev(job, "failed", "wake_agent_false_agent_job")
+                job.run_note = {"outcome": "failed", "reason": (
+                    "this job runs nothing (it skips the model and has no verb or script); "
+                    "cancel it and schedule it again")}
+                return False
             logger.info("cron job %s: wake_agent=False — $0 tick, agent not invoked", job.id)
             _cron_ev(job, "skipped", "wake_agent_false")
             return True

@@ -1,6 +1,6 @@
 {
   "function": {
-    "description": "Read your typed preferences and settings (read-only here). operation='list' shows every preference (value/source/applies); 'get' with `key` shows one; 'explain' with `key` shows the provenance chain of ANY setting (preference or env flag) — use it to answer 'why is X off?'. A change is the owner's: propose_setting.",
+    "description": "Read your typed preferences and settings (read-only here). operation='list' shows every preference (value/source/applies); 'get' with `key` shows one; 'explain' with `key` shows the provenance chain of ANY setting (preference or env flag) — use it to answer 'why is X off?'; 'search' (`query`) finds a setting; 'changed' lists those off their default; 'check' names broken env or preference lines. A change is the owner's: propose_setting.",
     "name": "preferences",
     "parameters": {
       "additionalProperties": false,
@@ -15,8 +15,17 @@
           "enum": [
             "list",
             "get",
-            "explain"
+            "explain",
+            "search",
+            "changed",
+            "check"
           ],
+          "type": "string"
+        },
+        "query": {
+          "default": null,
+          "description": "search only: words to match",
+          "nullable": true,
           "type": "string"
         }
       },

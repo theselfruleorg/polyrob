@@ -1046,21 +1046,14 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
                 candidate_path = os.path.join(str(workspace_dir), rel)
                 normalized_path = pm().normalize_path(candidate_path, session_id=clean_id)
 
-            # Final safety check - ensure we're still within the workspace.
-            # FS_REALPATH_CONFINE (default on): confine on realpath (catches in-root
-            # symlink escapes) and FAIL LOUD on an escape instead of silently
-            # rewriting to basename (which wrote a different file than asked).
-            # Set FS_REALPATH_CONFINE=off to restore the legacy basename rewrite.
+            # Final safety check - ensure we're still within the workspace: confine
+            # on realpath (catches in-root symlink escapes) and FAIL LOUD on an
+            # escape. It has no switch: the old basename rewrite wrote a different
+            # file than the one asked for.
             workspace_abs = os.path.abspath(str(workspace_dir))
-            if os.getenv("FS_REALPATH_CONFINE", "on").strip().lower() not in ("0", "false", "off", "no"):
-                from core.path_safety import is_within_root
-                if not is_within_root(normalized_path, workspace_abs):
-                    raise ServiceError(f"Path escapes workspace: {file_path}")
-            elif not os.path.abspath(normalized_path).startswith(workspace_abs):
-                self.logger.warning(f"Path would escape workspace: {file_path} -> {normalized_path}")
-                # Use only the filename component to stay within workspace
-                filename = os.path.basename(file_path)
-                normalized_path = os.path.join(str(workspace_dir), filename)
+            from core.path_safety import is_within_root
+            if not is_within_root(normalized_path, workspace_abs):
+                raise ServiceError(f"Path escapes workspace: {file_path}")
 
             # Ensure parent directory exists
             parent_dir = os.path.dirname(normalized_path)

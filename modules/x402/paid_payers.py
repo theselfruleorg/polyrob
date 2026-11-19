@@ -2,9 +2,13 @@
 
 One store knows a payer address: ``x402_payment_requests`` in ``bot.db``. An order
 (``core/commerce/orders.py``) keeps its money state on that invoice row, so an order
-needs no second read. A row names its payer in the ``payer_address`` column (the
-facilitator ``/pay`` path) or in ``metadata.payer_address`` (stamped by the on-chain
-settlement scan, ``settlement_scan._stamp_settlement_source``).
+needs no second read. A row names its payer in the ``payer_address`` column, in
+``metadata.payer_address`` (stamped by the on-chain settlement scan,
+``settlement_scan._stamp_settlement_source``), or — the facilitator ``/pay`` path — in
+``metadata.authorization.payer``: the signer of the EIP-3009 authorization that settled it
+(``settlement_attempt.authorization_record``). ``/pay`` writes no ``payer_address`` column, so
+before that third source a payer through ``/pay`` was never a paying client (found by the
+level-1 interface rig, scenario RP3).
 
 Counted: a payable row (``invoicing.PAYABLE_KINDS``: an agent invoice, a room action, an
 order) whose status is income (``INCOME_STATUSES``, i.e. ``completed``). A refunded or
@@ -63,7 +67,8 @@ def paid_payer_addresses(*, family: str = "evm",
     from core.sqlite_util import read_only_connect
     statuses = tuple(INCOME_STATUSES)
     sql = ("SELECT chain, COALESCE(NULLIF(payer_address, ''), "
-           "json_extract(metadata, '$.payer_address')) AS payer "
+           "json_extract(metadata, '$.payer_address'), "
+           "json_extract(metadata, '$.authorization.payer')) AS payer "
            "FROM x402_payment_requests "
            f"WHERE status IN ({','.join('?' * len(statuses))}) "
            f"AND json_extract(metadata, '$.kind') IN ({','.join('?' * len(PAYABLE_KINDS))})")

@@ -1,10 +1,15 @@
 {
   "function": {
-    "description": "Read what has been said in a group/channel room you are in: the most recent lines from the local room ledger, newest last. Each line carries {uid=… msg=…} for room_moderate. Read-only — to reply, use message(surface='telegram', target=<chat_id>) or answer a mention in the room. Omit `room` to list your rooms.",
+    "description": "Read what has been said in a group/channel room you are in: the most recent lines from the local room ledger, newest last. Each line carries {uid=… msg=…} for room_moderate. Read-only — to reply, use message(surface='telegram', target=<chat_id>) or answer a mention in the room. Omit `room` to list your rooms; audit=true shows who ran its /admin tools.",
     "name": "room_read",
     "parameters": {
       "additionalProperties": false,
       "properties": {
+        "audit": {
+          "default": false,
+          "description": "Instead of the lines: who ran which /admin tool in this room in the last 7 days (needs `room`; `limit` rows).",
+          "type": "boolean"
+        },
         "limit": {
           "default": 50,
           "description": "How many of the most recent lines to return (1-200).",

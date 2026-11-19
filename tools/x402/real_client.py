@@ -165,6 +165,22 @@ def _settle_amount_usd(raw) -> Optional[float]:
     return value
 
 
+def body_headers(body_bytes: bytes) -> dict:
+    """The request headers a paid body needs: ``Content-Type: application/json`` when the
+    body is a JSON document, else none (httpx sends no type for raw ``content``).
+
+    An A2A ``message/send`` is a JSON-RPC body. Sent without a JSON type, the seller's
+    framework rejects it as malformed (422) AFTER the payment settled, and a 422 is the
+    caller's error, so nothing is refunded (found by the level-1 interface rig, ops/rig,
+    scenario PX5)."""
+    import json
+    try:
+        json.loads(body_bytes)
+    except (ValueError, UnicodeDecodeError):
+        return {}
+    return {"Content-Type": "application/json"}
+
+
 def _max_authorization_seconds() -> int:
     """The window limit in force: 600 s, or the signer's ``x402_max_window_sec``
     when a signer is installed and set lower (one limit — a window the agent
@@ -779,6 +795,7 @@ class RealX402Client:
                     probe_kwargs: dict = {"method": method, "url": url}
                     if body_bytes:
                         probe_kwargs["content"] = body_bytes
+                        probe_kwargs["headers"] = body_headers(body_bytes)
                     probe_resp = await probe_client.request(**probe_kwargs)
                     if probe_resp.status_code == 402:
                         challenge = self._parse_402_challenge(
@@ -1026,6 +1043,7 @@ class RealX402Client:
             req_kwargs: dict = {"method": method, "url": url}
             if body_bytes:
                 req_kwargs["content"] = body_bytes
+                req_kwargs["headers"] = body_headers(body_bytes)
             response = await asyncio.wait_for(http.request(**req_kwargs), timeout=X402_HTTP_TIMEOUT_SEC)
 
         # N-F: bound what reaches the agent. The prober caps at the same number;

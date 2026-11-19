@@ -33,7 +33,8 @@ REFUSED = "refused"
 SHAPES = ("/mcp add <id> <https-url>", "/config set <key> <value>",
           "/goal grant <id> tools=<a,b>", "/job edit <id> grant tools=<a,b>",
           "/model <name> default", "/groups role <surface> _<chat_id> <uid> <role>",
-          "/groups tools <surface> _<chat_id> [admin] add|remove <name>")
+          "/groups tools <surface> _<chat_id> [admin] add|remove <name>",
+          "/groups mode <surface> _<chat_id> <mention|active|listen|off>")
 
 MCP_RISK = ("Risk: the server's tools gain network reach from this agent, and what "
             "they return is untrusted input; the server sees every argument the agent "
@@ -268,17 +269,37 @@ def _model_default(words: List[str]) -> SettingProposal:
                            risk=MODEL_RISK, who="owner-verb", when="now")
 
 
+#: 120 W5: what each room mode lets the agent do, on its card.
+_MODE_RISK = {
+    "active": ("Risk: the agent reads and answers every message in the room, not only "
+               "the ones that name it — more replies, more AI cost, more public text."),
+    "mention": "The agent answers only a message that names it or replies to it.",
+    "listen": "The agent answers only the owner and the room admins; it keeps reading.",
+    "off": "The agent answers nobody in the room; it keeps logging the lines.",
+}
+
+
 def _groups(words: List[str]) -> SettingProposal:
-    """101: a room role or a room grant, by numeric id, naming the room. The card
-    holds the line and the owner taps; the seat re-runs it through every gate."""
-    shape = "a room card names the room: " + "; ".join(SHAPES[-2:])
-    if len(words) < 5 or words[1] not in ("role", "tools") or not words[2].isalpha():
+    """101: a room role or a room grant, by numeric id, naming the room; 120 W5: a
+    room's mode. The card holds the line and the owner taps; the seat re-runs it
+    through every gate."""
+    shape = "a room card names the room: " + "; ".join(SHAPES[-3:])
+    if len(words) < 5 or words[1] not in ("role", "tools", "mode") or not words[2].isalpha():
         return _refused(shape)
     surface, chat = words[2].lower(), words[3]
     from core.surfaces.catalog import get as _surface_row
     if not re.fullmatch(r"[-_]?\d+", chat) or _surface_row(surface) is None:
         return _refused(shape)
     room = f"{surface} _{chat.lstrip('-_')}" if chat[0] in "-_" else f"{surface} {chat}"
+    if words[1] == "mode":
+        from core.surfaces.chat_policy import MODES
+        mode = words[4].lower()
+        if len(words) != 5 or mode not in MODES:
+            return _refused(shape)
+        return SettingProposal(CARD, words=["/groups", "mode", *room.split(), mode],
+                               setting=f"room.{chat}.mode={mode}",
+                               change=f"Set the mode of room {room} to {mode}.",
+                               risk=_MODE_RISK.get(mode, ""), who="owner-verb", when="now")
     if words[1] == "role":
         from core.surfaces.group_roles import ROLES
         uid, role = (words[4], words[5].lower()) if len(words) == 6 else ("", "")

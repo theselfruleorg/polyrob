@@ -165,7 +165,6 @@ def _fill(h, n=40):
 
 @pytest.mark.asyncio
 async def test_the_ledger_survives_every_compaction_and_does_not_grow(monkeypatch):
-	monkeypatch.setenv("COMPACTION_CHECKPOINT", "false")
 	llm = _LLM()
 	h = _Harness(llm, source=lambda: "<session-actions>FACT tx-1</session-actions>")
 	_fill(h)
@@ -182,7 +181,6 @@ async def test_the_ledger_survives_every_compaction_and_does_not_grow(monkeypatc
 
 @pytest.mark.asyncio
 async def test_no_source_adds_no_block_and_no_prompt_line(monkeypatch):
-	monkeypatch.setenv("COMPACTION_CHECKPOINT", "false")
 	llm = _LLM()
 	h = _Harness(llm)
 	_fill(h)

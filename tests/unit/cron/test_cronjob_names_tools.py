@@ -47,3 +47,15 @@ async def test_edit_and_show_name_the_rig_tools(tmp_path, monkeypatch):
     show = await t.cronjob_show(CronShowAction(job_id=job.id), execution_context=_ctx())
     assert "its runs carry: " in show.extracted_content
     assert "precheck: none" in show.extracted_content
+
+
+def test_a_read_job_runs_no_model_so_it_names_no_tools_and_no_x_gates():
+    # Prod 2026-11-18: a by-id lp_positions read job was told it carries 21 tools
+    # (twitter, defi_trade, x402_pay …) and the X post gates; its runs start no model.
+    from tools.cronjob_tools import _tools_line, _x_gates_line
+    p = {"read_verb": {"verb": "defi_data.lp_positions",
+                       "params": {"chain": "robinhood", "protocol": "v4", "token_id": 7}}}
+    line = _tools_line(p)
+    assert "no model" in line and "defi_data.lp_positions" in line
+    assert "twitter" not in line
+    assert _x_gates_line(p, "u1") == ""

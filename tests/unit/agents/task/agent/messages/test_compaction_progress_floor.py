@@ -46,7 +46,6 @@ class _SummaryLLM:
 
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
-	monkeypatch.setenv("COMPACTION_CHECKPOINT", "false")
 	monkeypatch.setenv("TASK_MAX_MESSAGES", "500")
 
 

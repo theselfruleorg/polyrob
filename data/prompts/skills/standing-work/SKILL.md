@@ -25,6 +25,12 @@ later run, which sees only what you wrote, can finish it.
 | One reminder at one time | a one-time job | `cronjob_schedule(schedule="<ISO time ending in Z>")` |
 | A long side task for this chat only | a background child | `delegate_task(background=true)` (lost on a restart) |
 
+**The model of a goal or a job.** `goal_create`, `goal_update`, `cronjob_schedule` and
+`cronjob_edit` take `tier=` (heavy | light | default) or `model=` (any model id; see
+`agent_status(view="models")` for the prices), with a one-line `why=`. There is no price
+gate: a model for many runs costs on every run, so choose by price. A model the owner set
+is locked; `model="default"` clears yours.
+
 - A goal runs ONCE. A cadence in its text ("every day", "per run") is a job; the
   `goal_create` result warns when it reads like one — fix it now.
 - A goal has no start time: it starts when a slot is free, within the goal limits.

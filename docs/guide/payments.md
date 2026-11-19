@@ -169,8 +169,8 @@ A pending invoice completes by any of:
    detected. Safety:
    `transaction_hash` has a partial-unique index + a `claim_for_settlement` CAS
    (a tx settles at most one invoice, ever); a transfer matching nothing emits a
-   `payment_unmatched` owner notice; and **amount-jitter** (`X402_INVOICE_AMOUNT_JITTER`,
-   forced ON with detection) nudges same-amount invoices sub-cent apart, disclosed at
+   `payment_unmatched` owner notice; and **amount-jitter** (always on with
+   detection) nudges same-amount invoices sub-cent apart, disclosed at
    full precision on every payer-facing surface so the payer sends an unambiguous amount.
 
 On settlement the watcher re-enters the originating session via the self-wake rail
@@ -239,6 +239,7 @@ Your verbs: `/offer` (list), `/offer show <id>`, `/offer orders`, `/offer report
 (income, order spend and margin; your LLM cost stays on `/usage`), `/offer threads`
 (the announcement posts), and `/status` names open orders, refunds owed and a
 stopped reply intake.
+The agent reads the same report and announcement posts with `offer_manage` (`report`, `threads`).
 Also `/offer quote <order> <usd>` (a quote-priced order), `/offer resolve <order>
 accept|refund` (a dispute), `/offer pause|resume|retire <id>`. Refunds are always
 yours: refund the order's invoice to the buyer's refund address — never to the
@@ -271,6 +272,9 @@ polyrob wallet asset add --id demo --chain base \
 polyrob wallet asset list
 polyrob wallet asset verify demo
 ```
+
+The agent reads the same list with `x402_invoices` (`assets=true`) before it names an
+`asset_id` on an invoice. It cannot add an asset.
 
 `--verify` reads `decimals()` and `symbol()` on-chain **once** and freezes them.
 A stablecoin symbol does not make an asset a dollar: only the pinned USDC and
@@ -336,9 +340,12 @@ noticed; an offer refuses before the mint when either is off. The full rail is i
 
 ## 4. Metering → invoice bridge (`modules/credits/usage_rollup.py`)
 
+The agent's `usage_summary` read action always shows the owner the `/usage` cost
+breakdown (`days`, default 7). The invoice part below is a separate gate.
+
 Turn measured LLM usage into a *draft* invoice. Gated `USAGE_INVOICE_BRIDGE_ENABLED`
 (default OFF). A tenant-scoped `usage_rollup(user_id, session_id?, since?)` sums
-`api_cost_usd` from `usage_records`; the `usage_summary` read action returns it and can
+`api_cost_usd` from `usage_records`; with the flag on, `usage_summary` also returns it and can
 propose an invoice payload (amount = cost × `USAGE_INVOICE_MARKUP`, default `1.0`).
 **The bridge only suggests** — the agent must still fire the approval-gated
 `x402_request`; the bridge never mints a payment request itself. `usage_summary` is
@@ -432,26 +439,72 @@ identity; a feedback call needs no permission from the agent.
 
 ## 7. Platform billing — credits (`modules/credits/`)
 
-Separate from the agent's own money: this is what *users* owe *the platform* for LLM
-calls. The real gate is `ENABLE_AUTH` (off = no billing service registered at all).
+Separate from the agent's own money: this is what *users* owe *the platform* for model
+calls. The real gate is `ENABLE_AUTH` (off = no billing service is registered, and no
+call is charged). A single-owner installation runs with it off.
 
-Access comes from the account tier: `free_access` (an administrator grant), `x402`
-(pay per request) or `admin`. A `free` account has none. No tier is granted by token
-or NFT ownership.
+**Who has access.** The account tier decides: `free_access` (an administrator grant),
+`x402` (pay per request) or `admin` (never charged). A `free` account has none. No tier
+is granted by token or NFT ownership.
 
-- **Metering:** each LLM call becomes a `usage_records` row (keyed by `user_id` +
-  `session_id`), with cost from the model registry including cached-input and cache-write
-  pricing. A stable `request_id` column dedupes a retried bill of the same completion.
-  Credits are deducted fail-fast (`InsufficientCreditsError` halts on depletion) unless
-  `CHAT_SKIP_CREDIT_CHECK` (ON) skips the chat path. `CREDIT_VALUE_USD` = `$0.01`,
-  `WELCOME_BONUS` = `0` (automatic grants are opt-in; new wallets are not unique people).
-  - **Operational note:** `usage_records.user_id` has a foreign key to `user_profiles`.
-    A headless single-owner deployment **seeds an owner `user_profiles` row at
-    startup** (`ensure_owner_profile`) so metering actually persists — without it, every
-    metering write fails the FK and spend reads as a false `$0`.
-- **Resilience:** `CREDIT_SENTINEL_ENABLED` (ON) latches on credit-death (402 / quota)
-  and pauses dispatch with one notice; `BILLING_FAILOVER_ENABLED` (ON) tries provider
-  fallback on a billing/quota error before halting.
+**The unit.** One credit is worth `CREDIT_VALUE_USD` (default `$0.01`). Deposits, the
+`402` answer and every charge read this one rate. `WELCOME_BONUS` is `0`: a new wallet
+is not a unique person, so nothing is granted without an administrator.
+
+**What is charged.** Only a model call. Its price is the provider cost of that call
+(input, output, cached input and cache writes, from the model's price row, or the
+cost the provider reports) × `PRICING_MARKUP` (default `1.00`), turned into credits by
+ONE decimal conversion that rounds up to a whole credit and never goes below
+`MIN_CREDIT_CHARGE` (default `1`). A flat-rate provider plan costs the minimum per call.
+There is no charge for a new chat, an action the agent runs or an image as such: an
+image is paid for through the tokens of the call that reads it.
+
+**How one call is billed.**
+
+1. **Admission.** A new chat needs at least one credit. `CHAT_SKIP_CREDIT_CHECK`
+   (ON) skips this check for chat turns; step 2 still applies to them.
+2. **Hold.** Before the call, the engine reserves the largest amount the call could
+   cost (the full context window plus the full output of that model). A model with
+   no price row cannot be reserved, so it cannot be billed by mistake at zero.
+3. **Settle.** After the call, the real cost replaces the hold and the rest returns.
+   The call becomes one `usage_records` row (`user_id`, `session_id`, tokens, cost),
+   and a stable `request_id` stops a retried call from being charged twice.
+4. **Refused call.** A provider status that proves no output was made (a `4xx` other
+   than `408`, or `500` / `503` / `529`; for a streamed answer, only before its first chunk)
+   returns the hold at once.
+5. **Unknown outcome.** A timeout, a cancelled call, a lost connection and a `408` /
+   `502` / `504` keep the hold. The provider may have charged, so the engine never
+   returns it on a timer: an administrator settles it from
+   `GET /api/admin/billing-failures`.
+
+**When the credits run out.** The run stops with a message that starts with
+`Account credit refusal` and names the amount needed and the amount held. This is the
+account's state, not the provider's: the engine does not switch provider, does not
+pause the provider for other accounts, and tells the owner once.
+`FAIL_ON_INSUFFICIENT_CREDITS` (ON) is this stop; OFF records the call and does not
+block it (reconciliation work only).
+
+**When the provider's own account runs out** (a `402` or a quota error from the
+provider): `CREDIT_SENTINEL_ENABLED` (ON) pauses new work on that provider with one
+notice, and `BILLING_FAILOVER_ENABLED` (ON) tries the next provider first.
+
+**Limits and prices per user.** The engine has ONE markup and ONE credit rate for the
+whole installation. It holds no per-user price, no per-user spend limit and no plan. A
+hosted service that needs them keeps them in its own control plane, in front of the
+engine; the engine's part is to meter each call truthfully. `MAX_SESSIONS_PER_USER`
+(default `10`) is the one per-user limit the engine applies itself.
+
+⚠️ **Two things read as live and are not.** `SESSION_CREATION_COST` is shown in the
+public pricing block and is never charged; the model list and the count of open chats on a tier are not applied to a
+run. Do not price a service on them.
+
+- **Operational note:** `usage_records.user_id` has a foreign key to `user_profiles`.
+  A headless single-owner deployment **seeds an owner `user_profiles` row at
+  startup** (`ensure_owner_profile`) so metering actually persists — without it, every
+  metering write fails the FK and spend reads as a false `$0`.
+- **`/v1` token counts:** the `usage` block of the OpenAI-compatible answer is an
+  estimate from the request and reply text (a streamed answer marks it `"estimated": true`).
+  The charge is not an estimate: it comes from the real calls, as above.
 - **Deposit addresses** (`api/payment_endpoints.py`, strict JWT): each user gets a
   crypto deposit address derived from `PAYMENT_MASTER_SEED`, plus balance, transaction
   and deposit reads; the routes are listed in [api.md](api.md#money-and-pricing).
@@ -505,7 +558,7 @@ process. With the wallet on, the treasury auto-fills (`X402_TREASURY_FROM_WALLET
 ```bash
 AGENT_WALLET_ENABLED=true
 AGENT_WALLET_MASTER_SEED=<secret>       # or run `polyrob wallet init`
-# posture members ride ONE line; X402_SETTLE_ONCHAIN_DETECT forces X402_INVOICE_AMOUNT_JITTER on,
+# posture members ride ONE line; X402_SETTLE_ONCHAIN_DETECT brings the amount jitter with it,
 # INVOICE_CARD_ENABLED attaches branded QR cards
 POLYROB_OVERRIDES=X402_INVOICE_ENABLED=true,X402_SETTLE_ONCHAIN_DETECT=true,INVOICE_CARD_ENABLED=true
 X402_DEFAULT_CHAIN=base-sepolia         # testnet first; flip to base after the dry run
@@ -600,7 +653,7 @@ run moves funds), `autonomous` (the agent runs its own work, money not armed) an
 `armed`. `armed` needs effective `AUTONOMY_MODE=autonomous` plus `DEFI_AGENT_AUTONOMY`,
 `DEFI_TRADE_ENABLED`, `DEFI_AUTONOMOUS_TURN_TRADING`, `DEFI_TIERED_SPEND_LANE` and a
 daily cap. Without the tiered lane a within-ceiling unattended spend still waits on a
-tap that nobody gives. The posture card (`polyrob doctor`, `/status`, `/autonomy`)
+tap that nobody gives. The posture card (`polyrob doctor`, `/status all`, `/autonomy`)
 names the regime and any missing key.
 
 `DEFI_AGENT_AUTONOMY` is what makes the rail *reachable* — it adds `defi_data`,
@@ -617,10 +670,12 @@ micro-payments only without a tap),
 but no host tool, and `launchpad`/`dapp_browser` stay behind their own
 switches.
 
-**What you will be told.** Every broadcast reaches you, on a lane no delivery limit
-silences: a BROADCAST notice (verb, network, amounts, USD value, tx hash, the lane that
-allowed it, the daily-cap headroom it consumed) and a SETTLED notice with the measured
-outcome — confirmed, reverted, arrived or in flight. The BROADCAST line waits
+**What you will be told.** Every broadcast the agent makes reaches you, on a lane no
+delivery limit silences: a BROADCAST notice (verb, network, amounts, USD value, the
+explorer link or the tx hash, the daily limit used) and a SETTLED notice with the measured
+outcome — confirmed, reverted, arrived or in flight. A command you ran yourself (a typed
+`go`, a Confirm tap) answers with its own report, so it sends no second notice; an
+IN FLIGHT notice always arrives. The BROADCAST line waits
 `TX_NOTIFY_SENT_HOLD_SEC` (default 60 s) for its settlement: a transaction that settles
 inside the wait sends ONE line that carries both sets of facts, and one still unsettled
 after it gets its own BROADCAST line (`0` always sends two). It is deliberately not stopped by the owner pause: a report about funds

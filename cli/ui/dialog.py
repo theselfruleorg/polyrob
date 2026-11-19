@@ -20,7 +20,6 @@ full, UNtruncated message the agent wants the user to read.
 from __future__ import annotations
 
 import json
-import os
 import re
 from typing import Any, Dict, List, Optional
 
@@ -62,17 +61,6 @@ def summary_segments(
         parts.append("failed")
     return parts
 
-
-#: OR-7: prefer the clean parsed action text (done/send_message) over the raw
-#: streamed buffer at turn end — the stream is internal brain-state telemetry for
-#: many providers; the parsed answer is the agent's real voice. Default ON; set
-#: CLI_PREFER_ACTION_TEXT=off/false/0/no to restore the legacy stream-preference.
-PREFER_ACTION_TEXT = os.getenv("CLI_PREFER_ACTION_TEXT", "true").strip().lower() not in (
-    "0",
-    "false",
-    "off",
-    "no",
-)
 
 # ---------------------------------------------------------------------------
 # Plumbing strings — the receipts the send_message tool returns to the agent.
@@ -121,7 +109,7 @@ def choose_answer_text(answer: str, streamed: str) -> str:
     identical selection both renderers' turn-end paths used to inline (D6).
     """
     ans = (answer or "").strip()
-    if PREFER_ACTION_TEXT and ans and not is_plumbing_string(ans):
+    if ans and not is_plumbing_string(ans):
         return answer
     return streamed if streamed.strip() else answer
 

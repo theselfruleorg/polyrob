@@ -38,7 +38,14 @@ class _MessageManager:
     max_input_tokens = 100_000
 
     def get_token_count(self):
-        return 12_500
+        return 9_000          # history + foundation only: NOT what the status prints
+
+    def context_usage(self):
+        return {"total_tokens": 12_500, "limit": 100_000, "pct": 12.5,
+                "source": "provider_usage",
+                "slots": {"foundation": 4_000, "conversation": 5_000, "ephemeral": 0,
+                          "hmem": 1_500, "tool_schemas": 2_000},
+                "last_call": {}}
 
 
 class _Agent:
@@ -160,7 +167,9 @@ async def test_agent_status_reports_steps_tools_context(monkeypatch):
     text = result.extracted_content
     assert "steps: 4/25" in text
     assert "tools: browser, mcp" in text
+    # 120 T1: THE gauge (context_usage), never the history-only get_token_count.
     assert "context_tokens: 12500/100000 (12%)" in text
+    assert "context_slots: foundation 4000, conversation 5000, hmem 1500, tool_schemas 2000" in text
     # treasury net = income(1.5) - spend(0.0). It must NOT net against runtime
     # cost — the old +1.2500 here was the merged figure (1.5 - total_spend 0.25).
     assert "net:" in text and "+1.5000" in text        # ledger leg rendered
@@ -625,3 +634,17 @@ async def test_agent_status_no_live_agent_says_so(monkeypatch):
     assert "this chat's model: model-x" not in text
     assert "this chat's model: unavailable" in text
     assert "run_spend:" not in text  # owner chat stub: no per-run cap
+
+
+def test_context_lines_name_an_estimate_and_a_missing_gauge():
+    """120 T1: a local estimate says so; a manager without the gauge is named."""
+    from tools.controller.agent_status_action import _context_lines
+
+    class _Est:
+        def context_usage(self):
+            return {"total_tokens": 800, "limit": 0, "pct": 0.0, "source": "local_estimate",
+                    "slots": {}, "last_call": {}}
+
+    assert _context_lines(_Est()) == [
+        "context_tokens: ≈800 — a local estimate, not yet measured by the provider"]
+    assert "no context gauge" in _context_lines(object())[0]

@@ -52,9 +52,10 @@ def _iter_chain(error: BaseException) -> Iterator[BaseException]:
 def credit_death_in_chain(error: BaseException) -> Optional[str]:
     """The frame of this error's chain that reads as credit death, or None.
 
-    Only the LLM and credit family may be judged by its text: a tool or parse error
-    whose message holds "402" is not billing."""
-    if not isinstance(error, (LLMError, InsufficientCreditsError)):
+    Only the LLM family may be judged by its text: a tool or parse error whose message
+    holds "402" is not billing. ``InsufficientCreditsError`` is one tenant's balance on
+    our own ledger, never the provider's account, so it is never credit death."""
+    if isinstance(error, InsufficientCreditsError) or not isinstance(error, LLMError):
         return None
     for e in _iter_chain(error):
         if looks_like_credit_death(str(e)):

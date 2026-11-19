@@ -2,7 +2,7 @@
 (``lazy_deps_mode()``)."""
 import pytest
 
-from cli.commands.doctor import optional_extras_line
+from core.health_slot import optional_extras_line  # 120 W8: the one home
 
 
 @pytest.fixture(autouse=True)

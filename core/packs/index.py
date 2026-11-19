@@ -192,14 +192,23 @@ def first_party_rows() -> List[dict]:
     return out
 
 
-def third_party_rows() -> List[dict]:
-    """The reviewed third-party rows of ``index.json``. An unreadable file reads
-    as empty; a first-party row in it, or one reusing a first-party id, is ignored."""
+def third_party_rows(*, strict: bool = False) -> List[dict]:
+    """The reviewed third-party rows of ``index.json``. A first-party row in it, or
+    one reusing a first-party id, is ignored.
+
+    An unreadable file reads as empty for a caller that only needs what it can
+    trust (``strict=False``: the default, so a broken index never stops a boot).
+    A caller that PRINTS the list passes ``strict=True`` and gets
+    :class:`PackIndexError` instead: an index that could not be read is not an
+    empty one, and the reader must be told which."""
     first = set(first_party_entry_points())
     out = []
     try:
         data = _read(INDEX_FILE)
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        if strict:
+            raise PackIndexError(
+                f"the pack index could not be read ({type(exc).__name__}: {exc})") from exc
         return []
     for raw in data:
         try:
@@ -211,28 +220,39 @@ def third_party_rows() -> List[dict]:
     return out
 
 
-def rows() -> List[dict]:
+def rows(*, strict: bool = False) -> List[dict]:
     """Every index row (validated): the runtime first-party rows, then the
     reviewed third-party rows. With no polyrob metadata and no source tree there
     is no first-party row, and :func:`first_party_identities` grants no
-    exemption (fail closed)."""
-    return sorted(first_party_rows() + third_party_rows(), key=lambda r: r["id"])
+    exemption (fail closed). ``strict``: see :func:`third_party_rows`."""
+    return sorted(first_party_rows() + third_party_rows(strict=strict), key=lambda r: r["id"])
 
 
-def find(pack_id: str) -> Optional[dict]:
-    return next((r for r in rows() if r["id"] == pack_id), None)
+def find(pack_id: str, *, strict: bool = False) -> Optional[dict]:
+    return next((r for r in rows(strict=strict) if r["id"] == pack_id), None)
 
 
-def search(query: str = "") -> List[dict]:
-    """Rows whose id, dist, summary or capabilities contain *query* (case-folded)."""
+def search(query: str = "", *, strict: bool = False) -> List[dict]:
+    """Rows whose id, dist, summary or capabilities contain *query* (case-folded).
+    ``strict``: an unreadable index raises (see :func:`third_party_rows`)."""
     q = (query or "").strip().lower()
     out = []
-    for r in rows():
+    for r in rows(strict=strict):
         hay = " ".join([r["id"], r["dist"], r.get("summary", ""),
                         " ".join(r.get("capabilities", []))]).lower()
         if q in hay:
             out.append(r)
     return out
+
+
+def row_line(row: dict) -> str:
+    """One index row as `polyrob pack search` and the agent's `tool_search` print it.
+    ⚠️ An unreadable kill list RAISES here, as :func:`killed` does."""
+    caps = ", ".join(row.get("capabilities", [])) or "none"
+    line = (f"{row['id']} {row['version']} ({row['tier']}) — {row.get('summary') or '-'}"
+            f" · capabilities: {caps} · {row['dist']}")
+    note = killed(row["id"], row["version"])
+    return line + (f" · ! {note}" if note else "")
 
 
 def retired_dist(name: str) -> bool:

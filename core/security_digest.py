@@ -13,7 +13,7 @@ core/status_snapshot.py — core may not import agents.* or surfaces.*.
 """
 import os
 from dataclasses import dataclass, field
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 _TOP_N = 5
 
@@ -221,21 +221,25 @@ def build_security_rollup(user_id: str, *, data_dir: str, since_ts: float,
     return r
 
 
-def recent_gate_refusals(user_id: str, *, data_dir: str, limit: int = 5) -> List[dict]:
+def recent_gate_refusals(user_id: str, *, data_dir: str, limit: int = 5,
+                         instance_rows: bool = True) -> List[dict]:
     """O10: the last *limit* typed gate refusals (``source='gate'``, the
     ``core/security/refusals.py`` emit), newest first — for the owner's ``/why``.
 
     Rows the gate recorded with no tenant (a guard call with no execution
-    context) are the instance's own and are included beside the owner's.
-    Raises when the store is absent, like :func:`build_security_rollup`: "no
-    store" must never read as "no refusals". A read never creates the store.
+    context) are the instance's own and are included beside the owner's;
+    ``instance_rows=False`` reads the tenant's rows only (a tenant that is not
+    the owner, 120 W3). Raises when the store is absent, like
+    :func:`build_security_rollup`: "no store" must never read as "no refusals".
+    A read never creates the store.
     """
     import json
     from core.event_kinds import TOOL_DENIED
+    tenant = _TENANT if instance_rows else "user_id = ?"
     rows = _query(
         _db_path(data_dir),
         "SELECT ts, session_id, attrs FROM telemetry_events "
-        f"WHERE kind = ? AND source = ? AND {_TENANT} "
+        f"WHERE kind = ? AND source = ? AND {tenant} "
         "ORDER BY ts DESC, id DESC LIMIT ?",
         (TOOL_DENIED, GATE_SOURCE, str(user_id or ""), max(1, int(limit))))
     out = []
@@ -249,3 +253,48 @@ def recent_gate_refusals(user_id: str, *, data_dir: str, limit: int = 5) -> List
                     "tool": str(attrs.get("tool") or ""),
                     "detail": str(attrs.get("detail") or "")})
     return out
+
+
+#: ``/why`` and ``agent_status(view="refusals")``: rows shown when none is named,
+#: the most one read shows, and the longest detail line.
+REFUSALS_DEFAULT_N = 5
+REFUSALS_MAX_N = 20
+_DETAIL_CHARS = 180
+
+
+def _when(ts: float, now: float) -> str:
+    import time
+    age = max(0, int(now - ts))
+    ago = (f"{age // 86400}d" if age >= 86400 else f"{age // 3600}h" if age >= 3600
+           else f"{age // 60}m" if age >= 60 else f"{age}s")
+    return time.strftime("%m-%d %H:%M UTC", time.gmtime(ts)) + f" ({ago} ago)"
+
+
+def refusals_reply(user_id: str, data_dir: str, n: int = REFUSALS_DEFAULT_N, *,
+                   instance_rows: bool = True, now: Optional[float] = None) -> str:
+    """The last *n* gate refusals as text, each reason word for word — the ONE
+    render ``/why`` (Telegram, the terminal) and ``agent_status(view="refusals")``
+    print (120 W3). An absent or unreadable store answers ``unavailable(<reason>)``,
+    never "no refusals"."""
+    import logging
+    import time
+    if not user_id:
+        return "Only the owner can read the refusals."
+    n = max(1, min(int(n or REFUSALS_DEFAULT_N), REFUSALS_MAX_N))
+    try:
+        rows = recent_gate_refusals(user_id, data_dir=data_dir, limit=n,
+                                    instance_rows=instance_rows)
+    except Exception as e:
+        logging.getLogger(__name__).warning("refusals: the store is unreadable: %s", e)
+        return f"Refusals: unavailable({type(e).__name__}: {str(e)[:120]})"
+    if not rows:
+        return "No refusals recorded."
+    now = time.time() if now is None else now
+    lines = [f"Last {len(rows)} refusal(s), newest first:"]
+    for r in rows:
+        detail = " ".join(r["detail"].split())
+        if len(detail) > _DETAIL_CHARS:
+            detail = detail[:_DETAIL_CHARS - 1] + "…"
+        head = f"• {_when(r['ts'], now)} — {r['tool'] or 'no tool'} — {r['reason']}"
+        lines.append(head + (f"\n  {detail}" if detail else ""))
+    return "\n".join(lines)

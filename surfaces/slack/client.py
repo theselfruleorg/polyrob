@@ -74,11 +74,14 @@ class SlackClient:
         return t
 
     async def send_message(self, channel: str, text: str,
-                           thread_ts: Optional[str] = None) -> dict:
+                           thread_ts: Optional[str] = None,
+                           blocks: Optional[list] = None) -> dict:
         from html import escape
         body: dict = {"channel": await self._resolve_channel(channel),
                       "text": escape(text, quote=False), "mrkdwn": False,
                       "parse": "none", "link_names": False}
+        if blocks:
+            body["blocks"] = blocks
         if thread_ts:
             body["thread_ts"] = str(thread_ts)
         return await self._call("chat.postMessage", token=self._bot_token,

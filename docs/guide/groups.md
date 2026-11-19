@@ -73,7 +73,9 @@ your permission: a group you denied stays denied when somebody adds the bot back
 
 `TELEGRAM_BOT_USERNAME` overrides the bot's own handle for mention detection when
 `getMe` is unavailable at boot (the handle otherwise self-heals from the bot's own
-outbound messages).
+outbound messages). `/status all` names the Telegram and Discord bot handles in its
+identity lines; a process that does not run the bot (the CLI, the console) says
+that it does not know the handle.
 
 ---
 
@@ -301,8 +303,8 @@ list can only grow by adding a guard, never by flipping a flag.
 - **The owner's knowledge base** — no `kb_search`, `kb_ingest`, `kb_list`,
   `kb_remove`, or any other `kb_*` verb. The `knowledge` tool is not a room tool
   and its verbs stay denied even if `GROUP_TURN_TOOLS` names it.
-- **Deferred execution** — no `goal_create`, `goal_cancel`, `cronjob_schedule`,
-  `cronjob_edit`, `cronjob_cancel`, `skill_manage`, `self_context_manage`, `preferences`,
+- **Deferred execution** — no `goal_create`, `goal_cancel`, `goal_pause`, `cronjob_schedule`,
+  `cronjob_edit`, `cronjob_cancel`, `cronjob_pause`, `cronjob_resume`, `skill_manage`, `self_context_manage`, `preferences`,
   `owner_doc_manage`, `load_tool`, `tool_manage_install`, `self_modify`. A room turn cannot plant something a later owner-tenant run
   would execute, and it cannot widen its own rig.
 - **Cross-session recall** — no `session_search`, `memory`,
@@ -310,7 +312,7 @@ list can only grow by adding a guard, never by flipping a flag.
   `usage_summary`. A room reply can never surface the owner's DM or trading history.
 - **Outbound elsewhere** — no `message`, `send_email`, `email_send`.
   `send_message` is the only speech verb, and it lands in this room only.
-- **Delegation / control** — no `delegate_task`, `autonomy_control`.
+- **Delegation / control** — no `delegate_task`, `delegation_status`, `autonomy_control`.
 - **Every room-bound turn is stamped `turn_kind=group`**, which the same forged-turn
   predicate that protects self-wakes and delegation results treats as forged — a room
   turn can never auto-activate or promote a skill, and `tx_guard` refuses to sign for
@@ -339,13 +341,20 @@ three verbs for the rooms on the allowlist:
 - **`room_read`** reads a room's local ledger: the lines the bot saw, kept 14 days
   or 2,000 rows per chat. It is not a live Telegram history, and every read says so.
   A room that is not on the allowlist is refused with the list of real rooms. Room
-  lines are third-party text, so the turn that read them is tainted.
+  lines are third-party text, so the turn that read them is tainted. With
+  `audit=true` it reads who used `/admin` there in the last 7 days: the
+  `/groups audit` text. A turn in the group never reads the audit.
 - **`room_moderate`** mutes, unmutes, bans, unbans or deletes in a room, through the
   same adapter as the owner's own `/mute` and `/ban`. A mute defaults to 1 hour and a
   ban to 30 days; a mute or ban can also delete the target's lines from the last 48
   hours, and `delete` takes message ids from `room_read`. The target is refused if it
   is the owner, a live chat administrator or creator, a room admin, or cannot be read.
   The bot must hold the Telegram right (`can_restrict_members` / `can_delete_messages`).
+  With `action="silence"` the agent stops answering in the group for a while: the same
+  setting as your `/mute <group> <duration>`. The default is 1 hour and the limit is
+  24 hours. It never makes a silence shorter, so only you end one early (`/mute`). A
+  turn in the group, a member's message included, never silences the agent: you and the
+  group's admins have `/mute here`.
 - **`message(action="delete")`** removes one of the agent's own posts, using its
   record of what it posted as the proof of ownership, within Telegram's 48-hour window.
   Owner turns only; `message(action="posts")` lists what it posted.
@@ -361,6 +370,11 @@ Whose decision a moderation is:
 So a member line in a room can never talk the agent into banning another member: the
 agent may read the room, but the decision is the owner's, now or in a job the owner wrote.
 
+The agent cannot widen its own access to a group. It cannot allow or deny a group, give a
+role, or add an ability. To change how it answers in a group it sends you a suggested change
+(`/groups mode <surface> _<chat_id> <mode>`). A suggestion for `active` says that the
+agent then answers every message. You tap Confirm, and your own `/groups mode` runs.
+
 ## Owner commands from inside a room
 
 The owner's money, host and control verbs do not RUN from a room, even for the owner.
@@ -373,7 +387,7 @@ one-line note in the owner's DM:
 `/halt` `/resume` `/run` `/approve` `/reject` `/allow` `/deny` `/config` `/prefs`
 `/model` `/skills` `/mcp` `/apps` `/invoices` `/settle` `/job` `/goal` `/fulfill`
 `/contacts` `/thread` `/why` `/restart` `/update`, plus the write forms
-`/book retire` and `/avatar set|clear` — do these in the private chat. A verb that a
+`/book retire` and `/avatar set|clear|push` — do these in the private chat. A verb that a
 pack contributes (for example `/x`) is refused too, unless the pack declares it safe
 for a room.
 
@@ -655,7 +669,7 @@ service that was never delivered.
 |---|---|
 | Telegram, in the room | `/paid status\|enable\|disable\|price <verb> <usd>\|asset <id>\|offers\|cancel <id>` |
 | CLI | `polyrob owner paid list [--chat <id>]`, `polyrob owner paid show <chat_id>`, `polyrob owner paid cancel <offer_id>` |
-| status | the `Paid room actions` section of `/status` and `polyrob doctor` |
+| status | the `Paid room actions` section of `/status all` and `polyrob doctor` |
 
 `enable`/`disable`/`price`/`asset` are the owner's; `status`/`offers`/`cancel`
 are reachable by that room's own admin too. A PAID offer cannot be cancelled —
@@ -692,7 +706,7 @@ profile*); the reference with a code anchor per row is
 
 | Verb | Seats | Effect |
 |------|-------|--------|
-| `/groups allow here [name]` · `polyrob owner groups allow <surface> <chat_id>` | Telegram (in the room), CLI | Allowlist the current room |
+| `/groups allow here [name]` · `/groups allow <surface> <chat_id>` · `polyrob owner groups allow <surface> <chat_id>` | Telegram (`here` in the room; the explicit form from your DM), CLI | Allowlist a room |
 | `/groups deny here` · `polyrob owner groups deny <surface> <chat_id>` | Telegram, CLI | Revoke; ledger kept until retention. Denying a room keeps its /admin bundles, room tools and roles; `/groups allow` restores them and names them in its reply |
 | `/groups list` · `polyrob owner groups list` | Telegram, CLI | Rooms, mode, replies today, last write |
 | `/groups mode here <mode>` · `polyrob owner groups mode <surface> <chat_id> <mode>` | Telegram (owner/admin), CLI | Set `chat.mode` |
@@ -710,6 +724,6 @@ profile*); the reference with a code anchor per row is
 | `/groups service here every 30m [max 3]` · `polyrob owner groups service <surface> <chat_id> --every 30m --max 3` | Telegram (owner), CLI | Start/stop the recurring catch-up job |
 | `/mute here 2h` | Telegram only (owner/admin) | `chat.mode=listen` with an expiry |
 
-The status snapshot (`/status`, `polyrob doctor`, the console) carries a `groups`
+The status snapshot (`/status all`, `polyrob doctor`, the console) carries a `groups`
 section: rooms served, mode, replies today, ledger size, last write, and who holds an admin
 role or bundle. A settings file it cannot read shows `bundles=UNKNOWN`.

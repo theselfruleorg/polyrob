@@ -80,18 +80,43 @@ def resolve_charge_asset(network: str, asset_id: Optional[str] = None):
         raise ValueError(f"no payable asset for network {network!r}: {e}") from e
 
 
+def eip712_domain(network: str, asset_address: Optional[str], name, version):
+    """The EIP-712 domain ``(name, version)`` a payer signs for ``asset_address`` on
+    ``network``: the x402 SDK's pinned row for that token when it has one, else the
+    given ``(name, version)`` (the fastapi-x402 values).
+
+    ⚠️ fastapi-x402 0.1.8 names Base MAINNET USDC ``"USDC"``, which is the Base SEPOLIA
+    token's domain name. The mainnet FiatToken's domain is ``"USD Coin"`` version ``"2"``
+    (the x402 SDK pins it in ``x402.mechanisms.evm.default_assets``; ``core/wallet/
+    tokens.py`` names it). A payer signs the domain the challenge names, so a challenge
+    that says ``"USDC"`` gets an authorization the token rejects: every inbound x402
+    payment on Base failed verification (found by the level-1 interface rig, ops/rig).
+    The challenge and the verification requirement both take the domain from here.
+    """
+    try:
+        from x402.mechanisms.evm.default_assets import find_default_asset
+        row = find_default_asset(asset_address, network) if asset_address else None
+    except Exception:
+        row = None
+    if row and row.get("name") and row.get("version"):
+        return row["name"], row["version"]
+    return name, version
+
+
 def _charge_asset_fields(network: str):
     """``(decimals, address, eip712_name, eip712_version)`` for the challenge.
 
-    The facilitator rail needs the EIP-712 domain, which only `fastapi_x402`
-    knows, so that library stays the source for a network it knows. The asset
+    The facilitator rail needs the EIP-712 domain: the x402 SDK's pinned row
+    (:func:`eip712_domain`), else `fastapi_x402` for a network it knows. The asset
     registry is the fallback for decimals and the address — and when NEITHER
     can answer, this raises rather than inventing a 6.
     """
     try:
         from fastapi_x402.networks import get_default_asset_config
         cfg = get_default_asset_config(network)
-        return (cfg.decimals, cfg.address, cfg.eip712_name, cfg.eip712_version)
+        name, version = eip712_domain(network, cfg.address, cfg.eip712_name,
+                                      cfg.eip712_version)
+        return (cfg.decimals, cfg.address, name, version)
     except Exception:
         logger.debug("fastapi_x402 asset config unavailable for %r — falling "
                      "back to the payment-asset registry", network)
@@ -461,10 +486,9 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
                 payTo=config["pay_to"],
                 maxTimeoutSeconds=300,
                 asset=asset_config.address,
-                extra={
-                    "name": asset_config.eip712_name,
-                    "version": asset_config.eip712_version
-                }
+                extra=dict(zip(("name", "version"), eip712_domain(
+                    network, asset_config.address, asset_config.eip712_name,
+                    asset_config.eip712_version))),
             )
 
             from modules.x402.settlement_attempt import authorization_record, prepare_machine_payment

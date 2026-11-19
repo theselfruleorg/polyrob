@@ -74,7 +74,9 @@ class RemoveParams(BaseModel):
 
 
 class ListAppsParams(BaseModel):
-    pass
+    slug: Optional[str] = Field(None, description="One app's slug: show that app in full "
+                                                  "(dir, command, port, egress, env, digest, "
+                                                  "approval, deploy, health, failures).")
 
 
 class LogsParams(BaseModel):
@@ -318,12 +320,19 @@ class AppServiceTool(BaseTool):
             f"and record within one tick. app_service_list_apps stops showing it then."),
             include_in_memory=True)
 
-    @BaseTool.action("List this tenant's apps with status, URL and last health.",
+    @BaseTool.action("List this tenant's apps with status, URL and last health; with slug, "
+                     "one app in full.",
                      param_model=ListAppsParams)
     async def list_apps(self, params: Any = None, execution_context=None) -> ActionResult:
         user_id = str(getattr(execution_context, "user_id", "") or "")
         if not user_id:
             return ActionResult(error="app_service_list_apps denied: no tenant on the execution context")
+        slug = (getattr(params, "slug", None) or "").strip()
+        if slug:
+            # 120 W2: one app in full — the same lines as the owner's /apps show.
+            from core.app_service.owner_ops import show_lines
+            return ActionResult(extracted_content="\n".join(
+                show_lines(self._get_registry(), user_id, slug)), include_in_memory=True)
         rows = self._get_registry().list_for(user_id)
         if not rows:
             return ActionResult(extracted_content="No apps yet.")

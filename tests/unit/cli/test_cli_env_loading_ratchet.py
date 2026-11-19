@@ -38,7 +38,7 @@ EXEMPT = {
     "_lifecycle.py", "_lifecycle_boot.py", "_service_ops.py",
     # Helpers with no click command, called from `polyrob doctor` / `polyrob apps
     # install`, whose callbacks already loaded the env ladder.
-    "doctor_host.py", "doctor_data_home.py", "doctor_env_copies.py", "doctor_sandbox.py",
+    "doctor_host.py", "doctor_data_home.py", "doctor_env_copies.py",
     "doctor_apps.py", "doctor_models.py", "apps_install.py",
     "doctor_alerts.py", "doctor_audit.py",
 }

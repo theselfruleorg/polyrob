@@ -1103,11 +1103,7 @@ def _h_telemetry(ctx: CommandContext) -> None:
     Usage: /telemetry [window]  e.g. `/telemetry 24h`, `/telemetry 7d`.
     """
     import time as _time
-    try:
-        from core.event_log import get_event_log, event_log_enabled
-    except Exception as e:
-        ctx.emit(f"(event log unavailable: {e})")
-        return
+    from core.event_log import event_log_enabled
     if not event_log_enabled():
         from core.remedy import flag_remedy
         ctx.emit(f"(telemetry event log disabled — {flag_remedy('TELEMETRY_EVENT_LOG_ENABLED')})")
@@ -1117,16 +1113,19 @@ def _h_telemetry(ctx: CommandContext) -> None:
     secs = _parse_window_seconds(window)
     since_ts = (_time.time() - secs) if secs else None
 
-    log = get_event_log()
+    # 120 W3: the read is core.telemetry_view (agent_status view="log" reads it too).
+    from core.telemetry_view import telemetry_view
     try:
-        agg = log.aggregate(since_ts=since_ts)
-    except Exception:
-        ctx.emit("(telemetry totals unavailable: event log could not be read)")
+        view = telemetry_view(since_ts=since_ts, limit=10)
+    except Exception as e:
+        ctx.emit(f"(telemetry unavailable: the event log could not be read — "
+                 f"{type(e).__name__}: {str(e)[:120]})")
         return
-    recent = log.query(since_ts=since_ts, limit=10)
+    agg = {"total_events": view["total"], "wallet_spend_usd": view["wallet_spend_usd"]}
+    recent = view["recent"]
 
     scope = f"last {window}" if secs else "all time"
-    counts = agg.get("counts_by_kind", {})
+    counts = view["counts"]
 
     from cli.ui import candy
     from cli.ui.theme import style
@@ -1370,7 +1369,7 @@ def build_default_registry() -> CommandRegistry:
     reg.register(Command(
         "avatar", h_avatar,
         "Show or set the agent's avatar image (a file, a URL, or an NFT)",
-        usage="[show | set <file|url> | set nft <chain>:<contract>:<id>]", group="display",
+        usage="[show | set <file|url> | set nft <chain>:<contract>:<id> | clear | push [x] [telegram] [discord]]", group="display",
     ))
     # 043 D1: /inbox + /book. Their registrar lives beside them in h_inbox.py —
     # this file is AT its size ratchet, whose instruction is to extract rather

@@ -192,3 +192,33 @@ def test_voice_transcription_documented_default_matches_code(monkeypatch):
     monkeypatch.delenv("VOICE_TRANSCRIPTION_ENABLED", raising=False)
     documented_on = REGISTRY["VOICE_TRANSCRIPTION_ENABLED"].default_doc == "ON"
     assert documented_on == SurfaceConfig.voice_transcription_enabled()
+
+
+def test_a_set_pattern_row_name_is_in_the_list_views(monkeypatch):
+    """`WALLET_VENUE_DAILY_CAP_X402_USD` answered on `config get` and was absent
+    from `config list`, `doctor --flags` and the search: a set money cap that the
+    views of what is set did not show."""
+    from core import config_service
+    from core.flags import resolve_all, set_pattern_names
+    name = "WALLET_VENUE_DAILY_CAP_X402_USD"
+    assert set_pattern_names({}) == []
+    assert set_pattern_names({name: " "}) == []          # blank is not set
+    assert set_pattern_names({"ZZ_NOT_A_ROW_USD": "5"}) == []
+    assert set_pattern_names({name: "5"}) == [name]
+    assert [r.value for r in resolve_all({name: "5"}) if r.name == name] != []
+    assert name not in config_service.known_keys()
+    monkeypatch.setenv(name, "5")
+    assert name in config_service.known_keys()
+    assert name in [i.key for i in config_service.search("venue")]
+    infos, _unread = config_service.changed_settings(user_id=None, home_dir=None)
+    assert name in [i.key for i in infos]
+
+
+def test_a_member_flag_a_pattern_matches_is_not_a_second_set_row():
+    """EMAIL_SURFACE_ENABLED is a posture member and matches <SURFACE>_SURFACE_ENABLED: its
+    direct env line does nothing, so a list view must not show it again as set."""
+    from core.config_policy.members import is_member
+    from core.flags import pattern_flag_for, set_pattern_names
+    name = "EMAIL_SURFACE_ENABLED"
+    assert is_member(name) and pattern_flag_for(name) is not None
+    assert set_pattern_names({name: "true"}) == []

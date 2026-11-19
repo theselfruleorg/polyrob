@@ -541,14 +541,17 @@ def _job_model_updates(model_name: str, tenant: str) -> dict:
     """``payload.model`` (+ ``payload.provider`` off the operator's provider) for
     ``--model``; ``none`` clears both. Validated like the chat ``/model``."""
     if model_name.strip().lower() in ("none", "", "-"):
-        return {"model": None, "provider": None}
+        return {"model": None, "provider": None, "model_by": None, "model_why": None}
+    # (a clear keeps a stored tier: --model none goes back to the tier, if one is set)
     from agents.task.model_switch_service import resolve_job_model
     pin, note = resolve_job_model(model_name, tenant)
     if pin is None:
         raise click.ClickException(note)
     if note:
         click.echo(click.style(f"  ⚠️ {note}", fg="yellow"))
-    return {"model": pin["model"], "provider": pin.get("provider")}
+    # 121: an owner-written model is locked — the agent's job tools cannot change it.
+    return {"model": pin["model"], "provider": pin.get("provider"), "model_by": "owner",
+            "model_why": None, "tier": None, "tier_why": None}   # the model replaces a tier
 
 
 def _stop(job_id: str, user: Optional[str], *, forever: bool = False,

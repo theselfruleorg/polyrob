@@ -109,6 +109,23 @@ def test_resume_clears_the_count(tmp_path):
     assert store.get("job1").payload["last_outcome"]["streak"] == 1
 
 
+def test_the_agents_own_pause_and_resume_keeps_the_count(tmp_path):
+    """120 review: an unattended run paused and resumed a failing job, the resume dropped
+    the streak, and the failure limit never tripped. The agent's resume keeps the count;
+    only the owner's gives a new one."""
+    from cron.service import CronService
+    store, sch, _, _ = _setup(tmp_path, [FAIL] * 4)
+    _run(store, sch, FAILURE_STREAK_LIMIT - 1)
+    svc = CronService(store, now=lambda: NOW + timedelta(hours=5))
+    assert svc.pause("job1", user_id="u1", via="agent")
+    assert svc.resume("job1", user_id="u1", via="agent")
+    assert store.get("job1").payload["last_outcome"]["streak"] == FAILURE_STREAK_LIMIT - 1
+    _run(store, sch, 1, start=NOW + timedelta(hours=6))
+    assert store.get("job1").status == "paused"
+    assert svc.resume("job1", user_id="u1", via="telegram")     # the owner: a new count
+    assert "streak" not in store.get("job1").payload["last_outcome"]
+
+
 def test_the_digest_job_never_pauses(tmp_path):
     store, sch, lines, _ = _setup(tmp_path, [FAIL] * 4, payload={"digest": True})
     _run(store, sch, 4)

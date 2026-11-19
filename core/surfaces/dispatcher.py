@@ -7,21 +7,17 @@ One inbound message from any surface resolves to exactly one action:
   STEER        a bound session exists for this chat-scoped key (warm) — inject the
                message into the running session (the caller rehydrates if the
                orchestrator is gone; a warm chat NEVER diverts).
-  CHAT_FASTPATH cold + CHAT_INTENT_CLASSIFIER ON + an injected is_chitchat predicate
-               says it's chitchat — the optional ChatAgent cost-optimization.
   TASK_AGENT   default — the unified Task agent IS the front door (Option A).
 
 cold/warm is decided by SessionChatRegistry row existence (single SSOT, durable,
-cross-worker safe). The dispatcher never calls an LLM: an intent classifier, if any,
-is injected as is_chitchat (sync or async). Fully fail-open: any lookup/predicate
+cross-worker safe). The dispatcher never calls an LLM. Fully fail-open: any lookup
 error degrades to TASK_AGENT, never raises into the inbound handler.
 """
-import inspect
 import logging
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Awaitable, Callable, Optional, Union
+from typing import Any, Optional
 
 from core.surfaces.access import is_forgeable_surface
 from core.surfaces.access_log import record_route
@@ -172,8 +168,6 @@ def _member_verb_granted(container, surface, chat_id, token: str) -> bool:
                      surface, chat_id, e)
         return False
 
-ChitchatPredicate = Callable[[InboundMessage], Union[bool, Awaitable[bool]]]
-
 
 # P1-6: forgeable-sender network surfaces whose senders can NEVER be the bound owner
 # in v1 (the From:/address is trivially spoofable). Such a surface must never fall
@@ -191,7 +185,6 @@ ChitchatPredicate = Callable[[InboundMessage], Union[bool, Awaitable[bool]]]
 class RouteKind(str, Enum):
     COMMAND = "command"
     STEER = "steer"
-    CHAT_FASTPATH = "chat_fastpath"
     TASK_AGENT = "task_agent"
     DENIED = "denied"  # polyrob D3: ingress blocked (pairing required / not paired)
     CORRESPONDENT_DATA = "correspondent_data"  # WS-A: third-party reply -> DATA into
@@ -281,8 +274,6 @@ def _pairing_applies(container: Any, inbound: Any) -> bool:
 async def route_inbound(
     container: Any,
     inbound: InboundMessage,
-    *,
-    is_chitchat: Optional[ChitchatPredicate] = None,
 ) -> RouteDecision:
     """Route one inbound, then record the decision (045 lane 1).
 
@@ -303,8 +294,7 @@ async def route_inbound(
     trace: dict = {}
     decision = _bot_pair_refusal(inbound)
     if decision is None:
-        decision = await _route_inbound_impl(container, inbound,
-                                             is_chitchat=is_chitchat, _trace=trace)
+        decision = await _route_inbound_impl(container, inbound, _trace=trace)
     if decision.tier is None and trace.get("tier"):
         decision.tier = trace["tier"]
     # Security review 2026-09-23 (Low): the revive runs only for an ACCEPTED
@@ -466,7 +456,6 @@ async def _route_inbound_impl(
     container: Any,
     inbound: InboundMessage,
     *,
-    is_chitchat: Optional[ChitchatPredicate] = None,
     _trace: Optional[dict] = None,
 ) -> RouteDecision:
     user_id = inbound.identity.user_id
@@ -936,18 +925,5 @@ async def _route_inbound_impl(
             return RouteDecision(RouteKind.GROUP_TURN, session_key,
                                  session_id=row.get("session_id"))
         return RouteDecision(RouteKind.STEER, session_key, session_id=row.get("session_id"))
-
-    # 3) cold — optional ChatAgent fast-path (default-OFF cost optimization).
-    if is_chitchat is not None:
-        from core.surfaces.config import SurfaceConfig
-        if SurfaceConfig.chat_intent_classifier_enabled():
-            try:
-                verdict = is_chitchat(inbound)
-                if inspect.isawaitable(verdict):
-                    verdict = await verdict
-                if verdict:
-                    return RouteDecision(RouteKind.CHAT_FASTPATH, session_key)
-            except Exception as e:  # fail-open to the Task agent
-                logger.debug("route_inbound is_chitchat failed: %s", e)
 
     return RouteDecision(RouteKind.TASK_AGENT, session_key)

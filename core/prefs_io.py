@@ -27,6 +27,9 @@ _UNREADABLE: Dict[str, str] = {}
 #: path -> (mtime_ns, error) last warned about: one WARNING per broken file state.
 _WARNED: Dict[str, tuple] = {}
 
+#: The value :func:`locked_write` reads as "remove the key" (a preference unset).
+REMOVE = object()
+
 
 class PrefsUnreadable(Exception):
     """``preferences.toml`` exists but cannot be read or parsed."""
@@ -101,13 +104,17 @@ def _atomic_text(path: Path, text: str) -> None:
 
 def locked_write(path: Path, load_strict: Callable[[], dict], key: str, value: object,
                  render: Callable[[dict], str], cache: dict) -> tuple[bool, str]:
-    """Read strictly, set *key*, write — exclusive across processes."""
+    """Read strictly, set *key* (or drop it when *value* is :data:`REMOVE`), write —
+    exclusive across processes."""
     from core.state.files import file_lock
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with file_lock(str(path)):
             flat = load_strict()
-            flat[key] = value
+            if value is REMOVE:
+                flat.pop(key, None)
+            else:
+                flat[key] = value
             text = render(flat)
             _atomic_text(path, text)
             cache.pop(str(path), None)

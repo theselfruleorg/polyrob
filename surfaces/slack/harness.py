@@ -14,7 +14,8 @@ from core.surfaces.idempotency import IdempotencyStore
 from surfaces._shared import (FAILED_MARK, SEEN_MARK, BaseHarness, TextSink,
                                register_surface_and_sink, wants_feedback)
 from surfaces.slack.client import SlackClient
-from surfaces.slack.socket_mode import (SLASH_ENVELOPE, SlackSocketModeClient,
+from surfaces.slack.socket_mode import (INTERACTIVE_ENVELOPE, SLASH_ENVELOPE,
+                                        SlackSocketModeClient,
                                         parse_event, parse_slash_command)
 from surfaces.slack.surface import SlackSurface
 
@@ -41,7 +42,11 @@ class SlackHarness(BaseHarness):
         self.bot_user_id: str = ""
 
     async def handle_event(self, event: dict) -> None:
-        if event.get("type") == SLASH_ENVELOPE:
+        if event.get("type") == INTERACTIVE_ENVELOPE:
+            from surfaces.slack.blocks import parse_block_actions
+            inbound = parse_block_actions(event.get("payload") or {},
+                                          user_directory=self._user_directory)
+        elif event.get("type") == SLASH_ENVELOPE:
             inbound = parse_slash_command(event.get("payload") or {},
                                           user_directory=self._user_directory)
         else:

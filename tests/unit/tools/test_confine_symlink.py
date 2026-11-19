@@ -3,7 +3,7 @@
 coding/tool.py _confine and filesystem.py used abspath().startswith(root) — an
 in-root symlink pointing outside slipped through. Reuse a realpath+commonpath
 helper. filesystem.py also SILENTLY rewrote an escaping path to basename (N2) —
-now a loud rejection (gated FS_REALPATH_CONFINE, default on).
+now a loud rejection, always.
 """
 import os
 

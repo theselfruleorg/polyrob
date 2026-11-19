@@ -6,26 +6,15 @@ gateway read ``~/.polyrob/data`` while a process without ``POLYROB_LOCAL`` read
 the service started on empty stores. That was a log line. Now it is a doctor
 item that names every bot.db, which home each kind of process reads, and the
 one line that pins them together.
+
+120 W8: the check lives in ``core.health_slot.data_home_split_lines`` (the agent
+reads it too). This seat adds only what it alone knows: the installed user
+service unit (its path is the installer's, ``cli.commands.service``).
 """
 from __future__ import annotations
 
 from pathlib import Path
 from typing import List
-
-
-def _bot_dbs(homes) -> List[Path]:
-    seen, out = set(), []
-    for h in homes:
-        for c in (h / "database" / "bot.db", h / "data" / "database" / "bot.db"):
-            try:
-                key = c.resolve()
-                if key in seen or not c.is_file() or c.stat().st_size == 0:
-                    continue
-            except OSError:
-                continue
-            seen.add(key)
-            out.append(key)
-    return out
 
 
 def _unit_lacks_data_dir() -> "Path | None":
@@ -44,35 +33,5 @@ def _unit_lacks_data_dir() -> "Path | None":
 
 
 def data_home_split_lines(env: dict) -> List[str]:
-    from core.paths import polyrob_home
-    from core.runtime_paths import resolve_runtime_paths
-
-    explicit = (env.get("POLYROB_DATA_DIR") or "").strip()
-    local = resolve_runtime_paths(local=True).data_home
-    server = resolve_runtime_paths(local=False).data_home
-    home = polyrob_home()
-    homes = [Path(explicit).expanduser()] if explicit else []
-    homes += [local, server, home, home / "data"]
-    dbs = _bot_dbs(homes)
-    reads = (local / "database" / "bot.db").resolve()
-    lines: List[str] = []
-    if len(dbs) > 1:
-        lines.append(
-            "CRITICAL data home split: bot.db exists at " + ", ".join(str(d) for d in dbs)
-            + f". This process reads {reads}. Stop the services, keep the database that "
-            "holds your data, set POLYROB_DATA_DIR=<its home> in the service unit and the "
-            ".env file, then restart (the home is the folder that holds database/).")
-    if not explicit and local.resolve() != server.resolve():
-        lines.append(
-            f"CRITICAL data home split: the CLI reads {local}, a process without "
-            f"POLYROB_LOCAL (the service, migrate) reads {server}. Set "
-            "POLYROB_DATA_DIR=<the home that holds your data> in the service unit and "
-            "the .env file.")
-    unit = _unit_lacks_data_dir()
-    if unit is not None:
-        lines.append(
-            f"! service unit {unit} does not pin POLYROB_DATA_DIR; run "
-            "`polyrob service install` again so the service and the CLI read one home")
-    if not lines:
-        lines.append(f"data home: {explicit or local} (one home for every process)")
-    return lines
+    from core.health_slot import data_home_split_lines as _core_lines
+    return _core_lines(env, unit_without_pin=_unit_lacks_data_dir())

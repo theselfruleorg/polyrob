@@ -323,28 +323,9 @@ async def test_start_autonomy_orphan_reap_never_added_to_recurring_entries(monke
 
 
 # --------------------------------------------------------------------------
-# 043 A8/A42: sandbox_reap gains a flag + a pause kind, and start_autonomy
-# records what it actually started.
+# 043 A8/A42: sandbox_reap gains a pause kind, and start_autonomy records
+# what it actually started.
 # --------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_sandbox_reap_disabled_by_flag(monkeypatch):
-    """SANDBOX_REAP_ENABLED=false must stop the loop from starting even when
-    everything that would otherwise let it run (docker persistent + the CLI)
-    is present — `sandbox_reap` was the only always-on loop with no flag."""
-    monkeypatch.setenv("SANDBOX_REAP_ENABLED", "false")
-    monkeypatch.setenv("CODE_EXEC_DOCKER_PERSISTENT", "true")
-    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/docker")
-    _disable_other_loops(monkeypatch)
-    _install_reap_spy(monkeypatch)  # this test covers the ticker, not real Docker cleanup
-
-    handles = ar.start_autonomy(task_agent=object(), data_dir="data")
-    await asyncio.sleep(0.01)
-
-    names = [name for name, _task, _stop in handles._entries]
-    assert "sandbox_reap" not in names
-    await handles.stop()
-
 
 @pytest.mark.asyncio
 async def test_sandbox_reap_tick_skips_while_paused(monkeypatch):
@@ -395,7 +376,7 @@ async def test_start_autonomy_records_autonomy_started_event(monkeypatch):
     monkeypatch.setattr(ar, "_curator_enabled", lambda: False)
     monkeypatch.setattr(ar, "_surface_gc_enabled", lambda: False)
     monkeypatch.setattr(ar, "_quiet_release_enabled", lambda: False)
-    monkeypatch.setattr(ar, "_sandbox_reap_enabled", lambda: False)
+    monkeypatch.setattr(ar, "_build_sandbox_reaper_ticker", lambda ta: _FakeTicker())
 
     handles = ar.start_autonomy(task_agent=object(), data_dir="data")
     await asyncio.sleep(0.01)
@@ -403,7 +384,8 @@ async def test_start_autonomy_records_autonomy_started_event(monkeypatch):
     from core.event_log import get_event_log
     rows = get_event_log().query(kind="autonomy_started")  # newest-first
     assert rows, "no autonomy_started row recorded"
-    assert sorted(rows[0]["attrs"]["loops"]) == ["cron", "goals", "trading"]  # 086 W4
+    assert sorted(rows[0]["attrs"]["loops"]) == ["cron", "goals", "sandbox_reap",
+                                                 "trading"]  # 086 W4
     await handles.stop()
 
 
@@ -424,15 +406,11 @@ async def test_start_autonomy_starts_quiet_release_ticker_when_enabled(monkeypat
     assert ticker.stopped
 
 
-def test_quiet_release_enabled_follows_rail_and_prefs(monkeypatch):
-    # Gate = user-delivery rail ON (its default) AND prefs ON (its default).
+def test_quiet_release_enabled_follows_rail(monkeypatch):
+    # Gate = user-delivery rail ON (its default).
     monkeypatch.delenv("SEND_MESSAGE_USER_DELIVERY", raising=False)
-    monkeypatch.delenv("PREFS_ENABLED", raising=False)
     assert ar._quiet_release_enabled() is True
     monkeypatch.setenv("SEND_MESSAGE_USER_DELIVERY", "false")
-    assert ar._quiet_release_enabled() is False
-    monkeypatch.delenv("SEND_MESSAGE_USER_DELIVERY", raising=False)
-    monkeypatch.setenv("PREFS_ENABLED", "off")
     assert ar._quiet_release_enabled() is False
 
 

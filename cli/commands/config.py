@@ -573,17 +573,8 @@ def _echo_json(obj) -> None:
 
 
 def _unknown_key_error(key: str) -> "click.ClickException":
-    hint = _closest_match(key)
-    suffix = f" (did you mean {hint}?)" if hint else ""
-    return click.ClickException(f"unknown key: {key}{suffix}")
-
-
-def _is_changed(info) -> bool:
-    """True when the effective value comes from somewhere other than a default
-    (env var, env file, or a written preference)."""
-    src = str(info.source or "")
-    return not (src == "default" or src.startswith("default(")
-                or src.startswith("built-in"))
+    from core.config_service import unknown_key_message
+    return click.ClickException(unknown_key_message(key))
 
 
 @config.command("get")
@@ -637,7 +628,7 @@ def list_cmd(group_filter, changed, user_id, home_dir_opt, as_json):
             continue
         if group_filter and info.group != group_filter:
             continue
-        if changed and not _is_changed(info):
+        if changed and not config_service.is_changed(info):
             continue
         infos.append(info)
     if as_json:
@@ -674,12 +665,14 @@ def search_cmd(text, user_id, home_dir_opt, as_json):
     if as_json:
         _echo_json([_info_payload(i) for i in hits])
         return
+    unread = config_service.unread_line(getattr(hits, "unread", ()))
     if not hits:
         click.echo(f"no settings matching {query!r}")
-        return
     for info in hits:
         click.echo(f"{info.key} = {info.effective}   "
                    f"({info.source}, applies: {info.applies})")
+    if unread:
+        click.echo(unread)
 
 
 @config.command("explain")

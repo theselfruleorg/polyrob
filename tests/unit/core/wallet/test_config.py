@@ -52,14 +52,12 @@ def test_reads_env():
         "AGENT_WALLET_NETWORK": "mainnet",
         "AGENT_WALLET_MAX_PER_TX_USD": "250",
         "X402_CLIENT_ENABLED": "true",
-        "X402_CLIENT_FACILITATOR_URL": "https://facilitator.example",
     }
     cfg = load_wallet_config(env)
     assert cfg.enabled is True
     assert cfg.network == "mainnet"
     assert cfg.max_per_tx_usd == 250.0
     assert cfg.x402_client_enabled is True
-    assert cfg.x402_facilitator_url == "https://facilitator.example"
 
 
 # --- G-13: load_wallet_config() (-> PolicyGate) is now a real caller of the

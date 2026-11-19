@@ -171,6 +171,10 @@ def result_lines(rpc, chain: str, pos, st, held: Tuple[int, int],
     diff = path - hold
     pct = f" ({diff / hold * 100:+.1f}%)" if hold else ""
     sign = "-" if diff < 0 else "+"
+    # Each sum has its name: an agent read the first one as "value now" (prod 2026-11-18).
+    now = held[0] + f0 + _in0(held[1] + f1, s)
+    parts = "the position now + what was withdrawn" if f["out0"] or f["out1"] else "the position now"
+    parts += " + the fees owed" if fees is not None else ""
     lines = [
         f"  deposited: {amt(f['in0'], dec0)} currency0 + {amt(f['in1'], dec1)} currency1"
         + (f"; withdrawn: {amt(f['out0'], dec0)} + {amt(f['out1'], dec1)}"
@@ -178,8 +182,11 @@ def result_lines(rpc, chain: str, pos, st, held: Tuple[int, int],
         + f" ({f['changes']} change(s), each at the pool price of its block)",
         f"  currency0 leg: {amt(f['in0'] - f['out0'], dec0)} net deposited, "
         f"{amt(held[0], dec0)} in the position now",
+        f"  value of the position now, in currency0: {amt(now, dec0)}"
+        + (" (both legs + the fees owed)" if fees is not None else " (both legs)"),
         f"  result against holding the deposit, at the price now, in currency0: "
-        f"{amt(path, dec0)} against {amt(hold, dec0)} = {sign}{amt(abs(diff), dec0)}{pct}"
+        f"{amt(path, dec0)} ({parts}) against {amt(hold, dec0)} (the deposit held) "
+        f"= {sign}{amt(abs(diff), dec0)}{pct}"
         + (" — the fees owed are counted" if fees is not None else " — the fees owed are NOT counted")
         + "; fees collected earlier are not. Not final until a withdrawal.",
     ]

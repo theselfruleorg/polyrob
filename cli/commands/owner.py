@@ -816,20 +816,14 @@ def deny(surface, target, user):
 def allowlist(user, as_json):
     """List the outbound-send allowlist for a tenant."""
     tenant = _allowlist_tenant(user)
-    rows = _do_allowlist(_allowlist(_data_dir(write=False)), tenant)
+    store = _allowlist(_data_dir(write=False))
     if as_json:
-        click.echo(json.dumps(rows, indent=2, default=str))
+        click.echo(json.dumps(_do_allowlist(store, tenant), indent=2, default=str))
         return
-    if not rows:
-        from cli.ui.candy import empty
-        click.echo(empty("allowlist entries",
-                         f"tenant {tenant} may not be written to yet"))
-        return
-    for r in rows:
-        color = "green" if r["status"] == "active" else "red"
-        note = f"  ({r['note']})" if r["note"] else ""
-        click.echo(f"{click.style(r['status'].ljust(8), fg=color)} "
-                   f"{r['surface']}:{r['target']}{note}")
+    # The ONE render (the chat seats and the agent print the same text).
+    from core.surfaces.outbound_allowlist import allowlist_reply
+    click.echo(f"tenant {tenant}")
+    click.echo(allowlist_reply(store, tenant))
 
 
 # --- Money loop: invoice admin ----------------------------------------------

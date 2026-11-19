@@ -117,7 +117,7 @@ async def test_process_update_injects_transcript_as_text(monkeypatch):
     # Stub routing so we only assert the injected inbound text.
     import surfaces.telegram.inbound as inbound_mod
 
-    async def _fake_route(container, inbound, is_chitchat=None):
+    async def _fake_route(container, inbound):
         seen["text"] = inbound.text
         from core.surfaces.dispatcher import RouteDecision, RouteKind
         return RouteDecision(RouteKind.TASK_AGENT, "k")
@@ -144,7 +144,7 @@ async def test_process_update_no_transcriber_is_unchanged(monkeypatch):
     }
     import surfaces.telegram.inbound as inbound_mod
 
-    async def _fake_route(container, inbound, is_chitchat=None):
+    async def _fake_route(container, inbound):
         from core.surfaces.dispatcher import RouteDecision, RouteKind
         return RouteDecision(RouteKind.TASK_AGENT, "k")
     monkeypatch.setattr(inbound_mod, "route_inbound", _fake_route)

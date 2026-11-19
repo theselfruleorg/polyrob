@@ -13,7 +13,6 @@ import core.wallet.factory as _factory
 
 _WALLET_ENV = [
     "AGENT_WALLET_ENABLED",
-    "AGENT_WALLET_BACKEND",
     "AGENT_WALLET_MASTER_SEED",
     "AGENT_WALLET_NETWORK",
     "AGENT_WALLET_MAX_PER_TX_USD",
@@ -23,7 +22,6 @@ _WALLET_ENV = [
     # directory — reset it alongside the other wallet env vars.
     "WALLET_DAILY_CAP_USD",
     "X402_CLIENT_ENABLED",
-    "X402_CLIENT_FACILITATOR_URL",
 ]
 
 

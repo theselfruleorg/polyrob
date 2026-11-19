@@ -99,38 +99,42 @@ class AsyncDelegationRegistry:
         # lock on first use, so constructing an orchestrator costs zero sqlite I/O.
         self._counter_seeded = store is None or not session_id
 
-    # -- introspection (for a future delegation_status tool; out of v1 scope) --
+    # -- introspection and cancel (the `delegation_status` action reads these) --
     def active_count(self) -> int:
         return sum(1 for r in self._records.values() if r.status == "running")
 
     def list(self) -> List[DelegationRecord]:
         return list(self._records.values())
 
+    def cancel(self, delegation_id: str, reason: str) -> str:
+        """Stop one background delegation of this session. The ONE cancel: the owner
+        pause (``cancel_all``) and the agent's ``delegation_status`` call it.
+
+        Returns ``"cancelled"`` (it was running: the record goes to ``cancelled`` and
+        ``_run_and_deliver``'s CancelledError branch re-raises, so nothing is
+        delivered), ``"stopped"`` (it had finished and was still parking its result:
+        the result is not delivered, and the durable row is stamped so a restart does
+        not redeliver it), or ``""`` (no such id here, or nothing left to stop)."""
+        rec = self._records.get(delegation_id)
+        t = rec.task if rec is not None else None
+        if t is None or t.done():
+            return ""
+        t.cancel()
+        if rec.status == "running":
+            rec.status = "cancelled"
+            logger.warning("async delegation %s cancelled: %s", rec.delegation_id, reason)
+            # AG-09: the durable row moves now — not only from the coroutine's
+            # finally, which never runs for a task cancelled before its first step.
+            self._durable_cancel(rec.delegation_id)
+            return "cancelled"
+        self._stamp_not_redelivered(rec.delegation_id)
+        return "stopped"
+
     def cancel_all(self, reason: str) -> int:
-        """031 owner pause: cancel every running background delegation of this
-        session. The record goes to ``cancelled`` (``_run_and_deliver``'s
-        CancelledError branch re-raises, so nothing is delivered). Returns the
-        number cancelled."""
-        n = 0
-        for rec in self._records.values():
-            t = rec.task
-            if t is None or t.done():
-                continue
-            if rec.status == "running":
-                t.cancel()
-                rec.status = "cancelled"
-                n += 1
-                logger.warning("async delegation %s cancelled: %s", rec.delegation_id, reason)
-                # AG-09: the durable row moves now — not only from the
-                # coroutine's finally, which never runs for a task cancelled
-                # before its first step.
-                self._durable_cancel(rec.delegation_id)
-            else:
-                # Finished, still parking its result: the owner stopped it, so
-                # the boot sweep must not redeliver it either.
-                t.cancel()
-                self._stamp_not_redelivered(rec.delegation_id)
-        return n
+        """031 owner pause: :meth:`cancel` every background delegation of this session.
+        Returns the number that were still running."""
+        return sum(1 for did in list(self._records)
+                   if self.cancel(did, reason) == "cancelled")
 
     def _durable_cancel(self, delegation_id: str) -> None:
         """``running -> cancelled`` in the store (CAS). A miss means the row is

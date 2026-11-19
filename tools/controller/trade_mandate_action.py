@@ -58,7 +58,7 @@ def register_trade_mandate_action(controller) -> None:
             return ActionResult(error=(
                 f"trade_mandate_propose: trading mandate {live.id} is already "
                 f"{live.status.upper()} (one at a time). The owner changes or ends it with "
-                f"/trade pause|resume|stop; /trade status shows it. No card was made."),
+                f"/trade pause|resume|stop; defi_data_positions shows its state. No card was made."),
                 include_in_memory=True)
         fields = {"budget_usd": params.budget_usd, "chains": list(params.chains),
                   "preset": params.preset}

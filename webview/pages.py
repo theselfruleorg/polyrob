@@ -585,17 +585,12 @@ async def api_avatar_json():
 async def avatar_image():
     """The slot image with its stored content type (the name stays ``.png`` for
     every format), or 404 when no avatar is set."""
-    from core.avatar import CONTENT_TYPES, load_avatar
-    st = load_avatar(_avatar_data_dir(), resolve_instance_id())
-    if not st.is_set or st.path is None:
+    from core.avatar import image_response_parts
+    parts = image_response_parts(_avatar_data_dir(), resolve_instance_id())
+    if parts is None:
         return Response(status_code=404)
-    ext = st.path.suffix.lstrip(".")
-    headers = {"X-Content-Type-Options": "nosniff", "Cache-Control": "no-cache"}
-    if ext == "svg":
-        # An SVG can carry script; served same-origin it must not run any.
-        headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
-    return FileResponse(str(st.path), media_type=CONTENT_TYPES.get(ext, "application/octet-stream"),
-                        headers=headers)
+    path, media_type, headers = parts
+    return FileResponse(str(path), media_type=media_type, headers=headers)
 
 
 def _empty_ledger(user_id: str, days: int) -> dict:
@@ -922,7 +917,7 @@ async def api_config_explain(request: Request, key: str):
     try:
         info = config_service.explain(key, user_id=user_id, home_dir=_data_dir())
     except KeyError:
-        return JSONResponse({"error": f"unknown setting: {key}"}, status_code=404)
+        return JSONResponse({"error": config_service.unknown_key_message(key)}, status_code=404)
     return JSONResponse({
         "key": info.key, "namespace": info.namespace, "kind": info.kind,
         "value": str(info.effective), "source": info.source,

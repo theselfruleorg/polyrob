@@ -145,8 +145,6 @@ class ProductTelemetry:
 		# Feed writing is always enabled for webview functionality
 		self.feed_writing_enabled = True
 
-		self.debug_logging = os.getenv('BROWSER_USE_LOGGING_LEVEL', 'info').lower() == 'debug'
-
 		# Initialize logger with the global logger to avoid duplicates
 		try:
 			self.logger = logger
@@ -170,9 +168,8 @@ class ProductTelemetry:
 			)
 
 			# Silence posthog's logging
-			if not self.debug_logging:
-				posthog_logger = logging.getLogger('posthog')
-				posthog_logger.disabled = True
+			posthog_logger = logging.getLogger('posthog')
+			posthog_logger.disabled = True
 				
 		# Initialize sensitive data filter
 		self.sensitive_data = {}

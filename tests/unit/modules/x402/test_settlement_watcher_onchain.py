@@ -32,7 +32,6 @@ def _env(monkeypatch):
     # Isolate scan/match behavior from the jitter feature (covered separately
     # in test_onchain_settlement.py) — both same-amount tests below want the
     # exact, unnudged amount.
-    monkeypatch.setenv("X402_INVOICE_AMOUNT_JITTER", "false")
     for var in ("X402_SETTLE_ONCHAIN_DETECT", "X402_SETTLEMENT_SCAN_MAX_SPAN",
                 "X402_SETTLEMENT_CONFIRMATIONS"):
         monkeypatch.delenv(var, raising=False)

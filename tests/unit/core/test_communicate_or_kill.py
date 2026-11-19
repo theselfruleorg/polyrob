@@ -73,7 +73,7 @@ def _spawns(monkeypatch, proc):
 
 @pytest.mark.asyncio
 async def test_the_update_check_kills_a_stuck_child(monkeypatch):
-    from surfaces.telegram import lifecycle_ops
+    from core import lifecycle_ops
     proc = _StuckProc()
     _spawns(monkeypatch, proc)
     monkeypatch.setattr(lifecycle_ops, "CHECK_TIMEOUT_SEC", 0.01)

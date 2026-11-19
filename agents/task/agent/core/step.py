@@ -184,6 +184,10 @@ def _is_fatal_step_exc(error, billing_failover_enabled: bool) -> bool:
 	from core.error_classifier import credit_death_in_chain
 	if isinstance(error, (LLMAuthenticationError, LLMConfigError)):
 		return True
+	if isinstance(error, InsufficientCreditsError):
+		# This tenant's balance, not the provider: another provider costs the same
+		# credits, so there is nothing to fail over to.
+		return True
 	if credit_death_in_chain(error) is not None:
 		return not billing_failover_enabled
 	return False
@@ -578,8 +582,7 @@ class StepMixin:
 		should_recalibrate = False
 
 		# Check if we need to recalibrate after large actions
-		if (RobustParseConfig.FORCE_RECALIBRATE_AFTER_LARGE_ACTIONS and
-			self._last_result and any(
+		if (self._last_result and any(
 				result.extracted_content and len(result.extracted_content) > RobustParseConfig.LARGE_ACTION_THRESHOLD
 				for result in self._last_result
 			)):
@@ -948,6 +951,9 @@ class StepMixin:
 
 				# Create error result for user visibility
 				self._last_result = [ActionResult(
+					error=f"{str(e)[:400]} The session has been halted.",
+					include_in_memory=True
+				)] if isinstance(e, InsufficientCreditsError) else [ActionResult(
 					# Boilerplate must stay classification-neutral: classify_text reads
 					# this whole string and checks credit-death markers FIRST, so a
 					# literal "billing" here made every auth-caused fatal halt deliver

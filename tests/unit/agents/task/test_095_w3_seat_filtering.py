@@ -83,7 +83,6 @@ def test_status_sentence_follows_the_injector_predicates():
 
 def test_live_health_predicate_is_off_for_leaf_room_and_correspondent(monkeypatch):
     from agents.task.agent.core.live_health import live_health_injected
-    monkeypatch.setenv("LIVE_HEALTH_CONTEXT", "true")
     owner = types.SimpleNamespace(orchestrator=types.SimpleNamespace())
     leaf = types.SimpleNamespace(orchestrator=types.SimpleNamespace(), _is_sub_agent=True)
     room = types.SimpleNamespace(orchestrator=types.SimpleNamespace(_public_session=True))
@@ -91,8 +90,7 @@ def test_live_health_predicate_is_off_for_leaf_room_and_correspondent(monkeypatc
     assert not live_health_injected(leaf)
     assert not live_health_injected(room)
     assert not live_health_injected(corr)
-    from core.config_policy import AutonomyConfig
-    assert live_health_injected(owner) is bool(AutonomyConfig.live_health_context())
+    assert live_health_injected(owner) is True
 
 
 @pytest.mark.asyncio

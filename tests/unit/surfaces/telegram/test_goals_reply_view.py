@@ -27,7 +27,8 @@ def test_goals_reply_counts_every_row_and_lists_open_newest_first(tmp_path):
     text = _goals_reply("alice", str(tmp_path), board=board)
 
     assert "1202 goal(s)" in text
-    assert "done=1200" in text and "ready=2" in text
+    assert "OVER 1200" in text and "NEXT 2" in text      # one count line, the owner's buckets
+    assert "done=1200" not in text
     assert text.index(newer.id[:8]) < text.index(older.id[:8])
 
 

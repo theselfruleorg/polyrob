@@ -192,7 +192,6 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		'_last_summary_output_tokens',  # The last summary call's output, for that report
 		'last_compaction_summary',  # The audited summary, bounded, for the episode meta
 		'_history_budget_tokens', # Autonomous history budget (0 = off)
-		'_history_secret_scrub',  # HISTORY_SECRET_SCRUB, resolved once
 		'_hmem_token_memo',       # (key, tokens) for the last H-MEM string
 		'_persona_block',         # Chat persona forwarded to SystemPrompt
 		'_surface_profile',       # Bound chat surface capabilities
@@ -370,15 +369,6 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		self.max_error_length = max_error_length
 		self.max_actions_per_step = max_actions_per_step
 		self.sensitive_data = sensitive_data
-		# HISTORY_SECRET_SCRUB (default ON): the pattern backstop for UNregistered
-		# secrets lives inside _filter_sensitive_data, but every caller gated it
-		# behind `if self.sensitive_data:` — which is empty by default, so the
-		# default-ON backstop never ran and sk-/AKIA/Bearer/PEM leaking through a
-		# tool result persisted to message_history.json + compaction checkpoints in
-		# the clear. Cache the flag once so the write/ephemeral paths can invoke the
-		# filter even with no allowlist registered.
-		from core.env import bool_env as _bool_env
-		self._history_secret_scrub = _bool_env("HISTORY_SECRET_SCRUB", True)
 		self.session_id = session_id
 		self.add_task_message = add_task_message
 
@@ -744,11 +734,9 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		if "<untrusted_tool_result" in str(getattr(message, "content", "")):
 			self._untrusted_since_owner = True
 
-		# filter out sensitive data from the message. Run when an allowlist is
-		# registered OR the HISTORY_SECRET_SCRUB backstop is on (default) — the
-		# backstop must scrub unregistered secrets even with an empty allowlist.
-		if self.sensitive_data or self._history_secret_scrub:
-			message = self._filter_sensitive_data(message)
+		# filter out sensitive data from the message. It always runs: the pattern
+		# backstop scrubs unregistered secrets even with an empty allowlist.
+		message = self._filter_sensitive_data(message)
 
 		token_count = self._count_message_tokens(message)
 		from datetime import datetime

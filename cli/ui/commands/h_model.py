@@ -79,6 +79,10 @@ async def handle(ctx, *, pick_fn) -> None:
     if cmd.action == "error":
         ctx.emit(cmd.error)
         return
+    if cmd.action == "choice" or cmd.tier:   # 121: an owner setting — the chat seats' own path
+        from agents.task.model_settings import settings_command
+        ctx.emit(await settings_command(cmd, user_id, "repl"))
+        return
     if cmd.action == "aliases":
         table, err = model_pins.aliases_read(user_id)
         ctx.emit("\n".join(ms.alias_lines(table, read_error=err)))
@@ -126,9 +130,6 @@ async def handle(ctx, *, pick_fn) -> None:
     plan, err = await plan_switch(cmd, user_id=user_id, current=_current(ctx))
     if plan is None:
         ctx.emit(err)
-        return
-    if plan.quote:
-        ctx.emit(plan.quote)
         return
     if plan.default and agent is None:
         ctx.emit("No live session." + _save_default(

@@ -28,7 +28,7 @@ def _env(monkeypatch):
     monkeypatch.setenv("X402_PAYMENT_RECIPIENT", "0xTREASURY")
     monkeypatch.setenv("X402_DEFAULT_CHAIN", "base")
     for var in ("X402_INVOICE_MAX_USD", "X402_INVOICE_DAILY_MAX",
-                "X402_SETTLE_ONCHAIN_DETECT", "X402_INVOICE_AMOUNT_JITTER"):
+                "X402_SETTLE_ONCHAIN_DETECT"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.delenv("PAYMENT_APPROVAL_MODE", raising=False)
     from agents.task import constants as _c
@@ -184,7 +184,6 @@ async def test_m5_index_retries_jitter_on_cross_process_collision(tmp_path, monk
     INSERT raises IntegrityError and create_payment_request retries the next
     jitter candidate (simulated by neutering the in-process dedupe)."""
     monkeypatch.setenv("X402_SETTLE_ONCHAIN_DETECT", "true")
-    monkeypatch.setenv("X402_INVOICE_AMOUNT_JITTER", "true")
     db = await _setup_db(tmp_path)
     try:
         first = await invoicing.create_payment_request(

@@ -27,11 +27,20 @@ def record_model_route(*, kind: str, tier: str, model: Optional[str], why: Optio
 
 def record_stored_tier(*, kind: str, payload, model: Optional[str], absent: bool,
                        user_id: str = "", ref: str = "") -> None:
-    """A goal/job run with a stored ``payload.tier``: record the model it runs on. *absent* =
+    """A goal/job run: record the model it runs on (121: every run, tier or not). *absent* =
     the tier no longer resolves (the operator changed the env) — the run uses the default
     model, and the record says so (never a silent fallback)."""
-    tier = str((payload or {}).get("tier") or "")
+    # A stored model wins at dispatch (core.runtime_config.model_for), so it is the record.
+    tier = "" if (payload or {}).get("model") else str((payload or {}).get("tier") or "")
     if not tier:
+        # 121: EVERY run records the model it got. A model the agent or the owner set on
+        # the job is named with who set it and why; else it is the default route.
+        named = bool((payload or {}).get("model"))
+        by = (payload or {}).get("model_by") or ("owner" if named else "")
+        why = (payload or {}).get("model_why") or ""
+        record_model_route(kind=kind, tier="model" if named else "default", model=model,
+                           why=(f"set by the {by}" + (f": {why}" if why else "")) if named else "",
+                           source=f"{kind}_run", user_id=user_id)
         return
     if absent:
         import logging

@@ -15,14 +15,18 @@ went (an update that fails, or whose new code does not start, is rolled back).
 * swap code under a live process — the update is applied by the NEXT start,
   before it builds anything (``cli/commands/_lifecycle_boot.py``);
 * reach the CLI package — the update check runs ``polyrob update --check
-  --json`` in a subprocess (the entry-point tier may not import itself in a
-  cycle; ``tests/test_layering_ratchet.py``).
+  --json`` in a subprocess (``core`` may not import ``cli``;
+  ``tests/test_layering_ratchet.py``).
 
 ``/update now`` (093 D6) is a different act: it starts nothing here. It records
 that the owner wants the operator's waiting deploy (``scripts/deploy_when_idle.sh``)
 to skip its owner-quiet window once (:func:`update_now_reply`).
 
-The REPL twin (``cli/ui/commands/h_lifecycle.py``) calls the same functions.
+The procedure lives here, below the seats (120 W7): the Telegram verbs
+(``surfaces/telegram/admin_verbs.py``), the REPL twin
+(``cli/ui/commands/h_lifecycle.py``) and the agent's owner-approved
+``self_env_request_update`` (:func:`update_target`, :func:`running_service`)
+call the same functions.
 """
 from __future__ import annotations
 
@@ -63,7 +67,7 @@ def origin_of(result: Any, user_id: str) -> Dict[str, str]:
     return out
 
 
-def _running_service(data_dir: str) -> Tuple[Optional[dict], str]:
+def running_service(data_dir: str) -> Tuple[Optional[dict], str]:
     """``(boot record, "")`` of a live supervised surface process, or
     ``(None, why)``. An unreadable record is said, never read as "none"."""
     try:
@@ -103,7 +107,7 @@ def restart_reply(user_id: str, data_dir: str, args: List[str],
     if bad:
         return RESTART_USAGE
     now = "now" in rest
-    boot, why = _running_service(data_dir)
+    boot, why = running_service(data_dir)
     if boot is None:
         return why
     label = lc.version_label(boot.get("version"), boot.get("sha"))
@@ -169,6 +173,35 @@ def update_now_reply(data_dir: str, go: bool, origin: Dict[str, str]) -> str:
             f"It still waits for running work.")
 
 
+async def update_target(data_dir: str, channel: str = "stable", *,
+                        check=None) -> Tuple[Optional[dict], str]:
+    """``({"current", "latest", "method"}, "")`` when this running service can
+    apply an update on ``channel``, else ``(None, why)``: no supervised service,
+    the check failed, already on the latest version, or an install that does not
+    update itself. The owner's ``/update`` and the agent's
+    ``self_env_request_update`` both decide here, so they cannot disagree."""
+    if channel not in _UPDATE_CHANNELS:
+        return None, f"unknown update channel {channel!r} (one of: {', '.join(_UPDATE_CHANNELS)})"
+    boot, why = running_service(data_dir)
+    if boot is None:
+        return None, why.replace("restart myself", "update myself")
+    info, err = await (check or _update_check)(channel)
+    if info is None:
+        return None, f"I could not check for an update: {err}."
+    current, latest = info.get("current") or "?", info.get("latest")
+    shown = str(latest or "").lstrip("v")  # a release tag reads "v1.4.0"
+    method = str(info.get("method") or "unknown")
+    if info.get("error") or not latest:
+        return None, (f"I could not check for an update: "
+                      f"{info.get('error') or 'no release found'}.")
+    if not info.get("update_available"):
+        return None, f"You are on the latest version ({current}, {channel} channel)."
+    if method not in _SELF_UPDATING:
+        return None, (f"Version {shown} is out (I run {current}), but this install ({method}) "
+                      "does not update itself — whoever installed me updates it.")
+    return {"current": current, "latest": str(latest), "method": method}, ""
+
+
 async def update_reply(user_id: str, data_dir: str, args: List[str],
                        origin: Dict[str, str], *, check=None) -> str:
     rest, go, bad = _parse(args, _UPDATE_CHANNELS + ("now",))
@@ -177,22 +210,11 @@ async def update_reply(user_id: str, data_dir: str, args: List[str],
     if rest == ["now"]:
         return update_now_reply(data_dir, go, origin)
     channel = rest[0] if rest else "stable"
-    boot, why = _running_service(data_dir)
-    if boot is None:
-        return why.replace("restart myself", "update myself")
-    info, err = await (check or _update_check)(channel)
+    info, why = await update_target(data_dir, channel, check=check)
     if info is None:
-        return f"I could not check for an update: {err}."
-    current, latest = info.get("current") or "?", info.get("latest")
-    shown = str(latest or "").lstrip("v")  # a release tag reads "v1.4.0"
-    method = str(info.get("method") or "unknown")
-    if info.get("error") or not latest:
-        return f"I could not check for an update: {info.get('error') or 'no release found'}."
-    if not info.get("update_available"):
-        return f"You are on the latest version ({current}, {channel} channel)."
-    if method not in _SELF_UPDATING:
-        return (f"Version {shown} is out (I run {current}), but this install ({method}) "
-                "does not update itself — whoever installed me updates it.")
+        return why
+    current, latest, method = info["current"], info["latest"], info["method"]
+    shown = str(latest).lstrip("v")
     line = "/update go" if channel == "stable" else f"/update {channel} go"
     if not go:
         return (f"Update {current} → {shown} ({method}). I finish my current work, restart, "
@@ -209,4 +231,5 @@ async def update_reply(user_id: str, data_dir: str, args: List[str],
             "I tell you here how it went.")
 
 
-__all__ = ["restart_reply", "update_reply", "update_now_reply", "origin_of", "RESTART_USAGE", "UPDATE_USAGE"]
+__all__ = ["restart_reply", "update_reply", "update_now_reply", "update_target",
+           "running_service", "origin_of", "RESTART_USAGE", "UPDATE_USAGE"]

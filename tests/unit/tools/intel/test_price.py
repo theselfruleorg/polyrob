@@ -256,3 +256,56 @@ def test_with_no_primary_price_the_value_is_the_median_and_low():
     q = P.aggregate([SourceAnswer("dexscreener", usd=None, confidence=UNKNOWN, pool_count=0),
                      SourceAnswer("geckoterminal", usd=2.0), SourceAnswer("jupiter", usd=2.2)])
     assert q.usd == pytest.approx(2.1) and q.confidence == LOW
+
+
+# -- one decision reads each fresh price once (2026-11-18) ---------------------
+
+def _counting_source():
+    calls = []
+
+    def _fn(chain, address):
+        calls.append(address)
+        return _ds(2.0)
+    P.register_source("dexscreener", _fn, covers=lambda c: True, primary=True)
+    return calls
+
+
+def test_spend_price_stays_uncached_outside_a_decision():
+    calls = _counting_source()
+    assert P.spend_price("base", TOKEN) == 2.0 and P.spend_price("base", TOKEN) == 2.0
+    assert len(calls) == 2
+
+
+def test_one_decision_reads_each_price_once_and_forgets_it_after():
+    calls = _counting_source()
+    other = "0x" + "cd" * 20
+    with P.one_decision():
+        for _ in range(3):                      # conversion, quote, send
+            assert P.spend_price("base", TOKEN) == 2.0
+        assert P.spend_price("base", other) == 2.0
+        assert calls == [TOKEN, other]
+    assert P.spend_price("base", TOKEN) == 2.0
+    assert len(calls) == 3
+
+
+def test_a_decision_never_gives_back_a_reading_older_than_its_window():
+    calls = _counting_source()
+    now = [100.0]
+    with P.one_decision():
+        P.quote("base", TOKEN, use_cache=False, clock=lambda: now[0])
+        now[0] += P.DECISION_WINDOW_S + 0.1
+        P.quote("base", TOKEN, use_cache=False, clock=lambda: now[0])
+    assert len(calls) == 2 and P.DECISION_WINDOW_S < 20.0
+
+
+def test_a_decision_reaches_a_worker_thread():
+    """The guard runs under ``asyncio.to_thread``: the window must follow it."""
+    import asyncio
+    calls = _counting_source()
+
+    async def _run():
+        with P.one_decision():
+            await asyncio.to_thread(P.spend_price, "base", TOKEN)
+            await asyncio.to_thread(P.spend_price, "base", TOKEN)
+    asyncio.run(_run())
+    assert len(calls) == 1

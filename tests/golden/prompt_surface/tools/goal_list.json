@@ -1,10 +1,19 @@
 {
   "function": {
-    "description": "List your durable goals, newest first — LIVE ones by default (pass status='done'/'cancelled' for history).",
+    "description": "List your durable goals, newest first — LIVE ones by default (pass status='done'/'cancelled' for history); kind='ask' lists your owner asks.",
     "name": "goal_list",
     "parameters": {
       "additionalProperties": false,
       "properties": {
+        "kind": {
+          "default": "goal",
+          "description": "'goal' (default) lists goals; 'ask' lists your owner asks: the question, the goals it holds, and the answer once decided.",
+          "enum": [
+            "goal",
+            "ask"
+          ],
+          "type": "string"
+        },
         "limit": {
           "default": 30,
           "description": "Newest N rows to show (default 30).",
@@ -14,7 +23,7 @@
         },
         "status": {
           "default": null,
-          "description": "Filter: triage/waiting/ready/running/blocked/done/cancelled. Omitted = LIVE goals only (triage/waiting/ready/running/blocked); pass 'done' or 'cancelled' to see history.",
+          "description": "Filter: triage/waiting/ready/running/blocked/paused/done/cancelled. Omitted = LIVE goals only (triage/waiting/ready/running/blocked/paused); pass 'done' or 'cancelled' to see history. For kind='ask': open (default)/fulfilled/rejected/obsolete.",
           "nullable": true,
           "type": "string"
         }

@@ -28,11 +28,11 @@
       "tokens": 4448
     },
     "tools": {
-      "chars": 14769,
+      "chars": 14872,
       "count": 24,
-      "tokens": 3692
+      "tokens": 3718
     },
-    "total_tokens": 8140
+    "total_tokens": 8166
   },
   "cron": {
     "layers": {
@@ -78,11 +78,11 @@
       "tokens": 7488
     },
     "tools": {
-      "chars": 98041,
-      "count": 104,
-      "tokens": 24510
+      "chars": 105311,
+      "count": 109,
+      "tokens": 26327
     },
-    "total_tokens": 31998
+    "total_tokens": 33816
   },
   "goal": {
     "layers": {
@@ -128,11 +128,11 @@
       "tokens": 7484
     },
     "tools": {
-      "chars": 98041,
-      "count": 104,
-      "tokens": 24510
+      "chars": 105311,
+      "count": 109,
+      "tokens": 26327
     },
-    "total_tokens": 31994
+    "total_tokens": 33812
   },
   "leaf": {
     "layers": {
@@ -174,11 +174,11 @@
       "tokens": 4651
     },
     "tools": {
-      "chars": 37529,
-      "count": 41,
-      "tokens": 9382
+      "chars": 41943,
+      "count": 44,
+      "tokens": 10485
     },
-    "total_tokens": 14033
+    "total_tokens": 15136
   },
   "owner_repl": {
     "layers": {
@@ -224,11 +224,11 @@
       "tokens": 7614
     },
     "tools": {
-      "chars": 76619,
-      "count": 93,
-      "tokens": 19154
+      "chars": 80707,
+      "count": 95,
+      "tokens": 20176
     },
-    "total_tokens": 26769
+    "total_tokens": 27791
   },
   "owner_telegram_dm": {
     "layers": {
@@ -274,17 +274,17 @@
       "tokens": 7798
     },
     "tools": {
-      "chars": 73928,
-      "count": 60,
-      "tokens": 18482
+      "chars": 81283,
+      "count": 65,
+      "tokens": 20320
     },
-    "total_tokens": 26280
+    "total_tokens": 28119
   },
   "prod_owner_telegram_dm": {
     "layers": {
       "environment": {
-        "chars": 1479,
-        "tokens": 369
+        "chars": 1618,
+        "tokens": 404
       },
       "initial_task": {
         "chars": 107,
@@ -320,15 +320,15 @@
       }
     },
     "system": {
-      "chars": 37053,
-      "tokens": 9263
+      "chars": 37192,
+      "tokens": 9298
     },
     "tools": {
-      "chars": 130720,
-      "count": 86,
-      "tokens": 32680
+      "chars": 138141,
+      "count": 91,
+      "tokens": 34535
     },
-    "total_tokens": 41943
+    "total_tokens": 43833
   },
   "room": {
     "layers": {
@@ -400,10 +400,10 @@
       "tokens": 7957
     },
     "tools": {
-      "chars": 35588,
-      "count": 37,
-      "tokens": 8897
+      "chars": 40056,
+      "count": 40,
+      "tokens": 10014
     },
-    "total_tokens": 16854
+    "total_tokens": 17971
   }
 }

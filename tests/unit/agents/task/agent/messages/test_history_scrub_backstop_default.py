@@ -1,4 +1,4 @@
-"""Regression: HISTORY_SECRET_SCRUB backstop must run with the DEFAULT (empty)
+"""Regression: the history secret-scrub backstop must run with the DEFAULT (empty)
 allowlist.
 
 Previously every caller of _filter_sensitive_data was gated behind
@@ -44,18 +44,7 @@ def _all_text(mm):
 def test_backstop_scrubs_tool_result_with_empty_allowlist():
     mm = _mm()
     assert not mm.sensitive_data  # default: empty allowlist
-    assert mm._history_secret_scrub is True  # default ON
     mm.add_tool_response("call-1", f"here is the file contents:\n{SECRET}\n")
     text = _all_text(mm)
     assert "sk-abc123DEF456ghi789JKLmno" not in text
     assert "<secret>redacted</secret>" in text
-
-
-def test_backstop_off_leaves_content_verbatim(monkeypatch):
-    monkeypatch.setenv("HISTORY_SECRET_SCRUB", "off")
-    mm = _mm()
-    assert mm._history_secret_scrub is False
-    mm.add_tool_response("call-1", f"here is the file contents:\n{SECRET}\n")
-    text = _all_text(mm)
-    # With the backstop disabled and no allowlist, content is stored verbatim.
-    assert "sk-abc123DEF456ghi789JKLmno" in text

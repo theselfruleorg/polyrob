@@ -136,10 +136,9 @@ def render_board(board: Any, *, user_id: Optional[str] = None) -> str:
         return "\n".join([NO_GOALS_YET] + off)
 
     from core.goal_legibility import bucket_line, origin_tag
-    lines = [f"{total} goal(s): " +
-             ", ".join(f"{s}={n}" for s, n in sorted(counts.items()))]
-    # 034 §3.2: the owner's four facts over the seven machine statuses.
-    lines.append(bucket_line(counts))
+    # 034 §3.2: the owner's four facts. The seven machine statuses are on each
+    # row below (`[running]`), so their counts are not a second line.
+    lines = [f"{total} goal(s): {bucket_line(counts)}"]
 
     try:
         rows = board.list_recent(user_id=user_id, statuses=_LEAD_ORDER,

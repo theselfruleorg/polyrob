@@ -153,3 +153,29 @@ def test_the_claim_refusal_is_bounded():
     assert agent.step(_Action("send_message", text=text)) is not None
     assert agent.step(_Action("send_message", text=text)) is not None
     assert agent.step(_Action("send_message", text=text)) is None
+
+
+def test_a_tool_hunt_with_new_words_is_warned_refused_and_ended():
+    """Prod 2026-11-17: each query and each made-up tool name was a new target, so
+    the guard never counted the hunt."""
+    agent = _Agent("tool_search", "load_tool", "tool_describe")
+    names = ("tool_search", "load_tool", "tool_describe")
+    for i in range(STALE_BLOCK_AT):
+        key = {"tool_search": "query", "load_tool": "tool_id", "tool_describe": "tool_id"}[names[i % 3]]
+        assert agent.step(_Action(names[i % 3], **{key: f"guess {i}"})) is None
+    assert len(agent.message_manager.added) == 1
+    assert "search for a tool" in str(agent.message_manager.added[0].content)
+    refused = agent.step(_Action("tool_search", query="one more order of the words"))
+    assert refused and refused[0].error.startswith("STEP NOT RUN")
+    ended = agent.step(_Action("load_tool", tool_id="another_guess"))
+    assert ended and ended[0].error.startswith("RUN ENDED")
+
+
+def test_a_lookup_then_the_found_tool_is_progress():
+    agent = _Agent("tool_search", "load_tool", "filesystem_read_file")
+    for i in range(STALE_WARN_AT - 1):
+        agent.step(_Action("tool_search", query=f"q{i}"))
+    agent.step(_Action("load_tool", tool_id="filesystem"),
+               _Action("filesystem_read_file", path="a.txt"))
+    assert agent._stale_steps == 0
+    assert not agent.message_manager.added

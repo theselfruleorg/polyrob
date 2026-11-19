@@ -47,6 +47,18 @@ logger = logging.getLogger("core.cron_lanes")
 PAUSE_SCOPE_BY = "pause_scope"
 #: The ``via`` an agent cancel records when the turn is a genuine owner turn.
 OWNER_TURN_VIA = "owner_turn"
+#: The agent's own pause, with no owner word behind it.
+AGENT_VIA = "agent"
+
+
+def weaker_pause_vias(via: str) -> tuple:
+    """The pause-note hands that a pause by *via* takes over: an owner seat takes
+    the agent's two; the agent on an owner turn takes its own; the agent, none."""
+    if via == AGENT_VIA:
+        return ()
+    if via == OWNER_TURN_VIA:
+        return (AGENT_VIA,)
+    return (AGENT_VIA, OWNER_TURN_VIA)
 
 
 class LaneStopped(ValueError):
@@ -315,7 +327,7 @@ def lane_line(store, *, user_id: str, payload: Optional[Dict[str, Any]]) -> str:
 
 
 __all__ = [
-    "LaneStopped", "OWNER_TURN_VIA", "PAUSE_SCOPE_BY", "UNREADABLE", "UnknownPinnedSkill",
+    "AGENT_VIA", "LaneStopped", "OWNER_TURN_VIA", "PAUSE_SCOPE_BY", "UNREADABLE", "UnknownPinnedSkill", "weaker_pause_vias",
     "MANDATE_LANE_PREFIX", "allow_lane", "check_pinned_skills", "gated_lanes", "job_lane",
     "lane_gate", "lane_line", "mandate_lane",
     "lift_after_owner_create", "missing_pinned_skills", "missing_skills_notice",

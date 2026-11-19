@@ -49,6 +49,11 @@ does not do it in the chat turn. It creates a goal on the `heavy` model tier
 (`HEAVY_MODEL`), tells you the goal id and the model in one line, and the full result comes
 back to the same chat when the goal is done.
 
+The agent can also select the model of a goal or a scheduled job, and it gives its reason.
+The agent sees the price of each model and names it in the result; a model with no known
+price runs with a warning. A model that you set yourself (`polyrob cron edit --model`,
+`polyrob goals edit --model`) stays: the agent cannot change it.
+
 The same board from the terminal:
 
 ```bash

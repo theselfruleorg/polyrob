@@ -37,7 +37,7 @@ def _svm_env(monkeypatch):
     monkeypatch.setenv("X402_PAYMENT_RECIPIENT", "0xEVMTREASURY")
     monkeypatch.delenv("X402_DEFAULT_CHAIN", raising=False)
     for var in ("X402_INVOICE_MAX_USD", "X402_INVOICE_DAILY_MAX",
-                "X402_SETTLE_ONCHAIN_DETECT", "X402_INVOICE_AMOUNT_JITTER"):
+                "X402_SETTLE_ONCHAIN_DETECT"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(invoicing, "_svm_treasury", lambda: SOLANA_TREASURY)
     # DEFI-16: a devnet wallet's Solana invoice is a TEST invoice and is
@@ -89,7 +89,6 @@ async def test_svm_amounts_are_never_jittered(tmp_path, monkeypatch):
     must leave both svm amounts untouched: svm settlement matches by reference,
     never by amount."""
     monkeypatch.setenv("X402_SETTLE_ONCHAIN_DETECT", "true")
-    monkeypatch.setenv("X402_INVOICE_AMOUNT_JITTER", "true")
     db = await _setup_db(tmp_path)
     try:
         first = await invoicing.create_payment_request(

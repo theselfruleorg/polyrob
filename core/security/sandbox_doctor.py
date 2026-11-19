@@ -1,4 +1,6 @@
-"""``polyrob doctor`` lines for the Docker sandbox: can the agent reach the
+"""The Docker sandbox lines of the health slot (``core.health_slot``; moved from
+the CLI seat by 120 W8): ``polyrob doctor`` and ``agent_status(view="health")``
+print them. Can the agent reach the
 Docker socket, and, under wallet custody with the seed in a readable env file,
 which setup steps are still missing (``core.security.sandbox_setup``).
 
@@ -8,7 +10,8 @@ holds the new group, while the user manager (``user@<uid>.service``) and every
 unit it runs keep the groups of their own older login. On Linux the checker
 therefore also reads the user manager's ``Groups:`` from ``/proc``.
 
-Registered in ``cli.commands.doctor_host._checkers``. Never raises.
+Registered in ``cli.commands.doctor_host._checkers``; read-only (a stat of the
+socket, ``/proc``); never raises.
 """
 from __future__ import annotations
 

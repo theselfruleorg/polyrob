@@ -113,7 +113,7 @@ def trading_view(user_id: str, *, now: Optional[float] = None, data_dir: Optiona
                  price_fn: Optional[PriceFn] = None, mandate_path: Optional[str] = None,
                  book_path: Optional[str] = None, cron_db: Optional[str] = None,
                  memory_db: Optional[str] = None) -> Dict[str, Any]:
-    """``{lines, present, unknown: [what could not be read], mandate, ...}``.
+    """``{lines, present, unknown: [what could not be read], mandate, halted}``.
     ``present`` is False when there is no mandate and no open position (and
     nothing was unreadable). Never raises."""
     from core import runtime_paths as rp
@@ -145,7 +145,7 @@ def trading_view(user_id: str, *, now: Optional[float] = None, data_dir: Optiona
                      f"({type(exc).__name__}); not the same as none")
     if m is None and not book and not unknown:
         return {"lines": ["trading: no mandate and no open position"], "present": False,
-                "unknown": [], "mandate": None}
+                "unknown": [], "mandate": None, "halted": False}
 
     mine: Optional[List[dict]] = None
     if m is not None:
@@ -175,8 +175,10 @@ def trading_view(user_id: str, *, now: Optional[float] = None, data_dir: Optiona
     lines.append(_realized_line(user_id, m, book_path, realized_for, unknown))
     if m is not None:
         lines.append(_cost_line(user_id, m, memory_db, unknown))
+    from core.trading_mandate import HALTED
     return {"lines": lines, "present": True, "unknown": unknown,
-            "mandate": None if m is None else m.id}
+            "mandate": None if m is None else m.id,
+            "halted": m is not None and m.status == HALTED}
 
 
 def _mandate_lines(m, rows: Optional[List[dict]], ts: float) -> List[str]:

@@ -142,6 +142,8 @@ class DiscordGatewayClient:
         self._token = token
         self._get_gateway_url = get_gateway_url
         self.bot_user_id: Optional[str] = None
+        #: The bot's own handle from READY (120 W7: the identity status names it).
+        self.bot_username: Optional[str] = None
         self._on_interaction = None   # order 0016: the button-press handler
         self._stopped = asyncio.Event()
         #: OS3: in-flight MESSAGE_CREATE turns, held so the loop cannot GC them.
@@ -257,7 +259,9 @@ class DiscordGatewayClient:
                     event_type = payload.get("t")
                     d = payload.get("d") or {}
                     if event_type == "READY":
-                        self.bot_user_id = str((d.get("user") or {}).get("id") or "")
+                        me = d.get("user") or {}
+                        self.bot_user_id = str(me.get("id") or "")
+                        self.bot_username = str(me.get("username") or "") or None
                         ready = True
                         logger.info("discord gateway READY as %s", self.bot_user_id)
                     elif event_type == "INTERACTION_CREATE" and self._on_interaction:

@@ -192,7 +192,7 @@ def _contact_review(c, match: dict) -> str:
     surface, _, address = str(match.get("id") or "").partition(":")
     first = None
     try:
-        from surfaces.telegram.contacts_ops import _store
+        from core.surfaces.contacts_view import open_conversations as _store
         store = _store(getattr(c, "container", None), str(c.data_dir))
         row = (store.first_outbound(str(c.user_id), surface, address)
                if store is not None else None)
@@ -464,12 +464,6 @@ async def pair_verb(c) -> str:
 
 
 async def allowlist_verb(c) -> str:
-    """`/allowlist` — every entry with its state."""
-    rows = _allowlist(c).list(c.user_id)
-    if not rows:
-        return "No allowlist entries."
-    lines = [f"{len(rows)} allowlist entr{'y' if len(rows) == 1 else 'ies'}:"]
-    for r in rows:
-        note = f" ({r['note']})" if r["note"] else ""
-        lines.append(f"• {r['status']} {r['surface']}:{r['target']}{note}")
-    return "\n".join(lines)
+    """`/allowlist` — every entry with its state (``core.surfaces.outbound_allowlist``)."""
+    from core.surfaces.outbound_allowlist import allowlist_reply
+    return allowlist_reply(_allowlist(c), c.user_id)

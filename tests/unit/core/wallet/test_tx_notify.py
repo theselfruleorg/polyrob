@@ -43,8 +43,8 @@ def test_a_broadcast_notice_carries_what_left_and_how_to_follow_it():
     assert "0.93 SOL ($94.87) → ≥0.03640 ETH" in text
     assert "tx 5xQkab…f9ab" in text
     assert "ref 0x7c11…6677" in text
-    assert "cap: $94.87 of $250.00 daily" in text
-    assert "lane owner-approved" in text
+    assert "today: $94.87 of $250.00 used" in text
+    assert "lane" not in text          # an audit word: in the event, not in the owner's line
 
 
 def test_an_unknown_usd_renders_unknown_never_zero():
@@ -313,7 +313,7 @@ def test_a_settlement_inside_the_hold_collapses_the_sent_notice(monkeypatch):
     assert text.startswith("✅ CONFIRMED")
     # nothing lost: the SENT facts ride on the one line that goes out
     assert "1 X ($1.60)" in text
-    assert "cap: $2.00 of $10.00 daily" in text and "lane autonomous" in text
+    assert "today: $2.00 of $10.00 used" in text and "lane" not in text
     assert "measured +0.001 ETH" in text
 
 
@@ -379,3 +379,48 @@ def test_hold_zero_is_byte_identical_to_the_two_notice_rail(monkeypatch):
         await asyncio.sleep(0.05)
     asyncio.run(_drive())
     assert [t.split(" ")[1] for t in sent] == ["SENT", "CONFIRMED"]
+
+
+# -- 2026-11-18: one send, one report ------------------------------------------
+
+def test_the_seat_that_ran_the_verb_is_its_one_reporter(monkeypatch):
+    """A card Confirm answered with the report AND a notice of the same hash."""
+    from core.security.turn_facts import owner_seat_context
+    sent = []
+
+    async def _deliver(container, user_id, text, **kw):
+        sent.append(text)
+        return "delivered"
+
+    monkeypatch.setattr("core.surfaces.user_delivery.deliver_user_message", _deliver)
+    seat = tn.seat_reports(owner_seat_context("owner", seat="telegram"))
+    assert seat is True
+    assert tn.seat_reports(SimpleNamespace(metadata={"turn_kind": "goal"})) is False
+    assert tn.seat_reports(None) is False
+    n = tn.TxNotice(verb="transfer", route="base", tx_ref="0xabc", usd=5.0)
+    from dataclasses import replace
+    assert _run(tn.notify(None, "owner", n, settled=False, seat_reports=seat)) == "seat"
+    for state in (tn.STATE_CONFIRMED, tn.STATE_REVERTED):
+        assert _run(tn.notify(None, "owner", replace(n, state=state), settled=True,
+                              seat_reports=seat)) == "seat"
+    assert sent == []
+    # An interrupt's IN FLIGHT may be the only word the owner gets: it stays.
+    _run(tn.notify(None, "owner", replace(n, state=tn.STATE_IN_FLIGHT), settled=True,
+                   seat_reports=seat))
+    # And the agent's own send is always told.
+    _run(tn.notify(None, "owner", replace(n, state=tn.STATE_CONFIRMED), settled=True))
+    assert len(sent) == 2 and sent[0].startswith("⏳ IN FLIGHT")
+
+
+def test_the_link_holds_the_hash_and_a_block_reads_as_a_block():
+    tx = "0x" + "ab" * 32
+    text = tn.render_settled(tn.TxNotice(
+        verb="transfer", route="base", chain="base", tx_ref=tx,
+        state=tn.STATE_CONFIRMED, detail="block 23456789"))
+    lines = text.splitlines()
+    assert "block 23456789" in lines and "detail (data)" not in text
+    assert sum(tx in ln for ln in lines) == 1 and not any(ln.startswith("tx ") for ln in lines)
+    # No explorer for the chain: the short hash is the identifier.
+    bare = tn.render_settled(tn.TxNotice(verb="transfer", route="x", tx_ref=tx,
+                                         state=tn.STATE_CONFIRMED))
+    assert "tx 0xabab…abab" in bare

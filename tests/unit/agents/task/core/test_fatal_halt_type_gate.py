@@ -47,12 +47,34 @@ def test_provider_exceptions_still_halt(failover):
 def test_credit_death_still_routes_by_the_failover_flag():
     """Billing halts only when failover is off; with it on, it must reach
     _handle_step_error so a still-funded provider can be tried."""
-    err = InsufficientCreditsError(
-        "u1", required=100, available=0,
-        message="insufficient_quota: billing hard limit reached",
-    )
+    from core.exceptions import LLMPermanentError
+    err = LLMPermanentError("insufficient_quota: billing hard limit reached")
     assert _is_fatal_step_exc(err, billing_failover_enabled=False) is True
     assert _is_fatal_step_exc(err, billing_failover_enabled=True) is False
+
+
+@pytest.mark.parametrize("failover", [True, False])
+def test_an_account_credit_refusal_halts_and_never_fails_over(failover):
+    """088 R2: one tenant's balance. Another provider costs the same credits."""
+    err = InsufficientCreditsError("u1", required=100, available=0)
+    assert _is_fatal_step_exc(err, billing_failover_enabled=failover) is True
+
+
+def test_an_account_credit_refusal_never_trips_the_sentinel(monkeypatch):
+    import asyncio
+    import core.credit_sentinel as cs
+    from agents.task.agent.core.error_recovery import ErrorRecoveryMixin
+    tripped = []
+
+    async def _trip(*a, **kw):
+        tripped.append((a, kw))
+    monkeypatch.setattr(cs, "trip_credit_sentinel", _trip)
+
+    class _Agent(ErrorRecoveryMixin):
+        logger = __import__("logging").getLogger("t")
+    asyncio.run(_Agent()._trip_sentinel_if_credit_death(
+        InsufficientCreditsError("u1", required=402, available=0)))
+    assert tripped == []
 
 
 def test_a_typed_rate_limit_with_a_quota_text_is_not_fatal():

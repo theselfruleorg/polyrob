@@ -134,7 +134,8 @@ def payment_required_response(
     """Generate 402 response with every payment option: credits, plus each
     contributed option (067 P5a, ``api/contributions.py``; today x402)."""
     from api.contributions import payment_options
-    cost_usd = cost_credits * 0.01
+    from modules.credits.pricing import PricingConfig
+    cost_usd = round(cost_credits * PricingConfig.CREDIT_VALUE_USD, 6)
     options: Dict[str, Any] = {
         "credits": {
             "cost_usd": cost_usd,

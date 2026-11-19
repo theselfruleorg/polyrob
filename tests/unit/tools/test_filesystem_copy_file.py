@@ -44,7 +44,6 @@ def _ws(_pm):
 
 @pytest.mark.asyncio
 async def test_copy_file_copies_bytes_and_reports_size(_pm, monkeypatch):
-    monkeypatch.setenv("FS_REALPATH_CONFINE", "on")
     from tools.controller.views import CopyFileAction
     ws = _ws(_pm)
     payload = ("{\"a\":1}\n" * 5000).encode()  # ~40 KB, well past any read cap
@@ -60,7 +59,6 @@ async def test_copy_file_copies_bytes_and_reports_size(_pm, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_copy_file_refuses_to_overwrite_unless_asked(_pm, monkeypatch):
-    monkeypatch.setenv("FS_REALPATH_CONFINE", "on")
     from tools.controller.views import CopyFileAction
     ws = _ws(_pm)
     open(os.path.join(ws, "a.txt"), "w").write("new")
@@ -76,7 +74,6 @@ async def test_copy_file_refuses_to_overwrite_unless_asked(_pm, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_copy_file_is_confined_and_file_only(_pm, tmp_path, monkeypatch):
-    monkeypatch.setenv("FS_REALPATH_CONFINE", "on")
     from tools.controller.views import CopyFileAction
     ws = _ws(_pm)
     open(os.path.join(ws, "a.txt"), "w").write("x")

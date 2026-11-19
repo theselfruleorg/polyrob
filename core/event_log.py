@@ -513,11 +513,14 @@ class TelemetryEventLog:
 
     def aggregate(self, *, since_ts: Optional[float] = None,
                   user_id: Optional[str] = None,
-                  kind: Optional[str] = None) -> Dict[str, Any]:
+                  kind: Optional[str] = None,
+                  instance_rows: bool = False) -> Dict[str, Any]:
         """Complete rollup, without the display query's pagination limit.
 
         Unreadable or malformed financial data raises: callers must display
         unavailable rather than a plausible but incomplete spend total.
+        ``instance_rows=True`` reads *user_id* by :data:`TENANT_OR_INSTANCE_SQL`,
+        as :meth:`query` does.
         """
         from core.event_kinds import WALLET_SPEND
         if not self._ready:
@@ -526,7 +529,8 @@ class TelemetryEventLog:
         for column, value, op in (("ts", since_ts, ">="),
                                   ("user_id", user_id, "="), ("kind", kind, "=")):
             if value is not None:
-                clauses.append(f"{column} {op} ?")
+                clauses.append(TENANT_OR_INSTANCE_SQL if column == "user_id" and instance_rows
+                               else f"{column} {op} ?")
                 params.append(value)
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         rows = self._run("""

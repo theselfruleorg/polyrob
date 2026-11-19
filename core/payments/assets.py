@@ -310,15 +310,39 @@ def resolve(asset_id: Optional[str], *,
 
 def all_assets(*, data_home: Optional[str] = None) -> List[PaymentAsset]:
     """Every resolvable asset, operator rows shadowing builtins by id."""
+    return asset_listing(data_home=data_home)[0]
+
+
+def asset_listing(*, data_home: Optional[str] = None
+                  ) -> Tuple[List[PaymentAsset], Optional[str]]:
+    """``(assets, error)``: :func:`all_assets` plus the reason the operator rows
+    could not be read, or ``None``. The resolver still degrades to the builtins;
+    a LIST a person or the agent reads names the loss (120 W4)."""
     merged = dict(BUILTIN_ASSETS)
+    error = None
     store = _store(data_home)
-    if store is not None:
+    if store is None:
+        error = "the operator asset store could not be opened"
+    else:
         try:
             for row in store.list_all():
                 merged[row.asset_id] = row
         except Exception as e:
             logger.warning("payment asset listing failed (%s) — builtins only", e)
-    return [merged[k] for k in sorted(merged)]
+            error = f"the operator asset store could not be read ({type(e).__name__})"
+    return [merged[k] for k in sorted(merged)], error
+
+
+def asset_lines(*, data_home: Optional[str] = None) -> List[str]:
+    """The ONE asset list text: ``polyrob wallet asset list`` and the agent's
+    ``x402_invoices(assets=true)``. An unreadable operator store is a line,
+    never a silent builtins-only list."""
+    rows, error = asset_listing(data_home=data_home)
+    lines = [f"{a.asset_id:24} {a.symbol:8} {a.chain:14} "
+             f"{a.decimals:>2}d  {a.rail:14} {a.source}" for a in rows]
+    if error:
+        lines.append(f"⚠️ {error}: the builtin assets only; an operator row may be missing.")
+    return lines
 
 
 def vocabulary(*, data_home: Optional[str] = None) -> str:
@@ -396,7 +420,8 @@ def unpinned_stable_note(chain: str, address: Optional[str], symbol: Optional[st
 
 
 __all__ = ["AssetStore", "BUILTIN_ASSETS", "DEFAULT_ASSET_ID", "PaymentAsset",
-           "RAILS", "TESTNET_EXEMPT_ASSET_IDS", "all_assets", "get", "known_ids",
+           "RAILS", "TESTNET_EXEMPT_ASSET_IDS", "all_assets", "asset_lines", "asset_listing",
+           "get", "known_ids",
            "resolve", "solana_default_asset_id", "store_path", "unpinned_stable_note",
            "verify_on_chain",
            "vocabulary"]

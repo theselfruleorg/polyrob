@@ -118,3 +118,12 @@ def test_search_still_reaches_every_tier():
     res = click.testing.CliRunner().invoke(doctor, ["--search", "native_tools_debug"])
     assert res.exit_code == 0, res.output
     assert "NATIVE_TOOLS_DEBUG" in res.output
+
+
+def test_doctor_flags_shows_a_set_pattern_row_name():
+    """A set venue cap has only a `<...>` pattern row; the report left it out."""
+    from cli.commands.doctor import flags_report
+    name = "WALLET_VENUE_DAILY_CAP_X402_USD"
+    assert not [ln for ln in flags_report({}) if name in ln]
+    assert [ln for ln in flags_report({name: "5"}) if f"{name} = 5" in ln]
+    assert [ln for ln in flags_report({name: "5"}, changed=True) if name in ln]

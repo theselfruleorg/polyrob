@@ -53,6 +53,7 @@ clean zero over real money.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -207,6 +208,26 @@ def _tx_link(n: TxNotice) -> Optional[str]:
         return None
 
 
+_BLOCK_DETAIL = re.compile(r"^block \d+$")
+
+
+def _ref_lines(n: "TxNotice") -> list:
+    """The identifiers: the explorer link when there is one (it holds the whole
+    hash), else the short hash; a second ref (a bridge id) beside it."""
+    link = _tx_link(n)
+    refs = ([] if link else [f"tx {short(n.tx_ref)}"]) + [
+        f"ref {short(r)}" for r in n.extra_refs if r]
+    return ([" · ".join(refs)] if refs else []) + ([link] if link else [])
+
+
+def _cap_line(n: "TxNotice") -> list:
+    """The daily cap after this spend. The lane is an audit word: it is in the
+    event (`_emit_event`), not in the owner's line."""
+    if n.cap_limit_usd is None or n.cap_used_usd is None:
+        return []
+    return [f"today: {_usd(n.cap_used_usd)} of {_usd(n.cap_limit_usd)} used"]
+
+
 def render_broadcast(n: TxNotice) -> str:
     lines = [f"⛓ SENT · {n.verb} {n.route}"]
     if n.amount_in:
@@ -219,18 +240,8 @@ def render_broadcast(n: TxNotice) -> str:
         lines.append(head)
     else:
         lines.append(_usd(n.usd))
-    refs = [f"tx {short(n.tx_ref)}"] + [f"ref {short(r)}" for r in n.extra_refs if r]
-    lines.append(" · ".join(refs))
-    link = _tx_link(n)
-    if link:
-        lines.append(link)
-    tail = []
-    if n.cap_limit_usd is not None and n.cap_used_usd is not None:
-        tail.append(f"cap: {_usd(n.cap_used_usd)} of {_usd(n.cap_limit_usd)} daily")
-    if n.lane:
-        tail.append(f"lane {n.lane}")
-    if tail:
-        lines.append(" · ".join(tail))
+    lines.extend(_ref_lines(n))
+    lines.extend(_cap_line(n))
     return "\n".join(lines)
 
 
@@ -253,24 +264,16 @@ def render_settled(n: TxNotice) -> str:
         # No measurement is NOT the same as the quoted number, and must not be
         # printed as if it were one.
         lines.append(f"quoted {n.amount_out} · not independently measured")
-    refs = [f"tx {short(n.tx_ref)}"] + [f"ref {short(r)}" for r in n.extra_refs if r]
-    lines.append(" · ".join(refs))
-    link = _tx_link(n)
-    if link:
-        lines.append(link)
+    lines.extend(_ref_lines(n))
     if n.detail:
         from core.wallet.tokens import clean_provider_text
-        lines.append(f"detail (data): {clean_provider_text(n.detail)!r}")
+        detail = clean_provider_text(n.detail)
+        # A block number is ours; any other detail is provider text — data.
+        lines.append(detail if _BLOCK_DETAIL.match(detail) else f"detail (data): {detail!r}")
     if n.ledger_recorded is False:
         lines.append("⚠ ledger: NOT recorded — this spend is invisible to every "
                      "other money verb's cap")
-    tail = []
-    if n.cap_limit_usd is not None and n.cap_used_usd is not None:
-        tail.append(f"cap: {_usd(n.cap_used_usd)} of {_usd(n.cap_limit_usd)} daily")
-    if n.lane:
-        tail.append(f"lane {n.lane}")
-    if tail:
-        lines.append(" · ".join(tail))
+    lines.extend(_cap_line(n))
     return "\n".join(lines)
 
 
@@ -290,9 +293,22 @@ def caps_from_gate(gate: Any, venue: str = "defi") -> tuple:
         return None, None
 
 
+#: The states a verb's own reply states too. IN FLIGHT and NEVER SENT stay
+#: notices: they come from an interrupt or a sweep, when no reply may follow.
+_SEAT_REPORTED = frozenset({STATE_CONFIRMED, STATE_ARRIVED, STATE_REVERTED, STATE_FAILED})
+
+
+def seat_reports(execution_context: Any) -> bool:
+    """True when an OWNER SEAT ran the verb (``/send … go``, a card Confirm):
+    the seat answers the owner with the whole report, so a notice of the same
+    transaction is a second message with the same hash (owner 2026-11-18)."""
+    from core.security.turn_facts import is_owner_seat
+    return is_owner_seat(execution_context)
+
+
 async def notify(container: Any, user_id: Optional[str], notice: TxNotice, *,
                  settled: bool, session_id: Optional[str] = None,
-                 hold_sec: float = 0.0) -> str:
+                 hold_sec: float = 0.0, seat_reports: bool = False) -> str:
     """Deliver one notice. Never raises, never blocks a settled transaction.
 
     Returns the delivery outcome, ``"collapsed"`` or ``"error"``. The return value
@@ -301,6 +317,8 @@ async def notify(container: Any, user_id: Optional[str], notice: TxNotice, *,
     """
     # The durable record is immediate; only the owner's line may wait.
     _emit_event(user_id, notice, settled=settled, session_id=session_id)
+    if seat_reports and (not settled or notice.state in _SEAT_REPORTED):
+        return "seat"
     ref = str(notice.tx_ref or "")
     if settled and ref and ref in _HELD:
         # The broadcast for this transaction is still held: carry its facts on
@@ -343,7 +361,8 @@ _PENDING: set = set()
 
 
 def notify_soon(container: Any, user_id: Optional[str], notice: TxNotice, *,
-                settled: bool, session_id: Optional[str] = None) -> None:
+                settled: bool, session_id: Optional[str] = None,
+                seat_reports: bool = False) -> None:
     """Fire a notice from a SYNC call site. Never raises, never blocks.
 
     The EVM money verbs settle inside a synchronous helper (`_run_guarded`) that
@@ -362,7 +381,7 @@ def notify_soon(container: Any, user_id: Optional[str], notice: TxNotice, *,
         # the coroutine to completion, and sleeping there would stall the
         # caller for the whole hold.
         coro = notify(container, user_id, notice, settled=settled,
-                      session_id=session_id,
+                      session_id=session_id, seat_reports=seat_reports,
                       hold_sec=sent_hold_sec() if loop is not None else 0.0)
         if loop is not None:
             task = loop.create_task(coro)

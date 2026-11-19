@@ -1,15 +1,27 @@
 {
   "function": {
-    "description": "Report your own runtime state: health (credit sentinel, open asks, blocked goals, suppressed owner messages, dead loops), what runs next, steps used (of the cap), active tools and context usage. Read-only. Set release_notes to 'unreleased' (what changed since the last release), 'since_previous' (what changed since the previous deploy), 'latest' or a version ('1.2.0') to read instead what shipped, from the CHANGELOG.md shipped with your code. Set tool to a tool id to read why that tool is missing: its status, remedy, who can fix it and when the fix applies.",
+    "description": "Report your own runtime state: health (credit sentinel, open asks, blocked goals, suppressed owner messages, dead loops), what runs next, steps used (of the cap), active tools and context usage. Read-only. Set release_notes to 'unreleased' (what changed since the last release), 'since_previous' (what changed since the previous deploy), 'latest' or a version ('1.2.0') to read instead what shipped, from the CHANGELOG.md shipped with your code. Set tool to a tool id to read why that tool is missing: its status, remedy, who can fix it and when the fix applies. Set view='refusals' for the last n gate refusals, each reason word for word (the owner's /why), view='log' for the event log: counts by kind and the newest n rows over window ('24h', '7d'; empty = all time), view='health' for the install checks (extras, packs, browser, db schema, data home, sandbox), or view='models' for the models you may name for a sub-agent, with prices.",
     "name": "agent_status",
     "parameters": {
       "additionalProperties": false,
       "properties": {
+        "n": {
+          "default": 0,
+          "type": "integer"
+        },
         "release_notes": {
           "default": "",
           "type": "string"
         },
         "tool": {
+          "default": "",
+          "type": "string"
+        },
+        "view": {
+          "default": "",
+          "type": "string"
+        },
+        "window": {
           "default": "",
           "type": "string"
         }

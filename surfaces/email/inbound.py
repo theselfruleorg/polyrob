@@ -202,7 +202,6 @@ async def process_email(
     *,
     dedup: Any,
     user_directory: Any,
-    is_chitchat=None,
     now: Optional[float] = None,
     record_dedup: bool = True,
 ) -> Optional[InboundResult]:
@@ -235,5 +234,5 @@ async def process_email(
     inbound = build_inbound_message(msg, user_directory)
     if inbound is None:
         return None
-    decision = await route_inbound(container, inbound, is_chitchat=is_chitchat)
+    decision = await route_inbound(container, inbound)
     return InboundResult(inbound=inbound, decision=decision)

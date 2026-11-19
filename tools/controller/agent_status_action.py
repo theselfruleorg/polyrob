@@ -36,6 +36,27 @@ def _resolve_agent(controller, execution_context):
 	return agents[0] if agents else None
 
 
+def _context_lines(mm) -> list:
+	"""The context reading from THE gauge (``MessageManager.context_usage``): the
+	total the next request carries, the one denominator, the slots and whether the
+	number is measured or estimated. A manager without the gauge is named."""
+	usage_fn = getattr(mm, "context_usage", None)
+	if not callable(usage_fn):
+		return ["context_tokens: unavailable (this session has no context gauge)"]
+	usage = usage_fn()
+	used, limit = int(usage.get("total_tokens") or 0), int(usage.get("limit") or 0)
+	approx = "" if usage.get("source") == "provider_usage" else "≈"
+	head = (f"context_tokens: {approx}{used}/{limit} ({float(usage.get('pct') or 0):.0f}%)"
+			if limit > 0 else f"context_tokens: {approx}{used}")
+	if approx:
+		head += " — a local estimate, not yet measured by the provider"
+	slots = usage.get("slots") or {}
+	parts = [f"{name} {int(slots[name])}" for name in
+			 ("foundation", "conversation", "ephemeral", "hmem", "tool_schemas")
+			 if slots.get(name)]
+	return [head] + (["context_slots: " + ", ".join(parts)] if parts else [])
+
+
 def _unavail(section: str, exc: BaseException) -> str:
 	return f"{section}: unavailable ({type(exc).__name__}: {str(exc)[:120]})"
 
@@ -268,6 +289,101 @@ def _tool_view(controller, tool_id: str, execution_context) -> str:
 	return "\n".join(out)
 
 
+#: The views beside the full status (120 W3): the owner seats' `/why` and the log;
+#: 120 W8: the health slot, the checks of `polyrob doctor --full` that name no credential.
+#: 121: the models the agent may name, with prices (``agents.task.model_choice``).
+VIEWS = ("refusals", "log", "health", "models")
+
+
+def _tenant_scope(user_id) -> tuple:
+	"""``(tenant, instance_rows)``: a view reads the caller's own rows, and the
+	instance's untenanted rows only for the owner (120 §4.3)."""
+	from core.instance import is_owner_uid
+	uid = str(user_id or "")
+	return uid, bool(uid) and is_owner_uid(uid)
+
+
+def _refusals_view(controller, user_id, n: int) -> str:
+	"""`/why` for the agent: the same text, from ``core.security_digest``."""
+	from core.runtime_paths import container_data_home
+	from core.security_digest import REFUSALS_DEFAULT_N, refusals_reply
+	tenant, owner = _tenant_scope(user_id)
+	text = refusals_reply(tenant, container_data_home(getattr(controller, "container", None)),
+						  int(n or 0) or REFUSALS_DEFAULT_N, instance_rows=owner)
+	if not text.startswith("Last "):
+		return text  # no rows, or the store is unreadable: no detail to frame
+	# A refusal's detail quotes what a tool or a sender wrote: data, never an instruction.
+	from core.security.untrusted_wrap import wrap_untrusted
+	return wrap_untrusted("refusals", text)
+
+
+def _log_view(controller, user_id, n: int, window: str) -> str:
+	"""The telemetry log for the agent (``core.telemetry_view``): counts by kind and the
+	newest rows, tenant-filtered; the rows are framed as data."""
+	import time
+	from core.recap import _parse_window
+	from core.runtime_paths import container_data_home
+	from core.security.untrusted_wrap import wrap_untrusted
+	from core.telemetry_view import (LOG_DEFAULT_ROWS, LOG_MAX_ROWS, log_view_lines,
+									 telemetry_view)
+	tenant, owner = _tenant_scope(user_id)
+	if not tenant:
+		return "log refused: no tenant on this turn (an anonymous read is refused)"
+	label = (window or "").strip()
+	try:
+		secs = _parse_window(label)
+	except ValueError:
+		return f"log refused: window {label!r} is not a duration (use e.g. 30m, 24h or 7d)"
+	rows = max(1, min(int(n or 0) or LOG_DEFAULT_ROWS, LOG_MAX_ROWS))
+	try:
+		view = telemetry_view(
+			data_dir=container_data_home(getattr(controller, "container", None)),
+			user_id=tenant, instance_rows=owner,
+			since_ts=(time.time() - secs) if secs else None, limit=rows)
+	except Exception as e:
+		return (f"log: could not be read ({type(e).__name__}: {str(e)[:120]}) — "
+				"this is not an empty log")
+	scope = (f"last {label}" if secs else "all time") + (
+		"" if owner else ", this tenant's rows only")
+	totals, lines = log_view_lines(view, scope=scope, show_spend=owner)
+	out = list(totals)
+	if lines:
+		out.append(f"newest {len(lines)} rows (at most {rows}):")
+		out.append(wrap_untrusted("telemetry log", "\n".join(lines)))
+	else:
+		out.append("no rows in this window")
+	return "\n".join(out)
+
+
+def _health_view(controller, user_id) -> str:
+	"""The health slot for the agent (``core.health_slot``): the same builders
+	`polyrob doctor --full` prints, over this process's data home, with the read
+	`/status` makes. The install is the owner's: another tenant is refused."""
+	import os
+	from core.health_slot import health_slot_lines
+	from core.runtime_paths import container_data_home
+	_tenant, owner = _tenant_scope(user_id)
+	if not owner:
+		return ("health refused: the install's health is the owner's, and this turn's "
+				"user is not the owner")
+	lines = health_slot_lines(dict(os.environ),
+							  container_data_home(getattr(controller, "container", None)))
+	head = ("health (the install checks of `polyrob doctor --full` that name no "
+			"credential; the provider credential lines are the owner's only):")
+	return "\n".join([head] + [f"- {ln}" for ln in lines])
+
+
+def _current_model(controller) -> tuple:
+	"""``(provider, model)`` of the agent this controller serves (``("", "")`` unknown)."""
+	orch = getattr(controller, "orchestrator", None)
+	for agent in (getattr(orch, "agents", None) or {}).values():
+		model = getattr(agent, "model_name", None)
+		if model:
+			return (getattr(agent, "llm_provider", None)
+					or getattr(agent, "provider_name", "") or "", model)
+	return "", ""
+
+
 def register_agent_status_action(controller) -> None:
 	"""Register the read-only `agent_status` introspection tool (I-6).
 
@@ -281,6 +397,9 @@ def register_agent_status_action(controller) -> None:
 	class AgentStatusAction(BaseModel):
 		release_notes: str = ""
 		tool: str = ""
+		view: str = ""
+		n: int = 0
+		window: str = ""
 
 	_money = ("tools, context usage, and wallet/ledger balance" if detail
 			  else "tools and context usage")
@@ -292,7 +411,12 @@ def register_agent_status_action(controller) -> None:
 		"changed since the previous deploy), 'latest' or a version "
 		"('1.2.0') to read instead what shipped, from the CHANGELOG.md shipped with "
 		"your code. Set tool to a tool id to read why that tool is missing: its status, "
-		"remedy, who can fix it and when the fix applies.",
+		"remedy, who can fix it and when the fix applies. Set view='refusals' for the last "
+		"n gate refusals, each reason word for word (the owner's /why), view='log' for "
+		"the event log: counts by kind and the newest n rows over window ('24h', '7d'; "
+		"empty = all time), view='health' for the install checks (extras, packs, "
+		"browser, db schema, data home, sandbox), or view='models' for the models you "
+		"may name for a sub-agent, with prices.",
 		param_model=AgentStatusAction,
 	)
 	async def agent_status(params: AgentStatusAction, execution_context=None) -> ActionResult:
@@ -308,6 +432,24 @@ def register_agent_status_action(controller) -> None:
 															  execution_context),
 								include_in_memory=True)
 		user_id = getattr(execution_context, 'user_id', None) or getattr(controller, 'user_id', None)
+		view = (params.view or "").strip().lower()
+		if view:
+			import asyncio
+			if view not in VIEWS:
+				return ActionResult(error=f"agent_status: unknown view {params.view!r} "
+										  f"(one of: {', '.join(VIEWS)})",
+									include_in_memory=True)
+			if view == "refusals":
+				text = await asyncio.to_thread(_refusals_view, controller, user_id, params.n)
+			elif view == "health":
+				text = await asyncio.to_thread(_health_view, controller, user_id)
+			elif view == "models":   # 121: the models the agent may name, with prices
+				from agents.task.model_choice import models_view
+				text = await models_view(user_id, _current_model(controller))
+			else:
+				text = await asyncio.to_thread(_log_view, controller, user_id, params.n,
+											   params.window)
+			return ActionResult(extracted_content=text, include_in_memory=True)
 		lines = []
 		# 0) the shared status snapshot — health FIRST, then every section
 		#    (the ledger is awaited natively here and handed to the snapshot so
@@ -374,12 +516,7 @@ def register_agent_status_action(controller) -> None:
 		try:
 			mm = getattr(agent, 'message_manager', None)
 			if mm is not None:
-				used = mm.get_token_count()
-				max_in = getattr(mm, 'max_input_tokens', 0) or 0
-				if max_in > 0:
-					lines.append(f"context_tokens: {used}/{max_in} ({used / max_in * 100:.0f}%)")
-				else:
-					lines.append(f"context_tokens: {used}")
+				lines.extend(_context_lines(mm))
 			else:
 				lines.append("context_tokens: unavailable (no message manager)")
 		except Exception as e:

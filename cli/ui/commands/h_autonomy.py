@@ -38,10 +38,6 @@ def _autonomy_snapshot(user_id: str, data_dir: str = "data", sections=None) -> d
         except Exception:
             return None
 
-    def _sandbox_reap_gate():
-        from polyrob.app.autonomy_runtime import _sandbox_reap_enabled
-        return _sandbox_reap_enabled()
-
     def _surface_gc_gate():
         from polyrob.app.autonomy_runtime import _surface_gc_enabled
         return _surface_gc_enabled()
@@ -69,7 +65,7 @@ def _autonomy_snapshot(user_id: str, data_dir: str = "data", sections=None) -> d
         ("cron", cron_flag),
         ("cron-run-loop", AutonomyConfig.cron_run_loop()),
         ("background-review", AutonomyConfig.background_review_enabled()),
-        ("sandbox-reap", _gate(_sandbox_reap_gate)),
+        ("sandbox-reap", True),  # no switch; the pause kind `sandbox_reap` is the stop
         ("surface-gc", _gate(_surface_gc_gate)),
         ("quiet-release", _gate(_quiet_release_gate)),
         ("settlement", _gate(_settlement_gate)),

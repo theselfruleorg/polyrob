@@ -311,6 +311,15 @@ def _invoice_asset_cfg(network: str):
     return get_default_asset_config(network)
 
 
+def _invoice_domain(network: str, cfg) -> dict:
+    """The EIP-712 domain of a facilitator invoice: the ONE rule the machine-payment
+    challenge uses (``modules.x402.middleware.eip712_domain``), so the payer signs the
+    domain the token checks and the verification requirement names the same one."""
+    from modules.x402.middleware import eip712_domain
+    name, version = eip712_domain(network, cfg.address, cfg.eip712_name, cfg.eip712_version)
+    return {"name": name, "version": version}
+
+
 def _invoice_asset(row):
     """The `PaymentAsset` this invoice is payable in, or ``None``.
 
@@ -372,7 +381,7 @@ def _challenge_for_invoice(row):
             "description": inv.get("purpose"), "mimeType": "application/json",
             "payTo": inv["recipient"], "maxTimeoutSeconds": 300,
             "asset": cfg.address,
-            "extra": {"name": cfg.eip712_name, "version": cfg.eip712_version},
+            "extra": _invoice_domain(inv["chain"], cfg),
         }]}, 402)
 
     from core.wallet import chains as _chains
@@ -479,7 +488,12 @@ async def pay_invoice(request_id: str, request: Request):
         raise HTTPException(status_code=409, detail=refusal)
     payment_header = request.headers.get("X-PAYMENT")
     if not payment_header:
-        raise HTTPException(status_code=402, detail="X-PAYMENT header required")
+        # An x402 payer POSTs here unpaid first and re-sends the SAME request with the
+        # X-PAYMENT header it signed against this answer's `accepts` (the x402 handshake).
+        # A bare detail string carried no challenge, so no x402 client could pay an
+        # invoice here (found by the level-1 interface rig, ops/rig).
+        body, status = _challenge_for_invoice(row)
+        return JSONResponse(body, status_code=status)
 
     # Claim the exclusive right to settle BEFORE touching the facilitator, so two
     # concurrent distinct payers can never both settle this invoice on-chain (the
@@ -527,7 +541,7 @@ async def _verify_and_settle_invoice(request_id, row, payment_header):
         scheme="exact", network=row["chain"], maxAmountRequired=str(atomic),
         resource=f"/api/x402/requests/{request_id}/pay", description=row["purpose"],
         mimeType="application/json", payTo=row["recipient"], maxTimeoutSeconds=300,
-        asset=cfg.address, extra={"name": cfg.eip712_name, "version": cfg.eip712_version})
+        asset=cfg.address, extra=_invoice_domain(row["chain"], cfg))
     try:
         init_x402(app=None, pay_to=row["recipient"], network=row["chain"],
                   auto_add_middleware=False, load_dotenv_file=False)

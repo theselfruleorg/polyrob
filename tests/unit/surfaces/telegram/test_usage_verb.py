@@ -25,10 +25,12 @@ def test_usage_is_an_every_seat_owner_verb():
 
 
 def test_parse_days():
-    assert usage_ops.parse_days([]) == 7
-    assert usage_ops.parse_days(["30"]) == 30 and usage_ops.parse_days(["3d"]) == 3
-    assert usage_ops.parse_days(["500"]) == 90
-    assert usage_ops.parse_days(["soon"]) is None and usage_ops.parse_days(["0"]) is None
+    from core.status_economics import parse_days  # 120 W3: the one parser, below the seats
+    assert parse_days([]) == 7
+    assert parse_days(["30"]) == 30 and parse_days(["3d"]) == 3
+    assert parse_days(["500"]) == 90
+    assert parse_days(["soon"]) is None and parse_days(["0"]) is None
+    assert not hasattr(usage_ops, "parse_days")
 
 
 def test_bad_days_return_the_usage_line(tmp_path):

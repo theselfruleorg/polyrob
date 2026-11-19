@@ -46,6 +46,8 @@ PUBLIC_PATHS_EXACT: frozenset = frozenset({
     "/",
     "/health",
     "/api/offers",       # 099: the HTTP catalog of live offers (see the prefixes)
+    "/avatar.png",       # 120: the image the ERC-8004 card publishes; a card
+                         # consumer cannot authenticate (exact, so no sub-path)
 })
 
 #: Path PREFIXES that are public. Every entry here is a surface an anonymous

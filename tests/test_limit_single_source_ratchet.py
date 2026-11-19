@@ -28,6 +28,7 @@ CAP_FLAG_READERS = {
         "cli/commands/doctor.py",         # validates the env (shows shown_caps)
         "cli/commands/wallet.py",         # `set-cap --env` writes it; init validates
         "devtools/gen_prompt_surfaces.py",  # sets a placeholder cap for the prod golden seat
+        "ops/rig/stacks.py",              # WRITES a child env for a rig stack; reads no cap
     },
     "WALLET_DAILY_CAP_USD": {
         "core/wallet/config.py",
@@ -37,6 +38,7 @@ CAP_FLAG_READERS = {
         "cli/commands/wallet.py",
         "webview/pages.py",               # display fallback when the ledger has no cap
         "devtools/gen_prompt_surfaces.py",  # sets a placeholder cap for the prod golden seat
+        "ops/rig/stacks.py",              # WRITES a child env for a rig stack; reads no cap
     },
     "DEFI_AUTONOMOUS_MAX_USD": {
         "core/wallet/tx_guard.py",        # the resolver (autonomous_max_usd)

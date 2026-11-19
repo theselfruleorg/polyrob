@@ -1067,6 +1067,7 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
         "arithmetic done: per token the size (measured or quoted), the cost "
         "basis (average cost) or 'basis unknown', the current price, value, "
         "unrealized P&L in USD and %, realized P&L, and the high-water price. "
+        "Then the trading mandate (state, breaker) and the bridges in flight. "
         "Repeat its figures; never compute or convert a money figure yourself. "
         "Reveals own funds — owner-only. For SOMEONE ELSE's wallet use "
         "wallet_holdings.",
@@ -1102,6 +1103,9 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
         if not uid:
             return self._ar(error="no tenant on this call — cannot pick whose book to read")
         from core import open_positions
+        from tools.defi.money_state_lines import own_state_lines
+        # 120 W4: the trading mandate (no price read) and the bridges in flight.
+        state = "\n".join(own_state_lines(uid, execution_context))
         try:
             entries = open_positions.positions_for(uid, chain=chain)
             realized = open_positions.realized_for(uid, chain=chain)
@@ -1109,7 +1113,7 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
             return self._ar(error=(
                 f"the rail book (open_positions.db) exists but could not be read "
                 f"({type(exc).__name__}) — this is NOT an empty book; do not "
-                f"report zero positions"))
+                f"report zero positions\n{state}"))
         from tools.defi import positions_view
 
         def _observe(entry, price):
@@ -1118,7 +1122,7 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
 
         text, meta = positions_view.build(
             entries, realized, self._price_for, chain=chain, observe_fn=_observe)
-        return self._ar(content=text, metadata=meta)
+        return self._ar(content=f"{text}\n{state}", metadata=meta)
 
     @BaseTool.action(
         "List the POOLS most recently indexed on a chain — the fresh-launch "

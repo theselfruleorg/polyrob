@@ -69,7 +69,7 @@ def test_get_unknown_key_fails_with_suggestion(isolated):
     runner, config = _runner()
     res = runner.invoke(config, ["get", "GOAL_DAILY_QOUTA"])
     assert res.exit_code != 0
-    assert "unknown key" in res.output
+    assert "unknown setting" in res.output
     assert "GOAL_DAILY_QUOTA" in res.output  # closest-match hint
 
 
@@ -166,7 +166,7 @@ def test_explain_unknown_key_fails(isolated):
     runner, config = _runner()
     res = runner.invoke(config, ["explain", "NOT_A_REAL_KEY_AT_ALL"])
     assert res.exit_code != 0
-    assert "unknown key" in res.output
+    assert "unknown setting" in res.output
 
 
 def test_explain_json_carries_the_chain(isolated, monkeypatch):

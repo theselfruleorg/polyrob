@@ -42,7 +42,6 @@ def test_filter_noop_without_sensitive_data():
 def test_filter_redacts_unregistered_provider_key(monkeypatch):
     """An sk- key never registered in sensitive_data is still redacted before it
     can persist to message_history.json / compaction checkpoints."""
-    monkeypatch.delenv("HISTORY_SECRET_SCRUB", raising=False)
     host = _Host(sensitive_data={})  # nothing registered
     msg = HumanMessage(content="leaked OPENAI key sk-abc123DEF456ghi789JKLmno here")
     out = host._filter_sensitive_data(msg)
@@ -51,7 +50,6 @@ def test_filter_redacts_unregistered_provider_key(monkeypatch):
 
 
 def test_filter_redacts_unregistered_pem_block(monkeypatch):
-    monkeypatch.delenv("HISTORY_SECRET_SCRUB", raising=False)
     host = _Host(sensitive_data={})
     pem = ("-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n"
            "-----END RSA PRIVATE KEY-----")
@@ -61,17 +59,8 @@ def test_filter_redacts_unregistered_pem_block(monkeypatch):
     assert "PRIVATE KEY" not in out.content
 
 
-def test_filter_pattern_backstop_can_be_disabled(monkeypatch):
-    monkeypatch.setenv("HISTORY_SECRET_SCRUB", "off")
-    host = _Host(sensitive_data={})
-    msg = HumanMessage(content="sk-abc123DEF456ghi789JKLmno")
-    out = host._filter_sensitive_data(msg)
-    assert out.content == "sk-abc123DEF456ghi789JKLmno"  # untouched when off
-
-
 def test_filter_does_not_redact_working_hex_hash(monkeypatch):
     """Conservative backstop must not corrupt legitimate working content."""
-    monkeypatch.delenv("HISTORY_SECRET_SCRUB", raising=False)
     host = _Host(sensitive_data={})
     sha = "a" * 40
     msg = HumanMessage(content=f"compare against commit {sha}")

@@ -215,3 +215,58 @@ async def test_non_http_session_recreates_reservation_context(balance):
         assert (await balance.get_balance('payer'))['balance'] == 40
     assert not is_billed()
     assert await settle_reservation(balance, 'payer', ref, 12)
+
+
+@pytest.mark.parametrize("status,released", [
+    (429, True), (400, True), (401, True), (500, True), (503, True), (529, True),
+    (408, False), (502, False), (504, False), (None, False), (200, False),
+])
+@pytest.mark.asyncio
+async def test_a_hold_returns_only_when_the_status_proves_no_charge(balance, status, released):
+    """A provider answer that proves no output returns the whole hold at once. A
+    timeout, a cancel or a proxy error keeps it: the provider possibly billed."""
+    from core.billing_context import release_refused_hold
+    ref = await credit_reserver(balance, 'payer', 's')('model', 'provider')
+    assert (await balance.get_balance('payer'))['balance'] == 40
+    assert await release_refused_hold(ref, status) is released
+    assert (await balance.get_balance('payer'))['balance'] == (100 if released else 40)
+    if released:
+        # once only, and the settled hold cannot be charged later
+        assert await release_refused_hold(ref, status) is False
+        assert not await settle_reservation(balance, 'payer', ref, 12)
+        assert (await balance.get_balance('payer'))['balance'] == 100
+        assert (await balance.get_balance('payer')).get('lifetime_spent', 0) in (0, None)
+
+
+@pytest.mark.asyncio
+async def test_the_adapter_releases_on_a_refused_call_and_keeps_on_a_timeout(balance):
+    from modules.llm import billing_guard as A
+
+    class _Refused(Exception):
+        status_code = 429
+
+    ref = await credit_reserver(balance, 'payer', 's')('model', 'provider')
+    await A.release_refused(ref, TimeoutError("no answer"))
+    assert (await balance.get_balance('payer'))['balance'] == 40
+    await A.release_refused(ref, _Refused("rate limited"))
+    assert (await balance.get_balance('payer'))['balance'] == 100
+
+
+@pytest.mark.asyncio
+async def test_a_timeout_raised_while_a_4xx_was_handled_keeps_the_hold(balance):
+    """The 4xx is only the implicit context of the timeout: it proves nothing about the
+    call that timed out, which the provider possibly billed."""
+    from modules.llm import billing_guard as A
+
+    class _Refused(Exception):
+        status_code = 429
+
+    ref = await credit_reserver(balance, 'payer', 's')('model', 'provider')
+    try:
+        try:
+            raise _Refused("rate limited")
+        except _Refused:
+            raise TimeoutError("no answer")
+    except TimeoutError as err:
+        await A.release_refused(ref, err)
+    assert (await balance.get_balance('payer'))['balance'] == 40

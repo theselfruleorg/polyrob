@@ -32,13 +32,6 @@ def test_block_absent_on_plain_server(monkeypatch):
     assert build_environment_context(session_id="s1", user_id="u_123") is None
 
 
-def test_block_flag_off_disables(monkeypatch, tmp_path):
-    _local(monkeypatch, tmp_path)
-    monkeypatch.setenv("ENV_CONTEXT_BLOCK", "false")
-    from agents.task.agent.core.env_context import build_environment_context
-    assert build_environment_context(session_id="s1", user_id="alice") is None
-
-
 def test_block_never_contains_secret_shapes(monkeypatch, tmp_path):
     _local(monkeypatch, tmp_path)
     monkeypatch.setenv("FAKE_API_KEY", "sk-should-never-appear")

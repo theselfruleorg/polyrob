@@ -42,10 +42,12 @@ The sources live in the tools tier and register here (``core`` must not import
 """
 from __future__ import annotations
 
+import contextvars
 import math
 import statistics
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from typing import Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
@@ -267,6 +269,33 @@ def _ask(src: Source, chain: str, address: str) -> SourceAnswer:
     return got
 
 
+#: The oldest reading :func:`one_decision` may give back. A number this young
+#: is the one the quote just showed; :func:`spend_price` rules out 20 s.
+DECISION_WINDOW_S = 10.0
+
+_DECISION: "contextvars.ContextVar[Optional[dict]]" = contextvars.ContextVar(
+    "price_decision", default=None)
+
+
+@contextmanager
+def one_decision():
+    """One owner command reads each FRESH price once.
+
+    ``/send … go`` converts the dollars, quotes (a guard pass) and then sends (a
+    second guard pass): five uncached readings of two tokens inside a few
+    seconds. The free indexer tier answers 429 after about four calls in a
+    burst, and each refused reading then waits out its backoff — measured
+    2026-11-18: the third Confirm in a row spent 8.6 s on price reads alone.
+    Inside this block a ``use_cache=False`` reading at most
+    :data:`DECISION_WINDOW_S` old is given back, so the send is held to the
+    price its own quote read. Nothing outlives the block."""
+    token = _DECISION.set({})
+    try:
+        yield
+    finally:
+        _DECISION.reset(token)
+
+
 def quote(chain: str, address: str, *,
           answers: Optional[Mapping[str, SourceAnswer]] = None,
           use_cache: bool = True,
@@ -284,6 +313,11 @@ def quote(chain: str, address: str, *,
         if hit is not None:
             q, age = hit
             return replace(q, age_s=age)
+    window = None if use_cache or answers else _DECISION.get()
+    if window is not None:
+        held = window.get(key)
+        if held is not None and clock() - held[1] <= DECISION_WINDOW_S:
+            return held[0]
     given = dict(answers or {})
     todo: List[Source] = []
     for src in registered_sources():
@@ -312,6 +346,8 @@ def quote(chain: str, address: str, *,
     q = _anchored(key[0], address, aggregate(got, now=clock()), use_cache=use_cache)
     if use_cache and not q.failed and got:
         cache.put(key, q)
+    if window is not None:
+        window[key] = (q, clock())
     return q
 
 

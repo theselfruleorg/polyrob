@@ -322,23 +322,14 @@ def h_pair(ctx) -> None:
 
 def h_allowlist(ctx) -> None:
     """List the outbound-send allowlist for this tenant."""
-    tenant = _tenant(ctx)
     try:
-        from cli.commands.owner import _do_allowlist
-        rows = _do_allowlist(_outbound_allowlist(ctx), tenant)
+        store = _outbound_allowlist(ctx)
     except Exception as e:
         ctx.emit(f"{candy.GUTTER}(allowlist unavailable: {e})", title="allowlist")
         return
-    if not rows:
-        ctx.emit("No allowlist entries.", title="allowlist")   # the chat seat's words
-        return
-    lines = [f"{len(rows)} allowlist entr{'y' if len(rows) == 1 else 'ies'} "
-             f"for tenant {tenant}:"]
-    for r in rows:
-        note = f"  ({r['note']})" if r.get("note") else ""
-        lines.append(f"{candy.GUTTER}{str(r['status']).ljust(8)} "
-                     f"{r['surface']}:{r['target']}{note}")
-    ctx.emit("\n".join(lines), title="allowlist")
+    from core.surfaces.outbound_allowlist import allowlist_reply
+    tenant = _tenant(ctx)
+    ctx.emit(allowlist_reply(store, tenant), title="allowlist")
 
 
 # ---------------------------------------------------------------------------

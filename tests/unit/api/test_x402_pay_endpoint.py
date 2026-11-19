@@ -50,15 +50,26 @@ async def test_pay_non_pending_409(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_pay_missing_header_402(monkeypatch):
+async def test_pay_missing_header_402_carries_the_challenge(monkeypatch):
+    """An x402 payer POSTs /pay unpaid first, then re-sends the SAME request with the
+    X-PAYMENT it signed against THIS answer: the 402 must carry the invoice's `accepts`
+    (a bare detail string left every x402 client unable to pay an invoice)."""
     monkeypatch.setenv("X402_INVOICE_ENABLED", "true")
     row = {"status": "pending", "amount_usd": 5.0, "chain": "base",
-           "recipient": "0xt", "purpose": "svc"}
+           "recipient": "0xt", "purpose": "svc", "request_id": "inv_x"}
+    claim = AsyncMock(return_value=True)
     with patch("modules.x402.invoicing.get_payment_request",
-               new=AsyncMock(return_value=row)):
-        with pytest.raises(HTTPException) as ei:
-            await ep.pay_invoice("inv_x", _fake_request(payment_header=None))
-    assert ei.value.status_code == 402
+               new=AsyncMock(return_value=row)), \
+         patch("modules.x402.invoicing.claim_for_settlement", new=claim), \
+         patch.object(ep, "_invoice_asset_cfg", lambda net: _asset_cfg()):
+        resp = await ep.pay_invoice("inv_x", _fake_request(payment_header=None))
+    assert resp.status_code == 402
+    import json as _json
+    accepts = _json.loads(resp.body)["accepts"][0]
+    assert accepts["maxAmountRequired"] == str(5_000_000)
+    assert accepts["payTo"] == "0xt"
+    assert accepts["resource"] == "/api/x402/requests/inv_x/pay"
+    claim.assert_not_awaited()  # an unpaid POST claims nothing
 
 
 @pytest.mark.asyncio

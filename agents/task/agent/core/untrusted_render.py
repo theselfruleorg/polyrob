@@ -21,8 +21,7 @@ This module closes that without inventing a second taxonomy:
   frames from that stamp through the SAME `maybe_wrap` helper, so the skip rules
   (non-str, `< UNTRUSTED_WRAP_MIN_CHARS`, delimiter defanging) cannot drift.
 
-Gated on `UNTRUSTED_TOOL_RESULT_WRAP` exactly like the ToolMessage path: OFF ⇒
-nothing is stamped upstream and nothing is wrapped here (byte-identical).
+The framing has no off switch, exactly like the ToolMessage path.
 C5: the non-native path has no tool-call ids, so ``result_processing.
 _stamp_result_sources`` stamps from the step's action names instead (an
 unpairable result in a step with an untrusted action is stamped with that
@@ -35,16 +34,6 @@ from typing import Any, Optional
 
 # metadata key holding the resolved untrusted source; a LABEL, not content.
 SOURCE_KEY = "untrusted_source"
-
-
-def wrap_enabled() -> bool:
-    """The UP-06 flag, read live so a test/monkeypatch is honoured. Fail-closed
-    to OFF (the legacy shape) if constants cannot be imported."""
-    try:
-        from agents.task.constants import UNTRUSTED_TOOL_RESULT_WRAP
-        return bool(UNTRUSTED_TOOL_RESULT_WRAP)
-    except Exception:  # pragma: no cover
-        return False
 
 
 def stamp_result_source(result: Any, action_name: Optional[str],
@@ -70,8 +59,6 @@ def maybe_wrap_result_content(result: Any, content: Any) -> Any:
     ``content`` is the ALREADY-RENDERED (truncated) string, so the closing
     delimiter can never be cut off by a later truncation.
     """
-    if not wrap_enabled():
-        return content
     try:
         source = (getattr(result, "metadata", None) or {}).get(SOURCE_KEY)
         if not isinstance(source, dict):
@@ -88,8 +75,6 @@ def maybe_wrap_browser_dom(text: Any) -> Any:
     The DOM block is attacker-authorable by definition (it IS the page), and it
     is the one untrusted surface that never passed through a tool result at all.
     """
-    if not wrap_enabled():
-        return text
     try:
         from core.security.untrusted_wrap import maybe_wrap
         # action_name=None ⇒ the frame is labelled with the tool namespace.

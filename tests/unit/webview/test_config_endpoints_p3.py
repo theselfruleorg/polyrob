@@ -38,6 +38,8 @@ def test_config_explain_masks_secrets(monkeypatch, tmp_path):
     assert "supersecret" not in str(body)
     assert body["secret"] is True
     assert c.get("/api/webgate/config/nope.nothing/explain").status_code == 404
+    retired = c.get("/api/webgate/config/STEP_TIMEOUT_SECONDS/explain")
+    assert retired.status_code == 404 and "retired" in retired.json()["error"]
 
 
 def test_config_patch_pref_and_flag(monkeypatch, tmp_path):

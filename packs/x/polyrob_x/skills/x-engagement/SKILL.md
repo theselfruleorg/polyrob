@@ -120,8 +120,8 @@ Every `twitter_*` write passes these checks, in this order. A refusal names its 
    autonomous post is refused, whatever its text. A NEW fact: defer it with the one-shot
    ISO `cronjob_schedule` that the refusal names. A repeat: skip it.
 4. **Approval** — a genuine owner turn or the main run of a standing cron job or goal
-   posts with no tap, whoever created the job; only an operator's
-   `APPROVAL_PROVIDER=deny` stops it. On a room, correspondent-tainted, forged,
+   posts with no tap, whoever created the job; only `APPROVAL_PROVIDER=deny`
+   or the owner preference `approvals.provider=deny` stops it. On a room, correspondent-tainted, forged,
    delegated or non-owner turn, the write waits for the owner's tap on the owner queue
    (Telegram card / `/pending`). A "waiting for the owner's approval" result is NOT done:
    report it as waiting. If the owner approves later, exactly that post goes out once.

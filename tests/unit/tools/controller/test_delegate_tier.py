@@ -140,14 +140,15 @@ def _delegate_controller(monkeypatch, build):
     """A bare Controller whose parent agent builds a child model with *build*."""
     import logging
     import agents.task.agent.service  # noqa: F401 — controller<->orchestrator import order
-    import agents.task.model_switch_service as svc
     from agents.task.constants import TimeoutConfig
     from tools.controller.registry.service import Registry
     from tools.controller.service import Controller
 
-    async def _allow(parent_agent, model, provider):
+    import agents.task.model_choice as choice
+
+    async def _allow(parent_agent, model, provider, route=None):
         return ""
-    monkeypatch.setattr(svc, "child_model_refusal", _allow)
+    monkeypatch.setattr(choice, "child_model_check", _allow)
     monkeypatch.setattr(TimeoutConfig, "get_sub_agents_enabled", classmethod(lambda cls: True))
     monkeypatch.setattr(TimeoutConfig, "get_max_sub_agent_depth", classmethod(lambda cls: 1))
 

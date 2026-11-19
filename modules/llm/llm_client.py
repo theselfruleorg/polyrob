@@ -30,10 +30,10 @@ from modules.llm.error_rules import (
 )
 
 
-def _status_code(error: BaseException) -> Optional[int]:
+def _status_code(error: BaseException, *, implicit: bool = True) -> Optional[int]:
     """The HTTP status on the exception or on what it wraps: ``status_code`` (openai,
     anthropic), ``response.status_code`` (httpx), an integer ``code`` (google, a body
-    error). openai's own ``code`` is a string and is not read."""
+    error); openai's ``code`` is a string, not read. *implicit* False = ``__cause__`` only."""
     current: Optional[BaseException] = error
     for _ in range(8):
         if current is None:
@@ -43,7 +43,7 @@ def _status_code(error: BaseException) -> Optional[int]:
                       getattr(current, "code", None)):
             if isinstance(value, int) and not isinstance(value, bool) and 400 <= value <= 599:
                 return int(value)
-        current = current.__cause__ or current.__context__
+        current = current.__cause__ or (current.__context__ if implicit else None)
     return None
 
 

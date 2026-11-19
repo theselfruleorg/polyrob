@@ -38,6 +38,13 @@
           "nullable": true,
           "type": "string"
         },
+        "model": {
+          "default": null,
+          "description": "Optional model for this work's runs: any model id or alias of a provider that has a key (agent_status view='models' lists them with prices); 'default' clears it. A model with no known price runs with a warning. Give a one-line 'why'. Not with 'tier'. A model the owner set is locked.",
+          "maxLength": 120,
+          "nullable": true,
+          "type": "string"
+        },
         "priority": {
           "default": 5,
           "description": "1-10, higher runs first.",
@@ -76,7 +83,7 @@
         },
         "tier": {
           "default": null,
-          "description": "Optional model tier for this work's runs — from the owner's chat only: 'heavy' for work that decides money (who is paid and how much) or is hard to undo; 'light' for bulk reads; 'default' = the normal model. <environment> names each tier's model. Requires 'why'.",
+          "description": "Optional model tier for this work's runs: 'heavy' for work that decides money (who is paid and how much) or is hard to undo; 'light' for bulk reads; 'default' = the normal model. <environment> names each tier's model (the owner or the operator sets it). Requires 'why'.",
           "enum": [
             "default",
             "heavy",
@@ -101,7 +108,7 @@
         },
         "why": {
           "default": null,
-          "description": "One line: why this tier. Required with 'tier'; shown in /status.",
+          "description": "One line: why this tier or model. Required with 'tier'; shown in /status.",
           "maxLength": 200,
           "nullable": true,
           "type": "string"

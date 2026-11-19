@@ -62,13 +62,15 @@ async def reserve_billed_call(model: str, provider: str) -> Optional[str]:
 #: raised never hands its id off: the next reservation in the same flow, or the
 #: agent's step-error handler, records it for the admin at once
 #: (:func:`record_orphaned_holds`). The 1 h reaper stays the backstop (a run
-#: that ends right after the exception). Never releases money.
+#: that ends right after the exception). Money returns in ONE case only: the
+#: provider answered with a status that proves no charge (:func:`release_refused_hold`).
 _OPEN_HOLDS: dict = {}
 _OPEN_HOLDS_MAX = 1000
 
 
 def note_open_hold(request_id: str, recorder: Callable[[list], Awaitable[int]],
-                   *, owned: bool = True) -> None:
+                   *, owned: bool = True,
+                   releaser: Optional[Callable[[str], Awaitable[bool]]] = None) -> None:
     """The credits reservation path registers a new hold and the async
     ``recorder(request_ids)`` that writes ``hold_unresolved`` rows for it.
     ``owned=False`` (a call made from a worker thread): no task follows the
@@ -80,12 +82,44 @@ def note_open_hold(request_id: str, recorder: Callable[[list], Awaitable[int]],
         task = None
     if len(_OPEN_HOLDS) >= _OPEN_HOLDS_MAX:
         _OPEN_HOLDS.pop(next(iter(_OPEN_HOLDS)))   # the reaper still covers it
-    _OPEN_HOLDS[request_id] = (task, recorder)
+    _OPEN_HOLDS[request_id] = (task, recorder, releaser)
 
 
 def hold_handed_off(request_id: str) -> None:
     """The metering path took this hold's id: it will settle (or record a failure)."""
     _OPEN_HOLDS.pop(request_id, None)
+
+
+def proves_no_charge(status: Optional[int]) -> bool:
+    """Does this HTTP status from the provider prove that it produced no output, so it
+    billed nothing? A 4xx refuses the request before work and a 500/503/529 says the
+    provider did not serve it. NOT proof: 408, 502 and 504 (a proxy lost a call that
+    possibly ran upstream), a timeout, a cancel, a lost connection, a missing status."""
+    if isinstance(status, bool) or not isinstance(status, int):
+        return False
+    return (400 <= status <= 499 and status != 408) or status in (500, 503, 529)
+
+
+async def release_refused_hold(request_id: Optional[str], status: Optional[int]) -> bool:
+    """Return a hold to its payer when the provider's answer proves no charge
+    (:func:`proves_no_charge`). Every other failed call keeps its hold for the admin
+    (:func:`record_orphaned_holds`). Fail-closed: a release that fails keeps the hold."""
+    if not request_id or not proves_no_charge(status):
+        return False
+    entry = _OPEN_HOLDS.get(request_id)
+    releaser = entry[2] if entry else None
+    if releaser is None:
+        return False
+    try:
+        released = bool(await releaser(request_id))
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("credit holds: release failed, hold kept",
+                                            exc_info=True)
+        return False
+    if released:
+        _OPEN_HOLDS.pop(request_id, None)
+    return released
 
 
 async def record_orphaned_holds() -> int:
@@ -98,7 +132,7 @@ async def record_orphaned_holds() -> int:
     except RuntimeError:
         current = None
     by_recorder: dict = {}
-    for rid, (task, recorder) in list(_OPEN_HOLDS.items()):
+    for rid, (task, recorder, _releaser) in list(_OPEN_HOLDS.items()):
         if task is current or (task is not None and task.done()):
             _OPEN_HOLDS.pop(rid, None)
             by_recorder.setdefault(recorder, []).append(rid)

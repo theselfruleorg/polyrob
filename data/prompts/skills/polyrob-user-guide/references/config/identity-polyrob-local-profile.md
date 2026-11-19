@@ -70,7 +70,6 @@ One line per setting: NAME — default — meaning. Code anchors and full prose:
 - TWITTER_BOT_USERNAME — default: unset — The bot's own X handle (without `@`), shown beside the X API line of the identity status section; unset = the handle is omitted.
 - WEBHOOK_PATH — default: /telegram/webhook — URL path for the Telegram webhook mode (explicitly not the old bot's hardcoded `/mvpbot`).
 - TELEGRAM_BOT_USERNAME — default: unset — the bot's @username without '@', used for room mention detection when getMe is unavailable at boot; getMe still wins when it succeeds.
-- CHAT_INTENT_CLASSIFIER — default: OFF — Enable the chat-surface intent classifier (pre-routing intent detection on inbound chat messages).
 - OUTBOUND_QUEUE_ENABLED — default: OFF — Durable outbound send queue (retry + dead-letter) behind `publish()`'s PRIMARY reply routing (direct-send vs. queued-with-retry for a locally-subscribed surface); OFF = direct legacy sends.
 - VOICE_TRANSCRIPTION_REQUIRED — default: OFF — Make a missing faster-whisper engine a startup ERROR instead of a WARN (most deploys degrade gracefully: voice refused with a notice).
 - INTERACTIVE_TOOL_IDS — default: unset — Explicit comma-list override of the owner chat seat's eager toolset (Telegram, the console/API on the owner's identity); unset derives it: the `owner` rig (`filesystem`, `task`, `web_fetch`, `goal`, `cronjob`, `message`) plus, under effect…
@@ -80,8 +79,6 @@ One line per setting: NAME — default — meaning. Code anchors and full prose:
 - POLYROB_CLI_CONFIG — default: unset — CLI config path override (default `~/.polyrob/cli.json`).
 - POLYROB_GITIGNORE_DOTROB — default: ON ("1") — Auto-gitignore the `.polyrob/` home.
 - CLI_WORKSPACE_LOCK — default: ON ("1") — CLI workspace lock to prevent concurrent CWD corruption.
-- CLI_PREFER_ACTION_TEXT — default: ON ('true') — CLI prefers clean action text over raw streamed buffer.
-- CLI_TODO_DOT_ROB — default: ON ("true") — In a project-root workspace, keep the agent TODO file under `.polyrob/` instead of the project root.
 - CONFIG_ENV — default: unset (→ ENV → development) — Highest-precedence spelling of the environment name that selects `config/.env.<env>` (`CONFIG_ENV` > `ENV` > `development`; see the env-files section at the top).
 - POLYROB_INSTANCE_ID — default: "polyrob" (DEFAULT_INSTANCE_ID; in profile mode the active profile name) — Instance identity id.
 - POLYROB_OWNER_USER_ID — default: unset → **local** — Explicit binding of this instance's OWNER principal (an **internal `user_id`** — **not** a raw Telegram id).

@@ -105,6 +105,14 @@ polyrob config check
 
 ## 3. Version notes
 
+### Upgrading to 1.7.13
+
+No database migration.
+
+- **The settings `PFP_PUSH_TWITTER`, `PFP_PUSH_TELEGRAM` and `PFP_PUSH_DISCORD` are gone, and so is `AVATAR_TOOL_ENABLED`.** The agent always has its avatar action: to read it is free, and a change needs your turn in the chat. An avatar push needs no setting: `polyrob avatar push` (or `/avatar push`) updates each account that has credentials. To update one account only, name it (`polyrob avatar push --telegram`). Delete the three lines from your env file; `polyrob doctor` names a line that is still there.
+- **Five defences have no off switch now.** `FS_REALPATH_CONFINE`, `HISTORY_SECRET_SCRUB`, `UNTRUSTED_TOOL_RESULT_WRAP`, `COMPACTION_PROMPT_GUARD` and `SUBAGENT_LEAST_PRIVILEGE` are gone. Seventeen default-ON switches are constants: `ENABLE_ROBUST_PARSE`, `ENABLE_JSON_TEMPLATE_RETRY`, `ENABLE_CONTEXT_OVERFLOW_GUARD`, `INJECT_FORMAT_HINT_EARLY`, `FORCE_RECALIBRATE_AFTER_LARGE_ACTIONS`, `EMPTY_ACTION_FAST_ESCALATE`, `ENV_CONTEXT_BLOCK`, `SOURCE_PRECEDENCE_PROMPT`, `TOOL_SCHEMA_SANITIZE`, `EXTERNAL_WRITE_TELEMETRY`, `CLI_PREFER_ACTION_TEXT`, `BROWSER_USE_LOGGING_LEVEL`, `PREFS_ENABLED`, `INBOUND_MEDIA_ENABLED`, `LIVE_HEALTH_CONTEXT`, `SANDBOX_REAP_ENABLED` and `CLI_TODO_DOT_ROB`. A file path that leaves the working files is refused (it was written under its bare file name with the setting off), and secret-shaped text is always scrubbed from the stored history. An install that set one of these names to `off` gets the default behaviour. The changes you can see: with `PREFS_ENABLED=off` your `preferences.toml` is honoured again, with `INBOUND_MEDIA_ENABLED=off` a file you send is stored and read again, with `SANDBOX_REAP_ENABLED=off` idle sandboxes are removed again (`/pause` stops that), with `CLI_TODO_DOT_ROB=off` the CLI keeps its todo file under `.polyrob/` (a `todo.md` in the project root is not read), and with `EMPTY_ACTION_FAST_ESCALATE=off` the strong nudge comes after two empty steps, not three.
+- **Settings with no effect are gone.** `STEP_TIMEOUT_SECONDS`, `STALL_TIMEOUT_SECONDS`, `LLM_BASE_TIMEOUT_SECONDS`, `LLM_STREAM_TIMEOUT_SECONDS`, `COMPACTION_CHECKPOINT`, `CHAT_INTENT_CLASSIFIER`, `CONTINUITY_LLM_SUMMARY`, `AGENT_WALLET_BACKEND`, `VISION_CALL_COST`, `TOOL_CALL_COST`, `X402_INVOICE_AMOUNT_JITTER`, `MIN_STEPS_BEFORE_DONE`, `CONFIDENCE_CHECK_BEFORE_DONE`, `TASK_VERIFICATION_REQUIRED`, `STORE_LARGE_CONTENT_AS_FILES` and `MAX_EXTRACTED_CONTENT_LENGTH` did nothing; nothing changes. `polyrob doctor` names a leftover line. `X402_CLIENT_FACILITATOR_URL` did nothing too; it had no settings row, so delete its line yourself.
+
 ### Upgrading to 1.7.12
 
 No database migration.
@@ -119,6 +127,7 @@ No database migration and no new store.
 - **`LP_ETH_CAP` is a net total.** A v4 withdrawal gives its ETH back to that limit, so a deposit you close lets you make the next one. `LP_ETH_DAILY_CAP` still counts every deposit. With `LP_ETH_CAP` at `0`, a v4 deposit of ETH refuses.
 - **A liquidity dry run is a decision you confirm.** `/lp add`, `remove`, `collect` and a seed run print Confirm under the dry run. The agent can propose a withdrawal or a fee collection the same way. It cannot propose a plain deposit; a new pool or a move is a declaration you confirm.
 - **An emptied v4 deposit stays in the wallet.** A full withdrawal keeps the deposit NFT; this release does not burn it.
+- **Slack shows buttons.** An approval, a decision and a choice carry buttons, and a tap counts as you typing the command. Turn Interactivity on in the Slack app (Socket Mode needs no request URL); without it the buttons do nothing and the commands still work as text. There are no menus.
 - **Discord shows buttons.** An approval, a decision and a choice carry buttons, and a tap counts as you typing the command. The commands still work as text. There are no slash commands and no menus.
 - **`AGENT_NFT_ENABLED` is an owner setting.** Turn it on with `/config set AGENT_NFT_ENABLED true` and restart. An env line that sets it still works; while the service's env file sets another value, the chat line refuses and names that file.
 

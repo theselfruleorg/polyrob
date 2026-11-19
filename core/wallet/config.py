@@ -464,14 +464,16 @@ def _load_wallet_config(env: Mapping[str, str], *, user_id: Optional[str],
     raw_seed = custody_secret("AGENT_WALLET_MASTER_SEED", env)
     return WalletConfig(
         enabled=enabled,
-        backend=env.get("AGENT_WALLET_BACKEND", "local_eoa").strip().lower(),
+        backend="local_eoa",  # the one key backend; WALLET_SIGNER says where it signs
         # CR-L30: normalized ONCE (see normalize_master_seed); a disabled wallet
         # derives nothing, so its seed is passed through untouched.
         master_seed=normalize_master_seed(raw_seed, env=env) if enabled else raw_seed,
         network=network if network in ("testnet", "mainnet") else "testnet",
         max_per_tx_usd=max_per_tx_usd,
         x402_client_enabled=_b(env, "X402_CLIENT_ENABLED", False),
-        x402_facilitator_url=env.get("X402_CLIENT_FACILITATOR_URL", TESTNET_FACILITATOR_URL),
+        # The paying client never contacts a facilitator (tools/x402/real_client.py);
+        # the field is kept for its constructors and has no env name.
+        x402_facilitator_url=TESTNET_FACILITATOR_URL,
         daily_cap_usd=daily_cap_usd,
         per_venue_daily_cap_usd=_load_per_venue_caps(env),
         operational_venue=(env.get("AGENT_WALLET_OPERATIONAL_VENUE", "treasury").strip().lower()

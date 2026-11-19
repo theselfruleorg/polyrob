@@ -106,7 +106,8 @@ async def pre_gate_reply(task_agent: Any, result: Any, cmd: str) -> Optional[str
 async def _status(c: AdminCall) -> str:
     from surfaces.telegram.status_ops import _status_reply
     return await _status_reply(c.task_agent, c.user_id, c.result.decision.session_id,
-                               c.data_dir, board=c.board)
+                               c.data_dir, board=c.board,
+                               full="all" in [w.lower() for w in _words(c.result)])
 
 
 async def _mode(c: AdminCall) -> str:
@@ -131,13 +132,13 @@ async def _recap(c: AdminCall) -> str:
 
 
 async def _avatar(c: AdminCall) -> Any:
-    # show / set <url|nft:…> / clear. The image rides the SAME media rail the
+    # show / set <url|nft:…> / clear / push. The image rides the SAME media rail the
     # invoice card uses (MessageRouter), best-effort: if no router is
     # reachable the text still answers rather than failing the verb.
-    # `/avatar set` fetches over the network, so it runs off the poll loop
+    # `/avatar set` and `/avatar push` use the network, so they run off the poll loop
     # (`harness._runs_in_background`).
     from surfaces.telegram import owner_ops as _owner_ops
-    if c.args and c.args[0].lower() in ("set", "clear"):
+    if c.args and c.args[0].lower() in ("set", "clear", "push"):
         text, img = await _owner_ops.avatar_change(c.data_dir, c.args)
     else:
         text, img = _owner_ops.avatar_reply(c.data_dir, c.args)
@@ -417,12 +418,12 @@ def _approval(name: str) -> Callable[[AdminCall], Awaitable[Any]]:
 
 
 async def _restart(c: AdminCall) -> str:
-    from surfaces.telegram.lifecycle_ops import origin_of, restart_reply
+    from core.lifecycle_ops import origin_of, restart_reply
     return restart_reply(c.user_id, c.data_dir, c.args, origin_of(c.result, c.user_id))
 
 
 async def _update(c: AdminCall) -> str:
-    from surfaces.telegram.lifecycle_ops import origin_of, update_reply
+    from core.lifecycle_ops import origin_of, update_reply
     return await update_reply(c.user_id, c.data_dir, c.args, origin_of(c.result, c.user_id))
 
 

@@ -105,6 +105,39 @@ def test_search_finds_flag_by_fragment(home):
     assert "GOAL_DAILY_QUOTA" in keys
 
 
+def _one_key_unreadable(monkeypatch, bad: str):
+    real = cs.describe
+
+    def _describe(key, **kw):
+        if key == bad:
+            raise ValueError("cannot read")
+        return real(key, **kw)
+    monkeypatch.setattr(cs, "describe", _describe)
+
+
+def test_search_names_a_key_it_could_not_read(home, monkeypatch):
+    """120 W9 leftover: an unread key is named (as changed_settings does), never dropped."""
+    _one_key_unreadable(monkeypatch, "GOAL_DAILY_QUOTA")
+    hits = cs.search("GOAL_DAILY", user_id="u1", home_dir=home)
+    assert "GOAL_DAILY_QUOTA" not in [i.key for i in hits]
+    assert hits.unread == ["GOAL_DAILY_QUOTA"]
+    text = cs.search_reply("GOAL_DAILY_QUOTA", user_id="u1", home_dir=home)
+    assert "1 setting(s) could not be read: GOAL_DAILY_QUOTA" in text
+
+
+def test_every_search_seat_prints_the_unread_keys(home, monkeypatch):
+    from click.testing import CliRunner
+
+    from cli.commands import config as config_cmd
+    from cli.ui.commands import h_config
+    _one_key_unreadable(monkeypatch, "GOAL_DAILY_QUOTA")
+    ctx = h_config.ConfigCtx(user_id="u1", home_dir=home)
+    assert "could not be read: GOAL_DAILY_QUOTA" in h_config._cmd_search(ctx, ["GOAL_DAILY"])
+    out = CliRunner().invoke(config_cmd.config, ["search", "GOAL_DAILY", "--home", str(home)],
+                             catch_exceptions=False).output
+    assert "could not be read: GOAL_DAILY_QUOTA" in out
+
+
 # --- set_value ----------------------------------------------------------------
 
 def test_set_pref_safe_writes_immediately(home):

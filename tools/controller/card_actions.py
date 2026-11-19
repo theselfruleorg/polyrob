@@ -74,6 +74,37 @@ def _refusal(controller, execution_context, user_id: str) -> Optional[str]:
     return None
 
 
+def _withdraw_card(user_id: str, card_id: str) -> ActionResult:
+    """120 W2: close one OPEN card the agent raised, through the store's own compare-and-set
+    (a Confirm the owner tapped first wins). A card the system raised is the owner's."""
+    from core.surfaces import cards
+    cid = card_id.removeprefix("/card_")
+    try:
+        card = cards.store().get(cid)
+    except Exception:
+        logger.warning("cards_read cancel: store unreadable", exc_info=True)
+        return ActionResult(error="cards_read: the card store could not be read, so no card "
+                                  "was cancelled.", include_in_memory=True)
+    if card is None or card.user_id != str(user_id):
+        return ActionResult(error=f"No card {cid} of yours.", include_in_memory=True)
+    if card.origin != cards.ORIGIN_AGENT:
+        return ActionResult(error=f"Refused: card {cid} was raised by the system for the owner "
+                                  f"({card.kind}); only the owner cancels it.",
+                            include_in_memory=True)
+    if card.state != cards.S_OPEN:
+        return ActionResult(error=f"Refused: card {cid} is {card.state}, not open.",
+                            include_in_memory=True)
+    done = cards.store().transition(cid, frozenset({cards.S_OPEN}), cards.S_CANCELLED,
+                                    result="withdrawn by the agent")
+    if done is None:
+        return ActionResult(error=f"Card {cid} changed first (the owner decided it); it was "
+                                  f"not cancelled. Read cards_read again.",
+                            include_in_memory=True)
+    cards._notify(done)
+    return ActionResult(extracted_content=f"Cancelled card {cid}: {done.line or done.title}. "
+                                          f"Nothing ran.", include_in_memory=True)
+
+
 def _session_id(controller, execution_context) -> str:
     return str(getattr(execution_context, "session_id", "")
                or getattr(controller, "session_id", "") or "")
@@ -434,12 +465,18 @@ def register_card_actions(controller) -> None:
     class CardsRead(BaseModel):
         hours: float = Field(24.0, ge=1, le=168, description=(
             "How far back to list the decided cards (default 24 h)."))
+        cancel: str = Field("", max_length=40, description=(
+            "The id of an OPEN card YOU raised that is no longer needed: it closes as "
+            "cancelled and nothing runs. A card the system raised (a quote) stays the "
+            "owner's. Empty: only read."))
 
     @controller.registry.action(
         "Read YOUR action cards from the card store: every open card (id, exact "
         "command, reason) and every card decided in the last hours with its outcome "
-        "(sent, cancelled, replaced, expired). Use it before you tell the owner what "
-        "is open, paid or owed, and before you raise or replace a card. Nothing changes.",
+        "(sent, cancelled, replaced, expired) and, for a payment that landed, its tx "
+        "hash. Use it before you tell the owner what is open, paid or owed, before you "
+        "write a tx hash anywhere, and before you raise or replace a card. With cancel=<id> "
+        "it withdraws one open card you raised; otherwise nothing changes.",
         param_model=CardsRead,
     )
     async def cards_read(params: CardsRead, execution_context=None) -> ActionResult:
@@ -448,6 +485,8 @@ def register_card_actions(controller) -> None:
         why = _refusal(controller, execution_context, user_id)
         if why:
             return ActionResult(error=why, include_in_memory=True)
+        if params.cancel.strip():
+            return await asyncio.to_thread(_withdraw_card, user_id, params.cancel.strip())
         from core.surfaces.card_list import agent_view
         text = await asyncio.to_thread(agent_view, user_id, hours=params.hours)
         return ActionResult(extracted_content=text, include_in_memory=True)

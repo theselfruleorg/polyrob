@@ -639,10 +639,6 @@ def _plan_stub(monkeypatch):
 
     async def fake(cmd, *, user_id, current=(None, None)):
         seen["cmd"] = cmd
-        if cmd.name == "pricey" and not cmd.confirm:
-            plan = svc.Plan("openrouter", "x/pricey", "id", None, cmd.default)
-            plan.quote = "Switch to x/pricey? …\nTo switch: /model pricey go"
-            return plan, ""
         if cmd.name == "nope":
             return None, "❌ 'nope' is not on openrouter. Nothing changed."
         return svc.Plan(cmd.provider or "anthropic", cmd.name, "id", cmd.reasoning, cmd.default), ""
@@ -684,10 +680,11 @@ async def test_model_default_also_persists(monkeypatch, _plan_stub, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_model_quote_does_not_swap(_plan_stub):
+async def test_a_pricier_model_swaps_at_once(_plan_stub):
+    """121: no price gate — the owner chooses the model knowingly."""
     agent, ctx, buf = _swap_ctx({"ok": True})
     await default_registry().dispatch("/model pricey", ctx)
-    assert agent.calls == [] and "/model pricey go" in buf.getvalue()
+    assert len(agent.calls) == 1 and " go" not in buf.getvalue()
 
 
 @pytest.mark.asyncio

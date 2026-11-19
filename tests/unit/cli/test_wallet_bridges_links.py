@@ -12,7 +12,7 @@ transaction LANDED on, and no link at all when that chain cannot be named.
 import pytest
 from click.testing import CliRunner
 
-from cli.commands.wallet import _chain_name, _tx_link
+from tools.defi.money_state_lines import chain_label as _chain_name, tx_link as _tx_link
 from core.wallet.bridge_guard import chain_name_for_id
 from tools.defi.providers.relay_bridge import SOLANA_CHAIN_ID
 
@@ -40,7 +40,7 @@ def test_the_core_resolver_knows_registry_ids_only():
 def test_the_seat_resolves_the_id_the_bridge_actually_stores():
     """`record_pending` writes Relay's own pseudo chain id for an SVM origin,
     and the seat that renders the row is where that is resolved."""
-    from cli.commands.wallet import _bridge_chain_key
+    from tools.defi.money_state_lines import bridge_chain_key as _bridge_chain_key
     assert _bridge_chain_key(SOLANA_CHAIN_ID) == "solana"
     assert _bridge_chain_key(8453) == "base"
     assert _bridge_chain_key(0) is None

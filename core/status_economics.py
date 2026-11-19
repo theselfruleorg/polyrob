@@ -500,6 +500,39 @@ def spend_view_lines(view: Dict[str, Any], *, names: Optional[Dict[str, str]] = 
     return out
 
 
+#: The ``/usage`` window when none is named (days).
+SPEND_DEFAULT_DAYS = 7
+
+
+def parse_days(args: List[str]) -> Optional[int]:
+    """Days from a ``/usage`` line's words; ``None`` for a malformed line. The one
+    parser: Telegram, the terminal and the console route call it."""
+    words = [str(a).strip().lower() for a in (args or []) if str(a).strip()]
+    if not words:
+        return SPEND_DEFAULT_DAYS
+    w = words[0].rstrip("d")
+    if len(words) > 1 or not w.isdecimal() or int(w) < 1:
+        return None
+    return min(int(w), 90)
+
+
+def spend_reply(user_id: str, data_dir: str, days: int = SPEND_DEFAULT_DAYS, *,
+                names: Any = None, now: Optional[float] = None) -> str:
+    """The ``/usage`` answer as text — every seat and the agent's ``usage_summary``
+    print this (120 W3). An unreadable ledger is said, never shown as $0. ``names``
+    is the seat's job-title map, or a no-argument callable that returns it (called
+    only after the ledger was read); the agent passes none (the resolver sits above
+    ``tools``), so a job reads ``scheduled job <id>``."""
+    import time
+    try:
+        view = spend_view(user_id, data_dir, now=time.time() if now is None else now,
+                          days=days)
+    except Exception as e:  # noqa: BLE001 — an unreadable ledger is not $0
+        return (f"AI cost: could not read the records ({type(e).__name__}: {str(e)[:160]}) "
+                "— this is not a zero.")
+    return "\n".join(spend_view_lines(view, names=names() if callable(names) else names))
+
+
 def top_cost_line(view: Dict[str, Any], *, names: Optional[Dict[str, str]] = None) -> str:
     """ONE digest line: the biggest AI cost of the window and what it was."""
     e = view["economics"]

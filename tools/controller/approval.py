@@ -506,14 +506,65 @@ def _stamp_owner_grant(context, params: Dict[str, Any]) -> None:
         logger.debug("owner grant stamp skipped", exc_info=True)
 
 
-def operator_denies_approvals() -> bool:
-    """``APPROVAL_PROVIDER=deny`` (or an unknown name, which resolves to deny): the
-    operator's standing stop, which no owner-turn rule passes. Fail closed."""
+#: The two causes of the standing stop, as a refusal names them.
+ENV_DENY_CAUSE = "APPROVAL_PROVIDER=deny"
+PREF_DENY_CAUSE = "the owner preference approvals.provider=deny"
+
+
+def operator_deny_cause() -> str:
+    """The cause of the standing stop, which no owner-turn rule passes, or ``""``:
+    ``APPROVAL_PROVIDER=deny`` (or an unknown name, which resolves to deny), or the
+    owner's ``approvals.provider`` preference set to ``deny`` (the stricter of the
+    two wins, as on the policy chain). Fail closed on the env value. A refusal
+    names this text, so the owner looks in the right place."""
     try:
-        return isinstance(get_approval_provider_or_deny(os.getenv("APPROVAL_PROVIDER")),
-                          DenyByDefaultApprover)
+        if isinstance(get_approval_provider_or_deny(os.getenv("APPROVAL_PROVIDER")),
+                      DenyByDefaultApprover):
+            return ENV_DENY_CAUSE
     except Exception:
-        return True
+        return ENV_DENY_CAUSE
+    return PREF_DENY_CAUSE if _owner_pref_denies() else ""
+
+
+def operator_denies_approvals() -> bool:
+    """The standing stop is on (:func:`operator_deny_cause` says why)."""
+    return bool(operator_deny_cause())
+
+
+_stop_owner_warned = False
+
+
+def _stop_owner() -> Optional[str]:
+    """The owner tenant whose preference is the stop. An owner's shell carries
+    none of the service env, so the deployed env file is asked first; a service
+    that cannot read that file (root-only) has the owner in its own env, and
+    the in-process resolver answers."""
+    global _stop_owner_warned
+    from core.admin_data_home import DeployedEnvUnreadable, admin_owner_principal
+    try:
+        return admin_owner_principal()
+    except DeployedEnvUnreadable:
+        from core.instance import resolve_owner_principal
+        owner = resolve_owner_principal()
+        if not _stop_owner_warned:
+            _stop_owner_warned = True
+            logger.warning("approval stop: the deployed env file is not readable by this "
+                           f"process; the owner preference is read for '{owner}'")
+        return owner
+
+
+def _owner_pref_denies() -> bool:
+    """The owner tenant's ``approvals.provider`` preference is ``deny``. An
+    unreadable preference file is logged and does not stop the act: the env
+    value above is the fail-closed half (same rule as ``effective_approval_state``)."""
+    try:
+        from core import prefs as _prefs
+        from core.runtime_paths import prefs_home_dir
+        return _prefs.resolve("approvals.provider", _stop_owner(),
+                              prefs_home_dir(), env_value="auto", default="auto") == "deny"
+    except Exception as e:
+        logger.error(f"operator_denies_approvals: preference not read (non-fatal): {e}")
+        return False
 
 
 def owner_social_write_exemption(action_name: str, params: Dict[str, Any],

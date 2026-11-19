@@ -94,7 +94,10 @@ _RETIRED_TABLES = ("account_binding", "desk")
 #: The only env names ``[env]`` may set in the signer process. An RPC pin (the
 #: guard refuses to arm on a shared public endpoint) and the Alchemy key the RPC
 #: resolver composes an endpoint from. Never a flag that loosens a guard.
-_ENV_NAMES = re.compile(r"^(DEFI_EVM_RPC_[A-Z0-9_]+|ALCHEMY_API_KEY|SOLANA_RPC_URL)$")
+#: ``SOLANA_RPC_URL`` is accepted so that an older ``signer.toml`` still loads;
+#: no code reads it. The Solana pin is ``DEFI_SOLANA_RPC``.
+_ENV_NAMES = re.compile(
+    r"^(DEFI_EVM_RPC_[A-Z0-9_]+|ALCHEMY_API_KEY|DEFI_SOLANA_RPC|SOLANA_RPC_URL)$")
 _ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
 

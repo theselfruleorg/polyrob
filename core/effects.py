@@ -193,11 +193,6 @@ def effect_pause_refusal(effect: str, tool_id: Optional[str], action: str,
 
 # --- flags -------------------------------------------------------------------------
 
-def external_write_telemetry_enabled() -> bool:
-    """``EXTERNAL_WRITE_TELEMETRY`` (default ON): record ``external_write`` rows."""
-    return bool_env("EXTERNAL_WRITE_TELEMETRY", True)
-
-
 def external_write_pause_gate_enabled() -> bool:
     """``EXTERNAL_WRITE_PAUSE_GATE`` (default ON): the effect pre-hook consults
     ``allows()`` for the gated classes on an autonomous turn."""
@@ -248,8 +243,6 @@ def record_external_write(*, effect: str, tool: str = "", action: str = "",
     try:
         if effect not in EFFECT_CLASSES:
             logger.debug("record_external_write: unknown effect %r dropped", effect)
-            return
-        if not external_write_telemetry_enabled():
             return
         from core.event_log import event_log_enabled, get_event_log
         if event_log is None and not event_log_enabled():
@@ -377,7 +370,7 @@ __all__ = [
     "EffectVerdict", "GATED_EFFECTS", "NON_WRITE_ACTIONS", "OUTCOMES",
     "TOKEN_TO_EFFECT", "WRITE_ACTIONS", "ceiling", "classify_effect", "dedup_key",
     "effect_line", "effect_pause_refusal", "external_write_pause_gate_enabled",
-    "external_write_strict", "external_write_telemetry_enabled", "last_good_act_on",
+    "external_write_strict", "last_good_act_on",
     "outward_counts",
     "outward_line", "pause_kind_for", "record_external_write",
 ]

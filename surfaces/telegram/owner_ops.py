@@ -323,16 +323,10 @@ def goal_reply(user_id: str, data_dir: str, args: List[str],
 #: clamped by the daily cap. He approved a raise twice while this note told him
 #: it could not work, and the agent then asked him to edit an env file.
 _CAP_NOTE = (
-    "Change the per-transaction ceiling from here: /config set "
-    "budget.wallet_per_tx_usd <usd> (guarded → /pending → /approve, applies "
-    "live). It is clamped to the daily cap, so the most a single move can "
-    "lose is never more than a whole day may.\n"
-    "Tighten the daily cap the same way: /config set budget.wallet_daily_usd "
-    "<usd> — that one can only ever LOWER what the operator set, so no chat "
-    "message can widen the maximum daily loss.\n"
-    "When the wallet signer is installed, its hard caps bound both: a raise "
-    "from chat stops at the signer's cap, which only root changes on the box.\n"
-    "Change how much runs without asking you: /wallet autonomous <usd>."
+    "Change a cap (it asks for your approval, then applies live): "
+    "/config set budget.wallet_per_tx_usd <usd> · "
+    "/config set budget.wallet_daily_usd <usd> (it can only lower the operator's cap). "
+    "What runs without asking you: /wallet autonomous <usd>."
 )
 
 
@@ -878,6 +872,8 @@ _AVATAR_USAGE = ("`/avatar` — show the avatar\n"
                  "`/avatar set <https-url | ipfs://… | nft:chain:contract:id>` — "
                  "replace it\n"
                  "`/avatar clear` — remove it\n"
+                 "`/avatar push [x] [telegram] [discord]` — make my account "
+                 "pictures show it (no word = all of them)\n"
                  "(From a file on the box: `polyrob avatar set <file>`.)")
 
 
@@ -910,7 +906,8 @@ def avatar_reply(data_dir: str, args: List[str]) -> Tuple[str, Optional[str]]:
 
 
 async def avatar_change(data_dir: str, args: List[str]) -> Tuple[str, Optional[str]]:
-    """``/avatar set <ref>`` | ``/avatar clear`` -> ``(text, image_path_or_None)``."""
+    """``/avatar set <ref>`` | ``/avatar clear`` | ``/avatar push [surfaces]`` ->
+    ``(text, image_path_or_None)``."""
     from core.avatar import AvatarError, clear_avatar, describe, set_avatar
     from core.instance import resolve_instance_id
 
@@ -920,22 +917,24 @@ async def avatar_change(data_dir: str, args: List[str]) -> Tuple[str, Optional[s
         removed = clear_avatar(data_dir, instance_id)
         return ((f"*{instance_id}* — avatar cleared; the default mark is back." if removed
                  else f"*{instance_id}* — there was no avatar to clear (it shows the default mark)."), None)
+    if sub == "push":
+        import asyncio
+        from modules.avatar import push as pushmod
+        results = await asyncio.to_thread(
+            pushmod.push_avatar, data_dir, instance_id, surfaces=args[1:])
+        return (f"*{instance_id}* — avatar push\n" + pushmod.render_push(results), None)
     ref = " ".join(args[1:]).strip()
     if sub != "set" or not ref:
         return (_AVATAR_USAGE, None)
     from tools import avatar_sources
     try:
-        if ref.startswith("nft:"):
-            chain, contract, token_id = avatar_sources.parse_nft_ref(ref[len("nft:"):])
-            data, source = await avatar_sources.image_from_nft(chain, contract, token_id)
-        else:
-            data, source = await avatar_sources.image_from_url(ref)
+        data, source = await avatar_sources.image_from_ref(ref)
         st = set_avatar(data_dir, instance_id, data, source=source)
     except AvatarError as e:
         return (f"The avatar was NOT changed: {e}", None)
     return (f"*{instance_id}* — avatar {describe(st)}\n"
-            f"_the X/Telegram account pictures keep the old image until "
-            f"`polyrob avatar push` on the server_", str(st.path))
+            f"_my X, Telegram and Discord pictures keep the old image until "
+            f"`/avatar push`_", str(st.path))
 
 
 # --------------------------------------------------------------------------- #

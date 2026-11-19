@@ -75,7 +75,10 @@ def _model_route_lines(sec: Section, tele: Section) -> None:
     turn) and why — newest first, at most three."""
     from core.event_kinds import MODEL_ROUTED
     keep = 3  # the newest three; /status is a summary, the event log holds all
-    routes = [r["attrs"] or {} for r in _tele_rows(tele, MODEL_ROUTED)][:keep]
+    # 121: every run records its model; the line shows the CHOICES (a tier or a model that
+    # somebody named), not each run on the default.
+    routes = [a for a in (r["attrs"] or {} for r in _tele_rows(tele, MODEL_ROUTED))
+              if a.get("tier") != "default"][:keep]
     sec.data["model_routes"] = [{k: a.get(k) for k in ("kind", "tier", "model", "why")}
                                 for a in routes]
     if routes:

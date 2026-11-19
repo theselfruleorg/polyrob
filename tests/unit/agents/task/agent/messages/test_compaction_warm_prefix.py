@@ -71,7 +71,6 @@ def _fill(mm: MessageManager, turns: int = 200) -> None:
 @pytest.fixture(autouse=True)
 def _roomy_deque(monkeypatch, tmp_path):
 	monkeypatch.setenv("TASK_MAX_MESSAGES", "500")
-	monkeypatch.setenv("COMPACTION_CHECKPOINT", "false")
 	yield
 
 

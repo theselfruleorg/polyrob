@@ -1,4 +1,5 @@
-"""The one price rule for a model change: ``/model`` quotes first, a fallback does not move.
+"""The price rule of the fallback ladder: a failed model is not replaced in silence by a much
+pricier one. A model that the owner or the agent CHOOSES has no price gate (121).
 
 Pure and with no import, so the LLM manager reads the rule with no import cycle.
 """

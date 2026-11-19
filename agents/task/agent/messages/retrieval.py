@@ -119,10 +119,8 @@ class MessageRetrievalMixin:
 		This does not modify history or token counts and is cleared after use.
 		"""
 		try:
-			# Apply sensitive data filtering if configured, or the HISTORY_SECRET_SCRUB
-			# backstop (default ON) which scrubs unregistered secrets with no allowlist.
-			if self.sensitive_data or getattr(self, "_history_secret_scrub", True):
-				message = self._filter_sensitive_data(message)
+			# The allowlist plus the pattern backstop for unregistered secrets.
+			message = self._filter_sensitive_data(message)
 			# B3 (2026-07-13 correspondent review): bound the one-shot queue — the HITL
 			# queue has backpressure (MAX_QUEUED_MESSAGES) but this rail had none, so a
 			# correspondent flood could inflate the next prompt without limit. Overflow

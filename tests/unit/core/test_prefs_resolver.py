@@ -89,14 +89,6 @@ def test_stricter_provider(home):
                    env_value="interactive_cli", default="auto") == "deny"
 
 
-def test_prefs_enabled_kill_switch(home, monkeypatch):
-    write_preference(home, "u1", "digest.channel", "email")
-    monkeypatch.setenv("PREFS_ENABLED", "false")
-    val, src = resolve_with_source("digest.channel", "u1", home,
-                                   env_value=None, default="telegram")
-    assert val == "telegram" and src == "default"
-
-
 def test_stricter_provider_never_overrides_custom_env_provider(home):
     """Custom (non-standard) APPROVAL_PROVIDER must never be overridden by a pref."""
     write_preference(home, "u1", "approvals.provider", "auto")

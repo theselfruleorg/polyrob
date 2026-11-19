@@ -48,7 +48,6 @@ async def test_kb_off_no_kb_call():
         patch("core.config_policy.AutonomyConfig.kb_auto_prefetch", return_value=False),
         patch("modules.memory.registry.memory_prefetch", new=AsyncMock(return_value=MEMORY_CONTENT)),
         patch("modules.memory.registry.kb_search", new=kb_sentinel),
-        patch("agents.task.constants.UNTRUSTED_TOOL_RESULT_WRAP", True),
     ):
         from agents.task.agent.core.memory_prefetch import build_prefetch_message
         result = await build_prefetch_message(QUERY, session_id=SESSION_ID, user_id=USER_ID)
@@ -86,7 +85,6 @@ async def test_kb_on_both_sections_present():
         patch("core.config_policy.AutonomyConfig.kb_auto_prefetch", return_value=True),
         patch("modules.memory.registry.memory_prefetch", new=AsyncMock(return_value=MEMORY_CONTENT)),
         patch("modules.memory.registry.kb_search", new=AsyncMock(return_value=KB_CONTENT)),
-        patch("agents.task.constants.UNTRUSTED_TOOL_RESULT_WRAP", True),
     ):
         from agents.task.agent.core.memory_prefetch import build_prefetch_message
         result = await build_prefetch_message(QUERY, session_id=SESSION_ID, user_id=USER_ID)
@@ -108,12 +106,11 @@ async def test_kb_on_both_sections_present():
 
 @pytest.mark.asyncio
 async def test_kb_on_memory_wrapped_cross_session():
-    """With UNTRUSTED_TOOL_RESULT_WRAP ON, memory is wrapped with cross_session_memory source."""
+    """Memory is wrapped with cross_session_memory source."""
     with (
         patch("core.config_policy.AutonomyConfig.kb_auto_prefetch", return_value=True),
         patch("modules.memory.registry.memory_prefetch", new=AsyncMock(return_value=MEMORY_CONTENT)),
         patch("modules.memory.registry.kb_search", new=AsyncMock(return_value=KB_CONTENT)),
-        patch("agents.task.constants.UNTRUSTED_TOOL_RESULT_WRAP", True),
     ):
         from agents.task.agent.core.memory_prefetch import build_prefetch_message
         result = await build_prefetch_message(QUERY, session_id=SESSION_ID, user_id=USER_ID)
@@ -133,7 +130,6 @@ async def test_kb_on_kb_raises_fail_open():
         patch("core.config_policy.AutonomyConfig.kb_auto_prefetch", return_value=True),
         patch("modules.memory.registry.memory_prefetch", new=AsyncMock(return_value=MEMORY_CONTENT)),
         patch("modules.memory.registry.kb_search", new=AsyncMock(side_effect=RuntimeError("KB exploded"))),
-        patch("agents.task.constants.UNTRUSTED_TOOL_RESULT_WRAP", True),
     ):
         from agents.task.agent.core.memory_prefetch import build_prefetch_message
         result = await build_prefetch_message(QUERY, session_id=SESSION_ID, user_id=USER_ID)
@@ -158,7 +154,6 @@ async def test_kb_on_only_kb_content():
         patch("core.config_policy.AutonomyConfig.kb_auto_prefetch", return_value=True),
         patch("modules.memory.registry.memory_prefetch", new=AsyncMock(return_value="")),
         patch("modules.memory.registry.kb_search", new=AsyncMock(return_value=KB_CONTENT)),
-        patch("agents.task.constants.UNTRUSTED_TOOL_RESULT_WRAP", True),
     ):
         from agents.task.agent.core.memory_prefetch import build_prefetch_message
         result = await build_prefetch_message(QUERY, session_id=SESSION_ID, user_id=USER_ID)
@@ -184,7 +179,6 @@ async def test_kb_on_both_empty_returns_none():
         patch("core.config_policy.AutonomyConfig.kb_auto_prefetch", return_value=True),
         patch("modules.memory.registry.memory_prefetch", new=AsyncMock(return_value="")),
         patch("modules.memory.registry.kb_search", new=AsyncMock(return_value="")),
-        patch("agents.task.constants.UNTRUSTED_TOOL_RESULT_WRAP", True),
     ):
         from agents.task.agent.core.memory_prefetch import build_prefetch_message
         result = await build_prefetch_message(QUERY, session_id=SESSION_ID, user_id=USER_ID)

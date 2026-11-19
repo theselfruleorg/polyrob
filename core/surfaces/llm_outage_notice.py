@@ -17,7 +17,7 @@ runs call ``run_session`` directly and never pass through that seam, so the
 notice structurally cannot fire for them.
 
 Flag: ``LLM_OUTAGE_NOTICE`` (default **ON** — deliberate: an outage notice that
-defaults OFF would never fire; precedent ``UNTRUSTED_TOOL_RESULT_WRAP``).
+defaults OFF would never fire).
 
 Cooldown choice: a module-level in-process timestamp map, NOT a durable store.
 The notice path runs inside an error handler and must stay dependency-free and
