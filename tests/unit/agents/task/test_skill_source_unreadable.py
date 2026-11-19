@@ -1,5 +1,6 @@
 """An unreadable skill source is named; it does not crash the catalog, and it is not
 "no skills" (``PermissionError`` on ``~/.agents/skills`` when HOME cannot be read)."""
+import logging
 import os
 from pathlib import Path
 
@@ -38,7 +39,13 @@ def locked(tmp_path):
     os.chmod(home, 0o700)
 
 
-def test_a_locked_root_is_named_not_raised(locked, caplog):
+def test_a_locked_root_is_named_not_raised(locked, caplog, monkeypatch):
+    # Another test file on the same xdist worker can disable this logger or stop its
+    # propagation (a logging config call); the assert must not depend on that state.
+    log = logging.getLogger(scopes.__name__)
+    monkeypatch.setattr(log, "disabled", False)
+    monkeypatch.setattr(log, "propagate", True)
+    caplog.set_level(logging.WARNING, logger=scopes.__name__)
     assert scopes.discover_skills(locked, "user") == []
     assert scopes.unreadable_sources() == [str(locked)]
     assert "could not read" in caplog.text and str(locked) in caplog.text
