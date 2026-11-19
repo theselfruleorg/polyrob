@@ -26,6 +26,9 @@ import time
 from typing import Any, Optional
 
 from core.env import bool_env, int_env
+from core.exceptions import InsufficientCreditsError
+
+_ACCOUNT_REFUSAL_MARKER = InsufficientCreditsError.MARKER.lower()
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +114,10 @@ def looks_like_credit_death(text: Optional[str]) -> bool:
     if looks_like_transient_budget(text):
         return False
     low = str(text).lower()
+    if _ACCOUNT_REFUSAL_MARKER in low:
+        # One tenant's balance on our own ledger (InsufficientCreditsError). The
+        # provider account is healthy: no latch, no pause, no failover.
+        return False
     if any(m in low for m in _CREDIT_DEATH_MARKERS):
         return True
     return bool(_CREDIT_DEATH_402_RE.search(low))
@@ -494,7 +501,11 @@ async def trip_credit_sentinel(reason: str, *, provider: Optional[str] = None,
                     f"{str(reason)[:300]}. "
                     f"Goal dispatch and LLM cron ticks resume automatically "
                     f"{resume_text} (or remove {_sentinel_path()} after topping up).")
-            outcome = await _ud.deliver_user_message(container, str(user_id or ""), text,
+            # The provider account is the operator's. The run's tenant (``user_id``,
+            # kept on the event above) may be any API user: that person cannot top the
+            # account up and must not read a server path.
+            from core.instance import resolve_owner_user_id
+            outcome = await _ud.deliver_user_message(container, resolve_owner_user_id(), text,
                                                      source="credit_sentinel")
             # 020 #3: a deduped sentinel notice means the owner was NOT told
             # about a genuinely new pause — with the stamp above this should

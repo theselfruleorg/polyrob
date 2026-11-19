@@ -33,7 +33,6 @@ class _TimedChain(_FakeChain):
 def _env(monkeypatch):
     monkeypatch.setenv("X402_PAYMENT_RECIPIENT", OLD)
     monkeypatch.setenv("X402_DEFAULT_CHAIN", "base")
-    monkeypatch.setenv("X402_INVOICE_AMOUNT_JITTER", "false")
     monkeypatch.setenv("X402_SETTLE_ONCHAIN_DETECT", "true")
     monkeypatch.setenv("X402_SETTLEMENT_CONFIRMATIONS", "0")
 

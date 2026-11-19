@@ -46,6 +46,13 @@
           "minimum": 60,
           "type": "integer"
         },
+        "model": {
+          "default": null,
+          "description": "Optional model for this work's runs: any model id or alias of a provider that has a key (agent_status view='models' lists them with prices); 'default' clears it. A model with no known price runs with a warning. Give a one-line 'why'. Not with 'tier'. A model the owner set is locked.",
+          "maxLength": 120,
+          "nullable": true,
+          "type": "string"
+        },
         "pause_windows": {
           "default": null,
           "description": "Per-job pause windows: [[start, end], ...] as epoch seconds or ISO-8601 UTC. A tick inside a window is a $0 skip.",
@@ -114,7 +121,7 @@
         },
         "tier": {
           "default": null,
-          "description": "Optional model tier for this work's runs — from the owner's chat only: 'heavy' for work that decides money (who is paid and how much) or is hard to undo; 'light' for bulk reads; 'default' = the normal model. <environment> names each tier's model. Requires 'why'.",
+          "description": "Optional model tier for this work's runs: 'heavy' for work that decides money (who is paid and how much) or is hard to undo; 'light' for bulk reads; 'default' = the normal model. <environment> names each tier's model (the owner or the operator sets it). Requires 'why'.",
           "enum": [
             "default",
             "heavy",
@@ -132,14 +139,9 @@
           "nullable": true,
           "type": "array"
         },
-        "wake_agent": {
-          "default": true,
-          "description": "If false, this tick runs without invoking the LLM (a $0 no-op tick). Default true = normal agent run.",
-          "type": "boolean"
-        },
         "why": {
           "default": null,
-          "description": "One line: why this tier. Required with 'tier'; shown in /status.",
+          "description": "One line: why this tier or model. Required with 'tier'; shown in /status.",
           "maxLength": 200,
           "nullable": true,
           "type": "string"

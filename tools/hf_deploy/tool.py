@@ -240,12 +240,13 @@ class HFDeployTool(BaseTool):
         needs_approval = row is None or row.get("approved_at") is None
         if needs_approval:
             from core.security.owner_turn import is_owner_driven
-            from tools.controller.approval import operator_denies_approvals
-            if operator_denies_approvals():
+            from tools.controller.approval import operator_deny_cause
+            stop = operator_deny_cause()
+            if stop:
                 # The operator's standing stop: no owner-turn rule passes it. Checked
                 # before the pending row, so a refused publish leaves no row behind.
                 return ActionResult(
-                    error=f"first publish of '{app_name}' blocked: APPROVAL_PROVIDER=deny "
+                    error=f"first publish of '{app_name}' blocked: {stop} "
                           f"stops every new public address on this install",
                     include_in_memory=True)
             registry.upsert_pending(app_name, uid, space_repo=space_repo)

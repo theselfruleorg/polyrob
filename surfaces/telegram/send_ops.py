@@ -200,7 +200,16 @@ async def _resolve_usd(tool, order: dict):
 
 
 async def send_reply(user_id: Optional[str], args: List[str], *, tool: Any = None) -> str:
-    """``/send <amount|$usd> <native|token> to <address> on <chain> [go]``."""
+    """``/send <amount|$usd> <native|token> to <address> on <chain> [go]``.
+
+    The conversion, the quote and the send are ONE decision: each price is
+    read once for all three (``tools.intel.price.one_decision``)."""
+    from tools.intel.price import one_decision
+    with one_decision():
+        return await _send_reply(user_id, args, tool=tool)
+
+
+async def _send_reply(user_id: Optional[str], args: List[str], *, tool: Any = None) -> str:
     if not user_id:
         return "Only the owner can send from the wallet."
     if not args:

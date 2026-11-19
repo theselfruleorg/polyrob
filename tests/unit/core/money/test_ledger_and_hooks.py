@@ -157,7 +157,8 @@ def test_check_reads_the_registered_journal(monkeypatch):
     hooks.register_submission_journal(lambda: j)
     d = _ledger().check(venue="v", amount_usd=1, idempotency_key=None)
     assert (d.allowed, d.reason) == (
-        False, "unaccounted wallet submission; reconcile before further spending")
+        False, "unaccounted wallet submission; spending refused until the operator settles it "
+        "(x402_pay_x402_wallet_status lists it)")
     j._u = []
     assert _ledger().check(venue="v", amount_usd=1, idempotency_key=None).allowed is True
 

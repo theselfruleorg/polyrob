@@ -210,6 +210,13 @@ def _pin_process() -> None:
     platform.system = lambda: "Linux"
     platform.release = lambda: "golden"
 
+    # A box that has the shared ``polyrob-data`` group (prod, or a dev machine
+    # that ran the deploy's ownership pass) audits the fresh temp data home and
+    # adds a "file permissions" health line the committed goldens do not carry.
+    # Render as a dev checkout does: no group, audit skipped.
+    import core.data_perms as data_perms
+    data_perms._resolve_gid = lambda *_a, **_k: None
+
     import agents.task.agent.core.env_context as env_context
     env_context._host_capabilities = lambda *a, **k: "git, python3"
     import polyrob.app.bootstrap as bootstrap

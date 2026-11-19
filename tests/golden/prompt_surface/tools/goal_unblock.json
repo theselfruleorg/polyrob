@@ -1,12 +1,12 @@
 {
   "function": {
-    "description": "Requeue a BLOCKED goal with a rationale (§5.3 stewardship; resets its retry budget).",
+    "description": "Requeue a BLOCKED goal with a rationale (§5.3 stewardship; resets its retry budget). On an owner turn it also lifts a PAUSED goal (the same rule as the owner's /goal retry).",
     "name": "goal_unblock",
     "parameters": {
       "additionalProperties": false,
       "properties": {
         "goal_id": {
-          "description": "The blocked goal id.",
+          "description": "The blocked goal id (or a paused one, on an owner turn).",
           "type": "string"
         },
         "rationale": {

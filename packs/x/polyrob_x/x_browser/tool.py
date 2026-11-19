@@ -140,9 +140,10 @@ def _leaf_or_forged(execution_context) -> bool:
     return is_leaf_or_forged(execution_context)
 
 
-def _operator_denies() -> bool:
-    from tools.controller.approval import operator_denies_approvals
-    return operator_denies_approvals()
+def _operator_denies() -> str:
+    """The cause of the standing stop, or ``""``."""
+    from tools.controller.approval import operator_deny_cause
+    return operator_deny_cause()
 
 
 class XBrowserTool(BaseTool):
@@ -226,8 +227,9 @@ class XBrowserTool(BaseTool):
                 error="x_post is blocked for delegated/forged turns — report back "
                       "and let the main agent post.",
                 include_in_memory=True)
-        if _operator_denies():
-            return ActionResult(error="x_post blocked: APPROVAL_PROVIDER=deny stops every "
+        stop = _operator_denies()
+        if stop:
+            return ActionResult(error=f"x_post blocked: {stop} stops every "
                                       "post on this install.", include_in_memory=True)
         from polyrob_x.post_spacing import placeholder_refusal
         placeholder = placeholder_refusal("x_post", getattr(params, "text", None))
@@ -280,8 +282,9 @@ class XBrowserTool(BaseTool):
                 error="x_reply is blocked for delegated/forged turns — report back "
                       "and let the main agent reply.",
                 include_in_memory=True)
-        if _operator_denies():
-            return ActionResult(error="x_reply blocked: APPROVAL_PROVIDER=deny stops every "
+        stop = _operator_denies()
+        if stop:
+            return ActionResult(error=f"x_reply blocked: {stop} stops every "
                                       "post on this install.", include_in_memory=True)
         user_id = self._user_id(execution_context)
         if not self.session_store.exists(user_id):

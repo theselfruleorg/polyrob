@@ -22,7 +22,7 @@ def _never_checked(channel):
 
 
 def _reply(home, args):
-    from surfaces.telegram.lifecycle_ops import update_reply
+    from core.lifecycle_ops import update_reply
     return asyncio.run(update_reply("u1", str(home), args, ORIGIN, check=_never_checked))
 
 
@@ -58,7 +58,7 @@ def test_an_expired_marker_reads_as_none(tmp_path):
 
 @pytest.mark.parametrize("args", [["now", "pre"], ["later"], ["now", "x"]])
 def test_bad_update_args_give_the_usage(tmp_path, args):
-    from surfaces.telegram.lifecycle_ops import UPDATE_USAGE
+    from core.lifecycle_ops import UPDATE_USAGE
     assert _reply(tmp_path, args) == UPDATE_USAGE
     assert "/update now" in UPDATE_USAGE
 

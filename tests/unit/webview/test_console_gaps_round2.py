@@ -101,10 +101,10 @@ def test_doctor_and_telemetry_health_refuse_a_tenant(monkeypatch):
 # --- WEB-4: security / trust flags are operator-file-only -------------------
 
 @pytest.mark.parametrize("key", [
-    "WEB_FETCH_ALLOW_PRIVATE_URLS", "HISTORY_SECRET_SCRUB",
+    "WEB_FETCH_ALLOW_PRIVATE_URLS",
     "CORRESPONDENT_ACCESS_ENABLED", "X402_TRUSTED_PROXIES",
     "X402_PAYMENT_ADDRESS", "X402_FACILITATOR_URL", "POLYROB_TOOL_DENYLIST",
-    "FS_REALPATH_CONFINE", "FEISHU_WEBHOOK_ALLOW_UNSIGNED",
+    "FEISHU_WEBHOOK_ALLOW_UNSIGNED",
     "CRYPTO_TRADE_LIVE_ENABLED", "GROUP_TURN_TOOLS", "LAZY_DEPS_MODE",
     "GMAIL_SMTP_SERVER", "EMAIL_PROVIDER", "APP_SERVICE_IMAGE",
 ])

@@ -12,7 +12,6 @@ avatar set over SSH is the one the running agent shows.
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Optional, Tuple
 
 import click
@@ -69,22 +68,16 @@ def show_cmd(do_open):
               help="Use the image an NFT's metadata names (e.g. base:0xabc…:42).")
 def set_cmd(image, nft_ref):
     """Set the avatar from an image FILE or URL, or from an NFT (--nft)."""
-    from core.avatar import AvatarError, describe, set_avatar, set_avatar_from_file
+    from core.avatar import AvatarError, describe, set_avatar
     from tools import avatar_sources
 
     if bool(image) == bool(nft_ref):
         raise click.UsageError("give exactly one of IMAGE (a file or URL) or --nft")
     home, instance_id = _home(write=True)
     try:
-        if nft_ref:
-            chain, contract, token_id = avatar_sources.parse_nft_ref(nft_ref)
-            data, source = asyncio.run(avatar_sources.image_from_nft(chain, contract, token_id))
-            st = set_avatar(home, instance_id, data, source=source)
-        elif "://" in image or image.startswith("data:"):
-            data, source = asyncio.run(avatar_sources.image_from_url(image))
-            st = set_avatar(home, instance_id, data, source=source)
-        else:
-            st = set_avatar_from_file(home, instance_id, image)
+        data, source = asyncio.run(avatar_sources.image_from_ref(
+            f"nft:{nft_ref}" if nft_ref else image, local_files=True))
+        st = set_avatar(home, instance_id, data, source=source)
     except AvatarError as e:
         raise click.ClickException(str(e))
     click.echo(f"{instance_id} — avatar {describe(st)}")
@@ -108,116 +101,27 @@ def clear_cmd(yes):
         click.echo(f"{instance_id} — there was no avatar to remove (it shows the default mark)")
 
 
-def _pushed_path(home: str, instance_id: str):
-    from core.avatar import avatar_dir
-    return avatar_dir(home, instance_id) / "pushed.json"
-
-
-def _load_pushed(home: str, instance_id: str) -> dict:
-    try:
-        data = json.loads(_pushed_path(home, instance_id).read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
-
-
-def _record_pushed(home: str, instance_id: str, surface: str, digest: str) -> None:
-    pushed = _load_pushed(home, instance_id)
-    pushed[surface] = {"hash": digest}
-    _pushed_path(home, instance_id).parent.mkdir(parents=True, exist_ok=True)
-    _pushed_path(home, instance_id).write_text(json.dumps(pushed, indent=2), encoding="utf-8")
-
-
 @avatar.command("push")
-@click.option("--twitter", "do_twitter", is_flag=True, help="Push to X/Twitter (needs PFP_PUSH_TWITTER=true).")
-@click.option("--telegram", "do_telegram", is_flag=True, help="Set the Telegram bot photo (needs PFP_PUSH_TELEGRAM=true).")
+@click.option("--twitter", "do_twitter", is_flag=True, help="Push to X/Twitter.")
+@click.option("--telegram", "do_telegram", is_flag=True, help="Set the Telegram bot photo.")
 @click.option("--telegram-chat", "tg_chats", multiple=True, metavar="CHAT_ID",
-              help="Also set this Telegram group's or channel's photo (the bot must be an admin); repeatable.")
-@click.option("--discord", "do_discord", is_flag=True, help="Set the Discord bot avatar (needs PFP_PUSH_DISCORD=true).")
+              help="Set this Telegram group's or channel's photo (the bot must be an admin); repeatable. Alone, it changes that photo only; add --telegram for the bot photo too.")
+@click.option("--discord", "do_discord", is_flag=True, help="Set the Discord bot avatar.")
 def push_cmd(do_twitter, do_telegram, tg_chats, do_discord):
-    """Push the avatar to the agent's surfaces (flag-gated, idempotent)."""
-    from core.avatar import load_avatar
-    from core.env import bool_env
-    from core.remedy import flag_remedy
+    """Push the avatar to the agent's accounts (no surface named = each connected one)."""
     from modules.avatar import push as pushmod
 
     home, instance_id = _home(write=True)
-    st = load_avatar(home, instance_id)
-    if not st.is_set:
-        raise click.ClickException(
-            "no avatar to push — set one first (`polyrob avatar set <file|url>`)"
-            if st.state == "none" else f"the avatar is unreadable: {st.detail}")
-    img = st.path
-    if not st.is_raster:
-        raise click.ClickException(
-            "the avatar is an SVG image; X, Discord and Telegram take only a raster "
-            "image (PNG/JPEG/GIF/WebP) — set one with `polyrob avatar set <png>`")
-
-    if tg_chats:
-        do_telegram = True
-    if not (do_twitter or do_telegram or do_discord):
-        do_twitter = do_telegram = do_discord = True  # default: attempt all surfaces (still gated)
-
+    surfaces = []
     if do_twitter:
-        if not bool_env("PFP_PUSH_TWITTER", False):
-            click.echo(f"twitter: disabled — {flag_remedy('PFP_PUSH_TWITTER')}")
-        else:
-            try:
-                h = pushmod.sha256_file(img)
-                if _load_pushed(home, instance_id).get("twitter", {}).get("hash") == h:
-                    click.echo("twitter: unchanged, skipped")
-                else:
-                    pushmod.push_twitter(img)
-                    _record_pushed(home, instance_id, "twitter", h)
-                    click.echo("twitter: profile image updated ✓")
-            except pushmod.TwitterCredsMissing as e:
-                click.echo(f"twitter: {e}")
-            except Exception as e:  # fail-open: never crash, always give the manual path
-                click.echo(f"twitter: could not set avatar ({e}). Set it manually in the X app; image: {img}")
-
+        surfaces.append("twitter")
     if do_discord:
-        if not bool_env("PFP_PUSH_DISCORD", False):
-            click.echo(f"discord: disabled — {flag_remedy('PFP_PUSH_DISCORD')}")
-        else:
-            try:
-                h = pushmod.sha256_file(img)
-                if _load_pushed(home, instance_id).get("discord", {}).get("hash") == h:
-                    click.echo("discord: unchanged, skipped")
-                else:
-                    pushmod.push_discord(img)
-                    _record_pushed(home, instance_id, "discord", h)
-                    click.echo("discord: bot avatar updated ✓")
-            except pushmod.DiscordCredsMissing as e:
-                click.echo(f"discord: {e}")
-            except Exception as e:  # fail-open: never crash, always give the manual path
-                click.echo(f"discord: could not set avatar ({e}). Set it manually in the "
-                           f"Discord developer portal (Bot → Icon); image: {img}")
-
+        surfaces.append("discord")
     if do_telegram:
-        if not bool_env("PFP_PUSH_TELEGRAM", False):
-            click.echo(f"telegram: disabled — {flag_remedy('PFP_PUSH_TELEGRAM')}")
-        else:
-            targets = [("telegram", None, "bot photo")] + [
-                (f"telegram:{c}", c, f"chat {c} photo") for c in tg_chats]
-            for key, chat_id, label in targets:
-                try:
-                    h = pushmod.sha256_file(img)
-                    if _load_pushed(home, instance_id).get(key, {}).get("hash") == h:
-                        click.echo(f"telegram: {label} unchanged, skipped")
-                        continue
-                    if chat_id is None:
-                        pushmod.push_telegram_bot(img)
-                    else:
-                        pushmod.push_telegram_chat(img, chat_id)
-                    _record_pushed(home, instance_id, key, h)
-                    click.echo(f"telegram: {label} updated ✓")
-                except pushmod.TelegramCredsMissing as e:
-                    click.echo(f"telegram: {e}")
-                    break
-                except Exception as e:  # fail-open: never crash, always give the manual path
-                    click.echo(f"telegram: could not set the {label} ({e})")
-                    if chat_id is None:
-                        click.echo(pushmod.telegram_instructions(img))
-                    else:
-                        click.echo(f"  make the bot an admin with 'Change group info', or set "
-                                   f"it in the group settings; image: {img}")
+        surfaces.append("telegram")
+    results = pushmod.push_avatar(home, instance_id, surfaces=surfaces, telegram_chats=tg_chats)
+    if results and results[0].status == "refused":
+        hint = (" (`polyrob avatar set <file|url>`)"
+                if results[0].text.startswith(("no avatar", "the avatar is an SVG")) else "")
+        raise click.ClickException(results[0].text + hint)
+    click.echo(pushmod.render_push(results))

@@ -35,6 +35,74 @@ from typing import Mapping, Optional
 #: name -> the setting that replaces it ("" = nothing: the new behaviour is
 #: permanent and the line can be deleted).
 RETIRED_FLAGS: dict[str, str] = {
+    # the avatar push follows the credentials; the owner's act is the consent
+    "PFP_PUSH_TWITTER": "",
+    "PFP_PUSH_TELEGRAM": "",
+    "PFP_PUSH_DISCORD": "",
+    # the agent always has its avatar action: a read is free, a write needs an owner turn
+    "AVATAR_TOOL_ENABLED": "",
+    # no reader: the step and stall limits are AgentConfig's (600 s)
+    "STEP_TIMEOUT_SECONDS": "",
+    "STALL_TIMEOUT_SECONDS": "",
+    "LLM_BASE_TIMEOUT_SECONDS": "",
+    "LLM_STREAM_TIMEOUT_SECONDS": "",
+    # always on: the environment block (local or autonomous), the source
+    # precedence prompt, the tool schema sanitizer, the external-write record,
+    # the parsed answer in the CLI; BROWSER_USE_LOGGING_LEVEL only hid one log line
+    "ENV_CONTEXT_BLOCK": "",
+    "SOURCE_PRECEDENCE_PROMPT": "",
+    "TOOL_SCHEMA_SANITIZE": "",
+    "EXTERNAL_WRITE_TELEMETRY": "",
+    "CLI_PREFER_ACTION_TEXT": "",
+    "BROWSER_USE_LOGGING_LEVEL": "",
+    # always on: preferences are honoured, inbound files reach the turn, the
+    # live-health block, the sandbox reaper (its pause kind is the stop), the
+    # CLI todo under .polyrob/
+    "PREFS_ENABLED": "",
+    "INBOUND_MEDIA_ENABLED": "",
+    "LIVE_HEALTH_CONTEXT": "",
+    "SANDBOX_REAP_ENABLED": "",
+    "CLI_TODO_DOT_ROB": "",
+    # constants now: the parse retries, the format hint, the context overflow
+    # guard, the recalibration after a large result, the fast escalation of an
+    # empty-action loop
+    "ENABLE_ROBUST_PARSE": "",
+    "ENABLE_JSON_TEMPLATE_RETRY": "",
+    "ENABLE_CONTEXT_OVERFLOW_GUARD": "",
+    "INJECT_FORMAT_HINT_EARLY": "",
+    "FORCE_RECALIBRATE_AFTER_LARGE_ACTIONS": "",
+    "EMPTY_ACTION_FAST_ESCALATE": "",
+    # always on: untrusted tool results are framed, the compaction prompt is
+    # guarded, a delegated child gets a narrowed toolset
+    "UNTRUSTED_TOOL_RESULT_WRAP": "",
+    "COMPACTION_PROMPT_GUARD": "",
+    "SUBAGENT_LEAST_PRIVILEGE": "",
+    # always on: a path that escapes the workspace is refused (no basename
+    # rewrite), and the secret-shape scrub of the history has no off switch
+    "FS_REALPATH_CONFINE": "",
+    "HISTORY_SECRET_SCRUB": "",
+    # no effect: the invoice amount jitter is on with on-chain detection and
+    # off without it; this name only chose a log line
+    "X402_INVOICE_AMOUNT_JITTER": "",
+    # no reader: the key backend is always the local EOA (WALLET_SIGNER says
+    # where it signs); no per-vision or per-tool credit charge exists
+    "AGENT_WALLET_BACKEND": "",
+    "VISION_CALL_COST": "",
+    "TOOL_CALL_COST": "",
+    # no caller: the chat fast-path never ran; the continuity summary makes no
+    # model call
+    "CHAT_INTENT_CLASSIFIER": "",
+    "CONTINUITY_LLM_SUMMARY": "",
+    # no reader: the pre-compaction checkpoint is always written
+    "COMPACTION_CHECKPOINT": "",
+    # no reader: three unread keys of the task-mode preset
+    "MIN_STEPS_BEFORE_DONE": "",
+    "CONFIDENCE_CHECK_BEFORE_DONE": "",
+    "TASK_VERIFICATION_REQUIRED": "",
+    # no reader: a large result goes to a file by the fixed per-result and
+    # per-turn sizes
+    "STORE_LARGE_CONTENT_AS_FILES": "",
+    "MAX_EXTRACTED_CONTENT_LENGTH": "",
     # X writes: the owner's turn or job posts; what to post is an owner rule
     "TWITTER_REQUIRE_APPROVAL": "",
     # skills: the owner's agent writes live skills; rollback undoes one
@@ -188,6 +256,23 @@ RETIRED_GATE_NOTES: dict[str, str] = {
 }
 
 
+def retired_note(name: str) -> Optional[str]:
+    """What became of the retired setting *name*, or None when it is not one.
+    The settings verbs answer this text: a retired name is not a typing error."""
+    import re
+    replacement = RETIRED_FLAGS.get(name)
+    if replacement is None:
+        replacement = next((r for rx, r in RETIRED_PATTERNS.items()
+                            if re.fullmatch(rx, name)), None)
+    if replacement is None:
+        return None
+    if name in REFUSING_ALIASES:
+        return f"renamed to {REFUSING_ALIASES[name]} (POLYROB refuses the old name)"
+    if replacement:
+        return f"use {replacement} instead"
+    return RETIRED_GATE_NOTES.get(name) or "its default is now permanent"
+
+
 def retired_flags_set(env: Optional[Mapping[str, str]] = None) -> list[tuple[str, str]]:
     """``[(name, replacement)]`` for every retired name *env* still sets."""
     import re
@@ -232,5 +317,5 @@ def retired_flag_lines(env: Optional[Mapping[str, str]] = None) -> list[str]:
 __all__ = [
     "RETIRED_FLAGS", "RETIRED_GATE_NOTES", "RETIRED_PATTERNS", "REFUSING_ALIASES", "RetiredFlagError",
     "moved_into_overrides", "refuse_retired_alias", "retired_flags_set",
-    "retired_flag_lines",
+    "retired_flag_lines", "retired_note",
 ]

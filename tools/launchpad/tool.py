@@ -225,7 +225,8 @@ class LaunchpadTool(WalletHolderMixin, BaseTool):
                 getattr(self, "container", None),
                 getattr(execution_context, "user_id", None), notice,
                 settled=settled,
-                session_id=getattr(execution_context, "session_id", None))
+                session_id=getattr(execution_context, "session_id", None),
+                seat_reports=tx_notify.seat_reports(execution_context))
         except Exception:
             logger.debug("launchpad: owner notice failed", exc_info=True)
 

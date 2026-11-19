@@ -2,7 +2,8 @@
 
 The tier set is the operator's (``core.runtime_config.tier_models``: default / heavy / light on
 the operator's pinned provider). This module turns each tier into the model id the existing
-build path takes (``_build_child_llm`` → ``child_model_refusal``, which still bounds it), caps
+build path takes (``_build_child_llm`` → ``agents.task.model_choice.child_model_check``, the
+one price rule of 121), caps
 heavy children per call, and records every choice (``core.model_routing``). It lives here because
 ``action_registration.py`` is at its size ceiling.
 """
@@ -64,7 +65,7 @@ def resolve_delegate_tiers(*, parent_agent, model, provider, tier, why, tasks,
                            session_id: str = "", user_id: str = "", env=None,
                            defer_record: bool = False) -> TierRoute:
     """Turn ``tier`` (top level) and each task's ``tier`` into models. A raw ``model`` passes
-    through untouched (the owner-alias path, D4). Any refusal refuses the call, naming the
+    through untouched (121: any model, bounded by the price rule in ``_build_child_llm``). Any refusal refuses the call, naming the
     task — the same rule as a bad raw model (no silent partial run), and records nothing.
     With ``defer_record`` the caller calls ``route.commit_records()`` after the child
     models are built; otherwise the routes are recorded when the whole call resolves."""
@@ -92,6 +93,14 @@ def _resolve_delegate_tiers(*, parent_agent, model, provider, tier, why, tasks,
             route.error = (f"refused: at most {MAX_HEAVY_PER_CALL} heavy sub-agents per call "
                            f"({heavy} asked) — run the rest on default or in a later call")
             return route
+    # 121: a raw model the agent named is a choice too — recorded with its reason.
+    for label, m, w in ([("goal", model, why)] if not tasks else
+                        [(f"task[{i}]", st.model or model, getattr(st, "why", None) or why)
+                         for i, st in enumerate(tasks)]):
+        if m and not (tier and not tasks):
+            route.records.append(dict(kind="child", tier="model", model=m, why=w,
+                                      source="delegate_task", user_id=user_id,
+                                      session_id=session_id))
     if not tier and not any(getattr(t, "tier", None) for t in (tasks or [])):
         return route
     if parent_agent is None:

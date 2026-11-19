@@ -157,6 +157,25 @@ def avatar_image_path(home_dir: Path | str, instance_id: Optional[str] = None) -
     return st.path if st.is_set else None
 
 
+def image_response_parts(home_dir: Path | str, instance_id: Optional[str] = None
+                         ) -> Optional[tuple]:
+    """``(path, media_type, headers)`` to serve the slot image, or ``None`` when
+    there is no readable image (the route answers 404). The ONE answer for every
+    origin that serves ``/avatar.png`` (the console and the API), so the stored
+    content type and the SVG sandbox cannot differ between them.
+
+    ⚠️ An SVG can carry script: it is served with a CSP that runs none."""
+    st = load_avatar(home_dir, instance_id)
+    if not st.is_set or st.path is None:
+        return None
+    ext = st.path.suffix.lstrip(".")
+    headers = {"X-Content-Type-Options": "nosniff", "Cache-Control": "no-cache"}
+    if ext == "svg":
+        headers["Content-Security-Policy"] = (
+            "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+    return st.path, CONTENT_TYPES.get(ext, "application/octet-stream"), headers
+
+
 def set_avatar(home_dir: Path | str, instance_id: Optional[str], data: bytes, *,
                source: str) -> AvatarState:
     """Put ``data`` in the slot (replaces any earlier image). ``source`` says where
@@ -193,18 +212,6 @@ def set_avatar(home_dir: Path | str, instance_id: Optional[str], data: bytes, *,
     return load_avatar(home_dir, instance_id)
 
 
-def set_avatar_from_file(home_dir: Path | str, instance_id: Optional[str],
-                         path: Path | str, *, source: Optional[str] = None) -> AvatarState:
-    """Read an image file into the slot. Raises :class:`AvatarError`."""
-    p = Path(path).expanduser()
-    if not p.is_file():
-        raise AvatarError(f"no such file: {p}")
-    if p.stat().st_size > MAX_BYTES:
-        raise AvatarError(f"{p.name} is {p.stat().st_size} bytes; the limit is {MAX_BYTES}")
-    return set_avatar(home_dir, instance_id, p.read_bytes(),
-                      source=source or f"file:{p.name}")
-
-
 def clear_avatar(home_dir: Path | str, instance_id: Optional[str] = None) -> bool:
     """Empty the slot (the instance shows the default again). Returns whether
     anything was removed."""
@@ -231,6 +238,7 @@ def describe(st: AvatarState) -> str:
 __all__ = [
     "AvatarError", "AvatarState", "CONTENT_TYPES", "DEFAULT_AVATAR", "DEFAULT_SOURCE",
     "MAX_BYTES", "RASTER_EXTS",
-    "avatar_dir", "avatar_image_path", "clear_avatar", "describe", "load_avatar",
-    "set_avatar", "set_avatar_from_file", "sniff_image",
+    "avatar_dir", "avatar_image_path", "clear_avatar", "describe", "image_response_parts",
+    "load_avatar",
+    "set_avatar", "sniff_image",
 ]

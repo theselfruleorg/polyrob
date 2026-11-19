@@ -287,20 +287,6 @@ class AutonomyConfig(GoalFlagsMixin):
     def agent_status_tool() -> bool:
         return member_flag("AGENT_STATUS_TOOL")
 
-    # The agent's own avatar (core/avatar.py): read the slot, copy the image
-    # INTO its own session workspace so the media rail can deliver it, and
-    # set it — on an owner turn only.
-    @staticmethod
-    def avatar_tool_enabled() -> bool:
-        return member_flag("AVATAR_TOOL_ENABLED")
-
-    # 2026-08-28 status SSOT — per-turn <live-health> note for the agent (the
-    # same health block the owner's /status renders), so "how are you doing?"
-    # is answered from live facts, never from stale context. Default ON.
-    @staticmethod
-    def live_health_context() -> bool:
-        return _bool_env("LIVE_HEALTH_CONTEXT", True)
-
     # I-3 / H3 (dedup decision D1) — verify-before-done: bounded nudge (max 2
     # attempts) when the action ledger shows a code edit newer than the last
     # successful run_tests. See agents/task/runtime/edit_verify.py.
@@ -394,12 +380,6 @@ class AutonomyConfig(GoalFlagsMixin):
     @staticmethod
     def continuity_bridge_enabled() -> bool:
         return member_flag("CONTINUITY_BRIDGE_ENABLED")
-
-    # Task 4 — LLM-generated continuity summary at reset. Intentionally NOT in
-    # _SAFE_LOCAL_FLAGS: OFF everywhere by default (adds latency at reset).
-    @staticmethod
-    def continuity_llm_summary() -> bool:
-        return _bool_env("CONTINUITY_LLM_SUMMARY", False)  # OFF everywhere (latency at reset)
 
     # Task 2 — episodic row retention window (days); pruned on the curator tick.
     @staticmethod

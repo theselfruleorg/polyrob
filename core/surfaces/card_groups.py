@@ -45,6 +45,9 @@ WAKE_KIND = "cards_settled"
 #: The longest outcome text a wake or a turn block carries.
 OUTCOMES_MAX_CHARS = 3000
 _LINE_RESULT_CHARS = 200
+#: The room the card lines get inside ``OUTCOMES_MAX_CHARS`` (the rest is the
+#: header, the agent's follow-up and the pointer line).
+_LINES_MAX_CHARS = 2200
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS card_groups (
@@ -357,6 +360,26 @@ def _first_line(text: str) -> str:
     return ""
 
 
+def receipt_facts(result: str) -> str:
+    """The outcome line and the transaction id of a card's result, on one line:
+    ``RESULT: SENT AND CONFIRMED · tx: 0x… · block: N``. Empty when the result
+    holds none. A hash is never cut. Prod 2026-11-18: the agent was shown only
+    the FIRST line of a confirmed send (its amount), so it wrote "hash truncated
+    in receipt" in its ledger and then copied a hash from another file. The receipt
+    lines (``cards.RECEIPT_KEYS``) are FACTS: the agent copies them, never recalls them;
+    ``cards.finish`` keeps them when it cuts a long result."""
+    from core.surfaces.cards import RECEIPT_KEYS
+    out: List[str] = []
+    for ln in (result or "").splitlines():
+        s = ln.strip()
+        if not s.startswith(RECEIPT_KEYS) or s in out:
+            continue
+        if s.startswith("RESULT:") and len(s) > 120:
+            s = s[:119] + "…"
+        out.append(s)
+    return " · ".join(out)
+
+
 def render_outcomes(user_id: str, group_id: str, *, st: Any) -> str:
     """One line per decided card of the group, the agent's own follow-up, and
     a pointer to commands the owner typed outside the cards. Pure read."""
@@ -366,16 +389,33 @@ def render_outcomes(user_id: str, group_id: str, *, st: Any) -> str:
     lines = []
     for c in leaves(st.group_cards(user_id, group_id)):
         word = _STATE_WORD.get(c.state, c.state.upper())
-        res = _first_line(c.result)
+        # A money receipt's FACTS (outcome line, tx, block) win over its first line,
+        # which is the amount the card line already states.
+        res = receipt_facts(c.result) or _first_line(c.result)
         lines.append(f"- {c.line} → {word}" + (f": {res}" if res else "")
                      + f" (card {c.card_id})")
-    out = [f"The owner decided all {len(lines)} card(s) you raised:", *lines]
+    out = [f"The owner decided all {len(lines)} card(s) you raised:", *_whole(lines)]
     if (g.get("then_text") or "").strip():
         out.append(f"Your follow-up, in your own words when you raised them: {g['then_text']}")
     out.append("Commands the owner typed by hand meanwhile are in the owner thread, "
                "labelled 'owner typed a command'.")
     text = "\n".join(out)
     return text if len(text) <= OUTCOMES_MAX_CHARS else text[:OUTCOMES_MAX_CHARS - 1] + "…"
+
+
+def _whole(lines: List[str]) -> List[str]:
+    """The card lines that fit, each one WHOLE: a line cut in the middle is a cut
+    tx hash. The cards that do not fit are counted, with where to read them."""
+    kept: List[str] = []
+    used = 0
+    for i, ln in enumerate(lines):
+        if used + len(ln) + 1 > _LINES_MAX_CHARS:
+            kept.append(f"- … and {len(lines) - i} more card(s): read each outcome "
+                        "and tx with cards_read")
+            break
+        kept.append(ln)
+        used += len(ln) + 1
+    return kept
 
 
 #: A group still ``woken`` this long after its wake ran no run to its end
@@ -453,5 +493,5 @@ install()
 __all__ = [
     "G_CONSUMED", "G_OPEN", "G_SETTLED", "G_WOKEN", "GroupStore", "ORIGIN_CHAT",
     "ORIGIN_CRON", "ORIGIN_GOAL", "WAKE_KIND", "groups", "is_settled", "leaves",
-    "on_transition", "render_outcomes", "take_outcomes", "wake_queue_path",
+    "on_transition", "receipt_facts", "render_outcomes", "take_outcomes", "wake_queue_path",
 ]

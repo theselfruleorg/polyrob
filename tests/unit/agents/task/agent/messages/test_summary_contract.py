@@ -126,11 +126,6 @@ def _summary(h) -> str:
 	return str(h.history.messages[0].message.content)
 
 
-@pytest.fixture(autouse=True)
-def _no_checkpoint(monkeypatch):
-	monkeypatch.setenv("COMPACTION_CHECKPOINT", "false")
-
-
 @pytest.mark.asyncio
 async def test_a_complete_answer_is_stored_once_without_the_end_line():
 	llm = _CappedLLM(_whole())

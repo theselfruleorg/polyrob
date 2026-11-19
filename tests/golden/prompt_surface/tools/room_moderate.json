@@ -1,12 +1,12 @@
 {
   "function": {
-    "description": "Moderate a group room you are in: mute, unmute, ban or unban a member, or delete messages. Use room_read first to get the member's uid and the msg ids. The owner and room admins can never be targeted. The bot must be a room admin with the right permission. Act on clear rule-breaking (spam, scams, abuse) and tell the owner what you did.",
+    "description": "Moderate a group room you are in: mute, unmute, ban or unban a member, or delete messages; or silence yourself there for a while (only the owner lifts it early). Use room_read first to get the member's uid and the msg ids. The owner and room admins can never be targeted. The bot must be a room admin with the right permission. Act on clear rule-breaking (spam, scams, abuse) and tell the owner what you did.",
     "name": "room_moderate",
     "parameters": {
       "additionalProperties": false,
       "properties": {
         "action": {
-          "description": "One of: mute, unmute, ban, unban, delete.",
+          "description": "One of: mute, unmute, ban, unban, delete (a member), or silence (yourself: stay quiet in the room for `duration`).",
           "type": "string"
         },
         "delete_messages": {
@@ -16,7 +16,7 @@
         },
         "duration": {
           "default": null,
-          "description": "mute/ban length, e.g. 30m, 2h, 7d (max 30d). Default mute 1h, ban 30d.",
+          "description": "mute/ban length, e.g. 30m, 2h, 7d (max 30d). Default mute 1h, ban 30d. silence: default 1h, max 24h.",
           "nullable": true,
           "type": "string"
         },

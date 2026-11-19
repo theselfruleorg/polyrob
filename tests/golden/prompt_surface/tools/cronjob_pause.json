@@ -1,0 +1,20 @@
+{
+  "function": {
+    "description": "Pause one of your cron jobs: no run until it is resumed (a run in flight is cut). Never the job this run runs in.",
+    "name": "cronjob_pause",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "description": "The id of the cron job to pause.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_id"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

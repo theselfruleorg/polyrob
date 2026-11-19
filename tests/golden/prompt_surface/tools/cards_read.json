@@ -1,10 +1,16 @@
 {
   "function": {
-    "description": "Read YOUR action cards from the card store: every open card (id, exact command, reason) and every card decided in the last hours with its outcome (sent, cancelled, replaced, expired). Use it before you tell the owner what is open, paid or owed, and before you raise or replace a card. Nothing changes.",
+    "description": "Read YOUR action cards from the card store: every open card (id, exact command, reason) and every card decided in the last hours with its outcome (sent, cancelled, replaced, expired) and, for a payment that landed, its tx hash. Use it before you tell the owner what is open, paid or owed, before you write a tx hash anywhere, and before you raise or replace a card. With cancel=<id> it withdraws one open card you raised; otherwise nothing changes.",
     "name": "cards_read",
     "parameters": {
       "additionalProperties": false,
       "properties": {
+        "cancel": {
+          "default": "",
+          "description": "The id of an OPEN card YOU raised that is no longer needed: it closes as cancelled and nothing runs. A card the system raised (a quote) stays the owner's. Empty: only read.",
+          "maxLength": 40,
+          "type": "string"
+        },
         "hours": {
           "default": 24.0,
           "description": "How far back to list the decided cards (default 24 h).",

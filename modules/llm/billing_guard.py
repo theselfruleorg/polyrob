@@ -36,6 +36,18 @@ async def fresh_credential(client) -> None:
     await refresh_credential(client)
 
 
+async def release_refused(reservation_id, error: BaseException) -> None:
+    """A provider status that proves no charge returns the call's hold to its payer
+    (``core.billing_context.proves_no_charge``). Output already streamed is billed
+    output: the caller passes no id then. Only the error and what it WRAPS prove the
+    status: a timeout raised while a 4xx was handled must not return the hold."""
+    if not reservation_id:
+        return
+    from core.billing_context import release_refused_hold
+    from modules.llm.llm_client import _status_code
+    await release_refused_hold(reservation_id, _status_code(error, implicit=False))
+
+
 def check_adapter(adapter) -> None:
     from core.llm_auth.inference import require_credential_access
     require_credential_access(getattr(adapter, '_client', None))

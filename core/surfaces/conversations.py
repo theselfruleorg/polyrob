@@ -351,10 +351,15 @@ class ConversationStore:
             (user_id, max(1, int(limit))), fetch="all") or []
         return [dict(r) for r in rows]
 
-    def format_list(self, user_id: str, limit: int = 30) -> str:
+    def format_list(self, user_id: str, limit: int = 30,
+                    states: Optional[dict] = None) -> str:
         """One line per conversation — 'who did we contact, who replied' at a
         glance (E4 slimmed: the store already tracks this; no campaign subsystem).
-        Empty string when the tenant has no conversations."""
+        Empty string when the tenant has no conversations.
+
+        120 W5: *states* maps ``(surface, address)`` to the contact's registry
+        state (``core.surfaces.contacts_view.contact_states``); with it, each line
+        starts with that state, and an address with no binding says so."""
         convs = self.list(user_id, limit=limit)
         if not convs:
             return ""
@@ -364,7 +369,11 @@ class ConversationStore:
                        if c.get("last_inbound_ts") else "no reply yet")
             sent = (f"last sent {_iso(c['last_outbound_ts'])}"
                     if c.get("last_outbound_ts") else "nothing sent")
-            lines.append(f"{c['surface']}:{c['address']} — {sent}; {replied}; "
+            state = ""
+            if states is not None:
+                state = (states.get((c["surface"], _norm_addr(c["address"])))
+                         or "no binding") + "; "
+            lines.append(f"{c['surface']}:{c['address']} — {state}{sent}; {replied}; "
                          f"session {c['session_id'] or '?'}")
         return "\n".join(lines)
 

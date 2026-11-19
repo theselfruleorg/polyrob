@@ -169,3 +169,115 @@ def test_push_telegram_chat_names_the_chat_and_surfaces_the_error(tmp_path):
                                 env={"TELEGRAM_BOT_TOKEN": "T"}, opener=opener)
     assert seen["url"].endswith("/setChatPhoto")
     assert b'name="chat_id"\r\n\r\n-1001' in seen["body"]
+
+
+# --- 120 W1: the ONE push procedure ------------------------------------------
+
+PNG_IMG = b"\x89PNG\r\n\x1a\n" + b"x" * 64
+
+
+@pytest.fixture
+def slot(tmp_path, monkeypatch):
+    from core.avatar import set_avatar
+    set_avatar(tmp_path, "alice", PNG_IMG, source="file:f.png")
+    return tmp_path
+
+
+def test_a_room_photo_alone_is_the_room_photo_only(slot, monkeypatch):
+    """A room named alone changes that room: the bot's own photo is a public
+    face the caller did not name."""
+    from modules.avatar import push
+    calls = []
+    monkeypatch.setattr(push, "push_telegram_bot", lambda p: calls.append("bot"))
+    monkeypatch.setattr(push, "push_telegram_chat", lambda p, c: calls.append(c))
+    monkeypatch.setattr(push, "push_twitter", lambda p: calls.append("x"))
+    monkeypatch.setattr(push, "push_discord", lambda p: calls.append("discord"))
+    res = push.push_avatar(slot, "alice", telegram_chats=["-1001", "-1001"])
+    assert [r.surface for r in res] == ["telegram:-1001"] and calls == ["-1001"]
+
+
+def test_telegram_named_with_a_room_sets_the_bot_and_the_room(slot, monkeypatch):
+    from modules.avatar import push
+    calls = []
+    monkeypatch.setattr(push, "push_telegram_bot", lambda p: calls.append("bot"))
+    monkeypatch.setattr(push, "push_telegram_chat", lambda p, c: calls.append(c))
+    res = push.push_avatar(slot, "alice", surfaces=["telegram"], telegram_chats=["-1001"])
+    assert [r.surface for r in res] == ["telegram", "telegram:-1001"] and calls == ["bot", "-1001"]
+
+
+def test_the_record_takes_the_cross_process_lock(slot, monkeypatch):
+    from modules.avatar import push
+    import core.state.files as files
+    seen = []
+    real = files.file_lock
+
+    def spy(path):
+        seen.append(str(path))
+        return real(path)
+    monkeypatch.setattr(files, "file_lock", spy)
+    push._record_pushed(slot, "alice", "twitter", "abc")
+    assert seen and seen[0].endswith("pushed.json")
+    assert push.load_pushed(slot, "alice")["twitter"] == {"hash": "abc"}
+
+
+def test_normalize_surfaces_reads_x_and_names_the_unknown():
+    from modules.avatar import push
+    assert push.normalize_surfaces(["X", "telegram", "x", ""]) == (("twitter", "telegram"), ())
+    assert push.normalize_surfaces(["mastodon"]) == ((), ("mastodon",))
+
+
+def test_an_unknown_surface_stops_everything(slot):
+    from modules.avatar import push
+    res = push.push_avatar(slot, "alice", surfaces=["x", "mastodon"])
+    assert [r.status for r in res] == ["refused"] and "mastodon" in res[0].text
+
+
+def test_an_unreadable_slot_is_not_an_empty_one(slot):
+    from core.avatar import avatar_dir
+    from modules.avatar import push
+    (avatar_dir(slot, "alice") / "avatar.json").write_text("{not json")
+    res = push.push_avatar(slot, "alice")
+    assert res[0].status == "refused" and "unreadable" in res[0].text
+
+
+def test_each_surface_reports_alone_and_only_a_success_is_recorded(slot, monkeypatch):
+    from modules.avatar import push
+
+    def _boom(p):
+        raise RuntimeError("403 Forbidden")
+
+    monkeypatch.setattr(push, "push_twitter", _boom)
+    monkeypatch.setattr(push, "push_discord", lambda p: None)
+
+    def _no_token(p):
+        raise push.TelegramCredsMissing("missing TELEGRAM_BOT_TOKEN")
+
+    monkeypatch.setattr(push, "push_telegram_bot", _no_token)
+    res = {r.surface: r for r in push.push_avatar(
+        slot, "alice", surfaces=["x", "discord", "telegram"], telegram_chats=["-1001"])}
+    assert res["twitter"].status == "failed" and "Set it manually" in res["twitter"].text
+    assert res["discord"].status == "updated"
+    assert res["telegram"].status == "no_credentials"
+    assert "telegram:-1001" not in res                       # one token: not repeated
+    assert set(push.load_pushed(slot, "alice")) == {"discord"}
+
+
+def test_the_record_merges_a_concurrent_writer(slot):
+    """Two writers (the CLI and the service): the second merges, never overwrites."""
+    from modules.avatar import push
+    push._record_pushed(slot, "alice", "twitter", "aa")
+    push._record_pushed(slot, "alice", "discord", "bb")
+    assert push.load_pushed(slot, "alice") == {"twitter": {"hash": "aa"},
+                                               "discord": {"hash": "bb"}}
+    assert not list((slot / "identity" / "alice" / "avatar").glob("*.tmp"))
+
+
+def test_the_cli_holds_no_push_procedure():
+    """The click command renders `push_avatar`; the flags, the record and the
+    platform calls have ONE home."""
+    import inspect
+    from cli.commands import avatar as cli_avatar
+    src = inspect.getsource(cli_avatar)
+    for gone in ("bool_env", "pushed.json", "push_twitter", "push_discord",
+                 "push_telegram", "_record_pushed", "set_avatar_from_file"):
+        assert gone not in src

@@ -8,6 +8,13 @@
         "job_id": {
           "description": "The id of the cron job to show in full.",
           "type": "string"
+        },
+        "runs": {
+          "default": 0,
+          "description": "Also list the job's last N run outcomes (0-20) from the run log. 0: none.",
+          "maximum": 20,
+          "minimum": 0,
+          "type": "integer"
         }
       },
       "required": [

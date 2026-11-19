@@ -139,11 +139,12 @@ def test_the_prod_and_server_seats_run_with_memory_wallet_and_install_record(
             assert any(n.startswith("defi_trade_") for n in names), prefix + surface
         else:
             # 095 W1c (SC-1, D2): the server posture reads its config — the
-            # read-only `preferences` (no set).
+            # read-only `preferences` (no set, no unset; 120 W6 adds the reads).
             schema = json.loads((fresh / "tools" / f"preferences.{prefix}{surface}.json")
                                 .read_text(encoding="utf-8"))
             ops = schema["function"]["parameters"]["properties"]["operation"]["enum"]
-            assert sorted(ops) == ["explain", "get", "list"], prefix + surface
+            assert sorted(ops) == ["changed", "check", "explain", "get", "list",
+                                   "search"], prefix + surface
 
 
 def test_the_owner_first_call_is_at_most_45k_under_the_prod_posture(fresh):

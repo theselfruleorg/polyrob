@@ -150,8 +150,8 @@ def operator_model_for(provider, env=None):
 #: default above the operator's) is ``core.model_pins.chat_runtime_for`` (094).
 MODEL_TIERS = ("default", "heavy", "light", "inherit")
 
-#: 112 W2: the tiers the AGENT may name (``delegate_task(tier=…)``; ``goal_create`` /
-#: ``cronjob_schedule`` on an owner turn). ``inherit`` stays internal to the regime column.
+#: 112 W2: the tiers the AGENT may name (``delegate_task(tier=…)``, ``goal_create``,
+#: ``cronjob_schedule``). ``inherit`` stays internal to the regime column.
 #: The model picks a NAME; the operator's env decides the model behind it.
 ROUTABLE_TIERS = ("default", "heavy", "light")
 
@@ -166,6 +166,35 @@ def register_light_resolver(fn) -> None:
     _LIGHT_RESOLVER = fn
 
 
+_OWNER_TIER_RESOLVER = None
+
+
+def register_owner_tier_resolver(fn) -> None:
+    """121: ``fn(tier) -> {"provider", "model"} | None`` — the instance owner's own heavy /
+    light model (``model.json``), registered from ``agents/task/constants.py`` (an import of
+    the owner store here closes an import cycle)."""
+    global _OWNER_TIER_RESOLVER
+    _OWNER_TIER_RESOLVER = fn
+
+
+def _owner_tier(tier, env=None):
+    """121: the instance owner's own ``heavy`` / ``light`` model (``/model heavy <name>``,
+    stored in ``model.json``), on the operator's provider. Only for the process env: an
+    explicit *env* mapping is a caller's what-if. Fail-open to None (the env value)."""
+    if (env is not None and env is not _os.environ) or _OWNER_TIER_RESOLVER is None:
+        return None
+    try:
+        row = _OWNER_TIER_RESOLVER(tier)
+    except Exception:
+        return None
+    if not row:
+        return None
+    pinned = canonicalize_provider(operator_provider_pin())
+    if pinned and canonicalize_provider(row.get("provider")) != pinned:
+        return None
+    return row.get("model")
+
+
 def _light_model(provider, env=None):
     """The ``light`` tier on *provider*: its cheap aux model for the operator's model, or the
     operator's model itself when that already is the cheap one (prod: flash). ``None`` when
@@ -174,7 +203,9 @@ def _light_model(provider, env=None):
     if not provider or not pinned or canonicalize_provider(provider) != pinned:
         return None
     main = operator_model_pin(env)
-    cheap = None
+    cheap = _owner_tier("light", env)
+    if cheap:
+        return cheap
     if _LIGHT_RESOLVER is not None:
         try:
             cheap = _LIGHT_RESOLVER(pinned, main)
@@ -221,7 +252,11 @@ def tier_refusal(tier, provider, env=None) -> str:
 
 
 def heavy_model_pin(env=None):
-    """``HEAVY_MODEL`` (the money tier on the operator's provider), or ``None``."""
+    """The heavy model on the operator's provider: the owner's own setting (121,
+    ``/model heavy <name>``) when one is set, else ``HEAVY_MODEL``, else ``None``."""
+    own = _owner_tier("heavy", env)
+    if own:
+        return own
     env = _os.environ if env is None else env
     return (env.get("HEAVY_MODEL") or "").strip() or None
 

@@ -93,3 +93,23 @@ class OutboundAllowlist:
             }
             for r in rows
         ]
+
+
+def allowlist_reply(store, user_id: str) -> str:
+    """The ONE render of the outbound allowlist: `/allowlist` on every chat seat and
+    `message(action="targets")` print this text. An absent or unreadable store is
+    said, never shown as an empty list."""
+    if store is None:
+        return "The allowlist is not available in this process — UNKNOWN, not empty."
+    try:
+        rows = store.list(user_id)
+    except Exception as exc:
+        return (f"The allowlist could not be read ({type(exc).__name__}) — "
+                f"UNKNOWN, not empty.")
+    if not rows:
+        return "No allowlist entries."
+    lines = [f"{len(rows)} allowlist entr{'y' if len(rows) == 1 else 'ies'}:"]
+    for r in rows:
+        note = f" ({r['note']})" if r.get("note") else ""
+        lines.append(f"• {r['status']} {r['surface']}:{r['target']}{note}")
+    return "\n".join(lines)

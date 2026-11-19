@@ -59,10 +59,9 @@ def expect_line(payload: Optional[dict]) -> str:
 
 
 def _count_is_met(expect: dict, session_id: str, user_id: str) -> Optional[bool]:
-    from core.effects import external_write_telemetry_enabled
     from core.event_kinds import EXTERNAL_WRITE
     from core.event_log import event_log_enabled, get_event_log
-    if not (event_log_enabled() and external_write_telemetry_enabled()):
+    if not event_log_enabled():
         return None
     minimum = int(expect.get("min", 1))
     rows = get_event_log().rows_where(

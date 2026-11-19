@@ -19,13 +19,15 @@ from pydantic import BaseModel, Field
 from agents.task.agent.views import ActionResult
 
 OPS = ("draft", "resource", "test", "propose_setup", "propose_live", "pause", "status",
-       "orders", "announce")
+       "orders", "report", "threads", "announce")
 
 
 def register_offer_actions(controller) -> None:
     class OfferManage(BaseModel):
         op: str = Field(..., description="One of: " + ", ".join(OPS))
-        offer_id: Optional[str] = Field(None, description="The offer id (all ops but draft/status).")
+        offer_id: Optional[str] = Field(
+            None, description="The offer id (all ops but draft; optional for status, orders, "
+                              "report, threads).")
         manifest: Optional[Dict[str, Any]] = Field(
             None, description="draft: the whole polyrob.offer/1 manifest (see the sell-anything skill).")
         kind: Optional[str] = Field(None, description="resource: contract|file_set|account|endpoint|storage")
@@ -43,8 +45,8 @@ def register_offer_actions(controller) -> None:
                               "then answers order replies under it")
 
     @controller.registry.action(
-        "Sell something: draft/edit an offer, record its resources and a test, see offers and "
-        "orders, pause one, and put the setup budget or go-live to the owner as ONE card each. "
+        "Sell something: draft/edit an offer, record its resources and a test, see offers, "
+        "orders, the sales report and the announcement threads, pause one, and put the setup budget or go-live to the owner as ONE card each. "
         "Grants nothing itself.",
         param_model=OfferManage,
     )
@@ -82,9 +84,11 @@ def register_offer_actions(controller) -> None:
             if op == "status":
                 from modules.commerce.owner_verb import offer_reply
                 return _ok(await offer_reply(user_id, ["show", oid] if oid else ["list"]))
-            if op == "orders":
+            if op in ("orders", "report", "threads"):
+                # 120 W4: report (sales, takings, costs) and threads (the announcement
+                # posts) are the `/offer` text, from the same owner_verb function.
                 from modules.commerce.owner_verb import offer_reply
-                return _ok(await offer_reply(user_id, ["orders"] + ([oid] if oid else [])))
+                return _ok(await offer_reply(user_id, [op] + ([oid] if oid else [])))
             if op in ("propose_setup", "propose_live"):
                 o = st.get(oid)
                 if o is None or o.user_id != user_id:

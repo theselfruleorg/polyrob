@@ -173,16 +173,15 @@ def pack_search(query):
     from cli.commands._bootstrap import ensure_env_loaded
     ensure_env_loaded()
     from core.packs import index
-    rows = index.search(query)
+    try:
+        rows = index.search(query, strict=True)
+    except index.PackIndexError as exc:   # an unreadable index is not an empty one
+        raise click.ClickException(str(exc))
     if not rows:
         click.echo(f"no pack in the index matches {query!r}" if query else "the pack index is empty")
         return
     for row in rows:
-        caps = ", ".join(row.get("capabilities", [])) or "none"
-        line = (f"{row['id']} {row['version']} ({row['tier']}) — {row.get('summary') or '-'}"
-                f" · capabilities: {caps} · {row['dist']}")
-        killed = index.killed(row["id"], row["version"])
-        click.echo(line + (f" · ! {killed}" if killed else ""))
+        click.echo(index.row_line(row))
 
 
 @pack.command("install")
@@ -250,7 +249,10 @@ def _accept(accepted: bool) -> None:
 
 def _install_from_index(pack_id: str, accepted: bool) -> None:
     from core.packs import index
-    row = index.find(pack_id)
+    try:
+        row = index.find(pack_id, strict=True)
+    except index.PackIndexError as exc:   # "not in the index" would be a guess
+        raise click.ClickException(str(exc))
     if row is None:
         raise click.ClickException(f"pack {pack_id!r} is not in the pack index "
                                    "(see: polyrob pack search)")

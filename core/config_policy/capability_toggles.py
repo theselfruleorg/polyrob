@@ -1,5 +1,5 @@
 """Per-feature capability toggles and runtime knobs (message tool, tool rig, prefs, invoice card,
-EIP-8004 feedback, persona block, memory cadence, tickers, compaction guard, dead-target registry,
+EIP-8004 feedback, persona block, memory cadence, tickers, dead-target registry,
 DeFi tiers, memory backend).
 
 Split out of ``core/config_policy/policy.py`` (S2, 2026-08-29); ``policy.py`` re-exports
@@ -159,9 +159,9 @@ def prefs_tool_enabled() -> bool:
     registered. Default OFF; ON under POLYROB_LOCAL (single-user CLI) via the
     _SAFE_LOCAL_FLAGS group. An explicit PREFS_TOOL_ENABLED always wins.
 
-    Gates the whole action, not the pref schema itself (core.prefs.prefs_enabled()
-    is the independent SSOT for whether preferences.toml is consulted at all —
-    this only controls whether the agent can call the tool to read/change one).
+    Gates the whole action, not the pref schema itself (preferences.toml is
+    always consulted — this only controls whether the agent can call the tool
+    to read/change one).
     """
     from core.config_policy.members import member_flag
     return member_flag("PREFS_TOOL_ENABLED")
@@ -281,28 +281,6 @@ def ticker_idle_backoff_max_multiplier() -> int:
     always wins; default 5.
     """
     return _int_env("TICKER_IDLE_BACKOFF_MAX_MULTIPLIER", 5)
-
-
-def compaction_prompt_guard() -> bool:
-    """Whether the compaction summarizer prompt + rebuilt summary carry explicit
-    anti-injection framing (T1.3, parity with the reference compaction guard).
-
-    A hostile mid-history payload (e.g. a tool result or user turn containing
-    "ignore prior instructions and...") sits in the raw middle that gets fed
-    verbatim to the (often smaller, cheaper) compaction aux model. Without
-    framing, that payload can steer the summarizer itself, or the resulting
-    summary can later be read by the MAIN model as live instructions rather
-    than derived reference context.
-
-    Resolved at access time. Default ON: on, ``_build_compaction_prompt``
-    prepends a SECURITY preamble and wraps the conversation body in
-    ``<conversation_data>``/``</conversation_data>`` literals, and
-    ``_rebuild_with_summary`` appends a one-line reminder inside the existing
-    compacted-history markers. OFF reproduces the exact legacy prompt/rebuild
-    bytes (byte-identical, test-locked) — set ``COMPACTION_PROMPT_GUARD=false``
-    to restore it.
-    """
-    return _bool_env("COMPACTION_PROMPT_GUARD", True)
 
 
 def reflection_llm_enabled_default() -> bool:

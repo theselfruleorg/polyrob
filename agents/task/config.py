@@ -17,7 +17,6 @@ import logging
 
 from agents.task.constants import LoopDetectionConfig
 from core.config_policy.goal_flags import interactive_max_steps
-from core.env import bool_env as _bool_env
 from core.version import get_version
 import os
 
@@ -87,25 +86,16 @@ class TaskMode:
                 "max_failures": 2,
                 "max_parse_retries": 1,
                 "telemetry_enabled": False,
-                "min_steps_before_done": 2,
-                "confidence_check_before_done": False,
-                "task_verification_required": False,
             },
             TaskMode.BALANCED: {
                 "max_failures": 5,
                 "max_parse_retries": int(os.getenv('MAX_PARSE_RETRIES', '3')),
                 "telemetry_enabled": False,
-                "min_steps_before_done": int(os.getenv('MIN_STEPS_BEFORE_DONE', '3')),
-                "confidence_check_before_done": _bool_env('CONFIDENCE_CHECK_BEFORE_DONE', True),
-                "task_verification_required": _bool_env('TASK_VERIFICATION_REQUIRED', True),
             },
             TaskMode.THOROUGH: {
                 "max_failures": 7,
                 "max_parse_retries": 5,
                 "telemetry_enabled": True,
-                "min_steps_before_done": 5,
-                "confidence_check_before_done": True,
-                "task_verification_required": True,
             },
         }
         return configs.get(mode, configs[TaskMode.BALANCED])
@@ -180,7 +170,7 @@ class LimitsConfigModel(BaseModel):
     # NOTE: use_todo_manager=True enables the TODO tool (agent can create/read/update TODO lists).
     # This is an optional productivity feature for complex tasks. Simple tasks can ignore it.
     use_todo_manager: bool = Field(default=True, description="Enable TODO tool for complex task organization (agent MAY use, not required)")
-    min_steps_before_done: int = Field(default=2, ge=1, le=10, description="Minimum steps before allowing task completion (prevents premature done() calls)")
+    min_steps_before_done: int = Field(default=2, ge=1, le=10, description="No reader. Kept so a stored config that sets it still loads (extra keys are forbidden)")
 
     # Artifact requirements
     require_artifacts_for_done: bool = Field(default=False, description="Require output artifacts before completion")

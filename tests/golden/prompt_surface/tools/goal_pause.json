@@ -1,0 +1,20 @@
+{
+  "function": {
+    "description": "Pause a goal on the owner's word: no run starts until it is lifted (goal_unblock on an owner turn). A running goal's run stops.",
+    "name": "goal_pause",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "goal_id": {
+          "description": "The goal id to pause.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "goal_id"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

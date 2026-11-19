@@ -197,7 +197,7 @@ surfaces, the web console and the programmatic API.
 | WhatsApp | `polyrob whatsapp` | WhatsApp Cloud API webhook; needs Meta credentials |
 | Email | `polyrob email` | IMAP poll in, SMTP out |
 | Discord | `polyrob discord` | Text, files; approve / reject / answer buttons under a decision (a tap counts as you typing the command; the text keeps the commands). A tapped button stays on the message (a decision already made refuses a second tap). No slash commands yet |
-| Slack | `polyrob slack` | |
+| Slack | `polyrob slack` | Text, files; approve / reject / answer buttons under a decision (turn Interactivity on in the Slack app; a tap counts as you typing the command; the text keeps the commands; a tapped button stays on the message and a decision already made refuses a second tap). No menus yet |
 | Signal | `polyrob signal` | |
 | X | — | DMs are read and sent by the agent's `twitter_get_dms` / `twitter_dm` tools over X Chat. The old `polyrob x` poller reads a DM endpoint X no longer delivers to and is obsolete. See [x-twitter.md](x-twitter.md) |
 | Feishu / Lark | `polyrob gateway` | Long connection (the `feishu` extra) or a signed webhook; text, files, buttons. See [feishu-dingtalk.md](feishu-dingtalk.md) |
@@ -284,4 +284,4 @@ ship inside the `polyrob` wheel; their SDKs are pip extras. See [packs.md](packs
 
 ## Agent delegation
 
-The agent can spawn **sub-agents** for parallel or delegated work via the `delegate_task` tool. Sub-agents are leaf nodes (cannot further delegate), run with a least-privilege tool set, and report results back to the parent session. Gated by `SUB_AGENTS_ENABLED` (default on) with conservative depth and concurrency caps. The agent picks a sub-agent's model by tier name — `heavy`, `light` or `default`, with a one-line reason, at most two heavy per call — and the operator's settings decide the model behind each name ([configuration.md §4](configuration.md#4-providers-and-models)).
+The agent can spawn **sub-agents** for parallel or delegated work via the `delegate_task` tool. Sub-agents are leaf nodes (cannot further delegate), run with a least-privilege tool set, and report results back to the parent session. Gated by `SUB_AGENTS_ENABLED` (default on) with conservative depth and concurrency caps. The agent picks a sub-agent's model by tier name — `heavy`, `light` or `default`, with a one-line reason, at most two heavy per call — and the operator's settings decide the model behind each name ([configuration.md §4](configuration.md#4-providers-and-models)). The agent can also name any model for a sub-agent. There is no price gate: the agent reads the price of each model, the result names the price of its choice, and the spend limit of each run bounds the cost. A model with no known price runs with a warning. The same rule applies to the model of a goal or a scheduled job.

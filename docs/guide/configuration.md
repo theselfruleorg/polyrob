@@ -23,6 +23,7 @@ Read this page top to bottom once. After that, `polyrob doctor` and
    action asks first only under an approval provider that asks (`owner_queue`,
    `interactive_cli`): under the default `auto`, a list changes nothing.
    `approvals.provider` also takes `owner_queue` (a wait you answer with `/approve` or the Inbox).
+   Set to `deny`, it also stops every X post, new public address and deploy, on your own turn too.
 3. **What does it do when I am away?** Nothing, until `AUTONOMY_ENABLED` is on. Scheduled jobs
    also need `AUTONOMY_POSTURE=full`, and goals need `POLYROB_LOCAL`.
 4. **How do I change that?** `/mode ask-first`, `/mode standard` or `/mode on-my-own` for one
@@ -51,7 +52,7 @@ polyrob autonomy status     # the posture card: every axis, its effective value,
 polyrob doctor              # the same card, then health
 ```
 
-(`/status` on Telegram, the console's Agent → Overview, and the agent's own
+(`/status all` on Telegram, the console's Agent → Overview, and the agent's own
 `agent_status` action render the same card.) Each axis below says what it moves,
 what it never moves, and how it can be clamped.
 
@@ -99,7 +100,7 @@ capabilities (axis 3), money, host access.
 **5. `AGENT_COMPUTE_POSTURE` — how much of the host it may use.** `0` is a
 confined, ephemeral sandbox. `1` adds a persistent dev container with a `shell`
 and pip installs. `2` adds the approval-gated `self_env` verbs, which read the
-agent's own source and restart its service. `3` is the host and requires axis 1. Frozen when the
+agent's own source and restart or update its service. `3` is the host and requires axis 1. Frozen when the
 process starts: a running agent cannot widen its own host access. Never moves:
 money; every `self_env` verb still asks.
 
@@ -309,11 +310,14 @@ names are retired; set alone, POLYROB refuses to start and names the
 `DEFAULT_` name to use.
 
 **Model tiers.** `HEAVY_MODEL` (on the pinned provider) is the `heavy` tier; the
-provider's cheap model is `light`; `DEFAULT_MODEL` is `default`. The agent picks a
-tier by name, with a one-line reason: for a helper it starts, and — when you asked for the
-work in chat — for a goal or job (`heavy` for work that decides money). It never
-names a raw model for unattended work. The tiers resolve on the pinned
-`DEFAULT_PROVIDER` only. `/status` shows the last choices and why.
+provider's cheap model is `light`; `DEFAULT_MODEL` is `default`. `/model heavy <name>` and
+`/model light <name>` set your own heavy and light model, and they win over the env. The
+agent picks a tier by name, with a one-line reason, for a helper, a goal or a job (`heavy`
+for work that decides money). It can also name any model: it sees each price, the result names
+the price of its choice, and a model with no known price runs with a warning. There is no
+price gate; the spend limit of each run bounds the cost. `/model choice listed` limits it to your own models.
+The tiers resolve on the pinned `DEFAULT_PROVIDER` only. `/status` shows the last choices
+and why.
 
 `DEEPSEEK_API_KEY` selects DeepSeek's own API (sixth in the order above): `deepseek-flash` by default, `deepseek-v4-pro`, and the legacy ids
 `deepseek-chat` (thinking off) and `deepseek-reasoner` (thinking on). The
@@ -726,7 +730,8 @@ Quiet hours (`digest.quiet_hours`) defer rather than drop. Framework run pings
   `analyst`, `coder`, `ops` — and your own go in your data or profile dir, which
   wins over both.
 - **Avatar** (`polyrob identity avatar set <image>`): the image used on cards,
-  the console, Telegram and profiles.
+  the console, Telegram and profiles. The X, Telegram and Discord account
+  pictures are copies: a push (`/avatar push`, or ask the agent) updates them.
 - **Profiles** (`polyrob profile create|use|export|install`): whole isolated
   homes for running several bots on one machine. See [profiles.md](profiles.md).
 
@@ -778,6 +783,12 @@ A guarded preference (approvals, budget) can only tighten what the environment
 allows. The agent may propose a preference change itself; proposals wait in
 `polyrob owner pending` until you promote them.
 
+The agent reads the settings as `/config` does: `search`, `get`, `explain`, `changed` (every
+setting off its default) and `check` (broken lines, key names only). A secret shows only as set.
+It may remove a safe preference of its own (`unset`, back to the default). It never removes a
+guarded preference, because a guarded preference only tightens, and it never writes an
+environment setting.
+
 ---
 
 ## 12. Server and console
@@ -811,11 +822,10 @@ tokens are, and `/compact` runs the whole ladder by hand.
 
 ## 13. Troubleshooting
 
-Two reliability defaults you can leave alone, before the table:
+One reliability default you can leave alone, before the table:
 `DEAD_TARGET_REGISTRY` skips sends to a chat that has blocked or deleted the
-bot and revives it when it writes again. `COMPACTION_PROMPT_GUARD` frames the
-context-compaction step so that old text is summarized as data, never followed
-as instructions. Both are on.
+bot and revives it when it writes again. It is on. The context-compaction step
+always frames old text as data, never as instructions; it has no setting.
 
 | Symptom | Check |
 |---|---|

@@ -8,8 +8,8 @@ whether files persist / whether node exists" is answerable in-context
 
 Emission policy (014 D-3): ONLY under ``local_mode_enabled()`` OR
 ``full_autonomy_enabled()`` — a multi-tenant server tenant never sees host
-details. Gated ``ENV_CONTEXT_BLOCK`` (default ON; fail-open — any builder
-error returns None and session construction continues without the block).
+details. Fail-open: any builder error returns None and session construction
+continues without the block.
 
 Content is per-session-STABLE: built once at session construction and pinned
 as a foundation message (``MessageManager.set_environment_message``), NOT in
@@ -51,10 +51,11 @@ def model_tiers_line(env=None) -> str:
     if not tiers:
         return ""
     names = ", ".join(f"{t} = {tiers[t]}" for t in ("default", "heavy", "light") if t in tiers)
-    return (f"Model tiers (the operator sets them; you pick by NAME): {names}. Pass tier= and a "
-            "one-line why= to delegate_task, or — when the owner's chat asked for the work — to "
-            "goal_create / cronjob_schedule: heavy for work that decides money or is hard to "
-            "undo, light for bulk reads.")
+    return (f"Model tiers (the owner or the operator sets them; you pick by NAME): {names}. Pass tier= and a "
+            "one-line why= to delegate_task, goal_create or cronjob_schedule: heavy for work that decides money or is hard to "
+            "undo, light for bulk reads. A sub-agent, a goal or a job may also run on any model: "
+            "pass model= and why= (agent_status view='models' lists the models and prices; "
+            "choose by price, there is no price gate).")
 
 
 def _exec_tools_line() -> str:
@@ -73,9 +74,6 @@ def _exec_tools_line() -> str:
 
 
 def _enabled() -> bool:
-    from core.env import bool_env
-    if not bool_env("ENV_CONTEXT_BLOCK", True):
-        return False
     from core.config_policy import local_mode_enabled, full_autonomy_enabled
     return bool(local_mode_enabled() or full_autonomy_enabled())
 

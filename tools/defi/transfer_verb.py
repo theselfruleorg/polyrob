@@ -8,9 +8,12 @@ reaches this code.
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from core.wallet.tx_guard_steps.value import SENT_VALUE_LABEL
 from tools.defi.send_order import fmt_tokens
+
+logger = logging.getLogger(__name__)
 
 
 def _value_check_line(basis, amount_usd) -> str:
@@ -38,9 +41,8 @@ def owner_typed_anyway(params, execution_context) -> bool:
     ``send_anyway`` itself gets the plain refusal."""
     if not getattr(params, "send_anyway", False):
         return False
-    from core.security.turn_facts import OWNER_SEAT_KIND
-    meta = getattr(execution_context, "metadata", None)
-    return isinstance(meta, dict) and meta.get("turn_kind") == OWNER_SEAT_KIND
+    from core.security.turn_facts import is_owner_seat
+    return is_owner_seat(execution_context)
 
 
 async def perform_transfer(tool, params, execution_context=None):
@@ -211,13 +213,21 @@ async def perform_transfer(tool, params, execution_context=None):
                     counterparty=to, idempotency_key=idem, result_ref=tx_hash,
                     chain=params.chain,
                     account=(held.account if held is not None else None))
-        receipt = await tool._await_receipt_or_record(
-            rail, tx_hash, gate=gate, record_kw=_rec,
-            execution_context=execution_context,
-            notice_kw=dict(verb="transfer", route=params.chain, chain=params.chain,
-                           amount_in=_label, usd=decision.amount_usd))
-        from tools.defi.receipt_wait import book_after_receipt
-        book_after_receipt(gate, receipt, **_rec)
+        try:
+            receipt = await tool._await_receipt_or_record(
+                rail, tx_hash, gate=gate, record_kw=_rec,
+                execution_context=execution_context,
+                notice_kw=dict(verb="transfer", route=params.chain, chain=params.chain,
+                               amount_in=_label, usd=decision.amount_usd))
+            from tools.defi.receipt_wait import book_after_receipt
+            book_after_receipt(gate, receipt, **_rec)
+        except Exception as exc:
+            # The send is on the wire: an owner seat's SENT notice is suppressed (one send,
+            # one report), so this answer is the only place the owner reads the hash.
+            logger.exception("transfer %s: the receipt wait or the booking failed", tx_hash)
+            return tool._ar(error=header + (
+                f"  RESULT: SENT, NOT BOOKED ({exc.__class__.__name__})\n"
+                f"  tx: {tx_hash}\n  The funds left: read the tx before any retry."))
         tool._notify_tx(execution_context, tx_notify.TxNotice(
             verb="transfer", route=params.chain, chain=params.chain, amount_in=_label,
             usd=decision.amount_usd, tx_ref=tx_hash,

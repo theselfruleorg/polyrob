@@ -501,7 +501,8 @@ class EvmRail:
                 "process — polyrob-signer signs only an authorized intent; nothing was sent")
         if submission_journal.unresolved():
             raise BroadcastError(
-                "unaccounted wallet submission; reconcile before another send — nothing was sent")
+                "unaccounted wallet submission; no send until the operator settles it "
+                "(x402_pay_x402_wallet_status lists it) — nothing was sent")
         try:
             result = self._signer.send_transaction(tx, chain=self.chain, intent=intent)
         except SignerRefused as exc:

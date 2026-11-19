@@ -26,6 +26,14 @@ room with `room_read`.
 ⚠️ Layering: `tools/` never imports `surfaces/`. The adapter is reached as a
 container service, duck-typed.
 
+120 W5: `silence` is the agent's narrowing write on ITSELF — it stays quiet in a
+room for a while (`core.surfaces.group_admin.mute`, the owner's `/mute <room>
+<duration>` helper). It names no member, needs no Telegram right and works on
+every surface; it is clamped to `AGENT_SILENCE_MAX_SEC`, never moves an
+existing silence earlier, and never runs from a room turn (a member's message is
+not a way to switch the agent off; a room admin has `/mute here`). Only the owner
+lifts a silence early; otherwise it expires.
+
 ⚠️ Registry-closure landmine: NO `from __future__ import annotations` here.
 """
 import logging
@@ -41,8 +49,8 @@ from core.surfaces.room_targets import resolve_target  # noqa: F401 (the one res
 
 logger = logging.getLogger(__name__)
 
-_VERBS = ("mute", "unmute", "ban", "unban", "delete")
-_DEFAULT_DURATION = {"mute": "1h", "ban": "30d"}
+_VERBS = ("mute", "unmute", "ban", "unban", "delete", "silence")
+_DEFAULT_DURATION = {"mute": "1h", "ban": "30d", "silence": "1h"}
 #: Telegram refuses to delete a message older than 48 h.
 _DELETE_WINDOW_SEC = 48 * 3600
 _MAX_DELETE = 50
@@ -94,6 +102,30 @@ async def _moderation_authority(controller, execution_context, chat_id: str, ver
     return None
 
 
+async def _silence(controller, execution_context, params, room, title: str) -> ActionResult:
+    """120 W5: the agent stays quiet in *room* — the owner's `/mute` helper,
+    clamped and extend-only. The same authority rule as a moderation."""
+    from agents.task.session_class import is_autonomous_session
+    surface, chat_id = room["surface"], str(room["chat_id"])
+    authority = await _moderation_authority(
+        controller, execution_context, chat_id, "silence", params,
+        autonomous=is_autonomous_session(getattr(execution_context, "session_id", None)),
+        title=title)
+    if authority:
+        return _out(authority)
+    from core.instance import resolve_owner_user_id
+    from core.surfaces import group_admin
+    text = group_admin.mute(
+        getattr(controller, "container", None), resolve_owner_user_id(), surface, chat_id,
+        params.duration or _DEFAULT_DURATION["silence"],
+        max_seconds=group_admin.AGENT_SILENCE_MAX_SEC, extend_only=True)
+    if params.reason:
+        logger.info("room_moderate: silence %s:%s reason=%s", surface, chat_id,
+                    params.reason[:200])
+    return _out(f"{title}: {text} Only the owner lifts it early (/mute); otherwise "
+                f"it ends by itself. Tell the owner what you did and why.")
+
+
 def register_room_moderate_action(controller) -> None:
     """Register `room_moderate`. Rides `GROUP_CHAT_ENABLED`, like `room_read`."""
     from core.surfaces.config import SurfaceConfig
@@ -105,7 +137,8 @@ def register_room_moderate_action(controller) -> None:
             description=("The allowlisted room: chat id, 'surface:chat_id', or "
                          "a distinctive fragment of its name or label."))
         action: str = Field(
-            description="One of: mute, unmute, ban, unban, delete.")
+            description=("One of: mute, unmute, ban, unban, delete (a member), or "
+                         "silence (yourself: stay quiet in the room for `duration`)."))
         target: Optional[str] = Field(
             default=None,
             description=("The member: their uid (from room_read's {uid=…}) or "
@@ -115,7 +148,7 @@ def register_room_moderate_action(controller) -> None:
         duration: Optional[str] = Field(
             default=None,
             description=("mute/ban length, e.g. 30m, 2h, 7d (max 30d). Default "
-                         "mute 1h, ban 30d."))
+                         "mute 1h, ban 30d. silence: default 1h, max 24h."))
         message_ids: Optional[List[str]] = Field(
             default=None,
             description="delete: the msg ids (from room_read's {msg=…}).")
@@ -128,7 +161,8 @@ def register_room_moderate_action(controller) -> None:
 
     @controller.registry.action(
         "Moderate a group room you are in: mute, unmute, "
-        "ban or unban a member, or delete messages. Use room_read first to get "
+        "ban or unban a member, or delete messages; or silence yourself there "
+        "for a while (only the owner lifts it early). Use room_read first to get "
         "the member's uid and the msg ids. The owner and room admins can never "
         "be targeted. The bot must be a room admin with the right permission. "
         "Act on clear rule-breaking (spam, scams, abuse) and tell the owner "
@@ -149,6 +183,17 @@ def register_room_moderate_action(controller) -> None:
             return _out(f"unknown action {params.action!r}; use one of "
                         f"{', '.join(_VERBS)}.")
 
+        silence = verb == "silence"
+        if silence:
+            from core.security.owner_turn import is_room_turn
+            if is_room_turn(execution_context):
+                return _out("a room turn never silences me: a member's message is not "
+                            "a way to switch me off. The owner or a room admin sends "
+                            "/mute here <duration>.")
+            if params.target or params.message_ids or params.delete_messages:
+                return _out("silence names no member and deletes nothing; to act on "
+                            "a member use mute, ban or delete.")
+
         from tools.controller.room_read_action import _data_dir, room_matches
         home = _data_dir(controller)
         if not home:
@@ -159,7 +204,7 @@ def register_room_moderate_action(controller) -> None:
             moderator = container.get_service("room_moderator") if container else None
         except Exception:
             moderator = None
-        if moderator is None:
+        if moderator is None and not silence:
             return _out("no chat connection is running (the Telegram surface "
                         "is not up in this process), so I cannot moderate.")
 
@@ -193,6 +238,9 @@ def register_room_moderate_action(controller) -> None:
             return _out(f"'{want}' {why}. Rooms: {listed}.")
         room = matches[0]
         surface, chat_id = room["surface"], str(room["chat_id"])
+        if silence:
+            return await _silence(controller, execution_context, params, room,
+                                  _title(room))
         if surface != "telegram":
             return _out(f"moderation is only wired for telegram, not {surface}.")
 

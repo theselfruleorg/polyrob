@@ -1,14 +1,12 @@
 """P3: route_inbound — the inbound decision table (pure, transport-free).
 
-Precedence (Fusion correction): COMMAND > STEER > TASK_AGENT/CHAT_FASTPATH.
+Precedence (Fusion correction): COMMAND > STEER > TASK_AGENT.
 COMMAND must win over an active session, else /cancel mid-session would be fed to
 the agent as a steering message instead of cancelling it.
 
 cold/warm = SessionChatRegistry row existence (single SSOT, durable). STEER whenever
-a row resolves (sticky: a warm chat NEVER diverts to the ChatAgent fast-path, even a
-warm-but-dead one -> the caller rehydrates the same session_key). The ChatAgent
-fast-path is a default-OFF cost optimization, reachable only when CHAT_INTENT_CLASSIFIER
-is ON, the session is cold, and an injected is_chitchat predicate says so.
+a row resolves (even a warm-but-dead one -> the caller rehydrates the same
+session_key). A cold message goes to the Task agent.
 """
 import pytest
 
@@ -101,38 +99,10 @@ async def test_warm_session_steers(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_cold_classifier_off_goes_to_task_agent(tmp_path, monkeypatch):
-    monkeypatch.delenv("CHAT_INTENT_CLASSIFIER", raising=False)
+async def test_cold_goes_to_task_agent(tmp_path):
     c = _FakeContainer(_registry_with(tmp_path))
-    d = await route_inbound(c, _inbound("hi there"), is_chitchat=lambda m: True)
-    assert d.kind == RouteKind.TASK_AGENT  # classifier OFF => never fast-path
-
-
-@pytest.mark.asyncio
-async def test_cold_classifier_on_chitchat_fastpath(tmp_path, monkeypatch):
-    monkeypatch.setenv("CHAT_INTENT_CLASSIFIER", "true")
-    c = _FakeContainer(_registry_with(tmp_path))
-    d = await route_inbound(c, _inbound("hello!"), is_chitchat=lambda m: True)
-    assert d.kind == RouteKind.CHAT_FASTPATH
-
-
-@pytest.mark.asyncio
-async def test_cold_classifier_on_nonchitchat_task_agent(tmp_path, monkeypatch):
-    monkeypatch.setenv("CHAT_INTENT_CLASSIFIER", "true")
-    c = _FakeContainer(_registry_with(tmp_path))
-    d = await route_inbound(c, _inbound("scrape this site"), is_chitchat=lambda m: False)
+    d = await route_inbound(c, _inbound("hi there"))
     assert d.kind == RouteKind.TASK_AGENT
-
-
-@pytest.mark.asyncio
-async def test_warm_never_diverts_even_with_chitchat_classifier(tmp_path, monkeypatch):
-    """Sticky invariant: a warm chat steers, never fast-paths (no two-history fork)."""
-    monkeypatch.setenv("CHAT_INTENT_CLASSIFIER", "true")
-    msg = _inbound("hello!")
-    key = build_session_key(msg.identity.source, msg.identity.user_id)
-    c = _FakeContainer(_registry_with(tmp_path, warm_key=key))
-    d = await route_inbound(c, msg, is_chitchat=lambda m: True)
-    assert d.kind == RouteKind.STEER  # warm wins over fast-path
 
 
 @pytest.mark.asyncio
@@ -140,18 +110,6 @@ async def test_no_registry_is_cold_failopen(tmp_path):
     c = _FakeContainer(registry=None)
     d = await route_inbound(c, _inbound("anything"))
     assert d.kind == RouteKind.TASK_AGENT
-
-
-@pytest.mark.asyncio
-async def test_async_chitchat_predicate_awaited(tmp_path, monkeypatch):
-    monkeypatch.setenv("CHAT_INTENT_CLASSIFIER", "true")
-    c = _FakeContainer(_registry_with(tmp_path))
-
-    async def _async_chitchat(m):
-        return True
-
-    d = await route_inbound(c, _inbound("yo"), is_chitchat=_async_chitchat)
-    assert d.kind == RouteKind.CHAT_FASTPATH
 
 
 @pytest.mark.asyncio

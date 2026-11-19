@@ -1,6 +1,5 @@
 import asyncio
 import os
-from core.env import bool_env
 import threading
 from collections import OrderedDict
 from inspect import Parameter, iscoroutinefunction, signature
@@ -1200,13 +1199,11 @@ class Registry:
 		# (nullable-union collapse, $ref-sibling strip, top-level combinator strip,
 		# bare-string/array-type normalization). Runs BEFORE the cache write and is
 		# composed downstream of DROP_TOOL (sanitize first => fewer tools dropped).
-		# Gated TOOL_SCHEMA_SANITIZE (default on; =false restores pre-port bytes).
-		if bool_env("TOOL_SCHEMA_SANITIZE", True):
-			try:
-				from tools.controller.registry.schema_sanitizer import sanitize_emitted_tools
-				actions = sanitize_emitted_tools(actions, provider)
-			except Exception as e:
-				self.logger.warning(f"schema sanitizer skipped (fail-open): {e}")
+		try:
+			from tools.controller.registry.schema_sanitizer import sanitize_emitted_tools
+			actions = sanitize_emitted_tools(actions, provider)
+		except Exception as e:
+			self.logger.warning(f"schema sanitizer skipped (fail-open): {e}")
 
 		if skipped_late:
 			self.logger.debug(

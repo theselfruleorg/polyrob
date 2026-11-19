@@ -43,7 +43,7 @@ class CatalogEntry:
     @property
     def price(self) -> Optional[Tuple[float, float]]:
         """None when either price is unknown or variable (a router such as
-        ``openrouter/auto`` lists -1): every price rule then fails closed."""
+        ``openrouter/auto`` lists -1): each price rule says what it does with no price."""
         if self.input_price is None or self.output_price is None:
             return None
         return self.input_price, self.output_price

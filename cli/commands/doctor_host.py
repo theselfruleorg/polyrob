@@ -15,7 +15,7 @@ Checker = Callable[[dict], List[str]]
 
 def _checkers() -> List[Checker]:
     from cli.commands.doctor_data_home import data_home_split_lines
-    from cli.commands.doctor_sandbox import docker_sandbox_lines
+    from core.security.sandbox_doctor import docker_sandbox_lines
     from cli.commands.doctor_env_copies import env_copy_lines
     from cli.commands.doctor_apps import apps_publish_lines
     return [data_home_split_lines, docker_sandbox_lines, env_copy_lines, apps_publish_lines]

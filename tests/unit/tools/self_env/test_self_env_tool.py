@@ -3,8 +3,9 @@
 Distinct verbs (never raw bash): read_source / restart_service. Every verb is gated
 compute_posture_allows(ctx, 2) AND (via the Controller's posture-2 wiring) approval.
 read_source is realpath-confined to the install tree and HARD-DENIES env/config
-files; restart_service refuses when the process is not supervised. Updates and
-dependency changes are the owner's /update — the agent has no verb for them.
+files; restart_service refuses when the process is not supervised. 120 W7:
+request_update is the restart's sibling — owner-approved, the owner's /update rule
+(core.lifecycle_ops.update_target), one lifecycle request of kind update.
 """
 import logging
 from pathlib import Path
@@ -13,7 +14,7 @@ import pytest
 
 import agents.task.constants as c
 from core.identity import LocalIdentity
-from tools.self_env.tool import SelfEnvTool, ReadSourceParams, RestartParams
+from tools.self_env.tool import SelfEnvTool, ReadSourceParams, RestartParams, UpdateParams
 from agents.task.loop_types.execution_context import ActionExecutionContext
 
 
@@ -188,6 +189,109 @@ async def test_restart_service_writes_the_drained_restart_request(monkeypatch, t
     req = lc.read_request(data_home=home)
     assert req.kind == lc.KIND_RESTART and req.reason == "new MCP server"
     assert req.origin["surface"] == "agent"
+
+
+# --- request_update (120 W7) -----------------------------------------------------
+
+def _supervised(monkeypatch, tmp_path):
+    from core import lifecycle as lc
+    home = tmp_path / "data"
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(home))
+    monkeypatch.setenv("INVOCATION_ID", "unit")
+    monkeypatch.setattr(lc, "_in_service_cgroup", lambda *a, **k: True)
+    lc.record_boot(data_home=home)
+    return home
+
+
+def _check(monkeypatch, **info):
+    """A fake `polyrob update --check --json` (never a subprocess, never the network)."""
+    from core import lifecycle_ops
+    seen = []
+
+    async def _c(channel):
+        seen.append(channel)
+        base = {"current": "1.3.0", "latest": "v1.4.0", "update_available": True,
+                "method": "editable_git", "error": None}
+        base.update(info)
+        return base, ""
+    monkeypatch.setattr(lifecycle_ops, "_update_check", _c)
+    return seen
+
+
+@pytest.mark.asyncio
+async def test_request_update_is_denied_below_posture_2(monkeypatch, tmp_path):
+    from core import lifecycle as lc
+    _posture(monkeypatch, "1")
+    home = _supervised(monkeypatch, tmp_path)
+    _check(monkeypatch)
+    res = await _tool(tmp_path).self_env_request_update(UpdateParams(),
+                                                        execution_context=_owner_ctx())
+    assert res.error and "posture" in res.error.lower()
+    assert lc.read_request(data_home=home) is None
+
+
+@pytest.mark.asyncio
+async def test_request_update_writes_the_update_request(monkeypatch, tmp_path):
+    from core import lifecycle as lc
+    _posture(monkeypatch, "2")
+    home = _supervised(monkeypatch, tmp_path)
+    seen = _check(monkeypatch)
+    events = []
+    res = await _tool(tmp_path, events=events).self_env_request_update(
+        UpdateParams(channel="pre", reason="a fix the owner asked for"),
+        execution_context=_owner_ctx())
+    assert not res.error, res.error
+    assert "1.3.0 → 1.4.0" in res.extracted_content
+    assert "Do not say it updated" in res.extracted_content
+    req = lc.read_request(data_home=home)
+    assert req.kind == lc.KIND_UPDATE and req.channel == "pre" and seen == ["pre"]
+    assert req.target_version == "v1.4.0" and req.origin["surface"] == "agent"
+    assert req.requested_by == "the agent (owner-approved)"
+    assert any(e.get("action") == "request_update" and e.get("ok") for e in events)
+    # A second call returns the open request; it never queues a second one.
+    again = await _tool(tmp_path).self_env_request_update(UpdateParams(),
+                                                          execution_context=_owner_ctx())
+    assert "already open" in again.extracted_content
+    assert lc.read_request(data_home=home).id == req.id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("info, says", [
+    ({"update_available": False, "latest": "1.3.0"}, "on the latest version"),
+    ({"method": "pip"}, "does not update itself"),
+    ({"error": "rate limited"}, "could not check for an update"),
+])
+async def test_request_update_refuses_with_the_owner_rule(monkeypatch, tmp_path, info, says):
+    """The agent's refusal is the owner's /update text, from the one rule."""
+    from core import lifecycle as lc
+    from core.lifecycle_ops import update_reply
+    _posture(monkeypatch, "2")
+    home = _supervised(monkeypatch, tmp_path)
+    _check(monkeypatch, **info)
+    res = await _tool(tmp_path).self_env_request_update(UpdateParams(),
+                                                        execution_context=_owner_ctx())
+    seat = await update_reply("u1", str(home), ["go"], {"surface": "telegram"})
+    assert res.error == f"update not requested: {seat}" and says in seat
+    assert lc.read_request(data_home=home) is None
+
+
+@pytest.mark.asyncio
+async def test_request_update_refuses_without_a_supervised_service(monkeypatch, tmp_path):
+    _posture(monkeypatch, "2")
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "data"))
+    seen = _check(monkeypatch)
+    res = await _tool(tmp_path).self_env_request_update(UpdateParams(),
+                                                        execution_context=_owner_ctx())
+    assert res.error and "update myself" in res.error and seen == []
+
+
+def test_request_update_rides_the_restart_lane():
+    """Owner-approved even under AUTONOMY_MODE=autonomous, tainted turns refused."""
+    from dataclasses import replace
+    from core.verb_policy import policy_for
+    update, restart = policy_for("self_env_request_update"), policy_for("self_env_restart_service")
+    assert update is not None and "always_queued" in update.approval
+    assert replace(update, name=restart.name) == restart
 
 
 # --- delegation / registration guardrails ----------------------------------------

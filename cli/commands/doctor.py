@@ -16,6 +16,11 @@ import click
 
 from core.config_policy import _FALSEY
 from cli.commands._options import json_option
+# 120 W8: the install checks that name no credential live in ONE core slot; the
+# agent reads them through agent_status(view="health"). This seat prints them.
+from core.health_slot import (browser_rail_line, legacy_tree_line, optional_extras_line,
+                              packs_line, playwright_line, server_extra_line)
+from core.health_slot import schema_status_line as _schema_line
 from cli.config_store import resolve_provider_model
 from core.path_safety import is_within_root
 from core.runtime_paths import resolve_runtime_paths
@@ -56,41 +61,6 @@ def python_version_line() -> str:
     return line
 
 
-def server_extra_line() -> str:
-    """[server]-extra presence (O6) — `polyrob serve` raises a raw ImportError
-    without it; say so BEFORE the user hits that. Probes come from the ONE map
-    (`core.optional_extras.MODULES_FOR_EXTRA`) — 058 put python-magic in this
-    extra, and a server without it REFUSES uploads."""
-    from core.optional_extras import MODULES_FOR_EXTRA
-    missing = [m for m in MODULES_FOR_EXTRA["server"] if importlib.util.find_spec(m) is None]
-    if not missing:
-        return "server extra: present (`polyrob serve` available)"
-    return ("server extra: absent (" + ", ".join(missing) + " missing) — "
-            "run `pip install 'polyrob[server]'` before `polyrob serve`")
-
-
-def optional_extras_line(local_on: bool = False) -> str:
-    """058: which optional extras this install carries, and how a missing one
-    arrives — on first use (``LAZY_DEPS_MODE`` trusted|legacy) or by `pip install`
-    (mode ``off``). One line, never a guess: an extra is present only when EVERY
-    probe module imports.
-
-    067 P0.2: the mode is the one the runtime resolves (``lazy_deps_mode()``,
-    default ``trusted`` on the CLI AND on a server), not a re-derivation from a
-    second boolean. ``local_on`` is kept for the caller's
-    signature; the mode no longer depends on it."""
-    from core.config_policy.capability_toggles import lazy_deps_mode
-    from core.optional_extras import MODULES_FOR_EXTRA, extra_available
-    watched = ("gemini", "anthropic", "docs", "media", "memory-vector", "browser", "crypto")
-    present = [e for e in watched if e in MODULES_FOR_EXTRA and extra_available(e)]
-    absent = [e for e in watched if e in MODULES_FOR_EXTRA and not extra_available(e)]
-    mode = lazy_deps_mode()
-    how = (f"install on first use (LAZY_DEPS_MODE={mode})" if mode != "off"
-           else "pip install 'polyrob[<extra>]' (LAZY_DEPS_MODE=off — a server adds it to PROD_EXTRAS)")
-    return (f"optional extras: present {', '.join(present) or '—'} · absent "
-            f"{', '.join(absent) or '—'} · a missing one: {how}")
-
-
 def a2a_v1_line(env: dict) -> str:
     """A2A agent-card + OpenAI-compat `/v1` reachability (043 A31).
 
@@ -118,59 +88,6 @@ def a2a_v1_line(env: dict) -> str:
     return ("machine API surfaces (served by the API server, not this process): "
             f"A2A agent card /.well-known/agent.json — {a2a_state}; "
             f"/v1 OpenAI-compat — {v1_state}")
-
-
-def playwright_line(env: dict) -> str:
-    """Playwright + chromium probe (O6) — the guide's own most-common issue.
-    Filesystem heuristic over the browsers cache; never launches anything."""
-    if importlib.util.find_spec("playwright") is None:
-        return "playwright: not installed (browser tool unavailable; web_fetch unaffected)"
-    override = (env.get("PLAYWRIGHT_BROWSERS_PATH") or "").strip()
-    if override:
-        candidates = [Path(override)]
-    else:
-        home = Path.home()
-        candidates = [
-            home / "Library" / "Caches" / "ms-playwright",   # macOS
-            home / ".cache" / "ms-playwright",               # Linux
-        ]
-        local_app = (env.get("LOCALAPPDATA") or "").strip()
-        if local_app:
-            candidates.append(Path(local_app) / "ms-playwright")  # Windows
-    for cand in candidates:
-        try:
-            if cand.is_dir() and any(p.name.startswith("chromium") for p in cand.iterdir()):
-                return "playwright: installed, chromium present"
-        except OSError:
-            continue
-    return ("playwright: installed but NO chromium browser — run "
-            "`python -m playwright install chromium`")
-
-
-def packs_line() -> str:
-    """067 P2: installed / loaded / disabled / refused packs (``polyrob pack doctor``
-    has the detail). Loads the enabled packs, as a session would."""
-    try:
-        from core.packs.loader import load_packs
-        from core.packs.state import summary_line
-        load_packs()
-        return summary_line()
-    except Exception as e:  # noqa: BLE001
-        return f"packs: unavailable ({type(e).__name__}: {e})"
-
-
-def browser_rail_line() -> str:
-    """The browser RAIL (custody-aware), distinct from the playwright INSTALL line
-    above. A custody process cannot launch the chromium the line above found; it
-    can only connect to a separately isolated browser. Probes a loopback endpoint
-    (a local read) and reports a remote one as configured, unprobed — unless the
-    owner is running doctor, where a fresh probe is exactly what they want."""
-    try:
-        from core.security.browser_rail import browser_rail_status
-        rail = browser_rail_status(refresh=True)
-    except Exception as e:  # never fail doctor on a probe
-        return f"browser rail: unreadable ({type(e).__name__})"
-    return f"browser rail: {rail.line()}"
 
 
 def x_oauth2_doctor_line(env: dict) -> str:
@@ -233,42 +150,13 @@ def doctor_data_home(env: dict) -> str:
 
 
 def schema_status_line(env: dict) -> str:
-    """DB-schema-vs-code check (U10): compare bot.db's recorded schema version
-    against the code's migration HEAD. Read-only; never raises."""
-    try:
+    """DB-schema-vs-code check (U10) over the report's data home — the slot's
+    line (``core.health_slot.schema_status_line``) with the code's migration
+    HEAD read here. Read-only; never raises."""
+    def _code_head() -> str:
         from migrations.version_manager import latest_migration_version
-        head = latest_migration_version()
-    except Exception:
-        return "db schema: unknown (could not resolve code schema version)"
-    data_home = doctor_data_home(env)
-    db_path = Path(data_home) / "database" / "bot.db"
-    if not db_path.is_file():
-        return f"db schema: no bot.db yet (baselined at {head} on first boot)"
-    try:
-        from core.sqlite_util import read_only_connect
-        con = read_only_connect(db_path)
-        try:
-            rows = con.execute("SELECT version FROM schema_versions").fetchall()
-        finally:
-            con.close()
-    except Exception as exc:
-        if "no such table" not in str(exc):
-            return f"db schema: unreadable ({type(exc).__name__}: {exc})"
-        rows = []
-    if not rows:
-        return "db schema: not versioned yet (stamped at next boot)"
-
-    def _key(v: str):
-        try:
-            return tuple(int(p) for p in v.split("."))
-        except Exception:
-            return (0,)
-
-    current = max((r[0] for r in rows), key=_key)
-    if current == head:
-        return f"db schema: {current} (up to date)"
-    return (f"! db schema {current} behind code {head} — run "
-            f"`python -m migrations.migrate upgrade`")
+        return latest_migration_version()
+    return _schema_line(doctor_data_home(env), code_head=_code_head)
 
 
 def setup_lines(env: dict) -> list[str]:
@@ -930,9 +818,7 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
     lines.append(browser_rail_line())
     lines.append(x_oauth2_doctor_line(env))
     lines.append(schema_status_line(env))
-    from core.legacy_data_tree import legacy_tree_doctor_line
-    _legacy = legacy_tree_doctor_line(Path(doctor_data_home(env)), data_dir=env.get(
-        "DATA_DIR") or "", db_path=env.get("DB_PATH") or "")
+    _legacy = legacy_tree_line(env, doctor_data_home(env))
     if _legacy:  # a 1.4.0 <home>/data tree: moved, collided or waiting
         lines.append(_legacy)
     # A-1: billed vs catalog LLM cost (a 2x drift once ran 12 days unseen).
@@ -1267,7 +1153,7 @@ def flags_report(env: dict, local_absent_means_on: bool = True, *,
     bare ``--flags``; every filter (and ``--all``) searches all tiers.
     """
     from core.config_policy.flag_defaults import dynamic_flag_default
-    from core.flags import REGISTRY, resolve_all
+    from core.flags import flag_for, resolve_all
 
     group_needle = group.lower() if group else None
     search_needle = search.lower() if search else None
@@ -1311,7 +1197,7 @@ def flags_report(env: dict, local_absent_means_on: bool = True, *,
                     and not _changed_from_default(r, dynamic_flag_default)):
                 continue
             if (not show_all and not frozen_inert and r.source != "env"
-                    and REGISTRY[r.name].tier != "public"):
+                    and flag_for(r.name).tier != "public"):
                 hidden += 1
                 continue
             if r.group != emitted_group:

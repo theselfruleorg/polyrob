@@ -285,7 +285,7 @@ async def test_start_autonomy_stamps_pid_and_role(monkeypatch):
     monkeypatch.setattr(ar, "_curator_enabled", lambda: False)
     monkeypatch.setattr(ar, "_surface_gc_enabled", lambda: False)
     monkeypatch.setattr(ar, "_quiet_release_enabled", lambda: False)
-    monkeypatch.setattr(ar, "_sandbox_reap_enabled", lambda: False)
+    monkeypatch.setattr(ar, "_build_sandbox_reaper_ticker", lambda ta: _FakeTicker())
 
     handles = ar.start_autonomy(task_agent=object(), data_dir="data")
     try:
@@ -295,7 +295,7 @@ async def test_start_autonomy_stamps_pid_and_role(monkeypatch):
         attrs = rows[0]["attrs"]
         assert attrs["pid"] == os.getpid()
         assert isinstance(attrs.get("role"), str) and attrs["role"]
-        assert sorted(attrs["loops"]) == ["cron", "goals", "trading"]  # 086 W4
+        assert sorted(attrs["loops"]) == ["cron", "goals", "sandbox_reap", "trading"]  # 086 W4
     finally:
         await handles.stop()
 

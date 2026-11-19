@@ -97,10 +97,6 @@ class SurfaceConfig:
         (ON under effective AUTONOMY_MODE=autonomous.)"""
         return member_flag("GROUP_CHAT_ENABLED")
 
-    @staticmethod
-    def chat_intent_classifier_enabled() -> bool:
-        return _bool_env("CHAT_INTENT_CLASSIFIER", False)
-
     # --- WS-A three-tier access model (owner/correspondent/denied) -----------
     @staticmethod
     def correspondent_access_enabled() -> bool:

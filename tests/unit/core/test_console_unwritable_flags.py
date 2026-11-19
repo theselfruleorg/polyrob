@@ -198,7 +198,7 @@ def test_preferences_are_not_env_flags(key):
 @pytest.mark.parametrize("key", ["GMAIL_IMAP_SERVER", "EXTERNAL_WRITE_PAUSE_GATE",
                                  "OUTBOUND_DOMAINS", "MEMORY_REQUIRE_USER_ID",
                                  # neighbours of the 2026-10-08 exemptions
-                                 "WEB_FETCH_ALLOW_PRIVATE_URLS", "HISTORY_SECRET_SCRUB",
+                                 "WEB_FETCH_ALLOW_PRIVATE_URLS",
                                  "POLYROB_TOOL_DENYLIST", "X402_FACILITATOR_URL",
                                  "WALLET_DAILY_CAP_USD", "AUTONOMOUS_RIG_DEFAULT"])
 def test_operational_exemption_leaves_trust_neighbours_refused(key):

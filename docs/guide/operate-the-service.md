@@ -87,11 +87,13 @@ money, approvals or who may reach the agent always waits for a restart, on purpo
 
 ## The agent and restarts
 
-The agent cannot restart itself. At the self-maintain posture it may **ask**
-(`self_env_restart_service`), and that request waits for your approval like every other
-self-maintenance action; at any posture it can put a `/restart` or `/update` card in
-front of you. Either way the restart is yours to confirm, and it runs the same drained
-path as above.
+The agent cannot restart or update itself. At the self-maintain posture it may **ask**
+(`self_env_restart_service`, `self_env_request_update`), and that request waits for your
+approval like every other self-maintenance action. The update request uses the same rule
+as `/update`: it refuses when no service runs under a supervisor, when no newer release
+exists, or when the install does not update itself.
+At any posture it can put a `/restart` or `/update` card in front of you. Either way the restart or the update is yours to confirm,
+and it runs the same drained path as above.
 
 ## Running as root on a server
 

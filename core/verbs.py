@@ -90,6 +90,16 @@ class Verb:
                  waits on a chain receipt or the owner's own tap: a chat seat
                  runs it off its poll loop and names it with this word in the
                  "started" reply (TG2; :func:`background_word`).
+        agent:   120 W9 (the parity ratchet). The action or classified tool id
+                 that gives the AGENT the same reach — a string only (core may
+                 not import ``tools``). Exactly one of ``agent`` and
+                 ``owner_only`` is set on every row
+                 (``tests/test_verb_agent_parity_ratchet.py``).
+        owner_only: One line: why the agent has no twin (proposal 120 §8, or
+                 :data:`SEAT` for a seat control). A missing twin with no stated
+                 reason reads ``"gap: …"``, so it stays visible and counted.
+        agent_partial: With ``agent`` only: what the twin does NOT reach. A part
+                 with no twin and no stated reason starts ``"gap:"``.
     """
 
     name: str
@@ -100,6 +110,9 @@ class Verb:
     room_refused: bool = False
     background: str = ""
     needs: str = ""
+    agent: str = ""
+    owner_only: str = ""
+    agent_partial: str = ""
 
     def runs_on(self, seat: str) -> bool:
         """True when ``seat`` can run this verb (no ``seats`` = every seat; a
@@ -123,6 +136,15 @@ class Verb:
         return ()
 
 
+#: 120 W9: the ``owner_only`` reason of a seat control (proposal §3.9): the
+#: verb steers the seat the owner sits at, not the agent.
+SEAT = "a seat control"
+
+#: 120 §8 reasons, each used by more than one row.
+_INGRESS = "ingress and trust settings (120 §8; chat-access-model.md)"
+_DECIDES = "the owner's decision on what the agent proposed (120 §1 rule 3)"
+
+
 #: The CORE rows. :data:`VERB_TABLE` is these plus every registered row
 #: (:func:`register_verbs`). Ordered by :data:`GROUP_ORDER`, then by how a section
 #: reads. Help lines are authored here (not imported from the CLI or Telegram
@@ -138,180 +160,260 @@ class Verb:
 #: /apps /identity are owner writes. A contributed verb (the money verbs,
 #: /writeoff, /check …) is refused unless its contributor names it
 #: room-safe.
+#: ``agent`` / ``owner_only`` / ``agent_partial`` (120 W9): see :class:`Verb`.
 _CORE_TABLE: tuple[Verb, ...] = (
     # talk
-    Verb("/start", "talk", "A welcome and a short tour of what I can do"),
+    Verb("/start", "talk", "A welcome and a short tour of what I can do", owner_only=SEAT),
     # needs you
     Verb("/inbox", "needs you",
-         "Everything waiting on a decision from you, blocking first; /inbox all lists every item"),
+         "Everything waiting on a decision from you, blocking first; /inbox all lists every item",
+         agent="agent_status",
+         agent_partial="the health lines and the approvals count; not the composed list "
+                       "(cards_read and goal_list(kind='ask') read two of its sources)"),
     Verb("/pending", "needs you",
-         "Every approval waiting on you: spends, contacts, tokens, and proposals"),
-    Verb("/approve", "needs you", "Approve something that is waiting on you", room_refused=True),
-    Verb("/reject", "needs you", "Decline something that is waiting on you", room_refused=True),
+         "Every approval waiting on you: spends, contacts, tokens, and proposals",
+         agent="agent_status",
+         agent_partial="the count and the kinds (approvals section); the decision is the owner's"),
+    Verb("/approve", "needs you", "Approve something that is waiting on you", room_refused=True,
+         owner_only=_DECIDES),
+    Verb("/reject", "needs you", "Decline something that is waiting on you", room_refused=True,
+         owner_only=_DECIDES),
     # REPL-local: the terminal is the seat where the owner sits while the agent
     # works, so it is where "what will stop and ask me" belongs.
     Verb("/gates", "needs you", "Which actions need your approval",
-         seats=("repl",)),
-    Verb("/asks", "needs you", "What I need from you to unblock work; /asks <id> opens one in full"),
+         seats=("repl",), agent="preferences",
+         agent_partial="the approvals.require preference; removing a gate is a guarded "
+                       "proposal the owner approves"),
+    Verb("/asks", "needs you", "What I need from you to unblock work; /asks <id> opens one in full",
+         agent="goal_list"),
     Verb("/missed", "needs you",
-         "Messages I could not deliver live: capped, paused, or undelivered"),
+         "Messages I could not deliver live: capped, paused, or undelivered",
+         agent="agent_status",
+         agent_partial="the newest few in the delivery section, not /missed <n>"),
     Verb("/fulfill", "needs you",
-         "Mark an ask fulfilled so its work can continue", room_refused=True),
+         "Mark an ask fulfilled so its work can continue", room_refused=True,
+         agent="owner_ask",
+         agent_partial="answer= decides an ask on a genuine owner turn, in the owner's own words"),
     Verb("/cards", "needs you",
-         "Open action cards: confirm, get a quote, answer, or cancel; /cards <id> reopens one in full", room_refused=True),
+         "Open action cards: confirm, get a quote, answer, or cancel; /cards <id> reopens one in full", room_refused=True,
+         agent="cards_read",
+         agent_partial="reads every card and cancels one it raised; confirm and answer are the owner's"),
     # 096 W5: every cut is one tap away. A read of text this seat already
     # rendered for you (``core.surfaces.more_store``), never a decision.
-    Verb("/more", "look", "The rest of a list or text I cut short", room_refused=True),
+    Verb("/more", "look", "The rest of a list or text I cut short", room_refused=True,
+         owner_only=SEAT),
     # work
-    Verb("/goal", "work", "Add, show, retry, grant, pause, or stop one goal", room_refused=True),
-    Verb("/goals", "work", "The goal board summary"),
+    Verb("/goal", "work", "Add, show, retry, grant, pause, or stop one goal", room_refused=True,
+         agent="goal",
+         agent_partial="a grant (/goal allow) and the lift of an owner hold are the owner's (120 §8)"),
+    Verb("/goals", "work", "The goal board summary", agent="goal_list"),
     Verb("/job", "work",
          "Scheduled jobs: the list, or add, change, grant, pause, resume, run, or stop one",
-         aliases=("/jobs",), room_refused=True),
+         aliases=("/jobs",), room_refused=True, agent="cronjob",
+         agent_partial="a grant (/job allow), the lift of an owner pause and a stop for good "
+                       "are the owner's (120 §8)"),
     Verb("/apps", "work",
-         "Deployed apps: approve an address, check health, stop, start or remove one", room_refused=True),
+         "Deployed apps: approve an address, check health, stop, start or remove one", room_refused=True,
+         agent="app_service",
+         agent_partial="approving an app is a signed owner decision (120 §8)"),
     # money: no core row. Every money verb is CONTRIBUTED
     # (``register_verbs``) — today by ``core/money_verbs.py``, after 067 P5b by
     # the wallet pack. With none registered the group renders its install hint.
     # control
     Verb("/cancel", "control",
          "Stop the task I am running now; /cancel <card id> or /cancel cards cancels cards",
-         aliases=("/stop",)),
+         aliases=("/stop",), owner_only=SEAT),
     Verb("/pause", "control", "Stop autonomous work now, all of it or one scope",
-         aliases=("/halt",), room_refused=True),
-    Verb("/resume", "control", "Lift the pause", room_refused=True),
-    Verb("/run", "control", "Pause, resume or stop one background run", room_refused=True),
+         aliases=("/halt",), room_refused=True, agent="autonomy_control"),
+    Verb("/resume", "control", "Lift the pause", room_refused=True,
+         owner_only="only the owner lifts a pause (120 §8)"),
+    Verb("/run", "control", "Pause, resume or stop one background run", room_refused=True,
+         agent="delegation_status",
+         agent_partial="this session's helpers; a goal or a job is paused with goal_pause or "
+                       "cronjob_pause; a live run's mailbox has no agent writer"),
     Verb("/mode", "control",
-         "What I may do without you, what I do when you are away, and how to change it"),
+         "What I may do without you, what I do when you are away, and how to change it",
+         agent="agent_status",
+         agent_partial="the posture answers (posture section), not every row of /mode all"),
     # 077: confirmed by a card; the restart drains first and reports back here.
-    Verb("/restart", "control", "Restart me once my current work is done", room_refused=True),
+    Verb("/restart", "control", "Restart me once my current work is done", room_refused=True,
+         agent="self_env_restart_service",
+         agent_partial="a request the owner approves"),
     # 093 D6: `/update now` lets the operator's waiting deploy skip the owner-quiet window.
     Verb("/update", "control", "Update me to the latest release, then report back "
          "(/update now: a waiting deploy stops waiting for your chat to go quiet)",
-         room_refused=True),
+         room_refused=True, agent="self_env_request_update",
+         agent_partial="a request the owner approves; /update now is the owner's"),
     # remember
     Verb("/thread", "remember",
-         "Our conversation across every session and rail, newest last", room_refused=True),
+         "Our conversation across every session and rail, newest last", room_refused=True,
+         agent="session_search",
+         agent_partial="recall of past sessions; the recent owner thread is in its context; "
+                       "no read of the whole transcript"),
     Verb("/journey", "remember", "What I have done over a recent window",
-         aliases=("/recap",)),
+         aliases=("/recap",), agent="recent_activity"),
     # 096 W5: read only — the rules you gave me and my operating contract.
     Verb("/rules", "remember", "Your rules for me and my operating contract, numbered",
-         room_refused=True),
-    Verb("/kb", "remember", "Search and list my knowledge base"),
+         room_refused=True, agent="owner_doc_manage",
+         agent_partial="reads owner.md; contract.md is loaded in its context"),
+    Verb("/kb", "remember", "Search and list my knowledge base", agent="knowledge"),
     # 113 W6 G-6: owner reads on every seat (a phone could not read either).
     Verb("/memory", "remember", "Recall across sessions and inspect memory scopes",
-         room_refused=True),
+         room_refused=True, agent="session_search",
+         agent_partial="the scope list is not shown; a scope promotion is the owner's (120 §8)"),
     # look
     Verb("/status", "look",
-         "Health first, then session, goals, loops, and wallet"),
-    Verb("/files", "look", "Recent files I produced"),
-    Verb("/cwd", "look", "The directory I am working in right now"),
+         "Health first, then session, goals, loops, delivery, wallet and money "
+         "(`/status all`: every section)", agent="agent_status"),
+    Verb("/files", "look", "Recent files I produced", agent="recent_activity",
+         agent_partial="up to three files on each run line"),
+    Verb("/cwd", "look", "The directory I am working in right now", owner_only=SEAT),
     # REPL-local: a per-TURN token meter. `/status` is the ONE snapshot every
     # seat renders, and this is the other thing the terminal used to show under
     # that name — separated so neither has to pretend to be the other.
-    Verb("/meter", "look", "This turn's meter", seats=("repl",)),
+    Verb("/meter", "look", "This turn's meter", seats=("repl",), owner_only=SEAT),
     Verb("/contacts", "look",
-         "Who I have been writing to, and the transcript with one of them", room_refused=True),
+         "Who I have been writing to, and the transcript with one of them", room_refused=True,
+         agent="contact_history"),
     Verb("/why", "look", "The last things I refused to do, and the reason for each",
-         room_refused=True),
+         room_refused=True, agent="agent_status"),
     # set up
-    Verb("/allow", "set up", "Allow me to message a target", room_refused=True),
-    Verb("/deny", "set up", "Revoke a message permission", room_refused=True),
-    Verb("/allowlist", "set up", "Who I am allowed to message"),
+    Verb("/allow", "set up", "Allow me to message a target", room_refused=True,
+         owner_only=_INGRESS),
+    Verb("/deny", "set up", "Revoke a message permission", room_refused=True,
+         owner_only=_INGRESS),
+    Verb("/allowlist", "set up", "Who I am allowed to message", agent="message"),
     Verb("/pair", "set up", "Strangers who asked to talk to me: list, approve or revoke",
-         room_refused=True),
+         room_refused=True, owner_only=_INGRESS),
     Verb("/groups", "set up",
-         "Room presence admin: allow, deny, mode, roles, and more"),
-    Verb("/mute", "set up", "Silence a room, or mute a member for a while"),
+         "Room presence admin: allow, deny, mode, roles, and more", agent="room_read",
+         agent_partial="lists the rooms; allow, deny and roles are the owner's (120 §8); "
+                       "a mode change is a propose_setting card"),
+    Verb("/mute", "set up", "Silence a room, or mute a member for a while",
+         agent="room_moderate",
+         agent_partial="the owner alone lifts a room silence early"),
     # F-07: the member verbs need a platform that mutes and bans (`moderation`).
     # /mute stays on every seat: silencing a room is the agent's own presence.
-    Verb("/ban", "set up", "Ban a member for a while", needs="moderation"),
-    Verb("/unban", "set up", "Lift a member's ban", needs="moderation"),
-    Verb("/unmute", "set up", "End a member's mute early", needs="moderation"),
-    Verb("/config", "set up", "Read or set preferences", room_refused=True),
+    Verb("/ban", "set up", "Ban a member for a while", needs="moderation",
+         agent="room_moderate"),
+    Verb("/unban", "set up", "Lift a member's ban", needs="moderation", agent="room_moderate"),
+    Verb("/unmute", "set up", "End a member's mute early", needs="moderation",
+         agent="room_moderate"),
+    Verb("/config", "set up", "Read or set preferences", room_refused=True, agent="preferences",
+         agent_partial="an env flag only through a propose_setting card; the agent unsets a "
+                       "SAFE preference, the seat's /config unset refuses a preference today"),
     # REPL-local (041 phase 2): the terminal holds the live session, so it is
     # where a RUNNING worker is stopped or steered; the store half is
     # `polyrob workers` on the same machine.
     Verb("/workers", "set up",
          "Named helpers: approve them, and stop or steer a running one",
-         seats=("repl",)),
+         seats=("repl",), agent="worker_manage",
+         agent_partial="lists, shows and proposes; approve and steer are the owner's"),
     Verb("/prefs", "set up", "The preferences you have set", room_refused=True,
-         aliases=("/settings",)),
-    Verb("/mcp", "set up", "MCP servers I can use: add, remove, or test", room_refused=True),
+         aliases=("/settings",), agent="preferences"),
+    Verb("/mcp", "set up", "MCP servers I can use: add, remove, or test", room_refused=True,
+         agent="mcp",
+         agent_partial="an added server is a propose_setting card the owner confirms; the "
+                       "removal of a configured server stays on the owner seat"),
     # display
-    Verb("/avatar", "display", "This instance's avatar image — show, set, clear"),
+    Verb("/avatar", "display",
+         "This instance's avatar image — show, set, clear, or push it to my account pictures",
+         agent="agent_avatar"),
     Verb("/identity", "display",
          "My on-chain identity: register it, or update where it is published (spends gas)",
-              room_refused=True, background="Identity registration"),
+              room_refused=True, background="Identity registration",
+         agent="defi_trade_register_agent",
+         agent_partial="the update of where it is published is defi_trade_set_agent_uri"),
     # 080 D8: the model and the skills, on every seat (Telegram had neither).
     Verb("/model", "set up",
-         "The model this chat runs on — switch it live, set your default, pick reasoning",
-         room_refused=True),
+         "The model this chat runs on — switch it live, set your default, pick reasoning; set "
+         "the heavy and light models and what the agent may choose",
+         room_refused=True,
+         owner_only="unattended spend never moves by a model's choice (120 §8)"),
     # I-1: one help line for every seat, so it says where the writes run.
     Verb("/skills", "work",
          "The skills I can load, and what each one does; /skills <id> shows one "
          "skill's text. You install or approve a skill in the terminal",
-         room_refused=True),
+         room_refused=True, agent="load_skill",
+         agent_partial="the catalog is in its context; install and approve are the owner's (120 §8)"),
     # 080 WS-2: the REPL-only verbs, so this ONE table is complete. The terminal
     # holds the live session, its trace and the local machine; no other seat can
     # run these, so every other seat's help and palette leave them out.
     # The chat model: one main chat and the separate chats beside it, on every
     # seat (core/surfaces/chats.py). `/new` in a group restarts the room, so it
     # is the one of the five a room runs.
-    Verb("/new", "talk", "Open a separate chat beside the main one"),
+    Verb("/new", "talk", "Open a separate chat beside the main one", owner_only=SEAT),
     Verb("/chats", "talk", "Your chats: the main one and each separate one",
-         aliases=("/sessions",), room_refused=True),
-    Verb("/chat", "talk", "Switch to another of your chats", room_refused=True),
-    Verb("/rename", "talk", "Name the chat you are in", room_refused=True),
+         aliases=("/sessions",), room_refused=True, owner_only=SEAT),
+    Verb("/chat", "talk", "Switch to another of your chats", room_refused=True, owner_only=SEAT),
+    Verb("/rename", "talk", "Name the chat you are in", room_refused=True, owner_only=SEAT),
     Verb("/close", "talk", "Close a separate chat and go back to the main one",
-         room_refused=True),
+         room_refused=True, owner_only=SEAT),
     Verb("/clear", "talk", "Clear this chat and keep my instructions",
-         seats=("repl",)),
+         seats=("repl",), owner_only=SEAT),
     Verb("/compact", "talk", "Shorten this chat's history in the background",
-         aliases=("/compress",), seats=("repl",)),
-    Verb("/history", "talk", "The turns of this chat", seats=("repl",)),
+         aliases=("/compress",), seats=("repl",), owner_only=SEAT),
+    Verb("/history", "talk", "The turns of this chat", seats=("repl",), owner_only=SEAT),
     Verb("/attach", "talk", "Attach local files or images to my next step",
-         seats=("repl",)),
+         seats=("repl",), owner_only=SEAT),
     # I-5: every chat app steers with a plain message; the verb is the terminal's.
     Verb("/steer", "talk", "Give the running turn one more instruction (in a chat app, "
-         "just send it)", seats=("repl",)),
+         "just send it)", seats=("repl",), owner_only=SEAT),
     Verb("/session", "talk", "Who and where this chat is: owner, model, memory, files",
-         aliases=("/info",), seats=("repl",)),
-    Verb("/replay", "talk", "Replay a chat's feed", seats=("repl",)),
-    Verb("/export", "talk", "Export this chat's data", seats=("repl",)),
+         aliases=("/info",), seats=("repl",), owner_only=SEAT),
+    Verb("/replay", "talk", "Replay a chat's feed", seats=("repl",), owner_only=SEAT),
+    Verb("/export", "talk", "Export this chat's data", seats=("repl",), owner_only=SEAT),
     Verb("/learn", "work", "Describe how to do something and I save it as a skill",
-         seats=("repl",)),
-    Verb("/todos", "work", "The todo list in my working files", seats=("repl",)),
-    Verb("/subagents", "work", "What I can hand to a helper", seats=("repl",)),
+         seats=("repl",), agent="skill_manage"),
+    Verb("/todos", "work", "The todo list in my working files", seats=("repl",),
+         agent="task_todo_list"),
+    Verb("/subagents", "work", "What I can hand to a helper", seats=("repl",),
+         agent="delegation_status",
+         agent_partial="the live helpers; the delegation limits are not shown"),
     Verb("/autonomy", "control", "My background loops and what they hold; switch them on or off",
-         seats=("repl",)),
+         seats=("repl",), agent="agent_status",
+         agent_partial="reads the loops; a switch off is autonomy_control(pause), a switch on "
+                       "is the lift of a pause (120 §8)"),
     Verb("/self", "remember", "My identity documents, read-only", aliases=("/soul",),
-         room_refused=True),
-    Verb("/doctor", "look", "The health report", seats=("repl",)),
-    Verb("/logs", "look", "Recent log lines of this chat", seats=("repl",)),
-    Verb("/context", "look", "What fills my context, slot by slot", seats=("repl",)),
-    Verb("/steps", "look", "The steps of the last turn", seats=("repl",)),
-    Verb("/tools", "look", "My abilities, built in and optional", seats=("repl",)),
+         room_refused=True, agent="self_context_manage",
+         agent_partial="reads self.md; SOUL is loaded in its context"),
+    Verb("/doctor", "look", "The health report", seats=("repl",), agent="agent_status",
+         agent_partial="view='health': the credential lines stay in the terminal (llm-auth.md)"),
+    Verb("/logs", "look", "Recent log lines of this chat", seats=("repl",), agent="agent_status",
+         agent_partial="view='log' reads the event log, not this chat's log files"),
+    Verb("/context", "look", "What fills my context, slot by slot", seats=("repl",),
+         agent="agent_status"),
+    Verb("/steps", "look", "The steps of the last turn", seats=("repl",), owner_only=SEAT),
+    Verb("/tools", "look", "My abilities, built in and optional", seats=("repl",),
+         agent="tool_search"),
     Verb("/telemetry", "look", "Event counts and wallet spend across chats",
-         seats=("repl",)),
+         seats=("repl",), agent="agent_status"),
     Verb("/usage", "look", "What my AI use cost: by kind of work, job, model and day",
-         aliases=("/cost",)),
+         aliases=("/cost",), agent="usage_summary"),
     Verb("/finance", "look", "Income, spend, money still due and net, with my AI cost",
-         seats=("repl",)),
+         seats=("repl",), agent="x402_invoice_accounting"),
     Verb("/auth", "set up", "The provider keys I have, and how to connect one",
-         seats=("repl",)),
-    Verb("/persona", "set up", "The personas, and the one new chats use", seats=("repl",)),
-    Verb("/profile", "set up", "Which agent this terminal runs, and where its files live", seats=("repl",)),
-    Verb("/toolset", "set up", "The ability sets, and the one new chats use", seats=("repl",)),
+         seats=("repl",),
+         owner_only="provider keys: no agent action can reach them (120 §8; llm-auth.md)"),
+    Verb("/persona", "set up", "The personas, and the one new chats use", seats=("repl",),
+         agent="preferences",
+         agent_partial="a guarded session.persona proposal the owner approves; the persona "
+                       "list is not shown"),
+    Verb("/profile", "set up", "Which agent this terminal runs, and where its files live", seats=("repl",),
+         owner_only="operator data: a profile is selected before the environment loads (120 §8)"),
+    Verb("/toolset", "set up", "The ability sets, and the one new chats use", seats=("repl",),
+         agent="preferences",
+         agent_partial="a guarded session.toolset proposal the owner approves; the named sets "
+                       "are not listed"),
     # I-3: "quiet" means quiet hours only; /quiet is the old name for one release.
     Verb("/brief", "display", "Hide or show the step transcript", seats=("repl",),
-         aliases=("/quiet",)),
-    Verb("/verbose", "display", "Show or hide the live trace", seats=("repl",)),
+         aliases=("/quiet",), owner_only=SEAT),
+    Verb("/verbose", "display", "Show or hide the live trace", seats=("repl",), owner_only=SEAT),
     Verb("/exit", "leave", "Leave the terminal", aliases=("/quit", "/q"),
-         seats=("repl",)),
+         seats=("repl",), owner_only=SEAT),
     # leave
     Verb("/help", "leave", "This help, or the detail for one verb",
-         aliases=("/h", "/?")),
+         aliases=("/h", "/?"), owner_only=SEAT),
 )
 
 

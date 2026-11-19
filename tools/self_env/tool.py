@@ -4,7 +4,7 @@ by the Registry (the agent-upgrades-wave4 / GLM param_model landmine)."""
 import logging
 import os
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -21,6 +21,13 @@ class ReadSourceParams(BaseModel):
 class RestartParams(BaseModel):
     reason: str = Field("", max_length=300,
                         description="One line for the owner: why a restart is needed now.")
+
+
+class UpdateParams(BaseModel):
+    channel: Literal["stable", "pre"] = Field(
+        "stable", description="'stable' (the latest release) or 'pre' (pre-releases too).")
+    reason: str = Field("", max_length=300,
+                        description="One line for the owner: why the update is needed now.")
 
 
 class SelfEnvTool(BaseTool):
@@ -201,4 +208,50 @@ class SelfEnvTool(BaseTool):
                  f"({req.describe()})") + ". Nothing has restarted yet: the service finishes "
                 "this turn and its other work first, then restarts and tells the owner its "
                 "version. Do not say it restarted."),
+            include_in_memory=True)
+
+    @BaseTool.action(
+        "Ask for an update of your own background service to the latest release. The "
+        "owner approves the call; then the service checks the release, finishes its "
+        "work, updates (a failure rolls back) and tells the owner how it went. You "
+        "never update anything yourself.",
+        param_model=UpdateParams,
+    )
+    async def self_env_request_update(self, params: UpdateParams, execution_context=None):
+        """120 W7: the sibling of ``self_env_restart_service`` — runs only after the
+        owner approved this call (``always_queued``) and writes the ONE lifecycle
+        request with kind ``update``. The decision (a supervised service, a newer
+        release, an install that updates itself) is the owner's ``/update`` rule
+        (``core.lifecycle_ops.update_target``); the boot step applies the update."""
+        if not self._allowed(execution_context):
+            return self._deny()
+        from core import lifecycle as lc
+        from core.lifecycle_ops import update_target
+        from core.runtime_paths import data_dir_or_home
+        home = data_dir_or_home(getattr(getattr(getattr(self, "container", None), "config", None),
+                                        "data_dir", None))
+        info, why = await update_target(home, params.channel)
+        if info is None:
+            self._emit(action="request_update", ok=False, execution_context=execution_context,
+                       reason="refused")
+            return ActionResult(error=f"update not requested: {why}")
+        user_id = str(getattr(execution_context, "user_id", "") or "")
+        req, created = lc.request_restart(
+            kind=lc.KIND_UPDATE, requested_by="the agent (owner-approved)",
+            origin={"surface": "agent", "user_id": user_id},
+            reason=(params.reason or "self_env_request_update")[:300],
+            channel=params.channel, target_version=info["latest"], data_home=home)
+        self._emit(action="request_update", item_id=req.id, ok=True,
+                   execution_context=execution_context, created=created)
+        if not created:
+            return ActionResult(extracted_content=(
+                f"Not requested again: a {req.describe()} is already open ({req.state}). "
+                "Do not say it updated."), include_in_memory=True)
+        shown = info["latest"].lstrip("v")
+        return ActionResult(
+            extracted_content=(
+                f"Update {info['current']} → {shown} requested. Nothing has updated yet: the "
+                "service finishes its work first, then restarts, installs, migrates and "
+                "verifies (a failure rolls back) and tells the owner how it went. Do not say "
+                "it updated."),
             include_in_memory=True)

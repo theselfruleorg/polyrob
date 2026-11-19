@@ -1670,8 +1670,8 @@ class TwitterTool(TwitterMediaArticleMixin, BaseTool):
 
         - A genuine OWNER turn, or the main run of a standing cron job or goal, posts:
           what the owner asked or scheduled is the decision, and a rule about what to
-          post lives in the agent's owner rules, not here. Only the operator's
-          ``APPROVAL_PROVIDER=deny`` stops it.
+          post lives in the agent's owner rules, not here. Only the standing
+          ``deny`` stops it (``APPROVAL_PROVIDER`` or the ``approvals.provider`` preference).
         - Any other turn (forged, room, correspondent-tainted, non-owner) needs a
           REAL owner approval whatever ``APPROVAL_PROVIDER`` says: an automatic
           provider (``auto``, ``auto_notify``) is replaced by the durable owner queue,
@@ -1685,13 +1685,17 @@ class TwitterTool(TwitterMediaArticleMixin, BaseTool):
                       or self._owner_standing_run(execution_context))
         timeout = 0.0
         try:
-            from tools.controller.approval import DenyByDefaultApprover, get_approval_provider_or_deny
+            from tools.controller.approval import (DenyByDefaultApprover,
+                                                   get_approval_provider_or_deny,
+                                                   operator_denies_approvals)
             try:
                 import tools.controller.approval_interactive  # noqa: F401  # registers interactive_cli
             except Exception:
                 pass
             provider = get_approval_provider_or_deny(os.getenv("APPROVAL_PROVIDER"))
             provider_name = (os.getenv("APPROVAL_PROVIDER") or "auto").strip().lower()
+            if operator_denies_approvals():  # the env value or the owner's preference
+                provider, provider_name = DenyByDefaultApprover(), "deny"
             if owner_turn and not isinstance(provider, DenyByDefaultApprover):
                 return None
             if not self._human_provider(provider):
@@ -1766,10 +1770,14 @@ class TwitterTool(TwitterMediaArticleMixin, BaseTool):
                  len(self._split_tweet_text(params.text))
                  if action_name in ("twitter_post", "twitter_reply") else 1)
         if not await asyncio.to_thread(reserve_write, is_dm=is_dm, units=units):
-            cap = self._dm_cap() if is_dm else self._write_cap()
-            kind = "DMs" if is_dm else "writes"
+            from polyrob_x.write_budget import refused_budget
+            kind, secs = refused_budget(is_dm=is_dm, units=units)
+            cap = self._dm_cap() if kind == "DMs" else self._write_cap()
+            mins = -(-secs // 60)
+            when = (f"The next slot opens in about {mins} min; do not retry before then "
+                    "(any session): tell the owner it is waiting." if mins else "Try later.")
             return self.create_action_result(
-                error=f"Twitter rate limit reached: max {cap}/hour for {kind}. Try later.",
+                error=f"Twitter rate limit reached: max {cap}/hour for {kind}. {when}",
                 include_in_memory=True,
             )
         return None

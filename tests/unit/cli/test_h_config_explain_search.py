@@ -26,7 +26,7 @@ def test_explain_flag_shows_sources(tmp_path, monkeypatch):
 
 def test_explain_unknown_key_is_graceful(tmp_path):
     out = cmd_config(_ctx(tmp_path), ["explain", "definitely.not_real"])
-    assert "unknown key" in out
+    assert "unknown setting" in out
 
 
 def test_search_spans_both_namespaces(tmp_path):

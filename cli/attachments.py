@@ -4,11 +4,9 @@ from pathlib import Path
 
 async def stage_attachments(paths, workspace, text=""):
     from core.surfaces.inbound_attachments import (
-        inbound_media_enabled, inbound_media_max_files, inbound_media_max_mb,
+        inbound_media_max_files, inbound_media_max_mb,
         persist_inbound_file, inject_file_content,
     )
-    if not inbound_media_enabled():
-        raise ValueError("Inbound attachments are disabled in this profile.")
     if len(paths) > inbound_media_max_files():
         raise ValueError(f"At most {inbound_media_max_files()} attachments are allowed per turn.")
     images, receipts = [], []

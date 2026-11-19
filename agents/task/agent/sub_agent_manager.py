@@ -528,7 +528,7 @@ class SubAgentManager:
         return f"{parent[:max(1, 50 - len(suffix))]}{suffix}"
 
     async def _build_child_controller(self, requested_tools: Optional[List[str]] = None,
-                                      force: bool = False, exclude_actions=()):
+                                      exclude_actions=()):
         """UP-05: build a least-privilege child Controller for a delegated sub-agent.
 
         Narrows the parent's tool_ids (drops ``code_execution``/``cronjob``) and
@@ -539,16 +539,8 @@ class SubAgentManager:
         ``mcp``) resolve to the SAME container singletons, so no second browser
         context / MCP client is created; the child shares the parent's orchestrator
         (same session_id/user_id) so tool re-configuration writes identical values.
-
-        Returns None when ``SUBAGENT_LEAST_PRIVILEGE`` is off => the caller falls
-        back to the shared parent controller (pre-UP-05 behaviour, byte-identical).
+        Least privilege has no off switch: every child is narrowed.
         """
-        from agents.task.constants import TimeoutConfig
-        # A named worker that declares its tools is ALWAYS narrowed (``force``):
-        # sharing the parent controller would hand it everything the parent holds.
-        if not force and not TimeoutConfig.get_subagent_least_privilege():
-            return None
-
         from tools.controller.service import Controller
         from tools.controller.delegation import (
             narrow_child_tools,
@@ -808,12 +800,9 @@ class SubAgentManager:
                 )
                 # UP-05: build a least-privilege child controller (narrowed toolset
                 # minus code_execution/cronjob; delegation actions excluded for the
-                # leaf child) instead of sharing the parent's full controller. Returns
-                # None when SUBAGENT_LEAST_PRIVILEGE is off => shared parent controller.
+                # leaf child) instead of sharing the parent's full controller.
                 child_controller = await self._build_child_controller(
                     requested_tools=(worker.tool_ids if worker is not None else None),
-                    force=bool((worker is not None and worker.tool_ids is not None)
-                               or exclude_actions),
                     exclude_actions=exclude_actions or ())
 
                 # Create sub-agent with ISOLATION flags

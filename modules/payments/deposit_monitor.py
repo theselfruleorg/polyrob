@@ -49,8 +49,9 @@ class DepositMonitor:
         # Minimum deposit thresholds (USD)
         self.min_deposit_usd = 5.00
 
-        # Credit rate: $0.01 per credit
-        self.credit_rate = 0.01
+        # The ONE credit rate: a deposit buys credits at the rate a charge spends them.
+        from modules.credits.pricing import PricingConfig
+        self.credit_rate = PricingConfig.CREDIT_VALUE_USD
 
         # Running flag
         self.running = False

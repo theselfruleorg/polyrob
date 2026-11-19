@@ -126,7 +126,7 @@ async def test_set_from_a_url_replaces_the_image(env, monkeypatch):
     st = load_avatar(env, "carol")
     assert st.is_set and st.source == "url:https://x.test/a.png"
     assert "set (url:https://x.test/a.png)" in out
-    assert "polyrob avatar push" in out  # the profile photos do not follow on their own
+    assert "/avatar push" in out  # the account pictures do not follow on their own
 
 
 @pytest.mark.asyncio
@@ -224,3 +224,29 @@ async def test_the_read_in_a_room_posts_no_photo_into_the_room(env, monkeypatch)
     out = await act_on_inbound(_Agent(str(env)), _room_cmd("/avatar"))
     assert "carol" in out
     assert sent == []
+
+
+# --- 120 W1: /avatar push ---------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_push_from_the_chat_runs_the_one_procedure(env, monkeypatch):
+    _write_pfp(env)
+    calls = []
+    monkeypatch.setattr("modules.avatar.push.push_twitter", lambda p: calls.append(p))
+    out = await act_on_inbound(_Agent(str(env)), _cmd("/avatar", "/avatar push x"))
+    assert "twitter: profile image updated" in out and len(calls) == 1
+    out = await act_on_inbound(_Agent(str(env)), _cmd("/avatar", "/avatar push mastodon"))
+    assert "unknown surface" in out
+
+
+def test_push_never_runs_from_a_room_and_runs_off_the_poll_loop():
+    from surfaces.telegram import harness
+    assert "push" in harness._ROOM_REFUSED_SUBVERBS["/avatar"]
+    assert harness._runs_in_background("/avatar", _cmd("/avatar", "/avatar push"))
+    assert not harness._runs_in_background("/avatar", _cmd("/avatar", "/avatar"))
+
+
+@pytest.mark.asyncio
+async def test_a_file_path_from_the_chat_is_refused(env):
+    out = await act_on_inbound(_Agent(str(env)), _cmd("/avatar", "/avatar set /etc/passwd"))
+    assert "NOT changed" in out and "cannot be read from here" in out

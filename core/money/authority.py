@@ -103,6 +103,17 @@ def delegated_refusal(context, verb):
     return None
 
 
+def money_read_refusal(context):
+    """120 W4: a READ of the instance's own money state (the unaccounted
+    submissions, the trading mandate, the bridges in flight). The bound owner
+    only, and never a delegated sub-agent. It moves nothing, so it asks no pause
+    and no cap. A probe error refuses (fail closed)."""
+    try:
+        return delegated_refusal(context, "read the money state") or turn_refusal(context)
+    except Exception as exc:
+        return f"refused: owner probe failed ({type(exc).__name__}); failing closed."
+
+
 def spend_pause_refusal(*, entry=False):
     """The 031 owner pause for a money verb. ONE predicate, ONE text, fail-closed.
 

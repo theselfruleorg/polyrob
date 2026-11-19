@@ -154,6 +154,8 @@ def test_always_gated_verbs_membership():
     assert approval._ALWAYS_GATED_VERBS == frozenset({
         "self_modify",
         "self_env_restart_service",
+        # 120 W7: the update sibling rides the same lane.
+        "self_env_request_update",
         "tool_manage",
         "x_browser_x_signup_start",
         "x_browser_x_post", "x_browser_x_reply", "x_browser_x_dm",
@@ -169,7 +171,7 @@ def test_always_gated_verbs_stay_owner_queued(monkeypatch, tmp_path):
     gates, provider = approval.effective_approval_state("alice", tmp_path)
     assert provider == "auto_notify"
     queued, reported = approval.autonomous_gating_lanes(gates)
-    for verb in ("self_modify", "self_env_restart_service",
+    for verb in ("self_modify", "self_env_restart_service", "self_env_request_update",
                  "tool_manage"):
         assert verb in queued, verb
         assert verb not in reported, verb

@@ -693,14 +693,8 @@ class SystemPrompt:
 			optional_sections += f"\n<subtask-delegation>\n{subtask_section}\n</subtask-delegation>\n"
 		if vision_section:
 			optional_sections += f"\n<vision-capabilities>\n{vision_section}\n</vision-capabilities>\n"
-		# UP-06: injection-defense notice (a posture flag, the same on each seat)
-		static_sections = ""
-		try:
-			from agents.task.constants import UNTRUSTED_TOOL_RESULT_WRAP
-		except Exception:
-			UNTRUSTED_TOOL_RESULT_WRAP = False
-		if UNTRUSTED_TOOL_RESULT_WRAP:
-			static_sections += f"\n<security>\n{self._get_security_content()}\n</security>\n"
+		# UP-06: injection-defense notice (the same on each seat)
+		static_sections = f"\n<security>\n{self._get_security_content()}\n</security>\n"
 		# 035 P1-9: route an owner instruction to the lane that can enforce it.
 		# Per-session stable (registry-derived), so prompt caching is unaffected.
 		_routing_on = bool(self._owner_route_parts())
@@ -747,13 +741,7 @@ class SystemPrompt:
 			optional_sections += (f"\n<communication-contract>\n"
 			                      f"{self._get_communication_contract_content()}\n"
 			                      f"</communication-contract>\n")
-		try:
-			from core.config_policy import _bool_env
-			_precedence_on = _bool_env("SOURCE_PRECEDENCE_PROMPT", True)
-		except Exception:
-			_precedence_on = True
-		if _precedence_on:
-			static_sections += f"\n<source-precedence>\n{self._get_source_precedence_content()}\n</source-precedence>\n"
+		static_sections += f"\n<source-precedence>\n{self._get_source_precedence_content()}\n</source-precedence>\n"
 
 		# T1-06: <input-format> describes browser state (URL / tabs / interactive
 		# elements) — inject it only when the session can actually drive a browser.
@@ -962,7 +950,7 @@ class AgentMessagePrompt:
 			# S5 (2026-09-14): the page's own text is attacker-authorable and was
 			# the ONE untrusted surface that never passed through a tool result,
 			# so UP-06 never saw it. Frame it as DATA here (source="browser").
-			# Gated on UNTRUSTED_TOOL_RESULT_WRAP; 'empty page' is below the
+			# 'empty page' is below the
 			# min-chars threshold and passes through untouched.
 			from agents.task.agent.core.untrusted_render import maybe_wrap_browser_dom
 			elements_text = maybe_wrap_browser_dom(elements_text)

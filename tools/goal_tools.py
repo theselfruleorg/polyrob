@@ -22,7 +22,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from tools.base_tool import BaseTool
 from core.money.classify import is_money_class as _money_class  # 112 W3
-from tools.model_tier import TIER_FIELD_DESCRIPTION, WHY_FIELD_DESCRIPTION, tier_payload  # 112 W2
+from tools.model_tier import (MODEL_FIELD_DESCRIPTION, TIER_FIELD_DESCRIPTION,  # 112 W2 / 121
+                              WHY_FIELD_DESCRIPTION, model_payload, notify_model_change,
+                              tier_payload)
 from agents.task.loop_types.controller_types import ActionResult
 from agents.task.goals.board import DuplicateGoalError, GoalBoard
 
@@ -429,6 +431,7 @@ class GoalCreateAction(BaseModel):
                      "autonomous mode)."),
     )
     tier: Optional[Literal["default", "heavy", "light"]] = Field(None, description=TIER_FIELD_DESCRIPTION)
+    model: Optional[str] = Field(None, max_length=120, description=MODEL_FIELD_DESCRIPTION)
     why: Optional[str] = Field(None, max_length=200, description=WHY_FIELD_DESCRIPTION)
     skills: Optional[List[str]] = Field(
         None,
@@ -484,11 +487,15 @@ class GoalCreateAction(BaseModel):
 
 class GoalListAction(BaseModel):
     model_config = ConfigDict(extra="ignore")
+    kind: Literal["goal", "ask"] = Field(
+        "goal", description="'goal' (default) lists goals; 'ask' lists your owner asks: the "
+                            "question, the goals it holds, and the answer once decided.")
     status: Optional[str] = Field(
         None,
-        description="Filter: triage/waiting/ready/running/blocked/done/cancelled. Omitted = "
-                    "LIVE goals only (triage/waiting/ready/running/blocked); pass 'done' or "
-                    "'cancelled' to see history.")
+        description="Filter: triage/waiting/ready/running/blocked/paused/done/cancelled. Omitted = "
+                    "LIVE goals only (triage/waiting/ready/running/blocked/paused); pass 'done' or "
+                    "'cancelled' to see history. For kind='ask': open (default)/fulfilled/"
+                    "rejected/obsolete.")
     limit: int = Field(30, ge=1, le=200, description="Newest N rows to show (default 30).")
 
 
@@ -496,6 +503,76 @@ class GoalListAction(BaseModel):
 #: on the board. ``done``/``cancelled`` are history and dwarf the live rows
 #: within days (357 done vs 1 ready on prod, 2026-08-29).
 from core.goal_vocab import LIVE_STATUS_ORDER as GOAL_LIST_LIVE_STATUSES  # noqa: E402
+
+
+def _verb_reply(res, goal) -> ActionResult:
+    """An owner goal verb's sentence (``core.goal_owner_verbs``), with the agent's own
+    actions in place of the seat commands it names."""
+    gid, full = str(goal.id)[:8], str(goal.id)
+    text = (res.message.replace(f"/goal retry {gid}", f"goal_unblock(goal_id='{full}')")
+            .replace(f"/goal show {gid}", f"goal_show(goal_id='{full}')")
+            .replace("see /goals", "see goal_list").replace("see /asks",
+                                                            "see goal_list(kind='ask')")
+            .replace("paused by you", "paused on the owner's word"))
+    if res.ok:
+        return ActionResult(extracted_content=text, include_in_memory=True)
+    return ActionResult(error=text, include_in_memory=True)
+
+
+#: The newest history rows ``goal_show`` prints (the console detail reads more).
+GOAL_SHOW_EVENTS = 10
+
+
+def _event_lines(board, goal_id: str) -> List[str]:
+    """120 W7: ``goal_show``'s history — the newest ``board.events`` rows, newest
+    last. A payload can carry a page's or a person's words (a failure text, an
+    answer), so the rows are framed as data. An unreadable history is named."""
+    import json
+    import time
+    from core.security.untrusted_wrap import wrap_untrusted
+    try:
+        events = board.events(goal_id, last=GOAL_SHOW_EVENTS)
+    except Exception as exc:
+        logger.warning("goal_show: the history of %s could not be read", goal_id, exc_info=True)
+        return [f"History: could not be read ({type(exc).__name__}) — this is not an "
+                "empty history"]
+    if not events:
+        return ["History: no events recorded"]
+    rows = []
+    for e in events:
+        ts = time.strftime("%Y-%m-%d %H:%M", time.gmtime(float(e.get("created_at") or 0)))
+        payload = e.get("payload") or {}
+        detail = json.dumps(payload, ensure_ascii=False, default=str)[:160] if payload else ""
+        rows.append(f"- {ts} UTC {e.get('kind') or '?'}" + (f" {detail}" if detail else ""))
+    return [f"History (newest {len(events)}, oldest first):",
+            wrap_untrusted("goal history", "\n".join(rows))]
+
+
+def _ask_list(board, user_id: str, params) -> ActionResult:
+    """``goal_list(kind='ask')``: the agent's owner asks, oldest first. An unreadable
+    store says so; it never reads as "no asks"."""
+    from core.goal_vocab import ASK_OPEN
+    status = params.status or ASK_OPEN
+    try:
+        asks = board.asks(user_id=user_id, status=status)
+    except Exception:
+        logger.warning("goal_list kind=ask: the ask store could not be read", exc_info=True)
+        return ActionResult(error="The ask list could not be read. This is NOT 'no asks'.",
+                            include_in_memory=True)
+    if not asks:
+        return ActionResult(extracted_content=f"No {status} asks.", include_in_memory=True)
+    lines = [f"Owner asks (status={status}, oldest first, {len(asks)}):"]
+    for a in asks[-params.limit:]:
+        p = a.payload or {}
+        lines.append(f"- `{a.id}` [{a.status}] {a.title}")
+        holds = list(p.get("blocks_goal_ids") or [])
+        if p.get("rail_id"):
+            holds.append(str(p["rail_id"]))
+        lines.append(f"  holds: {', '.join(holds) or 'nothing'}")
+        if a.status != ASK_OPEN:
+            answer = p.get("answer") or p.get("decision") or a.status
+            lines.append(f"  answer: {str(answer)[:300]}")
+    return ActionResult(extracted_content="\n".join(lines), include_in_memory=True)
 
 
 def _withdraw_ask(board, ask, user_id: str, owner_turn: bool) -> ActionResult:
@@ -537,8 +614,14 @@ class GoalCancelAction(BaseModel):
 
 class GoalUnblockAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    goal_id: str = Field(..., description="The blocked goal id.")
+    goal_id: str = Field(..., description="The blocked goal id (or a paused one, on an owner "
+                                          "turn).")
     rationale: str = Field("", description="Why it can proceed now (what changed).")
+
+
+class GoalPauseAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    goal_id: str = Field(..., description="The goal id to pause.")
 
 
 class GoalUpdateAction(BaseModel):
@@ -550,6 +633,7 @@ class GoalUpdateAction(BaseModel):
     acceptance: Optional[str] = Field(None, description="What 'done' must prove (ids/paths/urls).")
     tools: Optional[List[str]] = None
     tier: Optional[Literal["default", "heavy", "light"]] = Field(None, description=TIER_FIELD_DESCRIPTION)
+    model: Optional[str] = Field(None, max_length=120, description=MODEL_FIELD_DESCRIPTION)
     why: Optional[str] = Field(None, max_length=200, description=WHY_FIELD_DESCRIPTION)
 
 
@@ -690,6 +774,11 @@ class GoalTool(BaseTool):
         if _tier_err:
             return ActionResult(error=_tier_err, include_in_memory=True)
         payload.update(_tier)
+        _model, _model_err, _model_note, _model_notice = await model_payload(   # 121: any model, price-bounded
+            params.model, params.why, tier=params.tier, owner_turn=owner_turn, user_id=user_id)
+        if _model_err:
+            return ActionResult(error=_model_err, include_in_memory=True)
+        payload.update({k: v for k, v in _model.items() if v is not None})
         # 060 WS-5: the goal pins its doctrine (seeded every run; no tool granted).
         from core.config_policy.rigs import pinned_skills
         if pinned_skills({"skills": params.skills}):
@@ -774,7 +863,7 @@ class GoalTool(BaseTool):
                                             str(payload.get("acceptance") or ""))
         if recurring:
             warn_note += f"\n{recurring}"
-        return ActionResult(extracted_content=f"Created goal `{goal.id}` (status={goal.status}){tool_note}{dep_note}: {goal.title}{drop_note}{warn_note}",
+        return ActionResult(extracted_content=f"Created goal `{goal.id}` (status={goal.status}){tool_note}{dep_note}: {goal.title}{drop_note}{warn_note}{_model_note}",
                             include_in_memory=True)
 
     async def _money_goal_card(self, params, payload: dict, target, reasons: List[str],
@@ -794,7 +883,8 @@ class GoalTool(BaseTool):
         skipped = [name for name, value in (
             ("priority", params.priority != 5), ("depends_on", params.depends_on),
             ("memory_regime", params.memory_regime), ("report_back", params.report_back),
-            ("acceptance_checks", params.acceptance_checks), ("tier", params.tier)) if value]
+            ("acceptance_checks", params.acceptance_checks), ("tier", params.tier),
+            ("model", params.model)) if value]
         return await raise_job_card(
             self, execution_context, words, what="goal", reasons=reasons,
             details=[f"Goal: {params.title.strip()}"] + [f"Grant: {w}" for w in grant],
@@ -802,7 +892,8 @@ class GoalTool(BaseTool):
             later="find the goal with goal_list and set those fields with goal_update.")
 
     @BaseTool.action("List your durable goals, newest first — LIVE ones by default "
-                     "(pass status='done'/'cancelled' for history).",
+                     "(pass status='done'/'cancelled' for history); kind='ask' lists your "
+                     "owner asks.",
                      param_model=GoalListAction)
     async def goal_list(self, params: GoalListAction, execution_context=None) -> ActionResult:
         # A VIEW must read newest-first over the tenant's rows. ``board.list`` is the
@@ -812,6 +903,8 @@ class GoalTool(BaseTool):
         # owner it had no trading goals while ten clean cycles had run (2026-08-29).
         board = self._resolve_board()
         user_id = self._user(execution_context)
+        if params.kind == "ask":
+            return _ask_list(board, user_id, params)
         statuses = (params.status,) if params.status else GOAL_LIST_LIVE_STATUSES
         goals = board.list_recent(user_id=user_id, statuses=statuses, limit=params.limit)
         counts = board.status_counts(user_id=user_id)
@@ -879,15 +972,27 @@ class GoalTool(BaseTool):
         blocks = board.dependents(g.id)
         if blocks:
             lines.append("blocks: " + _id_title_list(blocks))
+        lines.extend(_event_lines(board, g.id))
         return ActionResult(extracted_content="\n".join(lines), include_in_memory=True)
 
-    @BaseTool.action("Requeue a BLOCKED goal with a rationale (§5.3 stewardship; "
-                     "resets its retry budget).", param_model=GoalUnblockAction)
+    @BaseTool.action("Requeue a BLOCKED goal with a rationale (§5.3 stewardship; resets its "
+                     "retry budget). On an owner turn it also lifts a PAUSED goal (the same "
+                     "rule as the owner's /goal retry).", param_model=GoalUnblockAction)
     async def goal_unblock(self, params: GoalUnblockAction, execution_context=None) -> ActionResult:
         refusal = _autonomy_refusal(execution_context, params.goal_id)
         if refusal:
             return refusal
         board = self._resolve_board()
+        goal = board.get(params.goal_id, user_id=self._user(execution_context))
+        if goal is not None and goal.status == "paused":
+            # 120 W2: the owner's hold lifts only on the owner's word, by the seat rule.
+            if not owner_seat_turn(execution_context):
+                return ActionResult(error=f"Refused: `{goal.id}` is paused by the owner; only "
+                                          f"an owner turn lifts the pause.",
+                                    include_in_memory=True)
+            from core.goal_owner_verbs import retry_goal
+            return _verb_reply(retry_goal(board, user_id=self._user(execution_context),
+                                          goal=goal), goal)
         ok = board.unblock(params.goal_id, user_id=self._user(execution_context),
                            rationale=params.rationale)
         if not ok:
@@ -896,6 +1001,25 @@ class GoalTool(BaseTool):
         return ActionResult(
             extracted_content=f"Unblocked goal `{params.goal_id}` (retry budget reset).",
             include_in_memory=True)
+
+    @BaseTool.action("Pause a goal on the owner's word: no run starts until it is lifted "
+                     "(goal_unblock on an owner turn). A running goal's run stops.",
+                     param_model=GoalPauseAction)
+    async def goal_pause(self, params: GoalPauseAction, execution_context=None) -> ActionResult:
+        refusal = _autonomy_refusal(execution_context, params.goal_id)
+        if refusal:
+            return refusal
+        if not owner_seat_turn(execution_context):
+            return ActionResult(error="Refused: goal_pause runs only when the owner asks in "
+                                      "this turn.", include_in_memory=True)
+        board = self._resolve_board()
+        user_id = self._user(execution_context)
+        goal = board.get(params.goal_id, user_id=user_id)
+        if goal is None or getattr(goal, "kind", "goal") != "goal":
+            return ActionResult(error=f"No goal `{params.goal_id}` of yours.",
+                                include_in_memory=True)
+        from core.goal_owner_verbs import pause_goal
+        return _verb_reply(pause_goal(board, user_id=user_id, goal=goal), goal)
 
     @BaseTool.action("Stop a durable goal: once by default; forever=true only when the "
                      "owner said never again (the same as the owner's /goal stop).",
@@ -943,10 +1067,18 @@ class GoalTool(BaseTool):
         patch: dict = {}
         # 112 W2: a tier is checked against the goal's own provider, as goal_create checks it.
         _goal_provider = (getattr(row, "payload", None) or {}).get("provider") if row else None
-        _tier, _tier_err = tier_payload(params.tier, params.why, owner_turn, _goal_provider)
+        _tier, _tier_err = tier_payload(params.tier, params.why, owner_turn, _goal_provider,
+                                        existing=(getattr(row, "payload", None) or {}) if row else None)
         if _tier_err:
             return ActionResult(error=_tier_err, include_in_memory=True)
         patch.update(_tier)
+        _model, _model_err, _model_note, _model_notice = await model_payload(   # 121
+            params.model, params.why, tier=params.tier, owner_turn=owner_turn, user_id=user_id,
+            existing=(getattr(row, "payload", None) or {}) if row else None,
+            what=f"goal `{params.goal_id}`")
+        if _model_err:
+            return ActionResult(error=_model_err, include_in_memory=True)
+        patch.update(_model)
         if params.acceptance is not None:
             patch["acceptance"] = params.acceptance
         if params.tools is not None:
@@ -969,6 +1101,8 @@ class GoalTool(BaseTool):
                 ok = board.update_fields(
                     params.goal_id, user_id=user_id, title=params.title, body=params.body,
                     priority=params.priority, payload_patch=patch or None)
+                if ok:
+                    notify_model_change(self, _model_notice)
                 done = (f"Updated goal `{params.goal_id}` (the other fields)." if ok
                         else "The other fields: goal not found / terminal / nothing to change.")
                 if card.error:
@@ -984,8 +1118,10 @@ class GoalTool(BaseTool):
             params.goal_id, user_id=user_id,
             title=params.title, body=params.body, priority=params.priority,
             payload_patch=patch or None)
+        if ok:
+            notify_model_change(self, _model_notice)
         return ActionResult(
-            extracted_content=(f"Updated goal `{params.goal_id}`." if ok
+            extracted_content=(f"Updated goal `{params.goal_id}`.{_model_note}" if ok
                                else "Goal not found / terminal / nothing to change."),
             include_in_memory=True)
 

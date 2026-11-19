@@ -1061,13 +1061,8 @@ class PathManager:
         workspace_dir = self.get_workspace_dir(clean_id, user_id)
         # OR-5: in local-CLI mode the workspace IS the project root (CWD), so a bare
         # todo.md lands in the user's repo and pollutes `git status`. Nest it under a
-        # `.polyrob/` metadata subdir instead. Set CLI_TODO_DOT_ROB=off to restore the
-        # legacy bare-todo.md location.
-        if (
-            getattr(self, "_workspace_is_project_root", False)
-            and os.getenv("CLI_TODO_DOT_ROB", "true").strip().lower()
-            not in ("0", "false", "off", "no")
-        ):
+        # `.polyrob/` metadata subdir instead.
+        if getattr(self, "_workspace_is_project_root", False):
             # B2/C3: get_workspace_dir ignores session_id in project-root mode, so a
             # <project>/.polyrob/todo.md is shared by EVERY session/sub-agent/parallel
             # `polyrob`. Session-scope it under the per-session tree (sibling to

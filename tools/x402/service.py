@@ -129,6 +129,28 @@ def _signer_hold_text(exc: BaseException) -> Optional[str]:
     return None
 
 
+def _submission_block(execution_context) -> list:
+    """120 W4: the unaccounted wallet submissions that block every send — the
+    `/wallet` lines (``core.wallet.view.submission_lines``) plus the operator's
+    step. An owner read; an unreadable journal is named, never "none"."""
+    from core.money.authority import money_read_refusal
+    if money_read_refusal(execution_context):
+        return ["Unaccounted submissions: not shown (the owner's read)."]
+    try:
+        from core.wallet.submission_journal import unresolved
+        rows = unresolved()
+    except Exception as exc:
+        return [f"Unaccounted submissions: UNKNOWN — the submission journal could not be "
+                f"read ({type(exc).__name__}); spending stays blocked until it can."]
+    if not rows:
+        return ["Unaccounted submissions: none — nothing blocks a send."]
+    from core.wallet.view import submission_lines
+    return submission_lines(rows) + [
+        "You cannot release one, and you do not re-send that payment: it may have "
+        "landed. The operator settles each on the box: `polyrob wallet submissions` shows the chain "
+        "evidence; `polyrob wallet release-submission <ref>` books it."]
+
+
 def _render_probe(row: dict) -> str:
     """One compact, honest line-block per endpoint. Never invents a price."""
     head = f"{row['url']} [{row['method']}]"
@@ -466,7 +488,17 @@ class X402PayTool(BaseTool):
                     # estimate. Mark it in the header so that distinction is visible.
                     estimate_marker = " (estimated)" if res.amount_is_estimate else ""
                     header = f"[paid ${res.amount_usd:.4f}{estimate_marker} to {res.pay_to}, tx {res.tx_hash}]\n"
-                    if cap_charge > res.amount_usd:
+                    if getattr(res, "status_code", None) == 202 and not res.tx_hash:
+                        # The seller took the signed authorization and answered 202:
+                        # its settlement is not proven, nothing was served, and it says
+                        # "do not pay again". The spend stays booked (the authorization
+                        # may still land), but "[paid …]" was a false claim (found by
+                        # the level-1 interface rig, ops/rig, scenario PX6).
+                        header = (f"[PAYMENT UNCONFIRMED: ${cap_charge:.4f} authorized to "
+                                  f"{res.pay_to}; the seller answered 202 (settling) and served "
+                                  "nothing. It is booked against your caps because it may "
+                                  "still land. Do NOT pay again and do NOT report it as paid.]\n")
+                    elif cap_charge > res.amount_usd:
                         header += f"[Spend cap charged ${cap_charge:.4f}, the signed authorization ceiling.]\n"
                 else:
                     if getattr(res, "submission_ref", None):
@@ -490,7 +522,7 @@ class X402PayTool(BaseTool):
                               "completed payment.]\n")
         return self._ar(content=f"{header}{res.body}")
 
-    @BaseTool.action("Show the agent wallet: address, ON-CHAIN USDC/gas balance, spend caps, and payment audit", param_model=EmptyWalletParams)
+    @BaseTool.action("Show the agent wallet: address, ON-CHAIN USDC/gas balance, spend caps, the unaccounted submissions that block a send, and payment audit", param_model=EmptyWalletParams)
     async def x402_wallet_status(self, params: EmptyWalletParams, execution_context=None):
         wallet = self._get_wallet()
         if wallet is None:
@@ -567,6 +599,7 @@ class X402PayTool(BaseTool):
         daily = wallet.policy.daily_cap_usd
         lines.append(f"Spend caps: max ${wallet.policy.per_tx_cap_usd:.2f}/tx"
                      + (f" · ${daily:.2f}/day" if daily is not None else ""))
+        lines.extend(_submission_block(execution_context))
         # G-12: count/sum the SAME filtered (venue == "x402") set the total is
         # labeled as. `audit` is the FULL cross-venue log, and with the
         # persistent JSONL sink (audit_sink.py) it also spans the whole lifetime

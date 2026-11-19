@@ -214,3 +214,16 @@ def test_describe_does_not_mutate_mcp_schema():
     c = FakeController(mcp=mcp)
     asyncio.run(perform_tool_describe(c, "anysite_search"))
     assert live == {"type": "object", "properties": {"q": {"type": "string"}}}
+
+
+def test_a_one_letter_word_matches_a_whole_word_only():
+    """Prod 2026-11-17: 'x profile' returned 64 matches, because 'x' is a part of
+    nearly every description."""
+    wide = search_tools("x", container=FakeContainer(set()), loaded_ids=set(),
+                        is_leaf=False, mcp_tools=_mcp(
+                            ("evidence", "evidence_next", "next",
+                             "The next extra context for a task"),
+                            ("social", "post_on_x", "post", "Write a post")), limit=50)
+    ids = [h.id for h in wide.results]
+    assert "post_on_x" in ids and "evidence_next" not in ids
+    assert wide.total_matched < 10

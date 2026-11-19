@@ -16,6 +16,13 @@ from .models import RegistrationFile, Endpoint, Registration, EIP8004Config
 logger = logging.getLogger(__name__)
 
 
+def ipfs_gateway() -> str:
+    """The IPFS gateway base (``IPFS_GATEWAY``), always with a trailing slash.
+    The ONE reader: the registration config and ``tools.avatar_sources`` call it."""
+    base = (os.environ.get("IPFS_GATEWAY") or "").strip() or "https://ipfs.io/ipfs/"
+    return base if base.endswith("/") else base + "/"
+
+
 def get_eip8004_config() -> EIP8004Config:
     """Get ERC-8004 configuration from environment."""
     return EIP8004Config(
@@ -27,7 +34,7 @@ def get_eip8004_config() -> EIP8004Config:
         agent_id=int(os.environ.get("EIP8004_AGENT_ID", "0")) or None,
         agent_wallet=os.environ.get("EIP8004_AGENT_WALLET"),
         supported_trust=os.environ.get("EIP8004_SUPPORTED_TRUST", "reputation").split(","),
-        ipfs_gateway=os.environ.get("IPFS_GATEWAY", "https://ipfs.io/ipfs/"),
+        ipfs_gateway=ipfs_gateway(),
     )
 
 

@@ -31,6 +31,11 @@ See [configuration.md](configuration.md#4-providers-and-models).
 Send `/model` in chat. It switches this chat at once, sets your default, and
 picks the reasoning level. In a terminal: `polyrob model`.
 
+**Can the agent select a model itself?**
+Yes, for a helper, a goal or a scheduled job. It sees the price of each model and names the
+price of its choice; the spend limit of each run bounds the cost. `/model choice listed` limits it to
+your own models. A model that you set on a job stays.
+
 **How do I connect a server that gives my agent new abilities?**
 Send `/mcp` in chat to add, remove or test one; `/help mcp` shows how.
 
@@ -40,7 +45,8 @@ Run `polyrob uninstall`. See [getting-started.md](getting-started.md#removing-it
 ## Cost and limits
 
 **What did my AI use cost?**
-Send `/usage`: the AI cost by kind of work, job, model and day.
+Send `/usage`: the AI cost by kind of work, job, model and day. The agent reads the
+same view with `usage_summary`, so you can also ask it in chat.
 
 **Can I limit the AI cost of a job or a goal?**
 Yes. A run that works without you stops at its AI cost limit
@@ -75,7 +81,8 @@ Send `/goal new <what>`; `/goals` shows the board.
 **Why did my goal stop or get blocked?**
 Send `/goal show <id>`: it states the stop reason in words. Each reason is under
 [Why did you not reply?](#why-did-you-not-reply). `/asks` lists what your agent
-needs from you to continue.
+needs from you to continue. The agent reads the same goal with `goal_show`, with
+the newest ten events of its history, so you can also ask it in chat.
 
 **How do I let a goal or a scheduled job trade, or use another ability?**
 Send `/goal grant <id>` or `/job edit <id> grant` with the abilities it may use.

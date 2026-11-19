@@ -42,7 +42,7 @@ def test_source_precedence_has_identity_clause():
 
 def test_security_section_unifies_on_owner():
     c = _render()
-    assert "<security>" in c  # UNTRUSTED_TOOL_RESULT_WRAP defaults ON
+    assert "<security>" in c  # the UP-06 block has no off switch
     sec = c.split("<security>")[1].split("</security>")[0]
     assert "Only the user" not in sec
     assert "OWNER" in sec

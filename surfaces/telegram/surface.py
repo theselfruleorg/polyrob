@@ -162,6 +162,9 @@ class TelegramSurface(Surface):
         0008: ``ids_out`` (when given) collects every chunk's message_id as it
         lands, so a multi-chunk post can be deleted whole.
         """
+        if actions:   # the buttons ARE the card's taps: the text need not spell them
+            from core.surfaces.card_text import without_taps
+            text = without_taps(text or "")
         limit = self.capabilities.max_message_bytes
         flavor = self.capabilities.markdown_flavor
         rendered = render_for_flavor(text or "", flavor, limit)

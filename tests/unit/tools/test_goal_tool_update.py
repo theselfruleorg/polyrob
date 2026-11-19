@@ -106,7 +106,7 @@ def test_goal_update_checks_a_tier_against_the_goals_own_provider(tmp_path, monk
     import tools.goal_tools as gt
     seen = []
 
-    def _tier_payload(tier, why, owner_turn, provider=None):
+    def _tier_payload(tier, why, owner_turn, provider=None, existing=None):
         seen.append(provider)
         return {"tier": tier, "tier_why": why}, None
     monkeypatch.setattr(gt, "tier_payload", _tier_payload)
@@ -117,3 +117,50 @@ def test_goal_update_checks_a_tier_against_the_goals_own_provider(tmp_path, monk
                           _ctx()))
     assert not r.error
     assert seen == ["provider-on-the-goal"]
+
+
+# --- 121 phase 2: the agent names the model of a goal --------------------------------------
+
+@pytest.fixture
+def priced(monkeypatch, tmp_path):
+    """One provider with a key and a small price list: main $0.05/$0.5, mid $0.1/$1.4,
+    dear $2/$10 (above the price guard)."""
+    import agents.task.model_switch_service as svc
+    import core.runtime_paths as rp
+    import modules.llm.profiles as profiles
+    prices = {"x/main": (0.05, 0.5), "x/mid": (0.1, 1.4), "x/dear": (2.0, 10.0)}
+
+    async def facts(provider, model):
+        price = prices.get(model)
+        return price, None, 100000, True, "", price is not None
+    monkeypatch.setattr(svc, "_model_facts", facts)
+    monkeypatch.setattr(profiles, "providers_with_keys", lambda env=None: ["openrouter"])
+    monkeypatch.setattr(rp, "prefs_home_dir", lambda: str(tmp_path / "home"))
+    monkeypatch.setenv("DEFAULT_PROVIDER", "openrouter")
+    monkeypatch.setenv("DEFAULT_MODEL", "x/main")
+
+
+def test_goal_create_and_update_carry_the_agents_model(tmp_path, priced, monkeypatch):
+    told = []
+    monkeypatch.setattr("tools.goal_tools.notify_model_change",
+                        lambda c, text: told.append(text) if text else None)
+    t = _tool(tmp_path)
+    mark_autonomous("run-sess")
+    ctx = _ctx(session_id="run-sess")                       # an unattended run
+    r = run(t.goal_create(GoalCreateAction(title="Write the long weekly market report",
+                                           model="x/mid", why="a long synthesis"), ctx))
+    assert not r.error and "Model: x/mid (openrouter), $0.1 in / $1.4 out" in r.extracted_content
+    g = t._goal_board.list(user_id="alice")[0]
+    assert (g.payload["model"], g.payload["provider"], g.payload["model_by"],
+            g.payload["model_why"]) == ("x/mid", "openrouter", "agent", "a long synthesis")
+    assert told == []                                        # a create tells nothing
+    # goal_update needs a genuine owner turn (an older rule). A pricier model is set at
+    # once: there is no price gate.
+    ctx = _ctx()
+    r = run(t.goal_update(GoalUpdateAction(goal_id=g.id, model="x/dear", why="w"), ctx))
+    assert not r.error and t._goal_board.get(g.id).payload["model"] == "x/dear"
+    # back to the default: the keys are cleared
+    r = run(t.goal_update(GoalUpdateAction(goal_id=g.id, model="default"), ctx))
+    assert not r.error and "back to the default" in r.extracted_content
+    assert not t._goal_board.get(g.id).payload.get("model")
+    assert told == []      # x/mid -> default: a clear is in the result, not a notice

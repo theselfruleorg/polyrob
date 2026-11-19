@@ -17,6 +17,7 @@ Why here? Pricing is OWNED by the credits module - it's business logic, not bot 
 
 import math
 import os
+from decimal import ROUND_CEILING, Decimal
 from typing import Any, Dict, Mapping, Optional, Union
 
 
@@ -60,10 +61,6 @@ class PricingConfig:
     # Session creation cost (infrastructure setup)
     SESSION_CREATION_COST: int = int(os.environ.get("SESSION_CREATION_COST", "1"))
 
-    # Special action costs
-    VISION_CALL_COST: int = int(os.environ.get("VISION_CALL_COST", "2"))
-    TOOL_CALL_COST: float = float(os.environ.get("TOOL_CALL_COST", "0.5"))
-
     @classmethod
     def get_markup_info(cls) -> Dict[str, any]:
         """Get markup information for display/reporting.
@@ -93,18 +90,31 @@ class PricingConfig:
         Returns:
             Tuple of (credits_to_charge, user_cost_usd)
         """
-        # Convert to credits with markup
-        credits_raw = (api_cost_usd / cls.CREDIT_VALUE_USD) * cls.MARKUP
-
-        # ALWAYS round UP to ensure we never charge less than API cost
-        # Using math.ceil() instead of int(x + 0.5) which was incorrectly rounding DOWN
-        # for values like 2.42 → int(2.92) = 2, losing money!
-        credits_charged = max(cls.MIN_CREDIT_CHARGE, math.ceil(credits_raw))
-
-        # Calculate what user actually pays
-        user_cost_usd = credits_charged * cls.CREDIT_VALUE_USD
-
+        credits_charged, _raw, user_cost_usd = cls.credits_for_api_cost(api_cost_usd)
         return credits_charged, user_cost_usd
+
+    @classmethod
+    def credits_for_api_cost(cls, api_cost_usd: float,
+                             markup: Optional[float] = None) -> tuple[int, float, float]:
+        """THE conversion of a provider cost in USD to credits: ``(credits_charged,
+        credits_raw, user_cost_usd)``. The reservation, the settlement and the
+        provider-billed correction all call it.
+
+        Decimal arithmetic: the float form made an exact amount one credit dearer
+        (``0.07 / 0.01`` is ``7.000000000000001``, and its ceiling is 8). The charge
+        rounds UP to a whole credit and is never below ``MIN_CREDIT_CHARGE``.
+        """
+        rate = Decimal(str(cls.CREDIT_VALUE_USD))
+        if not rate.is_finite() or rate <= 0:
+            raise ValueError("CREDIT_VALUE_USD must be a positive number")
+        factor = Decimal(str(cls.MARKUP if markup is None else markup))
+        cost = Decimal(str(api_cost_usd))
+        if not cost.is_finite() or cost < 0 or not factor.is_finite() or factor < 0:
+            raise ValueError("A credit charge needs a finite, non-negative cost and markup")
+        raw = cost / rate * factor
+        credits_charged = max(int(cls.MIN_CREDIT_CHARGE),
+                              int(raw.to_integral_value(rounding=ROUND_CEILING)))
+        return credits_charged, float(raw), float(Decimal(credits_charged) * rate)
 
 
 # Create singleton instance for easy importing

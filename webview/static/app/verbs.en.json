@@ -346,7 +346,7 @@
     {
       "name": "/status",
       "group": "look",
-      "help": "Health first, then session, goals, loops, and wallet",
+      "help": "Health first, then session, goals, loops, delivery, wallet and money (`/status all`: every section)",
       "aliases": []
     },
     {
@@ -458,13 +458,13 @@
     {
       "name": "/model",
       "group": "set up",
-      "help": "The model this chat runs on — switch it live, set your default, pick reasoning",
+      "help": "The model this chat runs on — switch it live, set your default, pick reasoning; set the heavy and light models and what the agent may choose",
       "aliases": []
     },
     {
       "name": "/avatar",
       "group": "display",
-      "help": "This instance's avatar image — show, set, clear",
+      "help": "This instance's avatar image — show, set, clear, or push it to my account pictures",
       "aliases": []
     },
     {

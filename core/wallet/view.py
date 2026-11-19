@@ -138,10 +138,20 @@ def render_wallet(view):
         native, usdc = row.get('native'), row.get('usdc')
         lines.append(f'{row["chain"]}: {native if native is not None else "unavailable"} '
                      f'{row["symbol"]}; USDC {usdc if usdc is not None else "unavailable"}')
-    if view.unaccounted_submissions:
-        lines.append('Spending blocked by unaccounted submissions — I sent these '
-                     'and could not confirm the result; no new spend goes out until '
-                     'each one is settled:')
-        lines.extend(f'{r["chain"]}: {r["tx_hash"]}' for r in view.unaccounted_submissions)
+    lines.extend(submission_lines(view.unaccounted_submissions))
     lines.extend(view.errors)
     return '\n'.join(lines)
+
+
+def submission_lines(rows):
+    """The unaccounted-submission lines: ONE text for ``/wallet``, ``polyrob
+    wallet`` and the agent's ``x402_wallet_status`` (120 W4). Empty for no row.
+    It names no command: the owner's chat seat has no shell, and the agent's
+    read adds the operator's step itself."""
+    if not rows:
+        return []
+    lines = ['Spending blocked by unaccounted submissions — I sent these '
+             'and could not confirm the result; no new spend goes out until '
+             'each one is settled:']
+    lines.extend(f'{r["chain"]}: {r["tx_hash"]}' for r in rows)
+    return lines

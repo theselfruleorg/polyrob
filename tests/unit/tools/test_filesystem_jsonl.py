@@ -33,7 +33,6 @@ def _fs_tool():
 @pytest.fixture
 def _pm(tmp_path, monkeypatch):
     from agents.task.path import PathManager, set_path_manager
-    monkeypatch.setenv("FS_REALPATH_CONFINE", "on")
     pm = PathManager(data_root=str(tmp_path / "data"))
     set_path_manager(pm)
     return pm

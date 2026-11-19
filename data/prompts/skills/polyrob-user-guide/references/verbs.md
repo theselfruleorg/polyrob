@@ -94,7 +94,7 @@ from this list; never invent a verb that is not on it. Pack verbs (such as
 ## look
 
 - `/more` — The rest of a list or text I cut short (not inside a group)
-- `/status` — Health first, then session, goals, loops, and wallet
+- `/status` — Health first, then session, goals, loops, delivery, wallet and money (`/status all`: every section)
 - `/files` — Recent files I produced
 - `/cwd` — The directory I am working in right now
 - `/meter` — This turn's meter (only in the terminal REPL)
@@ -124,7 +124,7 @@ from this list; never invent a verb that is not on it. Pack verbs (such as
 - `/workers` — Named helpers: approve them, and stop or steer a running one (only in the terminal REPL)
 - `/prefs` (also /settings) — The preferences you have set (not inside a group)
 - `/mcp` — MCP servers I can use: add, remove, or test (not inside a group)
-- `/model` — The model this chat runs on — switch it live, set your default, pick reasoning (not inside a group)
+- `/model` — The model this chat runs on — switch it live, set your default, pick reasoning; set the heavy and light models and what the agent may choose (not inside a group)
 - `/auth` — The provider keys I have, and how to connect one (only in the terminal REPL)
 - `/persona` — The personas, and the one new chats use (only in the terminal REPL)
 - `/profile` — Which agent this terminal runs, and where its files live (only in the terminal REPL)
@@ -132,7 +132,7 @@ from this list; never invent a verb that is not on it. Pack verbs (such as
 
 ## display
 
-- `/avatar` — This instance's avatar image — show, set, clear
+- `/avatar` — This instance's avatar image — show, set, clear, or push it to my account pictures
 - `/identity` — My on-chain identity: register it, or update where it is published (spends gas) (not inside a group)
 - `/brief` (also /quiet) — Hide or show the step transcript (only in the terminal REPL)
 - `/verbose` — Show or hide the live trace (only in the terminal REPL)

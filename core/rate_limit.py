@@ -227,6 +227,26 @@ class PersistentWindowLimiter:
         finally:
             db.close()
 
+    def seconds_until_free(self, bucket):
+        """Seconds until the OLDEST unit in *bucket* leaves the window, so one slot
+        reopens (a read; reserves nothing). 0 when the bucket is empty or absent."""
+        import os
+        from core.sqlite_util import wal_connect
+        if not os.path.exists(self.db_path):
+            return 0.0
+        db = wal_connect(self.db_path)
+        try:
+            row = db.execute('SELECT min(ts) FROM rate_events WHERE bucket=? AND ts > ?',
+                             (str(bucket), self.time_fn() - self.window)).fetchone()
+            oldest = row[0] if row else None
+            return 0.0 if oldest is None else max(0.0, oldest + self.window - self.time_fn())
+        except Exception as exc:
+            if 'no such table' in str(exc):
+                return 0.0
+            raise
+        finally:
+            db.close()
+
     def used(self, bucket):
         """Units held in *bucket* inside the window (a read; reserves nothing).
         0 for a store that does not exist yet."""

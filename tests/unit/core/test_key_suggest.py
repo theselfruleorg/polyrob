@@ -40,3 +40,22 @@ def test_unknown_pref_error_names_a_close_instance_flag():
     from core.prefs import unknown_pref_error
     err = unknown_pref_error("CORRESPONDENT_APPROVAL_REQUIRED", "true")
     assert "CORRESPONDENT_REQUIRE_APPROVAL" in err and "instance flag" in err
+
+
+def test_a_retired_name_says_retired_and_suggests_no_other_setting():
+    """`STEP_TIMEOUT_SECONDS` answered "did you mean SHELL_TIMEOUT_SECONDS?": a
+    retired name read as a typing error on every settings verb but the doctor."""
+    msg = config_service.unknown_key_message("STEP_TIMEOUT_SECONDS")
+    assert "is retired" in msg and "did you mean" not in msg and "SHELL_TIMEOUT" not in msg
+    # a renamed alias names its new name; a pattern name its replacement
+    assert "POLYROB_OWNER_USER_ID" in config_service.unknown_key_message("BOT_OWNER_USER_ID")
+    assert "DEFAULT_MODEL" in config_service.unknown_key_message("POLYROB_FOO_MODEL")
+    # a real typing error still gets a suggestion
+    assert "did you mean" in config_service.unknown_key_message("STEP_TIMEOUT_SECOND")
+
+
+def test_a_write_of_a_retired_name_is_refused_as_retired_on_every_seat():
+    for surface in ("local", "telegram", "console"):
+        res = config_service.set_value("STEP_TIMEOUT_SECONDS", "5", scope="global",
+                                       surface=surface)
+        assert not res.ok and "is retired" in res.message, surface

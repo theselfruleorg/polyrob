@@ -61,7 +61,6 @@ def _stubs(monkeypatch):
     monkeypatch.setattr(cont, "build_bridge_message", AsyncMock(return_value=sentinel))
     monkeypatch.setattr(live_health, "build_live_health_text", lambda *a, **k: "HEALTH")
     monkeypatch.setattr(live_health, "build_operations_text", lambda *a, **k: "OPS")
-    monkeypatch.delenv("LIVE_HEALTH_CONTEXT", raising=False)
     from core.config_policy import AutonomyConfig
     monkeypatch.setattr(AutonomyConfig, "continuity_bridge_enabled",
                         staticmethod(lambda: True))

@@ -67,11 +67,6 @@ def test_an_unreadable_log_is_not_a_failed_run(log, monkeypatch, off):
     assert _verified({"effect": "social"}) == {}
 
 
-def test_telemetry_off_is_not_a_failed_run(log, monkeypatch):
-    monkeypatch.setattr("core.effects.external_write_telemetry_enabled", lambda: False)
-    assert _verified({"effect": "social"}) == {}
-
-
 @pytest.mark.parametrize("bad", [
     {"effect": "nonsense"}, {"min": 1}, {"effect": "social", "min": 0},
     {"effect": "social", "min": True}, {"effect": "social", "min": "1"},
@@ -190,10 +185,6 @@ def test_the_tool_refuses_a_bad_expect_and_a_job_with_no_model_run(tmp_path):
         CronScheduleAction(task="post the weekly note", schedule="1d",
                            expect={"effect": "nonsense"}), execution_context=TURN))
     assert "expect.effect" in res.error
-    res = asyncio.run(tool.cronjob_schedule(
-        CronScheduleAction(task="post the weekly note", schedule="1d", wake_agent=False,
-                           expect={"idle_ok": True}), execution_context=TURN))
-    assert "needs a model run" in res.error
     job = tool._cron_service.schedule(task="post the weekly note", schedule_spec="1d",
                                       user_id="alice", payload={"wake_agent": False})
     res = asyncio.run(tool.cronjob_edit(CronEditAction(job_id=job.id, expect={"idle_ok": True}),

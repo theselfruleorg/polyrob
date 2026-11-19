@@ -84,3 +84,15 @@ async def test_a2a_data_part_orders_and_plain_text_is_untouched():
         "offer_id": "custom-art", "inputs": INPUTS}}]}}, "u")
     data = reply["parts"][1]["data"]
     assert data["status"] == "awaiting_payment" and data["payment"]["request_id"]
+
+
+def test_the_public_offer_carries_the_buyer_terms():
+    """A machine buyer reads the refund rule and the acceptance window from the listing
+    itself (GET /api/offers): they were in the manifest and missing from every projection."""
+    from core.commerce.listing import public_offer
+    from core.commerce.offer import validate
+    d = copy.deepcopy(MANIFEST)
+    d["terms"] = {"refund": "on_failure", "acceptance": "P2D"}
+    out = public_offer(validate(d), base_url="https://agent.example")
+    assert out["terms"] == {"refund": "on_failure", "acceptance_days": 2}
+    assert public_offer(validate(MANIFEST))["terms"] == {"refund": "never", "acceptance_days": 0}

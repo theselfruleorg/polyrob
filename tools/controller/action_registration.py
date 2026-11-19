@@ -524,10 +524,8 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 		# the wallet/ledger/config detail is gated AGENT_STATUS_TOOL.
 		self._register_agent_status_action()
 
-		# Task 13 (Phase 3 R3): read-only tenant-scoped usage rollup + non-binding
-		# invoice-draft suggestion, gated USAGE_INVOICE_BRIDGE_ENABLED (default
-		# false; deliberately NOT in the POLYROB_LOCAL safe group — explicit
-		# billing feature). Never creates a payment request itself.
+		# 120 W3: read-only usage — the owner's cost breakdown on every posture; the
+		# Task 13 invoice rollup + draft stays gated USAGE_INVOICE_BRIDGE_ENABLED.
 		self._register_usage_summary_action()
 
 		# Task 5: gated `message` action (owner/allowlist -> MessageRouter send),
@@ -704,19 +702,19 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 			until: Optional[str] = None
 			kind: Optional[str] = None       # "chat" | "goal" | "cron"
 			limit: int = 20
-			scope: Optional[str] = None      # "actions" => every card and outward act, last 48 h
+			scope: Optional[str] = None      # "actions": cards + outward acts, 48 h; "recap": /recap
 
 		_DESC = (
 			"Recall YOUR OWN recent activity — the goals, cron jobs, and chats you ran, "
 			"newest-first, with outcome and spend. USE THIS (not the filesystem, not notes) for 'what did I do', 'what ran since X', 'what have I been up to'. Optional "
 			"`since` ('8h'/'2d'/ISO), `kind` ('goal'/'cron'/'chat'), `limit` (1-20). `scope='actions'`: "
-			"every card, payment, post and send of the last 48 h, exact counts."
+			"every card, payment, post and send of the last 48 h, exact counts. `scope='recap'`: the owner's /recap over `since` (default '24h')."
 		)
 
 		async def _run_recent_activity(params, execution_context=None) -> ActionResult:
-			if params.scope == "actions":
-				from tools.controller.recent_actions import recent_actions_result
-				return recent_actions_result(execution_context, self)
+			if params.scope in ("actions", "recap"):  # 120 W7: recap over core.recap
+				from tools.controller.recent_actions import recent_scope_result
+				return await recent_scope_result(params, execution_context, self)
 			from modules.memory.registry import memory_recall_episodes
 			from modules.memory.episodic import parse_since
 			import time as _t
@@ -961,19 +959,22 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 			return
 
 		from core.surfaces.catalog import surface_ids
-		from tools.controller.message_send import message_input_error, perform_message_action
+		from tools.controller.message_send import (
+			message_input_error, message_targets_result, perform_message_action)
 		from tools.controller.views import MessageTargetAction
 
 		@self.registry.action(
 			'Send a message — and any FILES you made — to a chat/recipient on a surface '
 			f'({"/".join(surface_ids())}). Attach with media_paths, '
-			'one call per file; a path in text is NOT a delivery. Owner/allowlisted only. action=posts/delete: name/delete my own posts.',
+			'one call per file; a path in text is NOT a delivery. Owner/allowlisted only. action=posts/delete: name/delete my own posts; action=targets: who I may message.',
 			param_model=MessageTargetAction,
 		)
 		async def message(params: MessageTargetAction, execution_context=None) -> ActionResult:
 			invalid = message_input_error(params.action, params.text, params.media_paths)
 			if invalid:  # an empty send is a bad call, refused before any gate reads it
 				return ActionResult(error=invalid, include_in_memory=True)
+			if (params.action or "").strip().lower() == "targets":  # 120 W5: a read
+				return message_targets_result(self, execution_context)
 			# Forged/untrusted/autonomous turns must not reach ARBITRARY targets;
 			# MESSAGE_AUTONOMOUS_ALLOWLISTED only forwards to the tier gate below.
 			refusal = _autonomous_message_refusal(execution_context, self)
@@ -1005,56 +1006,10 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 			return _message_action_result(res, surface, target, params.text)
 
 	def _register_contact_history_action(self):
-		"""Register the read-only `contact_history` action (E3, 2026-07-13 review):
-		"what did we already say to this address" — durable, address-keyed, survives
-		session compaction/reset. Gated CORRESPONDENT_ACCESS_ENABLED. Output derives
-		from correspondent text, so it is returned untrusted-wrapped. Registered in
-		this module — no `from __future__ import annotations` (registry-closure
-		introspection)."""
-		try:
-			from core.surfaces.config import SurfaceConfig
-			if not SurfaceConfig.correspondent_access_enabled():
-				return
-		except Exception:
-			return
-
-		from tools.controller.views import ContactHistoryAction
-
-		@self.registry.action(
-			'Show the durable conversation history with an external correspondent '
-			'(what we sent and what they replied, across sessions). Omit '
-			'surface+address to LIST all conversations (who replied, who has not). '
-			'Read-only.',
-			param_model=ContactHistoryAction,
-		)
-		async def contact_history(params: ContactHistoryAction, execution_context=None) -> ActionResult:
-			user_id = (getattr(execution_context, 'user_id', None)
-			           or getattr(self, 'user_id', None) or "")
-			container = getattr(self, "container", None)
-			store = container.get_service("conversation_store") if container else None
-			if store is None:
-				return ActionResult(
-					extracted_content="contact_history: no conversation store available",
-					include_in_memory=True)
-			try:
-				limit = min(int(params.limit or 10), 50)
-				if not (params.surface and params.address):
-					listing = store.format_list(user_id, limit=limit)
-					return ActionResult(extracted_content=(
-						listing or "no recorded conversations for this tenant"),
-						include_in_memory=True)
-				ctx = store.format_context(user_id, params.surface, params.address,
-				                           limit=limit)
-			except Exception as e:
-				return ActionResult(extracted_content=f"contact_history failed: {e}",
-				                    include_in_memory=True)
-			if not ctx:
-				return ActionResult(extracted_content=(
-					f"no recorded conversation with {params.surface}:{params.address}"),
-					include_in_memory=True)
-			from core.security.untrusted_wrap import wrap_untrusted
-			return ActionResult(extracted_content=wrap_untrusted(
-				f"{params.surface}:{params.address}", ctx), include_in_memory=True)
+		"""Delegates to tools/controller/contact_history_action.py (120 W5: the
+		/contacts text, with each contact's state)."""
+		from tools.controller.contact_history_action import register_contact_history_action
+		register_contact_history_action(self)
 
 	def _register_insights_action(self):
 		"""Delegates to tools/controller/insights_action.py (ratchet extraction)."""
@@ -1068,76 +1023,11 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 		register_agent_status_action(self)
 
 	def _register_usage_summary_action(self):
-		"""Register the read-only `usage_summary` action (Task 13, Phase 3 R3 —
-		the metering-to-invoice bridge), gated USAGE_INVOICE_BRIDGE_ENABLED
-		(default OFF; deliberately NOT in _SAFE_LOCAL_FLAGS — this is an explicit
-		billing feature).
-
-		Reports the tenant-scoped usage rollup (`modules.credits.usage_rollup`,
-		which fixes G-29: `LLMUsageTracker.get_session_breakdown` aggregates by
-		session_id ALONE with no user_id filter) plus a non-binding
-		`suggested_invoice` draft. This action NEVER creates a payment request —
-		`build_invoice_draft` never touches `create_payment_request` — the agent
-		must still call the separate, approval-gated `x402_request` action itself
-		to actually send an invoice.
-		"""
-		try:
-			from modules.credits.usage_rollup import usage_invoice_bridge_enabled
-			if not usage_invoice_bridge_enabled():
-				return
-		except Exception:
-			return
-
-		class UsageSummaryAction(BaseModel):
-			session_id: Optional[str] = None
-			since: Optional[str] = None
-
-		@self.registry.action(
-			"Show your tenant-scoped LLM usage (api cost / credits / calls), "
-			"optionally narrowed to a session_id or a since timestamp, plus a "
-			"non-binding suggested invoice draft. Read-only — never sends money; "
-			"call x402_request yourself to actually create an invoice.",
-			param_model=UsageSummaryAction,
-		)
-		async def usage_summary(params: UsageSummaryAction, execution_context=None) -> ActionResult:
-			user_id = (getattr(execution_context, 'user_id', None)
-			           or getattr(self, 'user_id', None) or "")
-			if not user_id:
-				return ActionResult(
-					error=(
-						"usage_summary refused: this action requires an authenticated "
-						"tenant — the execution context has no user_id (anonymous "
-						"financial state is refused)"
-					),
-					include_in_memory=True,
-				)
-			from modules.credits.usage_rollup import build_invoice_draft, unreadable_text, usage_rollup
-			rollup = await usage_rollup(user_id, session_id=params.session_id, since=params.since)
-			if unreadable_text(rollup):
-				return ActionResult(error=unreadable_text(rollup), include_in_memory=True)
-			draft = build_invoice_draft(rollup)
-
-			scope = ""
-			if params.session_id:
-				scope += f", session {params.session_id}"
-			if params.since:
-				scope += f", since {params.since}"
-			lines = [
-				f"Usage summary (tenant {user_id}{scope}):",
-				f"  api_cost_usd: ${rollup['api_cost_usd']:.4f}",
-				f"  credits:      {rollup['credits']:.2f}",
-				f"  calls:        {rollup['calls']}",
-				"",
-				f"Suggested invoice (NOT sent — call x402_request yourself): "
-				f"${draft['amount_usd']:.2f} — {draft['purpose']}",
-			]
-			if draft["over_cap"]:
-				lines.append(f"  WARNING: {draft['note']}")
-			return ActionResult(
-				extracted_content="\n".join(lines),
-				metadata={"rollup": rollup, "suggested_invoice": draft},
-				include_in_memory=True,
-			)
+		"""Delegates to tools/controller/usage_summary_action.py (120 W3: the owner's
+		cost breakdown on every posture; the invoice rollup stays gated
+		USAGE_INVOICE_BRIDGE_ENABLED)."""
+		from tools.controller.usage_summary_action import register_usage_summary_action
+		register_usage_summary_action(self)
 
 	def _register_subtask_action(self):
 		"""Register subtask action for sub-agent delegation.
@@ -1263,13 +1153,13 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 				return None
 
 			async def _build_child_llm(m, p):
-				"""(isolated child LLM for `m`/`p`, error or None); the model must pass the 094 allowlist."""
+				"""(isolated child LLM for `m`/`p`, error or None); the model must pass the 121 price rule."""
 				parent_agent = _resolve_parent_agent()
 				build_fn = getattr(parent_agent, '_create_llm_from_config_async', None) if parent_agent else None
 				if build_fn is None:
 					return None, f"Could not build sub-agent model '{m}': parent agent unavailable"
-				from agents.task.model_switch_service import child_model_refusal
-				refusal = await child_model_refusal(parent_agent, m, p)
+				from agents.task.model_choice import child_model_check
+				refusal = await child_model_check(parent_agent, m, p, _route)
 				if refusal:
 					return None, f"Sub-agent model {refusal}"
 				cfg = {"model": m, **({"provider": p} if p else {})}
@@ -1367,8 +1257,8 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 			'scheduler for durable scheduled work). Set "tier" + "why" to pick the model: '
 			'"heavy" for judgement that decides money or is hard to undo, "light" for bulk '
 			'reads, "default" = yours (<environment> names each tier\'s model; at most 2 heavy '
-			'per call). "model" = an owner alias. With "tasks", each task may set its own tier '
-			'or model. Neither works with background=true.',
+			'per call). "model" = any model id (agent_status view=\'models\' lists the prices). '
+			'With "tasks", each task may set its own tier or model. Neither works with background=true.',
 			param_model=DelegateTaskAction
 		)
 		async def delegate_task(params: DelegateTaskAction, execution_context=None) -> ActionResult:

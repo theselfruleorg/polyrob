@@ -153,6 +153,11 @@ waits for a restart is listed in `/status` with `/restart` as its remedy. The
 whole story, and the shell and root equivalents:
 [operate-the-service.md](operate-the-service.md).
 
+The agent cannot restart or update itself. When you let it maintain itself
+(`AGENT_COMPUTE_POSTURE=2`), it can ask: `self_env_restart_service` or
+`self_env_request_update` waits for your approval, then runs the same path as
+`/restart` or `/update`.
+
 ## How to verify
 
 - `/status` (Telegram), `polyrob autonomy status`, `polyrob doctor` and the
@@ -181,7 +186,14 @@ whole story, and the shell and root equivalents:
   autonomous ceiling do not apply. The per-transaction and daily caps always do.
 - `/why [n]` lists the last refusals (default 5, at most 20): when, which
   tool, and the gate's reason word for word. It reads the recorded refusals, so
-  the answer does not depend on the agent's own summary.
+  the answer does not depend on the agent's own summary. The agent reads the same
+  list with `agent_status(view="refusals")`, and its event log with
+  `agent_status(view="log")` (the counts and rows `/telemetry` shows, its own rows only).
+- The agent reads the install checks of `polyrob doctor --full` with
+  `agent_status(view="health")`: the optional extras, the packs, the browser, the
+  database schema, the data home and the Docker sandbox. Only you get the credential
+  lines. The agent's read does not change anything and does not probe a remote
+  browser. It shows `<data home>` and `~` in place of the paths on the box.
 - `polyrob autonomy status --json` exposes the record under `pause`.
 
 Any maintenance or alerting loop you run on the box reads the same record: while
@@ -218,7 +230,9 @@ already received, so there is nothing to recover. And framework run pings
 (`▶ goal started`) are ephemeral status, not content — they would otherwise be
 most of what this list shows. Both are still recorded in the telemetry
 event log (`<data home>/telemetry_events.db`), which `polyrob doctor --full`
-and `polyrob journey` read.
+and `polyrob journey` read. The agent reads the same recap as `/recap` with
+`recent_activity` (`scope="recap"`), so you can also ask it in chat. It reads
+the recap only for you, because the recap shows your money.
 
 `/status` counts the missed messages since you last ran `/missed`. A message
 that waits for a chat host which never comes back is given up after 7 days;
@@ -434,13 +448,19 @@ the quote shows them before you type `go`.
 /nft trust|untrust|send … on <chain> [go]          # use, stop using, or give away an agent NFT
 /dapp list|revoke <id>              # web pages my wallet is armed for
 /identity register|set-uri on <chain> [go]   # my own ERC-8004 registration
-/contacts [<surface> <address>]     # third parties I have written to, and one transcript
+/contacts [<surface> <address>]     # people I have written to, their state, and one transcript
 /thread [n | <hours>h]              # OUR conversation, every session and rail (you are not a contact)
 /wallet tokens                      # which tokens I trust and why; what is quarantined
 /wallet trust|untrust <chain> <address> [go]   # your word on one token
 /writeoff <chain> <address> [go]    # write a holding off: the loss is its recorded cost
 /unquarantine <chain> <address> [go]           # undo a look-alike's quarantine
 ```
+
+**What the agent reads about the people it writes to.** The agent's `contact_history` prints the same
+text as `/contacts`: each person, their state (`active`, `pending` until you approve,
+`expired` when rejected or timed out) and one transcript. `message(action="targets")`
+prints who it may message: you, the outbound policy and the `/allowlist` text. It cannot
+approve a person or add a target; those stay yours (`/pending`, `/allow`).
 
 **Build it with buttons.** Send `/send` or `/swap` with nothing after it: I answer with
 buttons — the chain, then the token, then the recipient (from sends you confirmed
@@ -462,9 +482,14 @@ confirm), and `owner_ask` asks you to pick one of a few options and waits for
 the tap. When the agent lacks something you can fix, `propose_setting` puts the fix
 behind a Confirm button — `/mcp add`, a safe `/config set`, or a grant without
 money — and Confirm runs that line as if you typed it; a change only the operator can
-make is filed as an ask in `/asks`. `/cards` lists what is open. When you have made every decision the agent
+make is filed as an ask in `/asks`. The agent reads its own settings as
+`/config` does: `preferences` finds a setting by words (`search`), lists the ones off
+their default (`changed`) and names broken lines (`check`, key names only); a secret prints only
+as set. Its one change of its own is `unset` of a safe preference; a guarded one only tightens,
+and an environment setting stays yours. `/cards` lists what is open. When you have made every decision the agent
 raised in a chat, the agent continues by itself: it gets each outcome (sent, failed,
-dismissed, expired) and reports back, without you telling it. It still cannot
+dismissed, expired) and, for a payment that landed, its transaction hash, and reports
+back without you telling it. It still cannot
 spend on that turn — a next payment comes to you as a new decision.
 
 A token-identity question ("which XYZ is real?") arrives in `/pending` with a

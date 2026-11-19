@@ -121,6 +121,19 @@ async def test_transfer_success_counts_and_is_not_open(env, monkeypatch):
     assert env.gate.rolling_24h_spend_usd() == 40.0
 
 
+@pytest.mark.asyncio
+async def test_a_booking_that_fails_after_the_send_still_names_the_hash(env, monkeypatch):
+    """An owner seat's SENT notice is suppressed (one send, one report): when the booking
+    raised after the broadcast, the seat answered with no hash at all."""
+    import tools.defi.receipt_wait as rw
+
+    def boom(*a, **k):
+        raise RuntimeError("ledger write failed")
+    monkeypatch.setattr(rw, "book_after_receipt", boom)
+    res = await _transfer(env, "success", monkeypatch)
+    assert res.error and TX in res.error and "NOT BOOKED" in res.error
+
+
 # -- _run_guarded (a swap) ---------------------------------------------------
 
 _CTX = {"chain": "base", "token_in": USDC, "token_out": TOKEN, "in_native": False,

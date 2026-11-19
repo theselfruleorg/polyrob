@@ -10,7 +10,6 @@ import os
 import pytest
 
 from core.surfaces.inbound_attachments import (
-    inbound_media_enabled,
     inject_file_content,
     persist_inbound_file,
 )
@@ -150,18 +149,6 @@ def test_oversize_image_is_refused_with_a_named_reason(ws):
     assert "too large" in text.lower()
 
 
-# --- flag ------------------------------------------------------------------
-
-def test_inbound_media_is_on_by_default(monkeypatch):
-    monkeypatch.delenv("INBOUND_MEDIA_ENABLED", raising=False)
-    assert inbound_media_enabled() is True
-
-
-def test_inbound_media_can_be_turned_off(monkeypatch):
-    monkeypatch.setenv("INBOUND_MEDIA_ENABLED", "false")
-    assert inbound_media_enabled() is False
-
-
 # --- absorb_inbound_media --------------------------------------------------
 
 import base64 as _b64
@@ -219,27 +206,6 @@ async def test_absorb_caps_the_number_of_files_and_says_so(ws, monkeypatch):
         media, ws, fetch_bytes=_fetch({f"f{i}": _PNG for i in range(4)}), base_text="")
     assert images and len(images) == 2
     assert "2 more" in text
-
-
-@pytest.mark.asyncio
-async def test_absorb_with_the_flag_off_names_the_files_it_did_not_read(ws, monkeypatch):
-    """D51: the flag turns off READING, never TELLING.
-
-    A silent no-op let the agent answer as though the sender had attached
-    nothing — the same silent drop the whole rail exists to end. Nothing is
-    stored and no vision block is built, but the files are named with the
-    reason.
-    """
-    monkeypatch.setenv("INBOUND_MEDIA_ENABLED", "false")
-    media = [Media(kind="image", ref="f1", filename="shot.png")]
-    text, images = await absorb_inbound_media(
-        media, ws, fetch_bytes=_fetch({"f1": _PNG}), base_text="hi")
-    assert text.startswith("hi")
-    assert "shot.png" in text
-    assert "NOT read" in text
-    assert images is None
-    # …and nothing was written into the workspace.
-    assert not os.path.exists(os.path.join(ws, "inbound"))
 
 
 @pytest.mark.asyncio

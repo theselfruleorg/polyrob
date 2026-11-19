@@ -19,11 +19,10 @@ One line per setting: NAME — default — meaning. Code anchors and full prose:
 - X402_PUBLIC_RATE_PER_WINDOW — default: 20 — Per-IP call budget for the PUBLIC (anon-allowed, enumerable `inv_<12hex>` id) invoice endpoints — `GET /api/x402/requests/{id}` and `POST /api/x402/requests/{id}/pay`.
 - X402_PUBLIC_RATE_WINDOW_SEC — default: 60 — Window (seconds) for `X402_PUBLIC_RATE_PER_WINDOW`.
 - X402_TRUSTED_PROXIES — default: '' (loopback 127.0.0.1/::1 always trusted) — ⚠️ **Security fix (regression, reproduced live):** the public invoice rate limiter above was keyed on `get_client_ip`, which returns a client-supplied `X-Forwarded-For` VERBATIM — spoofable, letting an attacker either evade the cap (rotate…
-- USAGE_INVOICE_BRIDGE_ENABLED — default: OFF — the metering→invoice bridge: registers the read-only `usage_summary` agent action (tenant-scoped LLM usage rollup — api_cost_usd/credits/calls, optionally narrowed to a `session_id`/`since` — plus a non-binding `suggested_invoice` draft).
+- USAGE_INVOICE_BRIDGE_ENABLED — default: OFF — the metering→invoice bridge: adds to the read-only `usage_summary` agent action (which the OWNER tenant has without this flag, for the `/usage` breakdown) the tenant-scoped LLM usage rollup for any tenant — api_cost_usd/credits/calls, opti…
 - USAGE_INVOICE_MARKUP — default: 1.0 — Multiplier applied to a rollup's `api_cost_usd` when `build_invoice_draft` proposes a `suggested_invoice` amount (`1.0` = passthrough, no markup).
 - INVOICE_QR_STYLE — default: address — What the invoice card's QR code encodes (via `modules/x402/artifact.py::build_payment_artifact`): `address` — the bare treasury address string (works with any wallet's "scan an address" import); `eip681` — an EIP-681 USDC transfer URI (`et…
 - X402_SETTLEMENT_WATCH_INTERVAL_SEC — default: 60 — Settlement-watcher tick interval (expire stale invoices; wake the originating session via self-wake when one settles; emits `payment_settled`/`payment_expired`).
-- X402_INVOICE_AMOUNT_JITTER — default: **ON** — Amount jitter for on-chain matching: `create_payment_request` adds a RANDOM sub-cent tail to every new EVM invoice amount (so $5.00 becomes e.g. $5.003721 — not only on a collision), then, when an equal-amount PENDING invoice already exist…
 - X402_SETTLEMENT_SCAN_MAX_SPAN — default: 5000 — Max blocks one settlement-watcher tick will scan for on-chain detection, even after a long gap (bounds a single `eth_getLogs` call).
 - X402_SETTLEMENT_CONFIRMATIONS — default: unset (per-chain depth) — Confirmations buffer for on-chain detection — blocks within this many of the chain head are never scanned yet (a just-mined block can still reorg out).
 - X402_SETTLEMENT_RPC — default: '' — watcher-specific RPC pin for on-chain detection of the `X402_DEFAULT_CHAIN` ONLY — one URL serves one chain, so an invoice on any other chain is scanned on that chain's own pinned RPC.
@@ -44,12 +43,12 @@ One line per setting: NAME — default — meaning. Code anchors and full prose:
 - AGENT_WALLET_ENABLED — default: OFF — Enable the agent's native wallet.
 - AGENT_WALLET_MASTER_SEED — default: unset — **SECRET, masked** — The agent wallet's master seed (hex, ≥32 chars); every wallet key derives from it. `polyrob wallet init` writes it to `~/.polyrob/.env`; `polyrob doctor`/`wallet` verbs read it to check wallet health.
 - AGENT_WALLET_NETWORK — default: testnet — Wallet network (`testnet`/`mainnet`).
-- AGENT_WALLET_BACKEND — default: local_eoa — Wallet key backend.
 - AGENT_WALLET_MAX_PER_TX_USD — default: 250 — Per-transaction USD ceiling (catastrophic-loss guard, NOT a budget).
 - AGENT_WALLET_OPERATIONAL_VENUE — default: treasury — Venue key that same-chain spend paths (x402, generic payments) SIGN with, so the funded address (`AgentWallet.address`) equals the spent-from address. "Venue" elsewhere stays a policy/accounting label; hyperliquid keeps its own delegated k…
 - WALLET_SIGNER — default: local — where the agent's signatures come from. `local` = today: the agent process holds the seed and signs in process. `shadow` = it still signs locally AND asks `polyrob-signer` (its own UID, Unix socket `/run/polyrob-signer/signer.sock`, `SO_PE…
 - AGENT_WALLET_DERIVATION — default: unset (meta.json wins; absent = legacy) — Recovery-hatch override for the wallet's key-derivation scheme (`legacy` | `bip44`).
 - WALLET_DAILY_CAP_USD — default: 100 — Rolling 24h spend cap (2026-08-22: was unset/disabled — the per-tx ceiling alone cannot stop a within-ceiling loop draining the treasury one ticket at a time).
+- WALLET_VENUE_DAILY_CAP_<VENUE>_USD — default: unset (no venue cap) — Rolling 24h spend cap for one venue (`VENUE` is a wallet venue: `X402`, `POLYMARKET`, `HYPERLIQUID`, `TREASURY`), applied by the same ledger as `WALLET_DAILY_CAP_USD` and below it.
 - CREDIT_VALUE_USD — default: 0.01 — USD value of one credit.
 - WELCOME_BONUS — default: 0 — Optional new-wallet credit grant; default zero because wallet creation does not prove a unique person.
 - EIP8004_ENABLED — default: OFF ('false') — Enable EIP-8004 on-chain agent registration.
@@ -67,9 +66,7 @@ One line per setting: NAME — default — meaning. Code anchors and full prose:
 - OWNER_WALLET_ADDRESSES — default: unset — Comma list of the owner's OWN receive addresses (EVM `0x…` or Solana base58).
 - PRICING_MARKUP — default: 1.00 — Multiplier on provider API cost for internal credit billing (`1.20` = +20%).
 - MIN_CREDIT_CHARGE — default: 1 — Minimum credits charged per LLM call (prevents free calls).
-- SESSION_CREATION_COST — default: 1 — Credits charged for creating a session.
-- VISION_CALL_COST — default: 2 — Credits charged per vision call.
-- TOOL_CALL_COST — default: 0.5 — Credits charged per tool call.
+- SESSION_CREATION_COST — default: 1 — Shown as `session_credits` in the x402 pricing advertisement; nothing is charged for a session.
 - ETH_PRICE_USD_OVERRIDE — default: unset — Fixed ETH/USD price for the deposit monitor — bypasses the live CoinGecko fetch entirely.
 - ETH_PRICE_USD_MAX — default: 50000 — Sanity upper bound on the ETH/USD price (override or live fetch); a price above this raises instead of crediting a wildly-inflated deposit — guards against an oracle schema error or an `ETH_PRICE_USD_OVERRIDE` typo.
 - DEPOSIT_MONITOR_ENABLED — default: OFF — Enable the deposit-monitoring background loop (requires `SEPOLIA_RPC_URL`/`ETHEREUM_RPC_URL` too).

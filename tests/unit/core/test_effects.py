@@ -14,7 +14,6 @@ from core.exec_identity import reset_exec_identity, set_exec_identity
 def tlog(tmp_path, monkeypatch):
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH", str(tmp_path / "t.db"))
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_ENABLED", "true")
-    monkeypatch.delenv("EXTERNAL_WRITE_TELEMETRY", raising=False)
     el._INSTANCES.clear()
     yield lambda: el.get_event_log()
     el._INSTANCES.clear()
@@ -131,12 +130,6 @@ def test_falls_back_to_the_ambient_tenant(tlog):
 
 def test_unknown_effect_is_dropped(tlog):
     record_external_write(effect="not_a_class", tool="t", action="a")
-    assert tlog().query(kind="external_write") == []
-
-
-def test_flag_off_writes_nothing(tlog, monkeypatch):
-    monkeypatch.setenv("EXTERNAL_WRITE_TELEMETRY", "off")
-    record_external_write(effect="social", tool="twitter", action="twitter_post")
     assert tlog().query(kind="external_write") == []
 
 

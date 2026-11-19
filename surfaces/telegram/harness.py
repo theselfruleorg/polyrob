@@ -12,8 +12,6 @@ act_on_inbound maps:
   STEER       -> orchestrator.submit_user_message (warm-but-dead -> rehydrate, below)
   TASK_AGENT  -> create_session(session_source=, chat_session_key=) then run_session
   COMMAND     -> /cancel /new /task /help
-  CHAT_FASTPATH -> treated as TASK_AGENT for the MVP (the ChatAgent fast-path is a
-                   later optimization; never drop the message).
 """
 from core.runtime_paths import data_dir_or_home, goals_db_path
 import asyncio
@@ -223,7 +221,8 @@ _USAGE = {
              "cancel <id>>",
     "/prefs": "[all]",
     "/config": "[list | get|explain <key> | search <words> | set <key> <value> | check]",
-    "/model": "[<name> [default] [reasoning=<level>] | reset | aliases]",
+    "/model": ("[<name> [default] [reasoning=<level>] | reset | aliases | heavy <name> | "
+               "light <name> | choice free|listed]"),
     "/usage": "[days]",
     "/kb": "[list [collection] | search <query> | <words>]",
     "/files": "[n]",
@@ -449,10 +448,10 @@ _ROOM_REFUSED_COMMANDS = _build_room_refused()
 
 
 #: TG7 (audit 2026-10-03): a room-reachable READ verb whose SUBVERBS write.
-#: `/avatar` shows the face from a room; `/avatar set|clear` changes it, and
+#: `/avatar` shows the face from a room; `/avatar set|clear|push` changes it, and
 #: like every other owner write never runs from a room.
 _ROOM_REFUSED_SUBVERBS = {
-    "/avatar": frozenset({"set", "clear"}),
+    "/avatar": frozenset({"set", "clear", "push"}),
     "/book": frozenset({"retire"}),  # 086 W0: the book read stays; a retire writes
 }
 
@@ -480,7 +479,7 @@ def _room_refused(cmd: str) -> bool:
     return room_refused(cmd)
 
 _TURN_KINDS = frozenset({RouteKind.STEER, RouteKind.TASK_AGENT,
-                         RouteKind.CHAT_FASTPATH, RouteKind.CORRESPONDENT_DATA,
+                         RouteKind.CORRESPONDENT_DATA,
                          RouteKind.GROUP_TURN, RouteKind.ROOM_ADMIN_TURN})
 
 
@@ -1199,7 +1198,7 @@ def _owns_dm_session_key(session_key: Optional[str], chat_id: Any,
 # harness (`_mode_reply`, `_prefs_reply`, `_files_reply`, `_pending_set` …).
 from surfaces.telegram.status_ops import (  # noqa: E402,F401
     _STATUS_HEALTH_LIMIT, _cwd_reply, _goals_reply, _health_header, _missed_reply,
-    _mode_reply, _pause_line, _pause_reply, _recap_reply, _seat_via, _status_reply,
+    _mode_reply, _pause_line, _pause_reply, _seat_via, _status_reply,
 )
 from surfaces.telegram.prefs_ops import (  # noqa: E402,F401
     _config_reply, _is_configured_source, _prefs_home, _prefs_reply,
@@ -1305,10 +1304,10 @@ def _runs_in_background(cmd: str, result: InboundResult) -> bool:
     owner's tap). Only with a `go` word: the bare form is a quote and answers
     inline. A card confirm re-enters here with the line the card carries, so
     it follows the same rule. Also `/avatar set`, which fetches an image (or
-    an NFT's metadata) off the box."""
+    an NFT's metadata) off the box, and `/avatar push`, which calls each platform."""
     words = (result.inbound.text or "").split()
     if cmd == "/avatar":  # `/avatar set <url|nft:…>` fetches over the network
-        return len(words) > 1 and words[1].lower() == "set"
+        return len(words) > 1 and words[1].lower() in ("set", "push")
     from core.verbs import background_word
     if not background_word(cmd):
         return False
@@ -1377,7 +1376,10 @@ async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver
             card_ops.record_out(task_agent, result, cmd, text)   # 079 R5
             if text:
                 try:
-                    await deliver(text)
+                    # A card's own deliver stores the whole result, then compacts.
+                    from core.surfaces.money_report import owner_view
+                    await deliver(text if getattr(deliver, "stores_result", False)
+                                  else owner_view(text))
                 except Exception as e:   # TG12: the result must not vanish
                     _record_undelivered_reply(result.inbound.identity.user_id, cmd,
                                               str(text), e)
@@ -1389,10 +1391,9 @@ async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver
         # not held by the autonomous ceiling, so there is nothing to approve.
         if cmd == "/avatar":
             return "⏳ Fetching the image — I will send the result here."
+        from core.surfaces.card_list import started_line
         from core.verbs import background_word
-        what = background_word(cmd) or "Bridge"
-        return (f"⏳ {what} started — I will send the result here "
-                f"(it can take up to two minutes to confirm).")
+        return started_line(cmd, result.inbound.text, background_word(cmd) or "Bridge")
     if cmd == "/cards":
         # Owner-gated inside; a confirm re-enters this function with the line
         # the card carries, so it meets every gate above and below again.
@@ -1683,7 +1684,7 @@ async def _act_on_inbound_locked(
         await _start_task_session(task_agent, result, spawn, deliver, fetch_media)
         return None
 
-    # TASK_AGENT and CHAT_FASTPATH (MVP) -> start/continue a task session.
+    # TASK_AGENT -> start/continue a task session.
     await _start_task_session(task_agent, result, spawn, deliver, fetch_media)
     return None
 

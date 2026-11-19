@@ -7,13 +7,9 @@ what bot.db actually recorded). `polyrob update` prints the schema line too.
 import sqlite3
 from pathlib import Path
 
-from cli.commands.doctor import (
-    doctor_report,
-    playwright_line,
-    python_version_line,
-    schema_status_line,
-    server_extra_line,
-)
+from cli.commands.doctor import doctor_report, python_version_line, schema_status_line
+# 120 W8: the builders that name no credential live in the core health slot.
+from core.health_slot import playwright_line, server_extra_line
 
 
 # ---------------------------------------------------------------------------

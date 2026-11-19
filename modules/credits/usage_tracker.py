@@ -23,7 +23,6 @@ INTEGRATION:
 from collections import OrderedDict
 from dataclasses import dataclass, asdict
 from typing import Optional, Dict, Any
-import math
 import uuid
 import json
 import logging
@@ -490,16 +489,9 @@ class LLMUsageTracker:
         # Calculate API cost via the single billing entry point (G-24).
         api_cost_usd = compute_llm_cost(model, tokens, provider)
 
-        # Convert to credits with markup
-        credits_raw = (api_cost_usd / self.CREDIT_VALUE_USD) * self.MARKUP
-
-        # ALWAYS round UP to ensure we never charge less than API cost
-        # Using math.ceil() instead of int(x + 0.5) which was incorrectly rounding DOWN
-        # for values like 2.42 → int(2.92) = 2, losing money!
-        credits_charged = max(self.MIN_CREDIT_CHARGE, math.ceil(credits_raw))
-
-        # Calculate what user actually pays
-        user_cost_usd = credits_charged * self.CREDIT_VALUE_USD
+        # The one conversion (decimal, rounds up, never below the minimum charge).
+        credits_charged, credits_raw, user_cost_usd = _pricing_config.credits_for_api_cost(
+            api_cost_usd, self.MARKUP)
 
         return CostBreakdown(
             api_cost_usd=api_cost_usd,
@@ -528,14 +520,14 @@ class LLMUsageTracker:
             return costs
         if api_cost_usd != api_cost_usd or api_cost_usd < 0:   # NaN / negative
             return costs
-        credits_raw = (api_cost_usd / LLMUsageTracker.CREDIT_VALUE_USD) * costs.markup_multiplier
-        credits_charged = max(LLMUsageTracker.MIN_CREDIT_CHARGE, math.ceil(credits_raw))
+        credits_charged, credits_raw, user_cost_usd = _pricing_config.credits_for_api_cost(
+            api_cost_usd, costs.markup_multiplier)
         return CostBreakdown(
             api_cost_usd=api_cost_usd,
             markup_multiplier=costs.markup_multiplier,
             credits_raw=credits_raw,
             credits_charged=credits_charged,
-            user_cost_usd=credits_charged * LLMUsageTracker.CREDIT_VALUE_USD,
+            user_cost_usd=user_cost_usd,
         )
 
     def _generate_request_id(self) -> str:

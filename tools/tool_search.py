@@ -22,6 +22,7 @@ Hard lines (all inherited from the rig — see the dynamic-tool-rig handoff):
 Rides ``TOOL_PROGRESSIVE_DISCLOSURE`` — registered where ``load_tool`` is.
 """
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -77,6 +78,10 @@ def _builtin_description(display: str) -> str:
 
 # --- ranking (deterministic, no LLM / embeddings) ----------------------------
 
+#: A query word shorter than this matches a whole word, never a part of one.
+_SUBSTRING_MIN = 3
+_WORD_SPLIT = re.compile(r"[^a-z0-9]+")
+
 def _score(query: str, tokens: List[str], hay_id: str, hay_desc: str) -> int:
     qid, ddesc = hay_id.lower(), hay_desc.lower()
     score = 0
@@ -85,7 +90,14 @@ def _score(query: str, tokens: List[str], hay_id: str, hay_desc: str) -> int:
     if query and qid.startswith(query):
         score += 200
     for tok in tokens:
-        if tok in qid:
+        if len(tok) < _SUBSTRING_MIN:
+            # A one- or two-letter word ("x") is a part of nearly every description:
+            # it matches a whole word only (prod 2026-11-17: 'x profile' → 64 matches).
+            if tok in _WORD_SPLIT.split(qid):
+                score += 50
+            elif tok in _WORD_SPLIT.split(ddesc):
+                score += 10
+        elif tok in qid:
             score += 50
         elif tok in ddesc:
             score += 10
@@ -168,6 +180,50 @@ def _hit_line(h: ToolHit) -> str:
     return f"- {h.id} ({loc}): {h.description} {tag}".rstrip()
 
 
+#: Pack rows one fallback lists.
+_PACK_ROWS = 5
+
+
+def _pack_state(pack_id: str) -> str:
+    """What this process holds of one indexed pack (``core.packs.state``)."""
+    from core.packs import state
+    rec = state.record(pack_id)
+    if rec is None:
+        return f"not installed — the owner installs it (polyrob pack install {pack_id})"
+    if rec.status == state.DISABLED:
+        return "installed, not enabled — the owner enables it (POLYROB_PACKS)"
+    if rec.status == state.REFUSED:
+        return f"refused here: {rec.reason or 'no reason recorded'}"
+    return rec.status
+
+
+def pack_index_lines(query: str) -> List[str]:
+    """120 W6: when no installed tool matches, the curated pack index
+    (``core.packs.index.search``, a local file, no network) names a pack that would
+    bring one, with its state here. The agent installs nothing. An index or kill
+    list that cannot be read is named, never shown as "no pack"."""
+    q = (query or "").strip()
+    if not q:
+        return []
+    try:
+        from core.packs import index
+        rows = index.search(q, strict=True)
+        if not rows:  # several words: a row that matches any one of them
+            seen: Dict[str, dict] = {}
+            for word in q.split():
+                for r in index.search(word, strict=True):
+                    seen.setdefault(r["id"], r)
+            rows = list(seen.values())
+        lines = [f"- pack {index.row_line(r)} [{_pack_state(r['id'])}]"
+                 for r in rows[:_PACK_ROWS]]
+    except Exception as exc:  # noqa: BLE001
+        return [f"The pack index could not be read ({type(exc).__name__})."]
+    if not lines:
+        return [f"No pack in the index matches '{q}'."]
+    more = f" (showing {_PACK_ROWS} of {len(rows)})" if len(rows) > _PACK_ROWS else ""
+    return [f"The pack index{more}:", *lines]
+
+
 async def perform_tool_search(controller, query: str, limit: int = 8,
                               execution_context=None):
     """The ``tool_search`` action. Read-only; safe for leaves (shows honest
@@ -181,11 +237,12 @@ async def perform_tool_search(controller, query: str, limit: int = 8,
                       mcp_tools=_mcp_metadata(controller), limit=limit,
                       seat_denies=seat_probe(controller))
     if not sr.results:
+        packs = pack_index_lines(query)
         return ActionResult(
-            extracted_content=(
+            extracted_content="\n".join([
                 f"tool_search('{query}'): no matching tools. Browse the "
                 "<tool-catalog> for built-ins, or load_tool('mcp') to connect "
-                "MCP servers and discover their tools."),
+                "MCP servers and discover their tools.", *packs]),
             include_in_memory=True)
     lines = [f"tool_search('{query}') — {sr.total_matched} match(es):"]
     lines += [_hit_line(h) for h in sr.results]

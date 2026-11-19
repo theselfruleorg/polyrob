@@ -181,6 +181,10 @@ tier, and filter `--json` too; no match prints `no flags match …` and exits 0.
 A bare `--flags` shows only the public tier and the flags you set; `--all`
 shows the rest.
 
+The `--full` install checks that name no credential (extras, packs, browser,
+database schema, data home, Docker sandbox) are also what the agent reads with
+`agent_status(view="health")`; the credential lines are yours only.
+
 `--json` emits the TYPED snapshot (every section with its `state` / `reason` /
 `data`, plus the ranked health items) alongside the rendered prose, and honours
 `--full` — without it the `report` field is the one-line pointer, not the
@@ -256,6 +260,9 @@ polyrob model                              # the picker (provider, then model)
 polyrob model list                         # models + which provider keys are present
 polyrob model set-default                  # the same picker
 polyrob model set-default anthropic <model>
+polyrob model heavy <name>                 # the model for hard work (`reset` clears it)
+polyrob model light <name>                 # the model for bulk reads and summaries
+polyrob model choice free|listed           # which models the agent may select itself
 ```
 
 ### `polyrob update`
@@ -466,11 +473,17 @@ stops before it finished names the reason in its record, the CLI and the status.
 
 The agent has the same verbs as tools when `cronjob` is in its tool set:
 `cronjob_schedule`, `cronjob_list`, `cronjob_show` (the full task — `list`
-truncates it), `cronjob_edit` and `cronjob_cancel`. `cronjob_edit` patches a
+truncates it; `runs=N` adds the last N outcomes), `cronjob_edit`, `cronjob_pause`,
+`cronjob_resume` and `cronjob_cancel`. The agent resumes a job it paused itself.
+A job the failure limit paused resumes only when you ask in chat; a job you
+paused resumes only with `/job resume`. `cronjob_edit` patches a
 live job in place: it replaces one exact passage of the task (the passage must
 occur once) and can change the schedule, cap, rig, delivery or pinned skills.
 It never rewrites the whole task, so rules elsewhere in the task survive the
 edit.
+
+A job the agent schedules always runs the agent, unless it names a script or one
+read: the agent cannot schedule a job that does nothing.
 
 **A script job.** A job can run a file the agent wrote, with no model call:
 `script: {"path": "jobs/collect.py", "args": [], "timeout_s": 120}`. The file is a
@@ -869,7 +882,9 @@ The instance's identity, in three subgroups:
 The avatar is one image the instance shows on every surface; a new instance
 shows the polyrob mark until you set your own. `set` takes a file,
 a URL, or an NFT (its metadata `image`); `push` sends it to X, Telegram (the bot,
-or a group with `--telegram-chat`) or Discord.
+or a group with `--telegram-chat`, which alone changes that group's photo only) or Discord. With no account named, it updates
+each account that has credentials. `/avatar push` in the chat does the same, and you can ask the agent
+to do it ("set this as your avatar and push it").
 POLYROB generates no faces. `polyrob soul`, `polyrob persona` and
 `polyrob avatar` reach the same three groups directly.
 

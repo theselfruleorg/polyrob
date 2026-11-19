@@ -1,6 +1,6 @@
 {
   "function": {
-    "description": "Sell something: draft/edit an offer, record its resources and a test, see offers and orders, pause one, and put the setup budget or go-live to the owner as ONE card each. Grants nothing itself.",
+    "description": "Sell something: draft/edit an offer, record its resources and a test, see offers, orders, the sales report and the announcement threads, pause one, and put the setup budget or go-live to the owner as ONE card each. Grants nothing itself.",
     "name": "offer_manage",
     "parameters": {
       "additionalProperties": false,
@@ -49,12 +49,12 @@
         },
         "offer_id": {
           "default": null,
-          "description": "The offer id (all ops but draft/status).",
+          "description": "The offer id (all ops but draft; optional for status, orders, report, threads).",
           "nullable": true,
           "type": "string"
         },
         "op": {
-          "description": "One of: draft, resource, test, propose_setup, propose_live, pause, status, orders, announce",
+          "description": "One of: draft, resource, test, propose_setup, propose_live, pause, status, orders, report, threads, announce",
           "type": "string"
         },
         "post_id": {

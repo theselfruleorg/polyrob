@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 from core.status_types import HealthItem, SEVERITY_WARN, Section
 
@@ -111,7 +111,47 @@ def _security_section(user_id: str, data_dir: str, now: float,
     return sec
 
 
-def _identity_section(instance_id: str, data_dir: Optional[str]) -> Section:
+def _bot_handle_lines(sec: Section, container: Any = None) -> None:
+    """Append one ``<surface> bot:`` line per configured chat bot (120 W7; the
+    surfaces with the ``bot_handle`` capability in ``core/surfaces/catalog.py``): the
+    handle the RUNNING bot read at start (``MessageRouter.bot_username``), else
+    ``TELEGRAM_BOT_USERNAME``, else "not known in this process". Env presence
+    only — never a token value. A bot with no token and no live handle prints
+    nothing: it is not configured."""
+    from core.surfaces.catalog import capability_ids, get as _spec
+    router = None
+    try:
+        get_service = getattr(container, "get_service", None)
+        router = get_service("message_router") if callable(get_service) else None
+    except Exception:  # noqa: BLE001 — a missing bus reads as "not in this process"
+        router = None
+    handles: dict = {}
+    for sid in capability_ids("bot_handle"):
+        live = None
+        try:
+            live = router.bot_username(sid) if router is not None else None
+        except Exception:  # noqa: BLE001
+            live = None
+        live = str(live or "").strip().lstrip("@") or None
+        env = (os.environ.get("TELEGRAM_BOT_USERNAME") or "").strip().lstrip("@") \
+            if sid == "telegram" else ""
+        spec = _spec(sid)
+        token_env = getattr(spec, "token_env", None) if spec else None
+        has_token = bool(token_env and (os.environ.get(token_env) or "").strip())
+        handles[sid] = live or env or None
+        if live:
+            sec.lines.append(f"{sid} bot: @{live} (read from the running bot)")
+        elif env:
+            sec.lines.append(f"{sid} bot: @{env} (from TELEGRAM_BOT_USERNAME; this process "
+                             "does not run the bot)")
+        elif has_token:
+            sec.lines.append(f"{sid} bot: {token_env} is set; the handle is not known in "
+                             "this process (the running bot reads it at start)")
+    sec.data["bot_handles"] = handles
+
+
+def _identity_section(instance_id: str, data_dir: Optional[str],
+                      container: Any = None) -> Section:
     """WHO the agent is: its instance, on-chain identity, reach and avatar image.
 
     The avatar is ONE image slot (``core.avatar``): set (and from where), not
@@ -200,6 +240,7 @@ def _identity_section(instance_id: str, data_dir: Optional[str]) -> Section:
     # Env PRESENCE only, never a value; the X browser-session record lives in
     # the tools tier and is checked by the agent's own `x_login_check` verb.
     _identity_reach_lines(sec, data_dir)
+    _bot_handle_lines(sec, container)
 
     st = load_avatar(data_dir, instance_id)
     sec.data["avatar"] = st.state

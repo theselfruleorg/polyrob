@@ -394,3 +394,19 @@ def test_a_price_or_a_count_with_402_is_not_credit_death(text):
 def test_a_402_status_is_credit_death(text):
     from core.credit_sentinel import looks_like_credit_death
     assert looks_like_credit_death(text)
+
+
+def test_the_pause_notice_goes_to_the_owner_not_the_run_tenant(data_dir, monkeypatch):
+    """088 R2: the provider account is the operator's. An API user whose run met the
+    dead provider cannot top it up and must not read a server path."""
+    import core.credit_sentinel as cs
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "owner-1")
+    sent = []
+
+    async def _fake_deliver(container, user_id, text, **kw):
+        sent.append(user_id)
+        return "sent"
+
+    monkeypatch.setattr("core.surfaces.user_delivery.deliver_user_message", _fake_deliver)
+    asyncio.run(cs.trip_credit_sentinel("openrouter 402", container=object(), user_id="tenant-9"))
+    assert sent == ["owner-1"]

@@ -192,7 +192,8 @@ async def _notify(tool, execution_context, notice, *, settled: bool) -> None:
             getattr(tool, "container", None),
             getattr(execution_context, "user_id", None), notice,
             settled=settled,
-            session_id=getattr(execution_context, "session_id", None))
+            session_id=getattr(execution_context, "session_id", None),
+            seat_reports=tx_notify.seat_reports(execution_context))
     except Exception:
         logger.debug("bridge: owner notice skipped (fail-open)", exc_info=True)
 

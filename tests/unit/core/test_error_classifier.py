@@ -42,8 +42,15 @@ def test_non_llm_error_with_402_in_text_is_not_credit_death():
     assert credit_death_in_chain(ValueError("GET /v1/items/402 returned 500")) is None
 
 
-def test_insufficient_credits_is_in_the_family():
-    assert credit_death_in_chain(InsufficientCreditsError("u", 5, 1)) is not None
+def test_an_account_credit_refusal_is_never_provider_credit_death():
+    """One tenant's balance on our ledger says nothing of the provider's account
+    (088 R2): no latch, no pause for other tenants, no provider failover."""
+    err = InsufficientCreditsError("u", 402, 1)
+    assert credit_death_in_chain(err) is None
+    assert classify_text(f"Session failed: {err}") is FailoverReason.UNKNOWN
+    custom = InsufficientCreditsError("u", 5, 1, message="payment required: add credits")
+    assert str(custom).startswith(InsufficientCreditsError.MARKER)
+    assert classify_text(str(custom)) is FailoverReason.UNKNOWN
 
 
 def test_classify_text_credit_death_and_exhaustion():

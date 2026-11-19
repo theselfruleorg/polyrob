@@ -12,8 +12,8 @@ This mixin renders, at EVERY step boundary, the ``live_health`` part of the
 ``/status`` shows (``core/status_snapshot.py`` → ``render_agent_health_note``);
 it is pushed only when it changed. Cheap path: no
 money section, no network reads — a few read-only sqlite queries. Sub-agents
-are excluded (a focused leaf never needs tenant-wide health). Gated
-``LIVE_HEALTH_CONTEXT`` (default ON); fail-open — a builder error injects an
+are excluded (a focused leaf never needs tenant-wide health). Fail-open — a
+builder error injects an
 honest one-line "health unavailable" note rather than nothing, because
 "nothing" is what confabulation grows from.
 """
@@ -100,18 +100,15 @@ def _operations_injected(agent) -> bool:
 def live_health_injected(agent) -> bool:
     """095 W3: does this agent get a ``<live-health>`` note each turn? The ONE
     predicate the injector and the ``<environment>`` sentence share: a main
-    agent, not a public room (044 T4), not correspondent-facing (H16), and
-    ``LIVE_HEALTH_CONTEXT`` on. Fail-closed."""
+    agent, not a public room (044 T4), not correspondent-facing (H16).
+    Fail-closed."""
     try:
         if getattr(agent, "_is_sub_agent", False) or getattr(agent, "_role", None) == "leaf":
             return False
         from core.surfaces.room_policy import is_public_session
         from agents.task.session_class import correspondent_facing
         orch = getattr(agent, "orchestrator", None)
-        if is_public_session(orch) or correspondent_facing(orch):
-            return False
-        from core.config_policy import AutonomyConfig
-        return bool(AutonomyConfig.live_health_context())
+        return not (is_public_session(orch) or correspondent_facing(orch))
     except Exception:
         return False
 

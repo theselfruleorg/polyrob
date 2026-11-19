@@ -298,7 +298,7 @@ def _health_lines(user_id: str, data_dir: Optional[str], snap=None) -> List[str]
         snap = _snap(snap, user_id, data_dir)
         # The same number of health items as a chat /status (one constant).
         from core.status_render import SEAT_HEALTH_LIMIT
-        out = render_health_lines(snap, prefix="• ", limit=SEAT_HEALTH_LIMIT)
+        out = render_health_lines(snap, prefix="• ", limit=SEAT_HEALTH_LIMIT, brief=True)
         # 080 WS-4: what runs next, by name — the snapshot's ONE Next list.
         nxt = [ln for ln in (snap.sections["loops"].lines or []) if ln.startswith("next: ")]
         if snap.sections["loops"].available and nxt:

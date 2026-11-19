@@ -94,7 +94,7 @@
     },
     {
       "name": "agent_status",
-      "sha": "a537b675a8de"
+      "sha": "725cbda37187"
     },
     {
       "name": "insights",
@@ -106,7 +106,7 @@
     },
     {
       "name": "message",
-      "sha": "a477faab6c1f"
+      "sha": "dce9fd246f75"
     },
     {
       "name": "tool_call",
@@ -114,7 +114,7 @@
     },
     {
       "name": "agent_avatar",
-      "sha": "414a85c0b80e"
+      "sha": "91568f31a436"
     },
     {
       "name": "autonomy_control",
@@ -122,19 +122,19 @@
     },
     {
       "name": "cards_read",
-      "sha": "1a33b0223606"
+      "sha": "d3e2cf4ed61d"
     },
     {
       "name": "contact_history",
-      "sha": "cd5b9107df8e"
+      "sha": "f90902ed784f"
     },
     {
       "name": "delegate_task",
-      "sha": "24cec158d9c4"
+      "sha": "760269be1b7b"
     },
     {
       "name": "offer_manage",
-      "sha": "8f2695997d09"
+      "sha": "8c45ad365088"
     },
     {
       "name": "order_deliver",
@@ -150,7 +150,7 @@
     },
     {
       "name": "preferences",
-      "sha": "e30f13a6a673"
+      "sha": "9eb67cde0ad8"
     },
     {
       "name": "propose_action",
@@ -158,11 +158,11 @@
     },
     {
       "name": "room_moderate",
-      "sha": "47c4b36dfcef"
+      "sha": "687bb391d42f"
     },
     {
       "name": "room_read",
-      "sha": "9af7efe8d3e0"
+      "sha": "e50a3c2a5d27"
     },
     {
       "name": "self_context_manage",
@@ -341,6 +341,10 @@
       "sha": "6485d421e4e2"
     },
     {
+      "name": "delegation_status",
+      "sha": "1f3b46e4bd0a"
+    },
+    {
       "name": "knowledge_kb_ingest",
       "sha": "fb8723dcbbcf"
     },
@@ -358,7 +362,11 @@
     },
     {
       "name": "propose_setting",
-      "sha": "fc030760ca08"
+      "sha": "4b6e4ba7fb15"
+    },
+    {
+      "name": "usage_summary",
+      "sha": "f91f10890aeb"
     },
     {
       "name": "x402_invoice_accounting",
@@ -366,11 +374,11 @@
     },
     {
       "name": "x402_invoice_x402_invoices",
-      "sha": "a0cd60f5555e"
+      "sha": "e47a0cd8c9ff"
     },
     {
       "name": "x402_invoice_x402_request",
-      "sha": "0c3d5c9d1e7e"
+      "sha": "11467329d315"
     }
   ]
 }

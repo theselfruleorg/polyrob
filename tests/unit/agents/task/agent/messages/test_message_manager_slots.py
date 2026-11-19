@@ -66,7 +66,7 @@ def test_the_attributes_the_mixins_assign_are_declared(mm: MessageManager):
 
     for name in (
         "_environment_message", "_environment_tokens", "_ephemeral_pending",
-        "_history_budget_tokens", "_history_secret_scrub", "_hmem_token_memo",
+        "_history_budget_tokens", "_hmem_token_memo",
         "_persona_block", "_surface_profile", "_tool_catalog_source",
         "_tool_schema_tokens", "_verbosity", "tool_ids",
         # F6 added these in the same wave.

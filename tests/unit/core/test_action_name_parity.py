@@ -50,6 +50,9 @@ _DIRECT_ACTION_MODULES = (
     "tools/controller/setting_actions.py",  # 093 D1: propose_setting
     "tools/controller/offer_actions.py",  # 099: offer_manage / order_deliver
     "tools/controller/worker_manage_action.py",  # 041 phase 2: gated direct action
+    "tools/controller/delegation_status_action.py",  # 120 W2: delegation_status
+    "tools/controller/usage_summary_action.py",  # 120 W3: usage_summary (extracted)
+    "tools/controller/contact_history_action.py",  # 120 W5: contact_history (extracted)
 )
 
 

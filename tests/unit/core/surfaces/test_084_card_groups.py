@@ -243,3 +243,52 @@ def test_a_cancel_in_a_group_still_open_is_in_the_outcomes_block(st):
     assert "Still waiting on the owner: 1" in text
     assert f"- {cancelled.line} → DISMISSED (card {cancelled.card_id})" in text
     assert G.groups(st).get(cancelled.group_id)["state"] == G.G_OPEN   # still waits
+
+
+TX = "0x" + "c4" * 32
+RECEIPT = ("amount: $24.00 = 23.9885 tokens at $1.00 each (spend-grade price, read now)\n"
+           "transfer 23.9885 \"USDG\" -> 0x" + "cd" * 20 + "\n"
+           "  guard: authorized\n"
+           "  RESULT: SENT AND CONFIRMED\n"
+           f"  tx: {TX}\n"
+           "  block: 117177298\n"
+           "  caps:  per transaction $6,000.00")
+
+
+def test_the_outcomes_carry_the_tx_of_a_send_that_landed(st):
+    """Prod 2026-11-18: the wake showed the FIRST line of the receipt (the amount)
+    and no tx; the agent wrote "hash truncated in receipt", then a wrong hash."""
+    q = _quote_of(_propose(st))
+    _confirm(q, RECEIPT)
+    text = G.render_outcomes(U, q.group_id, st=st)
+    assert f"→ DONE: RESULT: SENT AND CONFIRMED · tx: {TX} · block: 117177298" in text
+    assert "amount: $24.00" not in text
+
+
+def test_the_agents_card_read_carries_the_tx(st):
+    from core.surfaces.card_list import agent_view
+    q = _quote_of(_propose(st))
+    _confirm(q, RECEIPT)
+    line = next(ln for ln in agent_view(U, st=st).splitlines() if q.card_id in ln)
+    assert f"RESULT: SENT AND CONFIRMED · tx: {TX} · block: 117177298" in line
+
+
+def test_a_result_with_no_receipt_keeps_its_first_line(st):
+    assert G.receipt_facts("") == "" and G.receipt_facts("No result") == ""
+    q = _quote_of(_propose(st))
+    _confirm(q, "❌ Nothing was sent. VALUE NOT VERIFIED")
+    assert "→ FAILED: ❌ Nothing was sent." in G.render_outcomes(U, q.group_id, st=st)
+
+
+def test_many_cards_never_cut_a_hash(st):
+    """Twenty paid cards do not fit: the ones shown are whole, the rest are counted."""
+    qs = []
+    for _ in range(20):
+        qs.append(_quote_of(_propose(st)))
+    for q in qs:
+        _confirm(q, RECEIPT)
+    text = G.render_outcomes(U, qs[0].group_id, st=st)
+    assert len(text) <= G.OUTCOMES_MAX_CHARS
+    shown = [ln for ln in text.splitlines() if "→ DONE" in ln]
+    assert shown and all(TX in ln and ln.endswith(")") for ln in shown)
+    assert f"and {20 - len(shown)} more card(s)" in text and "cards_read" in text

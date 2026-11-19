@@ -139,6 +139,47 @@ def clear_default(user_id, home_dir=None) -> Tuple[bool, str]:
     return _update(user_id, home_dir, lambda d: d.pop("default", None))
 
 
+def set_choice(user_id, mode: str, home_dir=None) -> Tuple[bool, str]:
+    """121: the owner's switch for a model the AGENT names — ``free`` or ``listed``
+    (``core.model_choice``)."""
+    from core.model_choice import CHOICE_MODES
+    mode = str(mode or "").strip().lower()
+    if mode not in CHOICE_MODES:
+        return False, "choice is free or listed"
+
+    def _fn(d):
+        d["choice"] = mode
+    return _update(user_id, home_dir, _fn)
+
+
+OWNER_TIERS = ("heavy", "light")
+
+
+def owner_tier(user_id: Optional[str], tier: str, home_dir=None) -> Optional[Dict]:
+    """121: the owner's own ``heavy`` or ``light`` model — ``{"provider", "model", …}`` — or
+    None (not set, no user, unreadable)."""
+    if not user_id or tier not in OWNER_TIERS:
+        return None
+    row = (load(user_id, home_dir)[0].get("tiers") or {}).get(tier)
+    return row if isinstance(row, dict) and row.get("model") else None
+
+
+def set_tier(user_id, tier: str, provider: Optional[str], model: Optional[str],
+             home_dir=None) -> Tuple[bool, str]:
+    """Set the owner's ``heavy`` or ``light`` model; ``model=None`` clears it."""
+    if tier not in OWNER_TIERS:
+        return False, "the setting is heavy or light"
+
+    def _fn(d):
+        table = d.get("tiers") if isinstance(d.get("tiers"), dict) else {}
+        if model:
+            table[tier] = {"provider": provider, "model": model, "set_at": int(time.time())}
+        else:
+            table.pop(tier, None)
+        d["tiers"] = table
+    return _update(user_id, home_dir, _fn)
+
+
 def aliases_read(user_id: Optional[str], home_dir=None) -> Tuple[Dict[str, str], str]:
     """The owner's aliases and the read error ('' when the store was read)."""
     data, err = load(user_id, home_dir)

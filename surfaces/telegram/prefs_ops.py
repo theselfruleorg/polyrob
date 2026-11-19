@@ -116,10 +116,14 @@ def _config_reply(user_id: str, data_dir: str, instance_id: str, args: list) -> 
         return _prefs_reply(user_id, data_dir, instance_id, full=True)
     if cmd.verb in ("get", "explain"):
         return _config_read(user_id, cmd.verb, [cmd.key])
-    if cmd.verb == "search":
-        return _config_search(user_id, cmd.query)
-    if cmd.verb == "check":
-        return _config_check(user_id)
+    if cmd.verb in ("search", "check"):
+        # 120 W6: the ONE chat text (core.config_service), which the agent prints too.
+        from core import config_service
+        from core.runtime_paths import prefs_home_dir
+        if cmd.verb == "check":
+            return config_service.check_reply(user_id=user_id, home_dir=prefs_home_dir())
+        return config_service.search_reply(cmd.query, user_id=user_id,
+                                           home_dir=prefs_home_dir())
     if cmd.verb == "unset":
         return f"❌ {unset_value(cmd.key, surface='telegram').message}"
     key, value = cmd.key, cmd.value
@@ -147,42 +151,6 @@ def _config_reply(user_id: str, data_dir: str, instance_id: str, args: list) -> 
     # are the part of the answer the owner cannot see any other way.
     notes = "".join(f"\n{n}" for n in (getattr(res, "notes", None) or ()))
     return f"✅ Set {key} = {value}{applies}.{notes}"
-
-
-#: Rows one chat `/config search` lists.
-_SEARCH_ROWS = 15
-
-
-def _config_search(user_id: str, query: str) -> str:
-    """`/config search <words>` — keys across preferences and flags, through
-    the ONE search (``core.config_service.search``). Secrets arrive masked."""
-    from core import config_service
-    from core.runtime_paths import prefs_home_dir
-    try:
-        hits = config_service.search(query, user_id=user_id, home_dir=prefs_home_dir(),
-                                     limit=_SEARCH_ROWS)
-    except Exception as exc:  # noqa: BLE001 — an unread setting is not "no match"
-        return f"I could not search the settings ({type(exc).__name__}: {str(exc)[:120]})."
-    if not hits:
-        return f"No setting matches '{query}'."
-    lines = [f"{len(hits)} setting(s) match '{query}':"]
-    lines += [f"• {i.key} = {i.effective} ({i.source})" for i in hits]
-    lines.append("One in full: /config explain <key>")
-    return "\n".join(lines)
-
-
-def _config_check(user_id: str) -> str:
-    """`/config check` — the ONE check (``core.config_service.check_findings``)."""
-    from core.config_service import check_findings
-    from core.runtime_paths import prefs_home_dir
-    try:
-        findings = check_findings(user_id=user_id, home_dir=prefs_home_dir())
-    except Exception as exc:  # noqa: BLE001 — a check that did not run is not "no issues"
-        return f"I could not run the check ({type(exc).__name__}: {str(exc)[:120]})."
-    if not findings:
-        return "Config check: no issues found."
-    return "\n".join([f"Config check: {len(findings)} finding(s):"]
-                     + [f"• {f}" for f in findings])
 
 
 def _config_read(user_id: str, sub: str, rest: list) -> str:

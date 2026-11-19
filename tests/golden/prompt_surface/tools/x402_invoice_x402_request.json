@@ -12,7 +12,7 @@
         },
         "asset_id": {
           "default": null,
-          "description": "Which token this invoice is payable in (see `polyrob wallet asset list`). Unset = the chain's canonical USDC. An unknown id is REFUSED with the known ids, never swapped for another asset.",
+          "description": "Which token this invoice is payable in (see x402_invoice_x402_invoices with assets=true). Unset = the chain's canonical USDC. An unknown id is REFUSED with the known ids, never swapped for another asset.",
           "nullable": true,
           "type": "string"
         },

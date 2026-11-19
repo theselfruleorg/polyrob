@@ -529,21 +529,46 @@ def tail(container: Any, surface: str, chat_id: str, n: int) -> str:
     return "\n".join(lines)
 
 
-def mute(container: Any, owner_uid: str, surface: str, chat_id: str, duration: str) -> str:
+#: 120 W5: the longest silence the AGENT sets on itself (``room_moderate`` action
+#: ``silence``). The owner's ``/mute`` takes no cap; the agent's silence is renewed,
+#: never set for days on one call.
+AGENT_SILENCE_MAX_SEC = 24 * 3600
+
+
+def mute(container: Any, owner_uid: str, surface: str, chat_id: str, duration: str, *,
+         max_seconds: Optional[int] = None, extend_only: bool = False) -> str:
     """Set ``chat.mute_until`` = now + *duration* (e.g. ``30m``/``2h``/``1d``) —
-    the room stays in ``listen`` (owner/admin-addressed only) until it expires."""
+    the room stays in ``listen`` (owner/admin-addressed only) until it expires.
+
+    120 W5, the agent's silence: *max_seconds* clamps the duration, and
+    *extend_only* never moves an existing silence EARLIER (only the owner lifts a
+    silence early), and refuses when the room's settings file cannot be read."""
     chat_id = _norm_chat_id(chat_id)
     from core.surfaces import chat_policy
     secs = _parse_duration_seconds(duration)
     if secs is None:
         return f"bad duration {duration!r} (use e.g. 30m, 2h, 1d)"
+    shown = duration
+    if max_seconds and secs > max_seconds:
+        from core.surfaces.room_actions import format_duration
+        secs, shown = max_seconds, f"clamped to {format_duration(max_seconds)}"
     until = time.time() + secs
+    label = f"{surface}:{chat_id}"
+    if extend_only:
+        pol = chat_policy.load(_data_dir(container), owner_uid, surface, chat_id)
+        if getattr(pol, "unreadable", False):
+            return (f"❌ the settings file of {label} could not be read, so its silence "
+                    f"is UNKNOWN; nothing was changed.")
+        current = float(getattr(pol, "mute_until", 0) or 0)
+        if current >= until:
+            return (f"🔇 {label} is already silenced until "
+                    f"{time.strftime('%H:%M UTC', time.gmtime(current))}; nothing was changed.")
     ok, msg = chat_policy.set(_data_dir(container), owner_uid, surface, chat_id,
                               "chat.mute_until", until)
     if not ok:
         return f"❌ {msg}"
     until_str = time.strftime("%H:%M UTC", time.gmtime(until))
-    return f"🔇 {surface}:{chat_id} muted until {until_str} ({duration})."
+    return f"🔇 {label} muted until {until_str} ({shown})."
 
 
 #: Public name for the chat-id normalizer. ``cron/room_service.py`` (044 T20 —
@@ -551,6 +576,6 @@ def mute(container: Any, owner_uid: str, surface: str, chat_id: str, duration: s
 #: room this module does, alias and all.
 normalize_chat_id = _norm_chat_id
 
-__all__ = ["allow_here", "audit", "data_home", "deny_here", "is_room_allowed", "list_roles",
+__all__ = ["AGENT_SILENCE_MAX_SEC", "allow_here", "audit", "data_home", "deny_here", "is_room_allowed", "list_roles",
           "list_rooms", "mute", "normalize_chat_id", "room_ref", "room_role", "set_key",
           "set_mode", "set_role", "set_tools", "show_tools", "tail"]

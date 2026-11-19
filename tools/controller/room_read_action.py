@@ -30,6 +30,10 @@ tainted session cannot read it.
 this module — the registry introspects the closure's first-param annotation
 to route the validated param model.
 
+120 W5: `audit=true` reads who ran which `/admin` tool in the room
+(`core.surfaces.group_admin.audit`, the text `/groups audit` prints). Never on a
+room turn: who holds and uses the room's admin tools is the owner's read.
+
 ⚠️ Registered from `tools/controller/service.py`, NOT `action_registration.py`
 (that file sits at its size-ratchet ceiling); same escape hatch
 `avatar_action.py` established.
@@ -131,6 +135,10 @@ def register_room_read_action(controller) -> None:
             default=None,
             description=("Only lines newer than this many minutes. Omit for "
                          "the plain most-recent window."))
+        audit: bool = Field(
+            default=False,
+            description=("Instead of the lines: who ran which /admin tool in this "
+                         "room in the last 7 days (needs `room`; `limit` rows)."))
 
     @controller.registry.action(
         "Read what has been said in a group/channel room you are in: "
@@ -138,7 +146,7 @@ def register_room_read_action(controller) -> None:
         "newest last. Each line carries {uid=… msg=…} for room_moderate. "
         "Read-only — to reply, use message(surface='telegram', "
         "target=<chat_id>) or answer a mention in the room. Omit `room` to "
-        "list your rooms.",
+        "list your rooms; audit=true shows who ran its /admin tools.",
         param_model=RoomReadAction,
     )
     async def room_read(params: RoomReadAction, execution_context=None) -> ActionResult:
@@ -246,6 +254,19 @@ def register_room_read_action(controller) -> None:
 
         room = matches[0]
         limit = max(1, min(int(params.limit or 50), _MAX_LIMIT))
+        if params.audit:
+            from core.security.owner_turn import is_room_turn
+            if is_room_turn(execution_context):
+                return ActionResult(
+                    extracted_content=("room_read: the /admin audit is the owner's "
+                                       "read; a room turn never reads it."),
+                    include_in_memory=True)
+            from core.surfaces import group_admin
+            return ActionResult(
+                extracted_content=(f"{_title(room)}: " + group_admin.audit(
+                    getattr(controller, "container", None), room["surface"],
+                    room["chat_id"], limit)),
+                include_in_memory=True)
         since_ts = (time.time() - int(params.since_minutes) * 60
                     if params.since_minutes else None)
 

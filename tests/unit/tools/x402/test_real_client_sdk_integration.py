@@ -913,3 +913,30 @@ async def test_after_a_released_attempt_the_next_payment_pays(fake_transport, mo
         url="http://fake/paid", method="POST", body=None,
         signer=signer, network=NETWORK, max_amount_usd=0.1)
     assert res.paid is True and res.submission_ref
+
+
+@pytest.mark.asyncio
+async def test_a_json_body_is_sent_as_json_on_both_legs(fake_transport, monkeypatch):
+    """A paid JSON-RPC body (A2A message/send) goes out as application/json on the
+    unpaid discovery leg AND the paid retry: without the type the seller's framework
+    rejected it (422) after the payment settled (the level-1 interface rig, PX5)."""
+    seen = []
+    handler = fake_transport.handler
+
+    def recording(request):
+        seen.append(request.headers.get("content-type"))
+        return handler(request)
+    monkeypatch.setattr(fake_transport, "handler", recording)
+    client = RealX402Client()
+    res = await client.fetch_with_payment(expected_pay_to=PAY_TO,
+        url="http://fake/a2a/rpc", method="POST", body='{"jsonrpc": "2.0", "id": 1}',
+        signer=LocalEoaSigner(KEY), network=NETWORK, max_amount_usd=0.10,
+    )
+    assert res.paid is True
+    assert seen == ["application/json", "application/json"]
+
+
+def test_a_non_json_body_gets_no_type():
+    from tools.x402.real_client import body_headers
+    assert body_headers(b"plain words") == {}
+    assert body_headers(b'{"a": 1}') == {"Content-Type": "application/json"}

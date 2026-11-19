@@ -20,7 +20,9 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from tools.base_tool import BaseTool
-from tools.model_tier import TIER_FIELD_DESCRIPTION, WHY_FIELD_DESCRIPTION, tier_payload  # 112 W2
+from tools.model_tier import (MODEL_FIELD_DESCRIPTION, TIER_FIELD_DESCRIPTION,  # 112 W2 / 121
+                              WHY_FIELD_DESCRIPTION, model_payload, notify_model_change,
+                              tier_payload)
 from agents.task.loop_types.controller_types import ActionResult
 from cron.jobs import CronJobStore
 from core.cron_lanes import LaneStopped
@@ -109,9 +111,6 @@ class CronScheduleAction(BaseModel):
     deliver_target: Optional[str] = Field(default=None,
                                           description="Optional explicit recipient; ignored unless the "
                                                       "operator enabled CRON_DELIVERY_ALLOW_EXPLICIT_TARGET.")
-    wake_agent: bool = Field(default=True,
-                             description="If false, this tick runs without invoking the LLM "
-                                         "(a $0 no-op tick). Default true = normal agent run.")
     rig: Optional[str] = Field(default=None,
                                description="Optional named tool rig for this job's runs: "
                                            "'money_rail', 'social', 'research', 'ops', or 'full' "
@@ -123,6 +122,7 @@ class CronScheduleAction(BaseModel):
                                                    "when no rig fits. They win over the rig. A money "
                                                    "tool needs a rig or the owner's /job new.")
     tier: Optional[Literal["default", "heavy", "light"]] = Field(default=None, description=TIER_FIELD_DESCRIPTION)
+    model: Optional[str] = Field(default=None, max_length=120, description=MODEL_FIELD_DESCRIPTION)
     why: Optional[str] = Field(default=None, max_length=200, description=WHY_FIELD_DESCRIPTION)
     skills: Optional[List[str]] = Field(default=None,
                                         description="Optional skill ids this job's runs must load (its "
@@ -207,6 +207,18 @@ class CronRunNowAction(BaseModel):
 class CronShowAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
     job_id: str = Field(..., description="The id of the cron job to show in full.")
+    runs: int = Field(0, ge=0, le=20, description="Also list the job's last N run outcomes "
+                                                  "(0-20) from the run log. 0: none.")
+
+
+class CronPauseAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    job_id: str = Field(..., description="The id of the cron job to pause.")
+
+
+class CronResumeAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    job_id: str = Field(..., description="The id of the paused cron job to resume.")
 
 
 class CronEditAction(BaseModel):
@@ -239,6 +251,7 @@ class CronEditAction(BaseModel):
                                    description="New delivery sink ('telegram'|'email' to the owner, "
                                                "'twitter' = a PUBLIC X post), or 'none' to drop it.")
     tier: Optional[Literal["default", "heavy", "light"]] = Field(default=None, description=TIER_FIELD_DESCRIPTION)
+    model: Optional[str] = Field(default=None, max_length=120, description=MODEL_FIELD_DESCRIPTION)
     why: Optional[str] = Field(default=None, max_length=200, description=WHY_FIELD_DESCRIPTION)
     skills: Optional[List[str]] = Field(default=None,
                                         description="Replace the pinned skill ids ([] clears them).")
@@ -335,7 +348,10 @@ def _provider_line(payload: dict) -> str:
     if not pin:
         return "provider: (owner's seat)"
     model = payload.get("model")
-    line = f"provider: {pin}{' / ' + model if model else ''} (pinned)"
+    by = payload.get("model_by")
+    line = (f"provider: {pin}{' / ' + model if model else ''} (pinned"
+            + (f"; model set by the {by}" if model and by else "")
+            + (f": {payload['model_why']}" if model and payload.get("model_why") else "") + ")")
     try:
         import core.runtime_config as rc
         if rc._sentinel_active(pin):
@@ -518,6 +534,8 @@ def _x_gates_line(payload: Optional[dict], user_id: Optional[str] = None) -> str
     """What will really stop this job's X posts, read from the live gates, so the agent
     says it when it arms the job and never guesses a hold. '' for a job with no X tool."""
     p = dict(payload or {})
+    if p.get("read_verb"):
+        return ""          # a read job starts no model: it cannot post
     try:
         ids = set(resolve_cron_tools(p) or [])
     except Exception:
@@ -526,10 +544,11 @@ def _x_gates_line(payload: Optional[dict], user_id: Optional[str] = None) -> str
         return ""
     from core.env import int_env
     from core.security.owner_turn import is_owner_tenant
-    from tools.controller.approval import operator_denies_approvals
+    from tools.controller.approval import operator_deny_cause
     parts = []
-    if operator_denies_approvals():
-        parts.append("NOT POSTING: APPROVAL_PROVIDER=deny stops every post")
+    stop = operator_deny_cause()
+    if stop:
+        parts.append(f"NOT POSTING: {stop} stops every post")
     elif not is_owner_tenant(SimpleNamespace(user_id=user_id)):
         parts.append("each post waits for the owner: this job is not the owner's")
     else:
@@ -559,6 +578,11 @@ def _tools_line(payload: Optional[dict]) -> str:
     """The tools this job's runs actually carry — the runner's own resolver
     (2026-10-14 review C-9: the agent told the owner a job "posts by itself"
     on a rig that had no posting tool). Fail-open to a named unknown."""
+    verb = dict(payload or {}).get("read_verb")
+    if verb:
+        name = verb.get("verb") if isinstance(verb, dict) else None
+        return (f"its runs carry no model and no tools: each run is the one read "
+                f"{name or '(unnamed)'} and its alert check")
     try:
         ids = resolve_cron_tools(dict(payload or {})) or []
     except Exception as exc:
@@ -667,8 +691,6 @@ class CronJobTool(BaseTool):
             payload["deliver"] = params.deliver  # validated by CronService.schedule
         if params.deliver_target:
             payload["deliver_target"] = params.deliver_target
-        if not params.wake_agent:
-            payload["wake_agent"] = False
         if params.rig:
             # 057 WS-A: validated here rather than on the model so an unknown
             # name is REFUSED with the valid list, not stored and silently
@@ -691,6 +713,12 @@ class CronJobTool(BaseTool):
         if _tier_err:
             return ActionResult(error=_tier_err, include_in_memory=True)
         payload.update(_tier)
+        _model, _model_err, _model_note, _model_notice = await model_payload(   # 121: any model, price-bounded
+            params.model, params.why, tier=params.tier, owner_turn=owner_turn,
+            user_id=self._user(execution_context))
+        if _model_err:
+            return ActionResult(error=_model_err, include_in_memory=True)
+        payload.update({k: v for k, v in _model.items() if v is not None})
         if params.tools:
             refusal = _job_tools_refusal(params.tools, owner_turn)
             if refusal:
@@ -784,7 +812,7 @@ class CronJobTool(BaseTool):
                                           self._user(execution_context)))
         return ActionResult(
             extracted_content=(f"Scheduled {kind} cron job `{job.id}` — next run {when}; "
-                               f"{_tools_line(job.payload)}.{notes}"
+                               f"{_tools_line(job.payload)}.{notes}{_model_note}"
                                + (f"\n{moved}" if moved else "")
                                + (f"\n{timing}" if timing else "")
                                + (f"\n{gates}" if (gates := _x_gates_line(job.payload, job.user_id)) else "")),
@@ -811,11 +839,11 @@ class CronJobTool(BaseTool):
             return ActionResult(error=f"Nothing was written: {exc}.", include_in_memory=True)
         skipped = [name for name, value in (
             ("max_duration_seconds", params.max_duration_seconds != 600),
-            ("deliver_target", params.deliver_target), ("wake_agent", not params.wake_agent),
+            ("deliver_target", params.deliver_target),
             ("read_verb", params.read_verb), ("precheck", params.precheck),
             ("write_verb", params.write_verb), ("script", params.script),
             ("pause_windows", params.pause_windows),
-            ("tools", params.tools), ("tier", params.tier))
+            ("tools", params.tools), ("tier", params.tier), ("model", params.model))
             if value]
         return await raise_job_card(
             self, execution_context, words, what="scheduled job", reasons=reasons,
@@ -876,6 +904,10 @@ class CronJobTool(BaseTool):
             lines += _timing_lines(self._resolve_service(), job, self._user(execution_context))
             lines.append(_stale_line(self._resolve_service(), job, self._user(execution_context)))
         lines = [ln for ln in lines if ln]
+        if params.runs:
+            from tools.cron_job_controls import job_run_lines
+            lines += job_run_lines(job, params.runs, data_dir=getattr(
+                getattr(self, "config", None), "data_dir", None))
         lines += [
             "task:",
             job.task,
@@ -904,9 +936,16 @@ class CronJobTool(BaseTool):
         # agent edit could drop its exit barriers or step outside the mandate gate.
         if (job.payload or {}).get("mandate") and not owner_turn:
             return ActionResult(error=_MANDATE_JOB_OWNER_ONLY, include_in_memory=True)
-        updates, _tier_err = tier_payload(params.tier, params.why, owner_turn)  # 112 W2
+        updates, _tier_err = tier_payload(params.tier, params.why, owner_turn,  # 112 W2
+                                          existing=job.payload or {})
         if _tier_err:
             return ActionResult(error=_tier_err, include_in_memory=True)
+        _model, _model_err, _model_note, _model_notice = await model_payload(   # 121
+            params.model, params.why, tier=params.tier, owner_turn=owner_turn, user_id=user,
+            existing=job.payload or {}, what=f"job `{job.id}`")
+        if _model_err:
+            return ActionResult(error=_model_err, include_in_memory=True)
+        updates.update(_model)
         if params.rig is not None:
             from core.config_policy.rigs import is_rig, rig_names
             rig = params.rig.strip().lower()
@@ -1037,12 +1076,13 @@ class CronJobTool(BaseTool):
                                       "target_token, read_verb, precheck, write_verb, script or "
                                       "pause_windows.",
                                 include_in_memory=True)
+        notify_model_change(self, _model_notice)
         edited = svc.store.get(job.id, user_id=user) or job
         when = edited.next_run_at.isoformat() if edited.next_run_at else "-"
         timing = "\n".join(_timing_lines(svc, edited, user))
         return ActionResult(
             extracted_content=(f"Edited cron job `{job.id}`: {', '.join(changed)}; "
-                               f"next run {when}; {_tools_line(edited.payload)}."
+                               f"next run {when}; {_tools_line(edited.payload)}.{_model_note}"
                                + (f"\n{moved}" if moved else "")
                                + (f"\n{timing}" if timing else "")
                                + (f"\n{gates}" if (gates := _x_gates_line(edited.payload, edited.user_id)) else "")),
@@ -1090,8 +1130,11 @@ class CronJobTool(BaseTool):
         why = svc.run_now(job.id, user_id=user,
                           via=OWNER_TURN_VIA if owner_seat_turn(execution_context) else "agent")
         if why == "paused":
-            return ActionResult(error=f"Job `{job.id}` is paused — only the owner resumes it "
-                                      f"(/job resume {job.id[:8]}).", include_in_memory=True)
+            from tools.cron_job_controls import paused_path
+            fresh = svc.store.get(job.id, user_id=user) or job
+            return ActionResult(error=f"Job `{job.id}` is paused — " + paused_path(
+                fresh, owner_turn=owner_seat_turn(execution_context)) + ".",
+                include_in_memory=True)
         if why:
             return ActionResult(error=f"Job `{job.id}` is {why} — it cannot run now.",
                                 include_in_memory=True)
@@ -1112,6 +1155,95 @@ class CronJobTool(BaseTool):
             extracted_content=(f"Job `{job.id}` runs on the next scheduler pass; its schedule "
                                f"({job.schedule_spec}) is kept.{drift}" + (f" {off}" if off else "")),
             include_in_memory=True)
+
+    def _job_write_gate(self, verb: str, job_id: str, execution_context):
+        """``(job, refusal)`` for a pause or a resume: the turn may act, the job is this
+        tenant's, and a trading mandate's job moves only on an owner turn."""
+        from core.security.owner_turn import owner_turn_refusal
+        from tools.goal_tools import owner_seat_turn
+        refusal = owner_turn_refusal(execution_context, verb=verb, does="pauses or resumes "
+                                     "a job", public="pause or resume a job")
+        if refusal:
+            return None, refusal
+        job = self._resolve_service().store.get(job_id, user_id=self._user(execution_context))
+        if job is None:
+            return None, f"No such cron job `{job_id}`."
+        if (job.payload or {}).get("mandate") and not owner_seat_turn(execution_context):
+            return None, _MANDATE_JOB_OWNER_ONLY.replace("cronjob_edit", verb)
+        return job, None
+
+    @BaseTool.action("Pause one of your cron jobs: no run until it is resumed (a run in "
+                     "flight is cut). Never the job this run runs in.",
+                     param_model=CronPauseAction)
+    async def cronjob_pause(self, params: CronPauseAction, execution_context=None) -> ActionResult:
+        job, refusal = self._job_write_gate("cronjob_pause", params.job_id, execution_context)
+        if refusal:
+            return ActionResult(error=refusal, include_in_memory=True)
+        from tools.cron_job_controls import own_run_job
+        if own_run_job(execution_context) == job.id:
+            return ActionResult(error=f"Refused: `{job.id}` is the job this run runs in; a "
+                                      f"pause would cut this run. Finish the run, or ask the "
+                                      f"owner.", include_in_memory=True)
+        from core.cron_lanes import OWNER_TURN_VIA
+        from tools.goal_tools import owner_seat_turn
+        svc, user = self._resolve_service(), self._user(execution_context)
+        owner_turn = owner_seat_turn(execution_context)
+        cut = svc.cut_note(job.id, user_id=user)
+        if not svc.pause(job.id, user_id=user, via=OWNER_TURN_VIA if owner_turn else "agent"):
+            return ActionResult(error=f"Job `{job.id}` is {job.status} — nothing to pause.",
+                                include_in_memory=True)
+        how = ("on an owner turn, so it resumes on the owner's word (cronjob_resume on an "
+               "owner turn, or /job resume)" if owner_turn else
+               "by you, so cronjob_resume resumes it")
+        return ActionResult(extracted_content=f"Paused job `{job.id}`: it does not run until "
+                                              f"resumed. Paused {how}.{cut}",
+                            include_in_memory=True)
+
+    @BaseTool.action("Resume a paused cron job at its next slot. A job you paused yourself "
+                     "resumes on any of your turns; a job the failure limit paused resumes "
+                     "only when the owner asks in this turn; an owner's pause only the owner "
+                     "lifts.", param_model=CronResumeAction)
+    async def cronjob_resume(self, params: CronResumeAction, execution_context=None) -> ActionResult:
+        job, refusal = self._job_write_gate("cronjob_resume", params.job_id, execution_context)
+        if refusal:
+            return ActionResult(error=refusal, include_in_memory=True)
+        from core.cron_lanes import OWNER_TURN_VIA, lane_line
+        from tools.goal_tools import owner_seat_turn
+        svc, user = self._resolve_service(), self._user(execution_context)
+        if job.status != "paused":
+            word = {"cancelled": "stopped"}.get(job.status, job.status)
+            lane = lane_line(svc.store, user_id=user, payload=job.payload) \
+                if job.status == "cancelled" else ""
+            tail = (" A stopped job does not resume" + (f"; its {lane}" if lane else "")
+                    + ".") if job.status == "cancelled" else ""
+            return ActionResult(error=f"Job `{job.id}` is {word}, not paused — nothing to "
+                                      f"resume.{tail}", include_in_memory=True)
+        owner_turn = owner_seat_turn(execution_context)
+        from tools.cron_job_controls import resume_rule
+        ok, words = resume_rule(job, owner_turn=owner_turn)
+        if not ok:
+            return ActionResult(error=f"Refused: job `{job.id}` stays paused — {words}.",
+                                include_in_memory=True)
+        # The same seat rule as cronjob_run_now: a resumed job runs again past this turn.
+        refusal = self._self_scheduling_refusal(execution_context)
+        if refusal:
+            return ActionResult(error=refusal.replace("cronjob_schedule", "cronjob_resume"),
+                                include_in_memory=True)
+        from tools.cron_job_controls import pause_note
+        if not svc.resume(job.id, user_id=user, via=OWNER_TURN_VIA if owner_turn else "agent",
+                          note_via=pause_note(job).get("via")):  # the note this rule judged
+            return ActionResult(error=f"Job `{job.id}` changed — see cronjob_show.",
+                                include_in_memory=True)
+        from cron.service import next_run_text, scheduler_off_note
+        fresh = svc.store.get(job.id, user_id=user) or job
+        late = (" Its time passed while it was paused, so it runs on the next tick."
+                if fresh.one_shot and fresh.next_run_at is not None
+                and fresh.next_run_at <= svc._now() else "")
+        off = scheduler_off_note()
+        return ActionResult(extracted_content=(f"Resumed job `{job.id}` — next run "
+                                               f"{next_run_text(fresh, clock=True)}.{late}"
+                                               + (f" {off}" if off else "")),
+                            include_in_memory=True)
 
     @BaseTool.action("Cancel a scheduled cron job by id.", param_model=CronCancelAction)
     async def cronjob_cancel(self, params: CronCancelAction, execution_context=None) -> ActionResult:
@@ -1141,6 +1273,10 @@ class CronJobTool(BaseTool):
                                     include_in_memory=True)
             return ActionResult(extracted_content=stop_job(
                 svc, job, user_id=user, via=via, forever=True), include_in_memory=True)
+        from tools.cron_job_controls import cancel_refusal
+        refusal = cancel_refusal(svc.store.get(params.job_id, user_id=user), owner_turn=owner_turn)
+        if refusal:
+            return ActionResult(error=refusal, include_in_memory=True)
         ok = svc.cancel(params.job_id, user_id=user, via=via)
         msg = f"Cancelled cron job `{params.job_id}`." if ok else f"No such cron job `{params.job_id}`."
         return ActionResult(extracted_content=msg, include_in_memory=True)

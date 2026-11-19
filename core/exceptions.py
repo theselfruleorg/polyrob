@@ -313,11 +313,19 @@ class InsufficientCreditsError(BotError):
     """
     status_code = 402
 
+    #: Every message starts with this. It is ONE tenant's balance on OUR ledger, never
+    #: the provider's account: ``core.credit_sentinel.looks_like_credit_death`` reads it
+    #: and answers False, so a status string that quotes this error cannot latch the
+    #: provider, pause other tenants or start a provider failover.
+    MARKER = "Account credit refusal"
+
     def __init__(self, user_id: str, required: int, available: int, message: str = None):
         self.user_id = user_id
         self.required = required
         self.available = available
-        super().__init__(
-            message
-            or f"Insufficient credits for user {user_id}. Required: {required}, Available: {available}. Please add credits to continue."
-        )
+        text = (message
+                or f"user {user_id} needs {required} credits and has {available}. "
+                   f"Top up to continue.")
+        if not text.startswith(self.MARKER):
+            text = f"{self.MARKER}: {text}"
+        super().__init__(text)

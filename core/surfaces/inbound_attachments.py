@@ -26,7 +26,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from core.env import bool_env, float_env, int_env
+from core.env import float_env, int_env
 
 logger = logging.getLogger(__name__)
 
@@ -71,12 +71,6 @@ _UNSAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 # --- flags -----------------------------------------------------------------
-
-def inbound_media_enabled() -> bool:
-    """Master switch for the inbound media rail. Default ON — a chat surface that
-    silently discards the owner's photo is the defect, not the safe default."""
-    return bool_env("INBOUND_MEDIA_ENABLED", True)
-
 
 def inbound_media_max_mb() -> float:
     """Per-file cap for a file arriving from a chat surface."""
@@ -455,18 +449,6 @@ async def absorb_inbound_media(
                   if getattr(m, "kind", None) not in TRANSCRIBED_KINDS]
     if not candidates:
         return text, None
-
-    if not inbound_media_enabled():
-        # D51: the turn carried files and the rail is off. Saying nothing let
-        # the agent answer as though the sender had attached nothing — the
-        # exact silent drop this module exists to end. Name them and the reason.
-        names = ", ".join(
-            str(getattr(m, "filename", None) or getattr(m, "kind", None) or "file")
-            for m in candidates)
-        return (f"{text}\n\n[This message carried {len(candidates)} attachment(s) "
-                f"({names}) that were NOT read: inbound media handling is turned "
-                f"off on this deployment. Say so rather than guessing their "
-                f"content; the owner can turn it back on.]"), None
 
     cap = inbound_media_max_files() if max_files is None else max_files
     overflow = max(0, len(candidates) - cap)

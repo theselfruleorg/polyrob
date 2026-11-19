@@ -48,4 +48,11 @@ def owner_seat_context(user_id: Any, *, seat: str, turn_id: Optional[str] = None
     return ctx
 
 
-__all__ = ["OWNER_SEAT_KIND", "SEATS", "owner_seat_context"]
+def is_owner_seat(execution_context: Any) -> bool:
+    """True when *execution_context* is an owner-seat verb call (the kind
+    :func:`owner_seat_context` stamps). A model tool call never carries it."""
+    meta = getattr(execution_context, "metadata", None)
+    return isinstance(meta, dict) and meta.get("turn_kind") == OWNER_SEAT_KIND
+
+
+__all__ = ["OWNER_SEAT_KIND", "SEATS", "is_owner_seat", "owner_seat_context"]

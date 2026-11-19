@@ -1,7 +1,7 @@
 """SPL settlement detection and Solana Pay `reference` matching. Phase 4.
 
 The EVM settlement watcher matches an incoming payment to a pending invoice by
-EXACT AMOUNT, and needs `X402_INVOICE_AMOUNT_JITTER` so two invoices priced the
+EXACT AMOUNT, and needs the amount jitter so two invoices priced the
 same stay distinguishable. That jitter is a workaround for a missing correlator,
 not a feature — it is disclosed to payers precisely because it is a wart.
 

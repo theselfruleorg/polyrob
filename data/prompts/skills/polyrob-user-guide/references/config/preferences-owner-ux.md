@@ -5,5 +5,4 @@
 One line per setting: NAME — default — meaning. Code anchors and full prose:
 `docs/CONFIGURATION.md`. Index: `references/configuration.md`.
 
-- PREFS_ENABLED — default: ON — Master switch for the whole preferences layer; when OFF, `resolve_with_source` always returns the env/default value and `preferences.toml` is never read.
 - CONTRACT_DOC_ENABLED — default: ON — Injects the owner-authored operating-contract doc (`contract.md`, legacy; `owner_doc_manage` writes the owner RULES doc instead, so no NEW `contract.md` is created — this flag only keeps an EXISTING one injected) plus a deterministic one-l…

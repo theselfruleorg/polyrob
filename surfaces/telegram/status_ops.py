@@ -16,7 +16,8 @@ logger = logging.getLogger("surfaces.telegram.harness")
 
 
 async def _status_reply(task_agent: Any, user_id: str, session_id: Optional[str],
-                        data_dir: str, board: Optional[Any] = None) -> str:
+                        data_dir: str, board: Optional[Any] = None, *,
+                        full: bool = False) -> str:
     """`/status` — rendered from the ONE status snapshot (core/status_snapshot.py).
 
     2026-08-28: this used to assemble its own view (ready/running counts + the
@@ -35,7 +36,10 @@ async def _status_reply(task_agent: Any, user_id: str, session_id: Optional[str]
     snap = await asyncio.to_thread(
         build_status_snapshot, user_id, data_dir=data_dir, task_agent=task_agent,
         session_id=session_id, include_balances=True)
-    return render_status_text(snap, title="Status:", prefix="• ", health_limit=_STATUS_HEALTH_LIMIT)
+    # `/status` is the short form (core.status_render.BRIEF_SECTIONS); `/status all`
+    # is every section. Health leads both and counts every section's issues.
+    return render_status_text(snap, title="Status:", prefix="• ",
+                              health_limit=_STATUS_HEALTH_LIMIT, brief=not full)
 
 
 #: Health lines one chat `/status` renders before rolling the rest into a count
@@ -57,7 +61,8 @@ async def _health_header(user_id: str, data_dir: str, task_agent: Any = None,
             build_status_snapshot, user_id, data_dir=data_dir, task_agent=task_agent,
             include_money=False)
         # 031: the pause state leads every seat, before health.
-        return [pause_headline(snap)] + render_health_lines(snap, prefix="• ", limit=limit)
+        return [pause_headline(snap)] + render_health_lines(snap, prefix="• ", limit=limit,
+                                                            brief=True)
     except Exception as e:
         logger.warning("telegram health header failed: %s", e, exc_info=True)
         return [f"Health: unavailable ({type(e).__name__}: {str(e)[:120]})"]
@@ -147,34 +152,14 @@ def _cwd_reply() -> str:
     return "\n".join(lines)
 
 
-#: Entry lines one chat `/recap` may render before rolling the rest into a count.
-_RECAP_CHAT_LIMIT = 15
-
-
-def _recap_reply(user_id: str, data_dir: str, args: list) -> str:
-    """owner-UX P4 T2: `/recap [window]` (default 24h) over core.recap (T1).
-
-    Bounded for chat (G14): an unbounded `/recap 7d` renders every event,
-    episode and authored skill one line each — several phone messages of
-    scrollback. The terminal keeps the full listing.
-    """
-    from core.recap import build_recap, format_recap_markdown
-    window = args[0] if args else "24h"
-    try:
-        entries = build_recap(user_id, data_dir, window=window)
-    except ValueError:
-        return (f"Invalid recap window {window!r} — expected e.g. '30m' / '24h' / '7d' "
-                "(a bare number of seconds also works).")
-    return format_recap_markdown(entries, window, limit=_RECAP_CHAT_LIMIT,
-                                 more_tenant=user_id)
-
-
 async def journey_reply(user_id: str, data_dir: str, task_agent: Any, args: list) -> str:
     """`/journey [window]` on every seat (113 W4 item 3, D-2): the health
     header, then the recap. The chat apps and the terminal both call this, so
     one verb gives one text."""
     header = await _health_header(user_id, data_dir, task_agent, limit=3)
-    return "\n".join(header) + "\n" + _recap_reply(user_id, data_dir, args)
+    from core.recap import recap_reply
+    return "\n".join(header) + "\n" + recap_reply(user_id, data_dir, args[0] if args else "24h",
+                                                 more_tenant=user_id)
 
 
 def _goals_reply(user_id: str, data_dir: str, board: Optional[Any] = None) -> str:

@@ -42,8 +42,5 @@ def _telemetry_row(record: Dict[str, Any]) -> tuple:
     session, both rendered as EMPTY cells. The session id keeps its 12-char
     prefix: that column is a correlation hint, not a handle.
     """
-    attrs = record.get("attrs") or {}
-    detail = (attrs.get("outcome") or attrs.get("action") or attrs.get("reason")
-              or attrs.get("preview") or "")
-    session = (record.get("session_id") or "")[:12]
-    return (str(record.get("kind") or DASH), str(detail) or DASH, session or DASH)
+    from core.telemetry_view import event_row  # 120 W3: the one row reading
+    return tuple(cell or DASH for cell in event_row(record))

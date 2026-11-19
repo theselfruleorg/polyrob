@@ -412,3 +412,28 @@ def format_recap_markdown(entries: List[RecapEntry], window: str,
     elif rest:
         lines.append(f"- _(+{len(rest)} more — ask for a narrower window)_")
     return "\n".join(lines)
+
+
+#: Entry lines one chat recap renders before rolling the rest into a count (G14):
+#: the owner's chat ``/recap`` and the agent's ``recent_activity(scope='recap')``.
+RECAP_CHAT_LIMIT = 15
+
+
+def recap_reply(user_id: str, data_home: Optional[str], window: str = "24h", *,
+                limit: Optional[int] = RECAP_CHAT_LIMIT,
+                more_tenant: Optional[str] = None) -> str:
+    """The recap TEXT over ``window`` (default 24h): the chat ``/recap`` and
+    ``/journey`` (every seat) and the agent's ``recent_activity(scope='recap')``
+    print it (120 W7). A malformed window is named, never widened to all time.
+
+    Bounded for chat (G14): an unbounded ``/recap 7d`` renders every event,
+    episode and authored skill one line each — several phone messages of
+    scrollback. ``limit=None`` keeps the full listing.
+    """
+    window = (window or "").strip() or "24h"
+    try:
+        entries = build_recap(user_id, data_home, window=window)
+    except ValueError:
+        return (f"Invalid recap window {window!r} — expected e.g. '30m' / '24h' / '7d' "
+                "(a bare number of seconds also works).")
+    return format_recap_markdown(entries, window, limit=limit, more_tenant=more_tenant)

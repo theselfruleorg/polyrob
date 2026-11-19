@@ -94,7 +94,7 @@ def build_config(env: Mapping[str, str], *, data_dir: str, agent_uids: List[int]
     caps = current_caps(env)
     chains = money_chains_with_pins(env)
     pins = {k: v for k, v in env.items()
-            if (k.startswith(_RPC_PREFIX) or k in ("ALCHEMY_API_KEY", "SOLANA_RPC_URL")) and v}
+            if (k.startswith(_RPC_PREFIX) or k in ("ALCHEMY_API_KEY", "DEFI_SOLANA_RPC")) and v}
     network = str(env.get("AGENT_WALLET_NETWORK", "testnet")).strip().lower() or "testnet"
     venue = str(env.get("AGENT_WALLET_OPERATIONAL_VENUE", "treasury")).strip().lower() or "treasury"
     dest = str(env.get("TREASURY_ADDRESS", "")).strip() or None

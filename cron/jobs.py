@@ -13,7 +13,7 @@ import os
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from core.sqlite_util import execute_retry
 from cron.job_machine import CRON_JOB_MACHINE, LEASE_SLACK_SECONDS, lease_is_live, run_owner
@@ -360,16 +360,40 @@ class CronJobStore:
             params = params + (user_id,)
         return bool(execute_retry(self.db_path, sql, params))
 
+    def take_over_pause(self, job_id: str, *, user_id: Optional[str],
+                        note: Dict[str, Any], from_vias: Tuple[str, ...]) -> bool:
+        """Rewrite the pause note of a job that is ALREADY paused, only when its
+        note's ``via`` is one of *from_vias* (a weaker hand). True iff it moved."""
+        if not from_vias:
+            return False
+        marks = ",".join("?" for _ in from_vias)
+        sql = ("UPDATE cron_jobs SET payload=json_set(payload, '$.paused', json(?)) "
+               "WHERE id=? AND enabled=1 AND status='paused' "
+               f"AND json_extract(payload, '$.paused.via') IN ({marks})")
+        params: tuple = (json.dumps(note), job_id) + tuple(from_vias)
+        if user_id is not None:
+            sql += " AND user_id=?"
+            params = params + (user_id,)
+        return bool(execute_retry(self.db_path, sql, params))
+
     def resume(self, job_id: str, *, user_id: Optional[str],
-               next_run_at: datetime) -> bool:
+               next_run_at: datetime, note_via: Optional[str] = None,
+               keep_streak: bool = False) -> bool:
         """'paused' -> 'scheduled' at *next_run_at*; drops ``payload.paused`` and the
         failure streak, so the job gets a full new count; ``last_outcome.resumed``
-        lets the first failure of that count be told again."""
+        lets the first failure of that count be told again. *note_via* set = move
+        only while the pause note still names that hand (the note the caller judged).
+        *keep_streak* = the agent's own resume: the failure count stays, so a pause and
+        resume of its own never resets the failure limit (only the owner gives a new count)."""
+        drop = "'$.paused', '$.cut_run'" if keep_streak else \
+            "'$.paused', '$.last_outcome.streak', '$.cut_run'"
         sql = ("UPDATE cron_jobs SET status='scheduled', next_run_at=?, "
-               "payload=json_set(json_remove(payload, '$.paused', '$.last_outcome.streak', "
-               "'$.cut_run'), '$.last_outcome.resumed', 1) "
+               f"payload=json_set(json_remove(payload, {drop}), '$.last_outcome.resumed', 1) "
                "WHERE id=? AND enabled=1 AND status='paused'")
         params: tuple = (_iso(next_run_at), job_id)
+        if note_via is not None:
+            sql += " AND json_extract(payload, '$.paused.via') = ?"
+            params = params + (note_via,)
         if user_id is not None:
             sql += " AND user_id=?"
             params = params + (user_id,)

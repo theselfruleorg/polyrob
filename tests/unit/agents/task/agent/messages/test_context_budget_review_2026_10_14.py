@@ -40,7 +40,6 @@ class _RecordingLLM:
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
 	monkeypatch.setenv("TASK_MAX_MESSAGES", "500")
-	monkeypatch.setenv("COMPACTION_CHECKPOINT", "false")
 	monkeypatch.delenv("TASK_MAX_INPUT_TOKENS", raising=False)
 	monkeypatch.delenv("AUTONOMOUS_CONTEXT_BUDGET_TOKENS", raising=False)
 

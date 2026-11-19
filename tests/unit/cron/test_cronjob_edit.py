@@ -398,3 +398,65 @@ async def test_run_now_off_an_owner_turn_never_runs_a_money_job(tmp_path, agent_
                                    payload={"priority": "money"})
     res = await t.cronjob_run_now(CronRunNowAction(job_id=job.id), execution_context=_ctx())
     assert res.error and "money job" in res.error
+
+
+# --- 121 phase 2: the agent names the model of a job; the owner's model is locked ---------
+
+@pytest.fixture
+def priced(monkeypatch, tmp_path):
+    import agents.task.model_switch_service as svc
+    import core.runtime_paths as rp
+    import modules.llm.profiles as profiles
+    prices = {"x/main": (0.05, 0.5), "x/mid": (0.1, 1.4), "x/dear": (2.0, 10.0)}
+
+    async def facts(provider, model):
+        price = prices.get(model)
+        return price, None, 100000, True, "", price is not None
+    monkeypatch.setattr(svc, "_model_facts", facts)
+    monkeypatch.setattr(profiles, "providers_with_keys", lambda env=None: ["openrouter"])
+    monkeypatch.setattr(rp, "prefs_home_dir", lambda: str(tmp_path / "home"))
+    monkeypatch.setenv("DEFAULT_PROVIDER", "openrouter")
+    monkeypatch.setenv("DEFAULT_MODEL", "x/main")
+    told = []
+    monkeypatch.setattr("tools.cronjob_tools.notify_model_change",
+                        lambda c, text: told.append(text) if text else None)
+    return told
+
+
+@pytest.mark.asyncio
+async def test_an_agent_run_sets_and_clears_a_job_model(tmp_path, agent_turn, priced):
+    t = _tool(tmp_path)
+    job = _job(t)
+    res = await t.cronjob_edit(CronEditAction(job_id=job.id, model="x/mid", why="long reports"),
+                               execution_context=_ctx())
+    assert res.error is None and "Model: x/mid (openrouter)" in res.extracted_content
+    stored = t._cron_service.store.get(job.id).payload
+    assert (stored["model"], stored["provider"], stored["model_by"]) == ("x/mid", "openrouter", "agent")
+    assert len(priced) == 1 and f"job `{job.id}`" in priced[0]      # the owner is told once
+    show = await t.cronjob_show(CronShowAction(job_id=job.id), execution_context=_ctx())
+    assert "model set by the agent: long reports" in show.extracted_content
+    res = await t.cronjob_edit(CronEditAction(job_id=job.id, model="no/such", why="w"),
+                               execution_context=_ctx())
+    assert res.error and "not on openrouter" in res.error
+    assert t._cron_service.store.get(job.id).payload["model"] == "x/mid"
+    assert len(priced) == 1                                # a refused change tells nothing
+    res = await t.cronjob_edit(CronEditAction(job_id=job.id, model="x/dear", why="w"),
+                               execution_context=_ctx())
+    assert res.error is None and len(priced) == 2          # no price gate, one notice
+    res = await t.cronjob_edit(CronEditAction(job_id=job.id, model="default"),
+                               execution_context=_ctx())
+    assert res.error is None
+    stored = t._cron_service.store.get(job.id).payload
+    assert "model" not in stored and "provider" not in stored and "model_by" not in stored
+
+
+@pytest.mark.asyncio
+async def test_an_agent_run_cannot_change_a_model_the_owner_set(tmp_path, agent_turn, priced):
+    t = _tool(tmp_path)
+    # no model_by: a pin the owner CLI wrote before 121 — locked like an owner's
+    job = t._cron_service.schedule(task=RULES, schedule_spec="1h", user_id="u1",
+                                   payload={"model": "x/main", "provider": "openrouter"})
+    res = await t.cronjob_edit(CronEditAction(job_id=job.id, model="x/mid", why="cheaper"),
+                               execution_context=_ctx())
+    assert res.error and "only the owner changes it" in res.error
+    assert t._cron_service.store.get(job.id).payload["model"] == "x/main" and priced == []

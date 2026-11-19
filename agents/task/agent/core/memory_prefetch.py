@@ -352,14 +352,11 @@ async def build_prefetch_message(query: str, *, session_id: str,
     # Cross-session recall replays prior user/assistant turns verbatim, so an
     # instruction injected into one session could be recalled into another. Frame
     # it as DATA (same delimiter the untrusted tool-result path uses) so indirect
-    # prompt-injection via recalled memory is read, not obeyed. Gated by the shared
-    # UNTRUSTED_TOOL_RESULT_WRAP flag (default ON).
+    # prompt-injection via recalled memory is read, not obeyed.
     if recalled:
         try:
-            from agents.task.constants import UNTRUSTED_TOOL_RESULT_WRAP
-            if UNTRUSTED_TOOL_RESULT_WRAP:
-                from core.security.untrusted_wrap import wrap_untrusted
-                recalled = wrap_untrusted("cross_session_memory", recalled)
+            from core.security.untrusted_wrap import wrap_untrusted
+            recalled = wrap_untrusted("cross_session_memory", recalled)
         except Exception as e:  # framing must never break prefetch
             logger.debug("memory recall wrap skipped: %s", e)
         recalled = f"{recalled}\n{RECALL_LEAD_NOTE}"
@@ -389,10 +386,8 @@ async def build_prefetch_message(query: str, *, session_id: str,
                     kb_recalled = kb_result
                     raw_kb = kb_recalled
                     try:
-                        from agents.task.constants import UNTRUSTED_TOOL_RESULT_WRAP
-                        if UNTRUSTED_TOOL_RESULT_WRAP:
-                            from core.security.untrusted_wrap import wrap_untrusted
-                            kb_recalled = wrap_untrusted("knowledge_base", kb_recalled)
+                        from core.security.untrusted_wrap import wrap_untrusted
+                        kb_recalled = wrap_untrusted("knowledge_base", kb_recalled)
                     except Exception as e:  # wrap failure must never break KB branch
                         logger.debug("kb recall wrap skipped: %s", e)
             except Exception as e:  # KB error must never break memory branch

@@ -92,6 +92,10 @@ class SurfaceSpec:
     #: What the platform lets the agent do beyond text (113 W4 item 6, F-07):
     #: ``moderation`` = it mutes and bans a room member and lifts both. A verb
     #: row that needs one (``core.verbs.Verb.needs``) runs only on such a surface.
+    #: ``profile_photo`` = its API sets the agent's own account picture
+    #: (``modules.avatar.push`` derives its push targets from it, 120).
+    #: ``bot_handle`` = the running bot reads its own handle at start
+    #: (``bot_username``); the status identity section names it (120 W7).
     capabilities: Tuple[str, ...] = ()
     #: Extra facts a surface wants to carry without a new field.
     meta: Dict[str, str] = field(default_factory=dict)
@@ -121,7 +125,7 @@ SURFACES: Tuple[SurfaceSpec, ...] = (
         owner_seat=True, forgeable=False, transport="longpoll", extra="telegram",
         cron_target=True, region="global", max_message_chars=4096,
         alias_owner=True, dedicated_sink=True, token_env="TELEGRAM_BOT_TOKEN",
-        auto_start=False, capabilities=("moderation",),
+        auto_start=False, capabilities=("moderation", "profile_photo", "bot_handle"),
         credentials=("TELEGRAM_BOT_TOKEN",),
         cli_command="cli.commands.telegram:telegram", state_dbs=("tg_dedup.db",)),
     SurfaceSpec(
@@ -149,6 +153,7 @@ SURFACES: Tuple[SurfaceSpec, ...] = (
         cron_target=True, region="global", max_message_chars=2000,
         alias_owner=True,
         token_env="DISCORD_BOT_TOKEN", credentials=("DISCORD_BOT_TOKEN",),
+        capabilities=("profile_photo", "bot_handle"),
         cli_command="cli.commands.discord:discord", state_dbs=("discord_dedup.db",)),
     SurfaceSpec(
         id="signal", label="Signal", module="surfaces.signal",

@@ -35,12 +35,14 @@ def test_dev_exec_ceiling_default_and_env(monkeypatch):
 def test_default_tool_timeout_is_180s_and_below_the_step_timeout(monkeypatch):
     """Prod 2026-10-02..09: 60 s cut 24 reconcile runs and 9 X posts mid-flight.
 
-    The default is 180 s (MCP's figure) and must stay below the 300 s step
-    timeout so a hung action is still cut by its own guard first.
+    The default is 180 s (MCP's figure) and must stay below the step
+    timeout (AgentConfig.step_timeout_seconds) so a hung action is still cut by its own guard first.
     """
     import os
     if "DEFAULT_TOOL_TIMEOUT_SECONDS" in os.environ:
         import pytest
         pytest.skip("env override set")
     assert TimeoutConfig.TOOL_TIMEOUTS["default"] == 180
-    assert TimeoutConfig.TOOL_TIMEOUTS["default"] < TimeoutConfig.STEP_TIMEOUT
+    from agents.task.agent.service import AgentConfig
+    step = AgentConfig(task="t").step_timeout_seconds
+    assert TimeoutConfig.TOOL_TIMEOUTS["default"] < step

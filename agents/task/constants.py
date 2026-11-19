@@ -6,7 +6,6 @@ This provides a single source of truth for history management, trimming, and mem
 import os
 
 from core.env import bool_env as _core_bool_env
-from core.env import float_env as _core_float_env
 from core.env import int_env as _core_int_env
 
 # Token counting defaults - Use modules.llm.token_counter for actual counting
@@ -117,6 +116,17 @@ def _spec_aux_model(provider, main_model):
 # 112 W2: the `light` model tier reads the same aux map (core cannot import modules).
 from core.runtime_config import register_light_resolver as _register_light  # noqa: E402
 _register_light(_spec_aux_model)
+
+
+def _owner_tier_row(tier):
+    """121: the instance owner's own heavy / light model (``/model heavy <name>``)."""
+    from core.instance import resolve_owner_principal
+    from core.model_pins import owner_tier
+    return owner_tier(resolve_owner_principal(), tier)
+
+
+from core.runtime_config import register_owner_tier_resolver as _register_owner_tier  # noqa: E402
+_register_owner_tier(_owner_tier_row)
 
 
 # Per-task explicit override env var names (the slot names, AUX_MODEL_<SLOT>).
@@ -354,7 +364,7 @@ class TimeoutConfig:
         'coding': _core_int_env('CODE_EXEC_TIMEOUT_SECONDS', 630),
         # Default for tools without a row. Was 60 s: on prod it cut the money
         # rail's reconcile (24x) and the X approval wait (9x) in a week to
-        # 2026-10-09. 180 s matches MCP and stays below STEP_TIMEOUT (300 s).
+        # 2026-10-09. 180 s matches MCP and stays below the 600 s step limit.
         'default': _core_int_env('DEFAULT_TOOL_TIMEOUT_SECONDS', 180),
     }
 
@@ -370,15 +380,6 @@ class TimeoutConfig:
         if config:
             return config.sub_agents_enabled
         return _core_bool_env('SUB_AGENTS_ENABLED', True)
-
-    @classmethod
-    def get_subagent_least_privilege(cls) -> bool:
-        """UP-05: narrow a delegated child's toolset (drop code_execution/cronjob
-        tool_ids + suppress delegation actions on leaf children via a dedicated
-        child Controller). Default ON — the prior behaviour leaked the full parent
-        toolset to children. Set SUBAGENT_LEAST_PRIVILEGE=false for the legacy
-        shared-controller path (byte-identical to pre-UP-05)."""
-        return _core_bool_env('SUBAGENT_LEAST_PRIVILEGE', True)
 
     @classmethod
     def get_sub_agent_timeout(cls) -> int:
@@ -426,13 +427,9 @@ class TimeoutConfig:
     PARALLEL_SUBTASKS_TIMEOUT = 900
     MAX_SUB_AGENT_DEPTH = 1
 
-    # ========== STEP/SESSION TIMEOUTS ==========
-    STEP_TIMEOUT = _core_float_env('STEP_TIMEOUT_SECONDS', 300)       # 5 min per step
-    STALL_TIMEOUT = _core_float_env('STALL_TIMEOUT_SECONDS', 300)     # 5 min stall detection
-
-    # ========== LLM REQUEST TIMEOUTS ==========
-    LLM_STREAM_TIMEOUT = _core_int_env('LLM_STREAM_TIMEOUT_SECONDS', 300)     # Streaming needs longer
-    LLM_BASE_TIMEOUT = _core_float_env('LLM_BASE_TIMEOUT_SECONDS', 30)        # Base (adjusted by tokens)
+    # The step and stall limits are AgentConfig.step_timeout_seconds and
+    # stall_timeout_seconds (agents/task/agent/service.py); the LLM request
+    # limit is core.llm_limits. No timeout of those kinds lives here.
 
     # ========== BROWSER CLEANUP TIMEOUTS ==========
     # 067 F4: plain constants. They read BROWSER_CLOSE_TIMEOUT /
@@ -460,8 +457,6 @@ class TimeoutConfig:
 
 
 # Legacy constants for backward compatibility (deprecated - use TimeoutConfig instead)
-DEFAULT_STEP_TIMEOUT = TimeoutConfig.STEP_TIMEOUT
-LLM_BASE_TIMEOUT = TimeoutConfig.LLM_BASE_TIMEOUT
 BROWSER_CLOSE_TIMEOUT = TimeoutConfig.BROWSER_CLOSE
 BROWSER_CONTEXT_CLOSE_TIMEOUT = TimeoutConfig.BROWSER_CONTEXT_CLOSE
 BROWSER_INSTANCE_CLOSE_TIMEOUT = TimeoutConfig.BROWSER_INSTANCE_CLOSE
@@ -669,7 +664,6 @@ COMPACTION_TOOL_RESULT_CHARS = 2000  # A2: tool-result budget (was: dropped)
 COMPACTION_MAX_SUMMARY_TOKENS = 12000  # A3: ceiling for summary budget
 COMPACTION_MIN_SUMMARY_TOKENS = 2000  # A3: floor for summary budget
 COMPACTION_MIN_SAVINGS_PCT = 10.0  # B4: anti-thrash back-off threshold
-COMPACTION_CHECKPOINT = _core_bool_env('COMPACTION_CHECKPOINT', True)  # C2: dump pre-compaction trajectory
 # Bounded tool-free reasoning turns (flow-efficiency D1-a, the seed resolution).
 # POLYROB forces >=1 function call every step. This allows a SMALL number of tool-free
 # "planning" turns to be treated as legitimate (gentle nudge) rather than a hard
@@ -693,12 +687,6 @@ def skill_catalog_include_all() -> bool:
     Access-time read (not the import-bound constant) so an env override always wins.
     """
     return _bool_env("SKILL_CATALOG_INCLUDE_ALL", True)
-
-# UP-06: wrap untrusted tool-result content (mcp/browser/web/perplexity) in
-# <untrusted_tool_result> delimiters before it enters message history, + a <security>
-# system-prompt line teaching the model the wrapped content is DATA, not instructions.
-# Security control — default ON. OFF => byte-identical to legacy (no wrapper, no <security>).
-UNTRUSTED_TOOL_RESULT_WRAP = _core_bool_env('UNTRUSTED_TOOL_RESULT_WRAP', True)
 
 # S1 (chat consolidation): the persona/<identity> injection gate lives in the
 # access-time `task_personality_block_enabled()` function above (there is no
@@ -768,7 +756,7 @@ MODEL_FAMILY_INSTRUCTIONS = [
 
 # T1-10: families that reliably emit the brain-state JSON without a per-step
 # reminder. The prompt is authored for Claude (MODEL_FAMILY_INSTRUCTIONS gives it
-# no family note), so the INJECT_FORMAT_HINT_EARLY native-mode nag is pure noise
+# no family note), so the native-mode format nag is pure noise
 # there — one wasted uncached message per step. Same needle mechanism as the
 # family notes: matched on the model name (plus the resolved provider).
 FORMAT_NAG_EXEMPT_FAMILIES = ('claude',)

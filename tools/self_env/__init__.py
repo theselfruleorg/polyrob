@@ -7,10 +7,12 @@ gated and logged:
   secrets/config hard-denied;
 - ``self_env_restart_service`` — after the owner approves the call, asks the
   running service for a drained restart (077, ``core.lifecycle``); the service
-  finishes its work, exits 75 and its supervisor starts it again.
-
-Updates and dependency changes are the owner's ``/update`` (the trusted update
-path: snapshot, migrate, verify, rollback); the agent has no verb for them.
+  finishes its work, exits 75 and its supervisor starts it again;
+- ``self_env_request_update`` — after the owner approves the call, asks for the
+  same drained path with kind ``update`` (120 W7). The decision is the owner's
+  ``/update`` rule (``core.lifecycle_ops.update_target``) and the update itself is
+  the trusted path (snapshot, migrate, verify, rollback); the agent installs
+  nothing and changes no dependency.
 
 Gated by ``compute_posture_allows(ctx, 2)`` AND (via the Controller's posture-2
 approval wiring, WS-6) an owner approval decision. Registered only at
@@ -47,8 +49,8 @@ def register_self_env_tool(force: bool = False) -> bool:
         SelfEnvTool,
         ToolDescriptor(
             name="self_env",
-            description="Read agent source and ask for a restart of its own service; "
-                        "updates are the owner's /update (approval-gated)",
+            description="Read agent source and ask for a restart or an update of its own "
+                        "service (approval-gated)",
             category=ToolCategory.INTEGRATION,
             is_optional=True,
             init_priority=80,

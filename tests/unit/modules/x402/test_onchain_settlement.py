@@ -24,7 +24,7 @@ def _treasury_env(monkeypatch):
     monkeypatch.setenv("X402_PAYMENT_RECIPIENT", TREASURY)
     monkeypatch.setenv("X402_DEFAULT_CHAIN", "base")
     for var in ("X402_INVOICE_MAX_USD", "X402_INVOICE_DAILY_MAX",
-                "X402_SETTLE_ONCHAIN_DETECT", "X402_INVOICE_AMOUNT_JITTER"):
+                "X402_SETTLE_ONCHAIN_DETECT"):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -147,8 +147,7 @@ async def test_match_is_treasury_scoped(tmp_path):
 
 @pytest.mark.asyncio
 async def test_jitter_inert_when_detection_disabled(tmp_path, monkeypatch):
-    # X402_INVOICE_AMOUNT_JITTER defaults ON, but detection defaults OFF ->
-    # the jitter must not fire; two same-amount invoices both keep the exact
+    # detection defaults OFF -> the jitter must not fire; two same-amount invoices both keep the exact
     # amount (byte-identical to pre-T11 behavior).
     monkeypatch.delenv("X402_SETTLE_ONCHAIN_DETECT", raising=False)
     db = await _setup_db(tmp_path)
@@ -166,7 +165,6 @@ async def test_jitter_inert_when_detection_disabled(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_jitter_nudges_colliding_amount_when_detection_on(tmp_path, monkeypatch):
     monkeypatch.setenv("X402_SETTLE_ONCHAIN_DETECT", "true")
-    monkeypatch.setenv("X402_INVOICE_AMOUNT_JITTER", "true")
     db = await _setup_db(tmp_path)
     try:
         first = await invoicing.create_payment_request(
@@ -183,82 +181,6 @@ async def test_jitter_nudges_colliding_amount_when_detection_on(tmp_path, monkey
         assert row["amount_usd"] == second["amount_usd"]
     finally:
         await db.close()
-
-
-@pytest.mark.asyncio
-async def test_jitter_flag_off_is_overridden_when_detection_on(tmp_path, monkeypatch):
-    """I2 safety fix (Task 11 review): X402_SETTLE_ONCHAIN_DETECT=true +
-    X402_INVOICE_AMOUNT_JITTER=false is an UNSAFE combination — on-chain
-    auto-settlement with zero disambiguation. Jitter is forced on internally
-    regardless of the flag; the flag can only disable jitter while detection
-    is also off (where it stays fully inert — see
-    test_jitter_inert_when_detection_disabled)."""
-    monkeypatch.setenv("X402_SETTLE_ONCHAIN_DETECT", "true")
-    monkeypatch.setenv("X402_INVOICE_AMOUNT_JITTER", "false")
-    db = await _setup_db(tmp_path)
-    try:
-        first = await invoicing.create_payment_request(
-            user_id="alice", session_id="s1", amount_usd=3.0, purpose="a", db=db)
-        second = await invoicing.create_payment_request(
-            user_id="alice", session_id="s2", amount_usd=3.0, purpose="b", db=db)
-        assert first["amount_usd"] == 3.0
-        assert second["amount_usd"] != 3.0  # forced jitter, flag notwithstanding
-        assert round(second["amount_usd"] - 3.0, 6) == 0.0001
-    finally:
-        await db.close()
-
-
-@pytest.mark.asyncio
-async def test_jitter_forced_on_logs_a_notice(tmp_path, monkeypatch, caplog):
-    """I2: forcing jitter on against the operator's explicit setting must be
-    observable (a logged notice), not a silent override."""
-    monkeypatch.setenv("X402_SETTLE_ONCHAIN_DETECT", "true")
-    monkeypatch.setenv("X402_INVOICE_AMOUNT_JITTER", "false")
-    db = await _setup_db(tmp_path)
-    try:
-        with caplog.at_level("WARNING", logger="modules.x402.invoicing"):
-            await invoicing.create_payment_request(
-                user_id="alice", session_id="s1", amount_usd=1.0, purpose="a", db=db)
-        assert any("forcing" in r.message.lower() and "jitter" in r.message.lower()
-                   for r in caplog.records)
-    finally:
-        await db.close()
-
-
-@pytest.mark.asyncio
-async def test_jitter_flag_off_stays_inert_when_detection_also_off(tmp_path, monkeypatch):
-    """The flag retains its ONE remaining function: disabling jitter is only
-    honored while detection is off (where it was already inert either way)."""
-    monkeypatch.delenv("X402_SETTLE_ONCHAIN_DETECT", raising=False)
-    monkeypatch.setenv("X402_INVOICE_AMOUNT_JITTER", "false")
-    db = await _setup_db(tmp_path)
-    try:
-        first = await invoicing.create_payment_request(
-            user_id="alice", session_id="s1", amount_usd=3.0, purpose="a", db=db)
-        second = await invoicing.create_payment_request(
-            user_id="alice", session_id="s2", amount_usd=3.0, purpose="b", db=db)
-        assert first["amount_usd"] == second["amount_usd"] == 3.0
-    finally:
-        await db.close()
-
-
-# --- I1: concurrent-create TOCTOU (amount-dedupe race) -----------------------
-#
-# `DatabaseConnection` wraps a SYNCHRONOUS `sqlite3.Connection` — none of
-# `execute`/`fetch_one`/`fetch_all` ever hit a real I/O suspension point, and
-# `asyncio.Lock.acquire()` returns immediately when uncontended (no genuine
-# yield either). So a bare `asyncio.gather(coro1, coro2)` never actually
-# interleaves `coro1`/`coro2`: the first-scheduled task runs to completion
-# (or to its first REAL suspension) before the second one gets a turn. That
-# means a naive version of this test would pass identically whether or not
-# the `_treasury_lock` existed — there is no genuine check-then-act race for
-# it to close, so the test would never catch a regression that removed the
-# lock. Forcing a real yield point (`await asyncio.sleep(0)`) right after the
-# collision-check SELECT and before the INSERT reintroduces a genuine
-# scheduler switch at exactly the TOCTOU window `_treasury_lock` guards —
-# WITHOUT the lock the second task's SELECT can now run before the first
-# task's INSERT (both see "no collision"); WITH the lock, the second task
-# blocks trying to acquire it (a real suspension) until the first releases.
 
 
 @pytest.mark.asyncio
@@ -279,7 +201,6 @@ async def test_concurrent_creates_same_amount_end_with_distinct_amounts(tmp_path
     `_treasury_lock` in the source reproduces the failure this test now
     catches)."""
     monkeypatch.setenv("X402_SETTLE_ONCHAIN_DETECT", "true")
-    monkeypatch.setenv("X402_INVOICE_AMOUNT_JITTER", "true")
 
     import asyncio
 
@@ -329,7 +250,6 @@ async def test_concurrent_creates_distinct_amounts_are_unaffected_by_the_lock(
     amount that has no collision to begin with — two concurrent creates at
     DIFFERENT amounts both keep their exact amount."""
     monkeypatch.setenv("X402_SETTLE_ONCHAIN_DETECT", "true")
-    monkeypatch.setenv("X402_INVOICE_AMOUNT_JITTER", "true")
     db = await _setup_db(tmp_path)
     try:
         import asyncio
@@ -353,9 +273,8 @@ async def test_jitter_never_exceeds_cap(tmp_path, monkeypatch):
     second same-amount pending invoice — the partial UNIQUE index forbids the
     ambiguous duplicate, and jitter must never exceed the cap. (With a normal
     cap, jitter has room and the second invoice succeeds at 10.0001 — see
-    test_two_same_amount_invoices_get_distinct_jittered_amounts.)"""
+    test_jitter_nudges_colliding_amount_when_detection_on.)"""
     monkeypatch.setenv("X402_SETTLE_ONCHAIN_DETECT", "true")
-    monkeypatch.setenv("X402_INVOICE_AMOUNT_JITTER", "true")
     monkeypatch.setenv("X402_INVOICE_MAX_USD", "10.00005")
     db = await _setup_db(tmp_path)
     try:
@@ -377,7 +296,6 @@ async def test_jitter_never_exceeds_cap(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_jitter_only_compares_against_pending_rows(tmp_path, monkeypatch):
     monkeypatch.setenv("X402_SETTLE_ONCHAIN_DETECT", "true")
-    monkeypatch.setenv("X402_INVOICE_AMOUNT_JITTER", "true")
     db = await _setup_db(tmp_path)
     try:
         first = await invoicing.create_payment_request(

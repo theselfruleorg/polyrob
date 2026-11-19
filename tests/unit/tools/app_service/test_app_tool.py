@@ -287,3 +287,19 @@ def test_a_stuck_removal_shows_its_reason_and_only_that_reason():
     old = {"remove_requested": 1, "status": "failed", "last_failure_error": "health check failed"}
     assert _health(old) == " — removal queued"
     assert _health({"remove_requested": 1, "status": "running"}) == " — removal queued"
+
+
+def test_list_apps_with_a_slug_shows_one_app_in_full(tmp_path, owner_ctx, app_env, green_orch,
+                                                     events):
+    """120 W2: the same lines as the owner's /apps show (core.app_service.owner_ops)."""
+    from core.app_service.owner_ops import show_lines
+    from tools.app_service.tool import ListAppsParams
+    tool = make_tool(tmp_path, orch=green_orch)
+    run_deploy(tool, owner_ctx)
+    res = asyncio.run(tool.list_apps(ListAppsParams(slug="demo-status"),
+                                     execution_context=owner_ctx))
+    want = show_lines(tool._registry, "owner-1", "demo-status")
+    assert res.extracted_content == "\n".join(want)
+    assert "cmd python server.py" in res.extracted_content
+    res = asyncio.run(tool.list_apps(ListAppsParams(slug="nope"), execution_context=owner_ctx))
+    assert "no app 'nope'" in res.extracted_content

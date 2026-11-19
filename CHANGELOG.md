@@ -10,6 +10,129 @@ short, user-facing notes for each release are on its GitHub Release page.
 
 ## [Unreleased]
 
+## [1.7.13] — 2026-11-19
+
+### Added
+
+- The agent can start a sub-agent on any model (`delegate_task(model=…)`): no price gate and no
+  owner card: the agent reads the prices (`agent_status(view="models")`), the result names the
+  price, and a model with no known price runs with a warning.
+- The agent can set the model of a goal or a scheduled job (`model` + `why`) or a tier, from any
+  turn. A model the owner set is locked, an unattended change sends the
+  owner one notice, and every run records the model it used.
+- `/model heavy <name>`, `/model light <name>` and `/model choice free|listed` (also
+  `polyrob model heavy|light|choice`): the owner sets the two helper models and what the agent may
+  choose. `/model` shows the settings and the agent's last model choices.
+- `WALLET_VENUE_DAILY_CAP_<VENUE>_USD` has a settings row (the code read it with none), and a test
+  now fails a setting that no shipped code names or a setting read through `env.get` with no row.
+- Every owner verb names the agent's twin or the reason it has none (`Verb.agent` / `owner_only`); a
+  ratchet fails a new verb with neither and counts the gaps. `/config search` and `polyrob pack
+  search` name a setting or a pack index they could not read, never "no match".
+- The agent reads the install checks of `polyrob doctor --full` that name no credential with
+  `agent_status(view="health")` (extras, packs, browser, db schema, data home, sandbox): one home,
+  `core/health_slot.py`, that the doctor prints too; owner only, host folders masked.
+- The agent may ask for an update of its own service on an owner-approved call
+  (`self_env_request_update`, the `/update` rule), reads `/recap` (`recent_activity`) and a goal's
+  history (`goal_show`); the status identity lines name the Telegram and Discord bot handles.
+- The agent reads its settings as `/config` does (`preferences` search, changed, check; secrets show
+  only as set) and may unset a safe preference of its own; when no tool matches, `tool_search`
+  names the packs in the index that would bring one. `/config check` no longer echoes a value.
+- The agent reads its groups and contacts: `message(action="targets")`, `room_read audit`, and
+  each contact's state in `contact_history` (the `/contacts` text); it may silence itself in a
+  group for up to 24 hours and proposes a group's mode on a card, and widens nothing.
+- The agent reads its money state: unaccounted submissions in `x402_wallet_status`, the trading
+  mandate and bridges in flight in `defi_data.positions`, payable assets in `x402_invoices`, and
+  the offer report and threads in `offer_manage`; no read moves money or adds authority.
+- The agent reads its own refusals and event log (`agent_status` views `refusals`, `log`) and,
+  for the owner, the `/usage` cost breakdown (`usage_summary days`) on every setup; `/why`,
+  `/usage` and `/telemetry` read the same core functions.
+- The agent pauses and resumes its own jobs (a failure pause only when the owner asks), pauses and
+  lifts goals on the owner's word, lists its owner asks, lists and stops its background helpers,
+  withdraws a card it raised, reads a job's last runs and shows one app in full.
+- The agent can push its avatar to its own X, Telegram and Discord pictures and clear it, when the
+  owner asks; `/avatar push` does the same in the chat. One push procedure and one image-reference
+  branch serve the terminal, the chat and the agent.
+- Slack shows native buttons for approvals, cards and choices (Block Kit); a tap is the presser typing
+  the card line (same owner/tier checks as typing it). Needs Interactivity on in the Slack app. No menus yet.
+
+### Changed
+
+- `/model <name>` switches at once at any price: the price-gate quote and its `go` line are gone
+  (an old `go` is ignored). The reply names the price.
+- `/status` in chat is the short form: health, then session, goals, loops, delivery, wallet and money;
+  `/status all` shows every section. `/goals` prints one count line, `/wallet` one cap line, and a long card
+  command is cut with the tap that shows all of it.
+- An owner seat that ran a money verb is its one reporter: no separate transaction notice repeats the hash
+  (`tx_notify.seat_reports`; IN FLIGHT stays). A notice shows the link in place of the short hash, and no lane.
+- A money card and its result message show the owner's view (`core/surfaces/money_report.py`): no guard,
+  lane or gas lines when nothing went wrong, a decided card shows its receipt once, and "Send started"
+  names the order. The stored text is unchanged.
+
+### Removed
+
+- The agent's `cronjob_schedule` tool has no `wake_agent` parameter now: a job with a task and no model run did nothing
+  and was recorded as done. The payload key stays for the owner's model-free digest.
+- `UNTRUSTED_TOOL_RESULT_WRAP`, `COMPACTION_PROMPT_GUARD` and `SUBAGENT_LEAST_PRIVILEGE` have no off switch now, and
+  seventeen default-ON switches are constants (the 1.7.13 upgrade note names each). One set to `off` gets the default.
+- `AVATAR_TOOL_ENABLED` is gone: the agent has its avatar action on every install. A read is free; set, clear and push need an owner turn.
+- `FS_REALPATH_CONFINE` and `HISTORY_SECRET_SCRUB`: the workspace path confinement and the secret
+  scrub of stored history have no off switch now.
+- Sixteen settings with no effect are retired: four step and LLM timeouts, `COMPACTION_CHECKPOINT`,
+  `CHAT_INTENT_CLASSIFIER`, `CONTINUITY_LLM_SUMMARY`, `AGENT_WALLET_BACKEND`, `VISION_CALL_COST`,
+  `TOOL_CALL_COST`, `X402_INVOICE_AMOUNT_JITTER` and five more. No behaviour changes.
+- The settings `PFP_PUSH_TWITTER`, `PFP_PUSH_TELEGRAM` and `PFP_PUSH_DISCORD`. An avatar push needs no switch: it updates
+  each account that has credentials, and one with none says "not connected". `polyrob doctor` names an old line.
+
+### Fixed
+
+- A model-free read job is told it carries no model and no tools: `cronjob_schedule`/`edit`/`show`
+  listed the full toolset and the X post gates for a run that starts no model.
+- A v4 position read prints the value of the position now on its own line, and the result
+  against holding names its parts: an agent read the sum with the withdrawals as the value now.
+- A client that paid an invoice through `POST /api/x402/requests/{id}/pay` now counts as a paying
+  client in the reputation read: that path stores the payer only in the settling authorization.
+- An agent pause and resume keeps a job's failure count, and a stored agent job that runs nothing
+  fails. A long card result and a send whose booking fails keep the tx hash.
+- A live offer's listing (`GET /api/offers`, `/api/offers/{id}`) carries the buyer's terms, the refund
+  rule and the acceptance window: a machine buyer read them nowhere.
+- An x402 payment between two agents works end to end: the Base USDC challenge names the token's
+  signing domain ("USD Coin"), an unpaid `POST /api/x402/requests/{id}/pay` answers with its challenge,
+  a JSON body goes out as JSON, and a 202 "settling" answer reads UNCONFIRMED, never paid.
+- `/send … go` and a card Confirm read each price once for the conversion, the quote and the send
+  (`tools.intel.price.one_decision`, at most 10 s old): five fresh reads met the indexer's rate limit
+  and each refused read waited 8 s.
+- The agent now reads the transaction hash of a payment card that landed: `cards_read` and the wake after the owner's
+  taps carry the `RESULT`, `tx` and `block` lines, and a long list drops whole cards, never half a hash. Before, it saw
+  only the amount line and could record a wrong hash.
+- A set venue cap (`WALLET_VENUE_DAILY_CAP_<VENUE>_USD`, or another setting with a pattern row) now shows in
+  `polyrob config list`, `polyrob doctor --flags` and the settings search; only `config get` showed it.
+- A retired setting name on `/config` and `polyrob config get`, `explain` and `set` now answers "retired" and names what
+  replaced it; it answered "unknown key" and suggested a different setting.
+- A refusal caused by the owner's `approvals.provider=deny` preference names the preference; it named `APPROVAL_PROVIDER=deny`.
+  The stop also holds for a service that cannot read the deployed env file: it reads the owner from its own env.
+- The agent's avatar set, clear and push refuse on every cron job and goal, a standing one too. A cancel of a paused cron job is refused when the caller may not lift that pause. The agent's refusals view is framed as data, and `polyrob owner allowlist` prints the one allowlist text.
+- A hunt for a tool that does not exist now stops: a tool search, a tool description read and a tool load are never new work for the no-progress guard, so the run is warned, refused, then ended. A one- or two-letter search word matches a whole word only.
+- An owner pause of a job that the agent paused now takes the pause over, so only the owner lifts it. The agent's settings
+  reads show an owner identifier only as set and refuse another tenant. A room photo push changes that room's photo only.
+- The owner's `approvals.provider=deny` preference now stops an X post, a first publish and an HF
+  deploy, as `APPROVAL_PROVIDER=deny` does; these acts read the env value only.
+- The signer's `[env]` table and its egress allowlist carry `DEFI_SOLANA_RPC`, the Solana pin the
+  code reads; they carried a name that no code read. Applies at the next signer provision.
+- An X write or DM refused by the hourly cap now says when the next slot opens (minutes) and
+  tells the agent not to retry from any session before then, instead of "Try later."; the cap,
+  its budget and the wire calls are unchanged.
+- The agent's own status reads the one context gauge (total, limit, slots, measured or estimated);
+  the avatar image the on-chain card publishes is served by the API without a login; an avatar
+  source error names the step, the host and an unreadable node; `ipfs://` uses `IPFS_GATEWAY`.
+- A billed model call that the provider refuses (a 4xx except 408, or 500/503/529) returns its
+  credit hold at once; a timeout, a cancel and a proxy error still keep it for the admin.
+- A charge is no longer one credit too high on an exact amount: one decimal conversion serves the
+  hold, the settlement and the provider-billed correction, and deposits and the 402 answer read
+  `CREDIT_VALUE_USD`.
+- A user with no credits no longer pauses the agent for every user: an account credit refusal
+  is never read as provider credit death (no latch, no failover), and the provider pause notice
+  goes to the owner.
+
 ## [1.7.12] — 2026-11-16
 
 ### Changed
@@ -50,6 +173,11 @@ short, user-facing notes for each release are on its GitHub Release page.
 - `AGENT_NFT_ENABLED` is an owner setting: `/config set AGENT_NFT_ENABLED true` from chat, and the
   agent proposes it on a one-tap card instead of filing an operator request.
 
+### Removed
+
+- The settings `PFP_PUSH_TWITTER`, `PFP_PUSH_TELEGRAM` and `PFP_PUSH_DISCORD`. An avatar push needs no switch: it updates
+  each account that has credentials, and one with none says "not connected". `polyrob doctor` names an old line.
+
 ### Fixed
 
 - A new v4 deposit with `slippage_bps` from 991 to 1000 no longer always refuses: its maximum
@@ -76,6 +204,11 @@ short, user-facing notes for each release are on its GitHub Release page.
 - `twitter_article` writes and publishes an X Article (title, headings, lists, cover image); media uploads use the
   X v2 media API (images, GIFs, chunked video, `media_alt_texts`); tweet reads carry the full long-post text, the
   Article and the attached media.
+
+### Removed
+
+- The settings `PFP_PUSH_TWITTER`, `PFP_PUSH_TELEGRAM` and `PFP_PUSH_DISCORD`. An avatar push needs no switch: it updates
+  each account that has credentials, and one with none says "not connected". `polyrob doctor` names an old line.
 
 ### Fixed
 
@@ -177,6 +310,11 @@ short, user-facing notes for each release are on its GitHub Release page.
 - A non-owner API tenant gets no execution tools.
 - Logs redact a 64-hex value assigned to a key-like name; the app slug `app` is reserved.
 
+### Removed
+
+- The settings `PFP_PUSH_TWITTER`, `PFP_PUSH_TELEGRAM` and `PFP_PUSH_DISCORD`. An avatar push needs no switch: it updates
+  each account that has credentials, and one with none says "not connected". `polyrob doctor` names an old line.
+
 ### Fixed
 
 - A goal that stops again after a retry is always told to the owner; a time-stamp compare could miss about one stop in eight.
@@ -212,6 +350,11 @@ short, user-facing notes for each release are on its GitHub Release page.
 
 - The `compute` action (hashes and the fair draw) and the host-job status files with their `/status` and `<operations>` lines, added in 1.7.7. They served one install's task; an agent that needs a hash or a draw writes and runs its own script.
 - The agent NFT mint help no longer states a price; the quote names it.
+
+### Removed
+
+- The settings `PFP_PUSH_TWITTER`, `PFP_PUSH_TELEGRAM` and `PFP_PUSH_DISCORD`. An avatar push needs no switch: it updates
+  each account that has credentials, and one with none says "not connected". `polyrob doctor` names an old line.
 
 ### Fixed
 
@@ -299,6 +442,11 @@ short, user-facing notes for each release are on its GitHub Release page.
 - `SELF_CONTEXT_REQUIRE_REVIEW` and `OWNER_DOC_REQUIRE_REVIEW`: nothing read them.
 - `SKILLS_WRITABLE_REQUIRE_REVIEW` and `SKILL_OVERWRITE_PROTECT`: a skill the owner's agent, job or reviewer writes is live at once with a rollback; only a correspondent, room or other-tenant session stays a draft.
 - `TWITTER_REQUIRE_APPROVAL`: an owner's turn or standing job posts to X with no tap, also on the browser rail; a rule about what to post goes in the owner rules, and `APPROVAL_PROVIDER=deny` still stops every post.
+
+### Removed
+
+- The settings `PFP_PUSH_TWITTER`, `PFP_PUSH_TELEGRAM` and `PFP_PUSH_DISCORD`. An avatar push needs no switch: it updates
+  each account that has credentials, and one with none says "not connected". `polyrob doctor` names an old line.
 
 ### Fixed
 
@@ -391,6 +539,11 @@ short, user-facing notes for each release are on its GitHub Release page.
 
 - The `release` pause scope (`/pause release`): nothing used it. An older pause record that names it pauses nothing.
 
+### Removed
+
+- The settings `PFP_PUSH_TWITTER`, `PFP_PUSH_TELEGRAM` and `PFP_PUSH_DISCORD`. An avatar push needs no switch: it updates
+  each account that has credentials, and one with none says "not connected". `polyrob doctor` names an old line.
+
 ### Fixed
 
 - `update --apply` and `/update` work on a git checkout run by a `systemctl --user` unit: it now counts as a git install.
@@ -437,6 +590,11 @@ short, user-facing notes for each release are on its GitHub Release page.
 
 - `SESSION_DIR_GC_APPLY`, `core/session_gc.py` and the `session_gc` event: that second sweep had no artifact guard and could delete
   what session retention protects. Session retention is now the only sweep of session trees; a line that sets the flag does nothing.
+
+### Removed
+
+- The settings `PFP_PUSH_TWITTER`, `PFP_PUSH_TELEGRAM` and `PFP_PUSH_DISCORD`. An avatar push needs no switch: it updates
+  each account that has credentials, and one with none says "not connected". `polyrob doctor` names an old line.
 
 ### Fixed
 
@@ -501,6 +659,11 @@ short, user-facing notes for each release are on its GitHub Release page.
 - Apps: an app can be removed for good (container, snapshots, logs, record and address) by the agent
   (`app_service` `remove`) and the owner (`/apps remove`), and the owner can start a stopped app again.
 
+### Removed
+
+- The settings `PFP_PUSH_TWITTER`, `PFP_PUSH_TELEGRAM` and `PFP_PUSH_DISCORD`. An avatar push needs no switch: it updates
+  each account that has credentials, and one with none says "not connected". `polyrob doctor` names an old line.
+
 ### Fixed
 
 - Skills: 40 bundled and pack skills corrected against the code (book size is simulated; every live spend asks
@@ -520,6 +683,11 @@ short, user-facing notes for each release are on its GitHub Release page.
 
 - Docs: `CONFIGURATION.md` says a posture member has no row of its own; set one member with `POLYROB_OVERRIDES`
   (a direct env line of a member name is ignored).
+
+### Removed
+
+- The settings `PFP_PUSH_TWITTER`, `PFP_PUSH_TELEGRAM` and `PFP_PUSH_DISCORD`. An avatar push needs no switch: it updates
+  each account that has credentials, and one with none says "not connected". `polyrob doctor` names an old line.
 
 ### Fixed
 
@@ -547,6 +715,11 @@ short, user-facing notes for each release are on its GitHub Release page.
   `/ask_<id>`, `/card_<id>`, `/skill_<id>`, `/rules`, `/inbox all`; CLI, REPL and console share one pending view.
 - Docs: README rewritten (531 → 264 lines); payments split into payments, `wallet.md` and `onchain.md`; slash
   commands in a generated `chat-commands.md`; every guide page checked against the code; a 1.7.1 upgrade note.
+
+### Removed
+
+- The settings `PFP_PUSH_TWITTER`, `PFP_PUSH_TELEGRAM` and `PFP_PUSH_DISCORD`. An avatar push needs no switch: it updates
+  each account that has credentials, and one with none says "not connected". `polyrob doctor` names an old line.
 
 ### Fixed
 
@@ -650,6 +823,11 @@ short, user-facing notes for each release are on its GitHub Release page.
   a failed owner-armed job tells the owner; the digest lists failures first and ask ages; `goal_cancel` withdraws an ask.
 - `APP_SERVICE_IMAGE` defaults to the public code-exec dev image (`nikolaik/python-nodejs:python3.11-nodejs20`,
   one shared constant) instead of `polyrob-dev:latest`, which exists only where a private factory built it.
+
+### Removed
+
+- The settings `PFP_PUSH_TWITTER`, `PFP_PUSH_TELEGRAM` and `PFP_PUSH_DISCORD`. An avatar push needs no switch: it updates
+  each account that has credentials, and one with none says "not connected". `polyrob doctor` names an old line.
 
 ### Fixed
 - Rooms: a member's replied-to text is one line on every seat (no forged owner line in the owner's turn); an
@@ -782,6 +960,11 @@ short, user-facing notes for each release are on its GitHub Release page.
 - Solana swaps write the position book, a major↔stable swap books P&L, one $1 dust line is shared, and the
   `exits`, `treasury-trading`, `sizing-and-risk` and `position-journal` skills lose their job templates and ledger text.
 
+### Removed
+
+- The settings `PFP_PUSH_TWITTER`, `PFP_PUSH_TELEGRAM` and `PFP_PUSH_DISCORD`. An avatar push needs no switch: it updates
+  each account that has credentials, and one with none says "not connected". `polyrob doctor` names an old line.
+
 ### Fixed
 
 - An unreadable or non-finite custom screen line makes the pool screen UNSCREENABLE and survivability PARTIAL (held at C);
@@ -835,6 +1018,11 @@ short, user-facing notes for each release are on its GitHub Release page.
 - Goal, cron, delegated and worker runs stop at one operator step cap, `AUTONOMOUS_MAX_STEPS` (150), and at
   `AUTONOMOUS_RUN_BUDGET_USD` ($2.00) of spend, sub-agents included; at the cap they report once, and a run that stops
   before `done()` names why in its record, the CLI and the session status.
+
+### Removed
+
+- The settings `PFP_PUSH_TWITTER`, `PFP_PUSH_TELEGRAM` and `PFP_PUSH_DISCORD`. An avatar push needs no switch: it updates
+  each account that has credentials, and one with none says "not connected". `polyrob doctor` names an old line.
 
 ### Fixed
 
@@ -951,6 +1139,11 @@ short, user-facing notes for each release are on its GitHub Release page.
   `AUX_AUTO`; `POLYROB_<PROVIDER>_MODEL` is no longer read. `polyrob doctor` names each retired line still set.
 - Rails, objectives, streams and the planner: `/rail`, `polyrob rails`, `/goal objective`, the `streams`/`planner`
   pause scopes, `polyrob owner pause-streams`; 11 flags retire. A recurring need is a scheduled job.
+
+### Removed
+
+- The settings `PFP_PUSH_TWITTER`, `PFP_PUSH_TELEGRAM` and `PFP_PUSH_DISCORD`. An avatar push needs no switch: it updates
+  each account that has credentials, and one with none says "not connected". `polyrob doctor` names an old line.
 
 ### Fixed
 
@@ -1112,6 +1305,11 @@ provider. `polyrob doctor` names each line to change; see [upgrading](docs/guide
 - 61 internal tuning env knobs are module constants with unchanged defaults, and four dead flag rows are gone.
 - The Fly kit, `deployment/legacy/`, `CLEAN_DEPLOY.md` and the dead one-off scripts.
 
+### Removed
+
+- The settings `PFP_PUSH_TWITTER`, `PFP_PUSH_TELEGRAM` and `PFP_PUSH_DISCORD`. An avatar push needs no switch: it updates
+  each account that has credentials, and one with none says "not connected". `polyrob doctor` names an old line.
+
 ### Fixed
 
 - `DEFAULT_MODEL`/`CHAT_MODEL` reach every run on the pinned provider (cron, goals, planner, clients, fallback), not only
@@ -1209,6 +1407,11 @@ provider. `polyrob doctor` names each line to change; see [upgrading](docs/guide
 ### Removed
 - The deprecated `/api/polymarket/*` and `/api/hyperliquid/*` mounts that 1.2.0 kept for one release; use
   `/api/packs/markets/...` (the old paths now answer 404).
+
+### Removed
+
+- The settings `PFP_PUSH_TWITTER`, `PFP_PUSH_TELEGRAM` and `PFP_PUSH_DISCORD`. An avatar push needs no switch: it updates
+  each account that has credentials, and one with none says "not connected". `polyrob doctor` names an old line.
 
 ### Fixed
 - A bare `pip install polyrob` could not import `tools` (and refused the `discovery` pack): `openai` 3.x moved to
@@ -1318,6 +1521,11 @@ provider. `polyrob doctor` names each line to change; see [upgrading](docs/guide
   writes an owner pin (no mint/reveal) beside the token pins; the root file stays for admin pins. `/nft` lists the trusted collections.
 - **The agent-NFT journal goes on chain:** each account action carries its signed entry in the same `executeBatch`
   (`JournalLog.log`); the next entry continues the chain read from the account's events. No site upload.
+
+### Removed
+
+- The settings `PFP_PUSH_TWITTER`, `PFP_PUSH_TELEGRAM` and `PFP_PUSH_DISCORD`. An avatar push needs no switch: it updates
+  each account that has credentials, and one with none says "not connected". `polyrob doctor` names an old line.
 
 ### Fixed
 
@@ -1696,6 +1904,11 @@ provider. `polyrob doctor` names each line to change; see [upgrading](docs/guide
 - The agent-writable `project/.pylibs` lazy-install directory.
 - The unused `CompactionManager` policy and the dead `AUTO_KNOWLEDGE_RETENTION_DAYS`
   setting.
+
+### Removed
+
+- The settings `PFP_PUSH_TWITTER`, `PFP_PUSH_TELEGRAM` and `PFP_PUSH_DISCORD`. An avatar push needs no switch: it updates
+  each account that has credentials, and one with none says "not connected". `polyrob doctor` names an old line.
 
 ### Fixed
 
@@ -2091,6 +2304,11 @@ All flag-gated and default-inert unless noted; prod arms them per the proposal's
   default — an ops knob for a seat whose cheapest upstream stalls (four 290–410 s timeouts and
   five money-rail cap cuts in one afternoon on prod).
 
+### Removed
+
+- The settings `PFP_PUSH_TWITTER`, `PFP_PUSH_TELEGRAM` and `PFP_PUSH_DISCORD`. An avatar push needs no switch: it updates
+  each account that has credentials, and one with none says "not connected". `polyrob doctor` names an old line.
+
 ### Fixed
 
 - `anysite_api`: an empty answer from a `/search/` endpoint to a query longer than two words now
@@ -2256,6 +2474,11 @@ All flag-gated and default-inert unless noted; prod arms them per the proposal's
   drained by an owner-run unit, because the hardened service identity cannot reach
   the developer's tools directly.
 
+### Removed
+
+- The settings `PFP_PUSH_TWITTER`, `PFP_PUSH_TELEGRAM` and `PFP_PUSH_DISCORD`. An avatar push needs no switch: it updates
+  each account that has credentials, and one with none says "not connected". `polyrob doctor` names an old line.
+
 ### Fixed
 
 - **Context overflow no longer kills a run.** The pre-LLM token check prunes once
@@ -2392,6 +2615,11 @@ All flag-gated and default-inert unless noted; prod arms them per the proposal's
   `wallet_per_tx_usd = 220`, the pref sat on disk, the guard kept reading the
   env's $120, and the agent asked the owner to edit `polyrob.env` and restart.
 
+### Removed
+
+- The settings `PFP_PUSH_TWITTER`, `PFP_PUSH_TELEGRAM` and `PFP_PUSH_DISCORD`. An avatar push needs no switch: it updates
+  each account that has credentials, and one with none says "not connected". `polyrob doctor` names an old line.
+
 ### Fixed
 
 - **The wallet caps apply LIVE.** `PolicyGate` copied both caps at construction
@@ -2478,6 +2706,11 @@ All flag-gated and default-inert unless noted; prod arms them per the proposal's
   writes a Playwright-server unit instead (token in a root-only env file,
   private bind enforced) and prints the agent's `BROWSER_WSS_URL` — the shape
   that removes the shared kernel. Guide: `docs/guide/self-hosting.md`.
+
+### Removed
+
+- The settings `PFP_PUSH_TWITTER`, `PFP_PUSH_TELEGRAM` and `PFP_PUSH_DISCORD`. An avatar push needs no switch: it updates
+  each account that has credentials, and one with none says "not connected". `polyrob doctor` names an old line.
 
 ### Fixed
 
@@ -2602,6 +2835,11 @@ All flag-gated and default-inert unless noted; prod arms them per the proposal's
   tokens already held, and removing them on withdrawal erased unrelated
   holdings. Position receipts stay in the NFT and transaction telemetry until
   an LP-specific basis exists.
+
+### Removed
+
+- The settings `PFP_PUSH_TWITTER`, `PFP_PUSH_TELEGRAM` and `PFP_PUSH_DISCORD`. An avatar push needs no switch: it updates
+  each account that has credentials, and one with none says "not connected". `polyrob doctor` names an old line.
 
 ### Fixed
 

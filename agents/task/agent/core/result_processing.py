@@ -239,23 +239,20 @@ class ResultProcessingMixin:
 			tool_responses = []
 			# UP-06: resolve each tool call's (action_name, tool namespace) so untrusted
 			# results (mcp/browser/web/perplexity) get framed as DATA before entering
-			# history. Gated on the flag; source_for=None => no wrapping (legacy).
-			source_for = None
-			from agents.task.constants import UNTRUSTED_TOOL_RESULT_WRAP
-			if UNTRUSTED_TOOL_RESULT_WRAP:
-				name_by_id = {tc.get('id'): tc.get('name') for tc in tool_calls_to_pass if tc.get('id')}
+			# history.
+			name_by_id = {tc.get('id'): tc.get('name') for tc in tool_calls_to_pass if tc.get('id')}
 
-				def _source_for(tc_id, _name_by_id=name_by_id):
-					name = _name_by_id.get(tc_id)
-					tool = None
-					if name and self.controller:
-						# NOTE: get_action() returns the callable; get_action_details()
-						# returns the RegisteredAction carrying the .tool namespace.
-						ra = self.controller.get_action_details(name)
-						tool = getattr(ra, 'tool', None) if ra else None
-					return (name, tool)
+			def _source_for(tc_id, _name_by_id=name_by_id):
+				name = _name_by_id.get(tc_id)
+				tool = None
+				if name and self.controller:
+					# NOTE: get_action() returns the callable; get_action_details()
+					# returns the RegisteredAction carrying the .tool namespace.
+					ra = self.controller.get_action_details(name)
+					tool = getattr(ra, 'tool', None) if ra else None
+				return (name, tool)
 
-				source_for = _source_for
+			source_for = _source_for
 			# validation_errors is resolved above; pass it so the positional fallback
 			# can skip the calls that were dropped before execution (they consumed no
 			# slot in `result`).
@@ -390,12 +387,11 @@ class ResultProcessingMixin:
 		path) is paired by the step's actions: when ANY action this step is
 		untrusted, every unpaired result is stamped with that untrusted source.
 		Over-wrapping is harmless; an unwrapped browser page is the failure
-		mode. Gated by UNTRUSTED_TOOL_RESULT_WRAP (off ⇒ nothing stamped).
-		Never raises.
+		mode. Never raises.
 		"""
 		try:
-			from agents.task.agent.core.untrusted_render import SOURCE_KEY, wrap_enabled
-			if not wrap_enabled() or not result:
+			from agents.task.agent.core.untrusted_render import SOURCE_KEY
+			if not result:
 				return
 			from core.security.untrusted_wrap import is_untrusted_tool
 

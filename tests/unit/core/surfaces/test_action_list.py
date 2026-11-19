@@ -83,22 +83,22 @@ def test_only_code_produced_notices_derive_buttons_from_their_text():
 
 @pytest.mark.asyncio
 async def test_a_surface_without_actions_sends_the_same_text():
-    from surfaces.slack.surface import SlackSurface
+    from surfaces.whatsapp.surface import WhatsAppSurface
 
     sent = []
 
     class _Client:
-        async def send_message(self, channel, text, **kw):
-            sent.append((channel, text, tuple(sorted(kw))))
-            return {"id": "1"}
+        async def send_text(self, to, text, **kw):
+            sent.append((to, text, tuple(sorted(kw))))
+            return {"messages": [{"id": "1"}]}
 
-    s = SlackSurface(_Client())
+    s = WhatsAppSurface(_Client())
     assert s.capabilities.supports_actions is False
     body = "Approve? /approve_p_a1b2c3"
-    await s.send(OutboundMessage(session_key="agent:main:slack:dm:555", text=body))
+    await s.send(OutboundMessage(session_key="agent:main:whatsapp:dm:555", text=body))
     plain = list(sent)
     sent.clear()
-    await s.send(OutboundMessage(session_key="agent:main:slack:dm:555", text=body,
+    await s.send(OutboundMessage(session_key="agent:main:whatsapp:dm:555", text=body,
                                  actions=[Action("Approve", "/approve_p_a1b2c3")]))
     assert sent == plain
 

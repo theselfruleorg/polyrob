@@ -190,3 +190,42 @@ def model_set_default(provider: str = None, model_name: str = None):
     if note:
         click.echo(click.style(note, fg="yellow"))
 
+
+
+def _owner_setting(words) -> None:
+    """121: the owner's model settings from a terminal — the chat seats' own handler."""
+    from cli._admin_home import admin_owner_tenant
+    from cli.commands._bootstrap import ensure_env_loaded
+    from core.identity import resolve_identity
+    ensure_env_loaded()
+    user_id = admin_owner_tenant(resolve_identity())
+    from agents.task.model_settings import settings_command, settings_lines
+    from core import model_switch as ms
+    if len(words) == 1 and words[0] != "choice":
+        click.echo("\n".join(settings_lines(user_id)))
+        return
+    cmd = ms.parse_model_args(words)
+    if cmd.action == "error":
+        raise click.ClickException(cmd.error)
+    click.echo(asyncio.run(settings_command(cmd, user_id, "cli")))
+
+
+@model.command("heavy")
+@click.argument("words", nargs=-1)
+def model_heavy(words):
+    """Set the heavy model: `polyrob model heavy <name> [go]`, or `reset`. Bare: show."""
+    _owner_setting(["heavy", *words])
+
+
+@model.command("light")
+@click.argument("words", nargs=-1)
+def model_light(words):
+    """Set the light model: `polyrob model light <name>`, or `reset`. Bare: show."""
+    _owner_setting(["light", *words])
+
+
+@model.command("choice")
+@click.argument("mode", required=False, type=click.Choice(["free", "listed"]))
+def model_choice(mode):
+    """Which models the agent may name for a helper, a goal or a job: free | listed."""
+    _owner_setting(["choice"] + ([mode] if mode else []))

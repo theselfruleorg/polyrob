@@ -487,7 +487,7 @@ class LLMClientAdapter(BaseChatModel):
     async def _agenerate(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, *,
                          reservation_id: Optional[str] = None, **kwargs) -> ChatResult:
         """One batch call. *reservation_id* is the hold of a stream that this call replaces."""
-        from modules.llm.billing_guard import check_adapter, fresh_credential
+        from modules.llm.billing_guard import check_adapter, fresh_credential, release_refused
         await fresh_credential(self._client)
         check_adapter(self)
         client_messages = self._convert_to_client_messages(messages)
@@ -496,7 +496,7 @@ class LLMClientAdapter(BaseChatModel):
         reservation_id = reservation_id or await self._reserve_call()
         request = begin_call()
         # An exception/cancellation retains the reservation: an absent response is not
-        # evidence that the provider did no work.
+        # evidence that the provider did no work (``release_refused`` names the exception).
         try:
             if tools and hasattr(self._client, 'generate_agent_response'):
                 response = await self._client.generate_agent_response(
@@ -519,6 +519,7 @@ class LLMClientAdapter(BaseChatModel):
                 generation.generation_info = {"raw": raw_response}
             return ChatResult(generations=[generation])
         except Exception as e:
+            await release_refused(reservation_id, e)
             self._raise_translated(e)
 
     @property
@@ -559,7 +560,7 @@ class LLMClientAdapter(BaseChatModel):
 
         reservation_id = None
         if token_streaming_enabled() and hasattr(self._client, 'astream_agent_response'):
-            from modules.llm.billing_guard import check_adapter, fresh_credential
+            from modules.llm.billing_guard import check_adapter, fresh_credential, release_refused
             await fresh_credential(self._client)
             check_adapter(self)
             reservation_id = await self._reserve_call()
@@ -572,6 +573,7 @@ class LLMClientAdapter(BaseChatModel):
                 return
             except Exception as e:
                 if yielded_any or not _is_stream_specific(e):
+                    await release_refused(None if yielded_any else reservation_id, e)
                     raise
                 self._logger.warning(
                     f"true token streaming failed before first chunk; "

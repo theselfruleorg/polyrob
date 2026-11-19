@@ -94,7 +94,7 @@
     },
     {
       "name": "agent_status",
-      "sha": "a537b675a8de"
+      "sha": "725cbda37187"
     },
     {
       "name": "insights",
@@ -106,7 +106,7 @@
     },
     {
       "name": "message",
-      "sha": "a477faab6c1f"
+      "sha": "dce9fd246f75"
     },
     {
       "name": "tool_call",
@@ -114,11 +114,11 @@
     },
     {
       "name": "agent_avatar",
-      "sha": "414a85c0b80e"
+      "sha": "91568f31a436"
     },
     {
       "name": "contact_history",
-      "sha": "cd5b9107df8e"
+      "sha": "f90902ed784f"
     },
     {
       "name": "owner_doc_manage",
@@ -126,11 +126,11 @@
     },
     {
       "name": "room_moderate",
-      "sha": "47c4b36dfcef"
+      "sha": "687bb391d42f"
     },
     {
       "name": "room_read",
-      "sha": "9af7efe8d3e0"
+      "sha": "e50a3c2a5d27"
     },
     {
       "name": "self_context_manage",
@@ -141,16 +141,24 @@
       "sha": "0e2b5f77f08e"
     },
     {
+      "name": "delegation_status",
+      "sha": "1f3b46e4bd0a"
+    },
+    {
       "name": "goal_cancel",
       "sha": "ffab27dd80ee"
     },
     {
       "name": "goal_create",
-      "sha": "740d92c15836"
+      "sha": "0781024035a2"
     },
     {
       "name": "goal_list",
-      "sha": "a555429edaaa"
+      "sha": "62c98bad5a95"
+    },
+    {
+      "name": "goal_pause",
+      "sha": "02b6619193aa"
     },
     {
       "name": "goal_show",
@@ -158,11 +166,15 @@
     },
     {
       "name": "goal_unblock",
-      "sha": "7930ccb2da8a"
+      "sha": "4a80c61216ed"
     },
     {
       "name": "goal_update",
-      "sha": "dca0525c60a5"
+      "sha": "45b5e435cc24"
+    },
+    {
+      "name": "usage_summary",
+      "sha": "f91f10890aeb"
     }
   ]
 }

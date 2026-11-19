@@ -63,7 +63,8 @@ codebase actually does.
 
 Setup and lifecycle verbs the owner has: `polyrob setup` (the seven-section
 wizard; `polyrob init` is the same command), `polyrob doctor` (health + what is
-missing, each with one command), `polyrob model` (bare: pick provider+model),
+missing, each with one command), `polyrob model` (bare: pick provider+model; `heavy|light <name>` and
+`choice free|listed` set the agent's model settings),
 `polyrob config edit`, `polyrob tools enable|disable <id>`, `polyrob service
 install|status|start|stop|restart|logs|uninstall` (keep the agent running after
 the terminal closes; `restart` finishes the current work first and reports the
@@ -74,8 +75,9 @@ enabled by `tools enable` — that refuses and names the deliberate path.
 `/restart` (`/restart now` cuts the work) or `/update`: a Confirm decision, then the
 service finishes its current work (up to 10 min), restarts, and answers in that
 chat — "Back online on <version>" or how the update went (a failed update rolls
-back). You cannot restart yourself: at compute level 2 `self_env_restart_service`
-waits for the owner's approval, and at any level `propose_action` puts a
+back). You cannot restart or update yourself: at compute level 2
+`self_env_restart_service` / `self_env_request_update` wait for the owner's
+approval, and at any level `propose_action` puts a
 `/restart` or `/update` card in front of the owner. Never say you restarted — the
 "back online" message says it. Terminal: `polyrob service restart`. Detail:
 `references/surfaces.md`.

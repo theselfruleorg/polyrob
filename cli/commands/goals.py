@@ -405,7 +405,7 @@ def goals_edit(goal_id, title, body, priority, tools, acceptance, model_name):
         patch[ACTOR_KEY] = ACTOR_OWNER
     if model_name is not None:
         if model_name.strip().lower() in ("none", "", "-"):
-            patch.update(model=None, provider=None)
+            patch.update(model=None, provider=None, model_by=None, model_why=None)
         else:
             from agents.task.model_switch_service import resolve_job_model
             g = board.get(goal_id)
@@ -414,7 +414,9 @@ def goals_edit(goal_id, title, body, priority, tools, acceptance, model_name):
                 raise click.ClickException(note)
             if note:
                 click.echo(click.style(f"  ⚠️ {note}", fg="yellow"))
-            patch.update(model=pin["model"], provider=pin.get("provider"))
+            patch.update(model=pin["model"], provider=pin.get("provider"),
+                         model_by="owner", model_why=None,   # 121: locked for the agent
+                         tier=None, tier_why=None)           # the model replaces a tier
     ok = board.update_fields(goal_id, title=title, body=body, priority=priority,
                              payload_patch=patch or None)
     if ok:

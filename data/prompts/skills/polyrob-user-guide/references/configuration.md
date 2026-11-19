@@ -42,18 +42,17 @@ The credit sentinel (`CREDIT_SENTINEL_ENABLED`) stops autonomous runs after a re
 - LLM / providers (45) — `references/config/llm-providers.md`
 - Memory (23) — `references/config/memory.md`
 - Skills (2) — `references/config/skills.md`
-- Autonomy & continuous-learning loops (59) — `references/config/autonomy-continuous-learning-loops.md`
-- Delegation / sub-agents (7) — `references/config/delegation-sub-agents.md`
-- Tools / code-exec / cron / approvals (129) — `references/config/tools-code-exec-cron-approvals.md`
+- Autonomy & continuous-learning loops (55) — `references/config/autonomy-continuous-learning-loops.md`
+- Delegation / sub-agents (6) — `references/config/delegation-sub-agents.md`
+- Tools / code-exec / cron / approvals (125) — `references/config/tools-code-exec-cron-approvals.md`
 - API / server / sessions (36) — `references/config/api-server-sessions.md`
-- Identity / polyrob / local profile (82) — `references/config/identity-polyrob-local-profile.md`
-- Preferences (owner UX) (2) — `references/config/preferences-owner-ux.md`
-- Billing / x402 / wallet (75) — `references/config/billing-x402-wallet.md`
+- Identity / polyrob / local profile (79) — `references/config/identity-polyrob-local-profile.md`
+- Preferences (owner UX) (1) — `references/config/preferences-owner-ux.md`
+- Billing / x402 / wallet (72) — `references/config/billing-x402-wallet.md`
 - DeFi / on-chain trading (41) — `references/config/defi-on-chain-trading.md`
 - WebView / Console (deployment posture, owner login, branding) (21) — `references/config/webview-console-deployment-posture-owner-login-branding.md`
-- Misc / runtime knobs (85) — `references/config/misc-runtime-knobs.md`
+- Misc / runtime knobs (65) — `references/config/misc-runtime-knobs.md`
 - Posture bundles (derived defaults) (1) — `references/config/posture-bundles-derived-defaults.md`
 - Web fetch (Tier-1 lightweight web reader) (1) — `references/config/web-fetch-tier-1-lightweight-web-reader.md`
 - Crypto trading (Polymarket / Hyperliquid) (5) — `references/config/crypto-trading-polymarket-hyperliquid.md`
 - `polyrob update` — self-update & rollback (2) — `references/config/polyrob-update-self-update-rollback.md`
-- Avatar (pfp) (3) — `references/config/avatar-pfp.md`

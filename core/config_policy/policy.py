@@ -79,7 +79,6 @@ from core.config_policy.payment_policy import (  # noqa: F401
     payment_approval_timeout_sec,
 )
 from core.config_policy.capability_toggles import (  # noqa: F401
-    compaction_prompt_guard,
     dead_target_registry_enabled,
     defi_data_enabled,
     defi_trade_enabled,

@@ -44,8 +44,10 @@ Never put a secret, key or seed in a brief. Mark any third-party text you paste 
 - `goal="…", background=true` — you get a `delegation_id` at once and keep working;
   the result arrives later as a new message. It is lost on a restart, so durable work
   is a goal or a job, not a background child. `background` takes no `model`.
-- `model="…"` (per task, or top-level) — a cheaper model for a simple sub-task; omit
-  it to inherit yours. Say so when it changes the cost.
+- `model="…"` (per task, or top-level) — any model id: a cheaper one for a simple
+  sub-task, a stronger one for hard judgement. `agent_status(view="models")` lists the
+  models and prices; there is no price gate, so choose by price. Omit it to inherit yours.
+  Say so when it changes the cost.
 - `profile="<worker id>"` — only when `worker_manage(action="list")` shows that worker
   as approved (the tool exists only when workers are on). `worker_manage(action=
   "propose")` drafts a new worker; it waits for the owner.

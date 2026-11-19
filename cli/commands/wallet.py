@@ -60,7 +60,6 @@ _POLICY_GATE_CAVEAT = (
 )
 
 
-
 def _is_malformed_number(raw, key: str) -> bool:
     """True iff ``raw`` is a value ``load_wallet_config``'s own parser for
     ``key`` would reject. Delegates to the REAL parsers (H3, 2026-08-22:
@@ -771,61 +770,6 @@ def _admin_tenant(user_id=None) -> str:
         raise click.ClickException(str(exc))
 
 
-def _bridge_chain_key(chain_id):
-    """The registry key for a chain id ON A BRIDGE ROW, or ``None``.
-
-    Two resolvers, because a bridge row carries two KINDS of id and only one of
-    them is a chain identifier. ``bridge_guard.chain_name_for_id`` owns the
-    registry ids (and the rule that a falsey id is NOT Solana, whose row carries
-    ``chain_id=0`` because EIP-155 has no analogue). The other is the PROVIDER's
-    own pseudo id for Solana, which is what ``record_pending`` stores as
-    ``origin_chain_id`` for an SVM origin — a `tools`-tier constant that the
-    core tier may not import, so it is resolved HERE, at the seat that renders
-    the row, from the module that owns it rather than from a copy.
-    """
-    from core.wallet.bridge_guard import chain_name_for_id
-    name = chain_name_for_id(chain_id)
-    if name:
-        return name
-    try:
-        from tools.defi.providers.relay_bridge import SOLANA_CHAIN_ID
-        if int(chain_id) == int(SOLANA_CHAIN_ID):
-            return "solana"
-    except Exception:
-        pass
-    return None
-
-
-def _chain_name(chain_id) -> str:
-    """043 D1: a bridge row said "-> chain 4663". A chain id is not a place a
-    person has been; the NAME is, and the id stays beside it so an operator can
-    still match it against the registry."""
-    name = _bridge_chain_key(chain_id)
-    if not name:
-        return f"chain {chain_id}"
-    return f"{name} (chain {chain_id})"
-
-
-def _tx_link(chain_id, tx_ref) -> str:
-    """An explorer link for a transaction that LANDED on *chain_id*, or ``""``.
-
-    ⚠️ ``tx_ref`` on a bridge row is the ORIGIN transaction
-    (``bridge_verb`` settles ``tx_ref=signature`` on the send), so it must be
-    resolved against the ORIGIN chain. Linking it to the destination put a
-    Solana base58 signature inside an EVM explorer URL — a link that looks
-    authoritative and resolves to nothing. Same rule as
-    ``core.wallet.tx_notify``: a link only for the chain the transaction landed
-    on, and no link at all when that chain cannot be named.
-    """
-    if not tx_ref:
-        return ""
-    from core.wallet.chains import explorer_url
-    name = _bridge_chain_key(chain_id)
-    if not name:
-        return ""
-    return explorer_url(name, "tx", str(tx_ref)) or ""
-
-
 @wallet_cmd.command("book")
 @click.option("--user", "user_id", default=None, help="Tenant id (default: this identity).")
 def wallet_book(user_id):
@@ -1070,35 +1014,9 @@ def wallet_bridges(user_id):
         raise click.ClickException(
             f"the bridge store could not be read ({exc}). That is UNKNOWN, not "
             f"'no bridges in flight' — do not treat it as all-clear.")
-    if not rows:
-        click.echo("No bridges awaiting confirmation.")
-        return
-    click.echo(f"{len(rows)} bridge(s) awaiting confirmation:")
-    import datetime as _dt
-    for r in rows:
-        # C61: `r["created_at"]` / `r["request_id"]` were unguarded index reads
-        # and `utcfromtimestamp` is deprecated (3.12 warns) — one row missing a
-        # stamp took the WHOLE in-flight listing down with a KeyError, and that
-        # is the one listing that must never fail to print.
-        try:
-            when = _dt.datetime.fromtimestamp(
-                float(r.get("created_at") or 0),
-                tz=_dt.timezone.utc).strftime("%Y-%m-%d %H:%MZ")
-        except (TypeError, ValueError):
-            when = "time unknown"
-        usd = "" if r.get("amount_usd") is None else f" ${float(r['amount_usd']):,.2f}"
-        dest = _chain_name(r.get("dest_chain_id"))
-        click.echo(f"  {r.get('id') or '(no id)'}  [{r.get('state') or '?'}]{usd}"
-                   f"  -> {dest}  {when}")
-        click.echo(f"     relay request: {r.get('request_id') or 'unknown'}")
-        # The hash is the ORIGIN send, so the link is the ORIGIN explorer.
-        link = _tx_link(r.get("origin_chain_id"), r.get("tx_ref"))
-        if link:
-            click.echo(f"     {link}")
-        elif r.get("tx_ref"):
-            click.echo(f"     tx {r['tx_ref']}")
-        if r.get("detail"):
-            click.echo(f"     {str(r['detail'])[:300]}")
+    from tools.defi.money_state_lines import open_bridge_lines
+    for line in open_bridge_lines(rows):
+        click.echo(line)
 
 
 @wallet_cmd.command("bridge")
@@ -1768,11 +1686,10 @@ def wallet_asset_add(ctx, asset_id, chain, address, decimals, symbol,
 @wallet_asset.command("list")
 def wallet_asset_list():
     """Every asset the treasury can be paid in, and where each row came from."""
-    from core.payments.assets import all_assets
+    from core.payments.assets import asset_lines
 
-    for a in all_assets():
-        click.echo(f"{a.asset_id:24} {a.symbol:8} {a.chain:14} "
-                   f"{a.decimals:>2}d  {a.rail:14} {a.source}")
+    for line in asset_lines():
+        click.echo(line)
 
 
 @wallet_asset.command("verify")

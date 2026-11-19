@@ -49,15 +49,6 @@ def _surface_gc_enabled() -> bool:
     return SurfaceConfig.surface_gc_enabled()
 
 
-def _sandbox_reap_enabled() -> bool:
-    """043 A8/A42: `sandbox_reap` was the only always-on loop with no flag and
-    no pause kind — this + the ``allows("sandbox_reap")`` check in its tick
-    close both gaps. Default ON: reach only, no behavior change for an
-    install that never touches the flag."""
-    from core.env import bool_env
-    return bool_env("SANDBOX_REAP_ENABLED", True)
-
-
 def _docker_socket_reachable() -> bool:
     """False when this process cannot open the Docker socket (prod 2026-10-03: the
     agent identity is deliberately outside the ``docker`` group, proposal 053, and
@@ -97,11 +88,9 @@ _QUIET_RELEASE_INTERVAL_SEC = 300  # window-end precision of ~5 min
 
 def _quiet_release_enabled() -> bool:
     """018 P0.3: sweep quiet-held deliveries whenever the user-delivery rail is
-    on (the hold can only be produced by that rail) and prefs are enabled (the
-    window is a pref; with prefs off nothing can be held)."""
-    from core.prefs import prefs_enabled
+    on (the hold can only be produced by that rail)."""
     from core.surfaces.user_delivery import send_message_user_delivery_enabled
-    return send_message_user_delivery_enabled() and prefs_enabled()
+    return send_message_user_delivery_enabled()
 
 
 def _build_quiet_release_ticker(task_agent):
@@ -1327,14 +1316,14 @@ def start_autonomy(*, task_agent, data_dir: str | None = None) -> AutonomyHandle
             handles._add("curator", _build_curator_ticker(data_dir))
         except Exception as e:
             logger.warning("Could not start skill curator: %s", e)
-    if _sandbox_reap_enabled():
-        try:
-            # Ownership-keyed sandbox container sweep. Safe to run periodically
-            # (see the builder's docstring for why this does not violate the
-            # cold-start-only rule that governs the AGE-based reap_orphans).
-            handles._add("sandbox_reap", _build_sandbox_reaper_ticker(task_agent))
-        except Exception as e:
-            logger.warning("Could not start sandbox reaper ticker: %s", e)
+    try:
+        # Ownership-keyed sandbox container sweep. Safe to run periodically
+        # (see the builder's docstring for why this does not violate the
+        # cold-start-only rule that governs the AGE-based reap_orphans). It has
+        # no switch; the pause kind `sandbox_reap` is the stop.
+        handles._add("sandbox_reap", _build_sandbox_reaper_ticker(task_agent))
+    except Exception as e:
+        logger.warning("Could not start sandbox reaper ticker: %s", e)
     if _surface_gc_enabled():
         try:
             handles._add("surface_gc", _build_surface_gc_ticker(task_agent))

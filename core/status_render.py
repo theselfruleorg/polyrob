@@ -121,7 +121,15 @@ def unverified_sources(snap: StatusSnapshot) -> List[str]:
     return [] if absent_while_idle(snap) else list(snap.unavailable_sources)
 
 
-def health_headline(snap: StatusSnapshot) -> str:
+#: What a chat ``/status`` shows after the health block; ``/status all`` shows
+#: every section. Nothing is hidden by this: an issue in ANY section is a health
+#: line, and the health block leads both forms (owner 2026-11-18: 57 lines).
+BRIEF_SECTIONS = ("session", "providers", "work", "approvals", "loops", "delivery",
+                  "wallet", "money")
+BRIEF_FOOTER = "Every section: /status all"
+
+
+def health_headline(snap: StatusSnapshot, *, brief: bool = False) -> str:
     n_crit = sum(1 for h in snap.health if h.severity == SEVERITY_CRIT)
     if snap.overall == OVERALL_DEGRADED:
         head = f"Health: DEGRADED — {len(snap.health)} issue(s)"
@@ -140,13 +148,15 @@ def health_headline(snap: StatusSnapshot) -> str:
     if snap.overall == OVERALL_PARTIAL:
         return ("Health: PARTIAL — no issue found, but could not verify: "
                 + "; ".join(snap.unavailable_sources))
+    if brief:      # a chat seat: the list of what was checked is in /status all
+        return "Health: OK — no issue found"
     return f"Health: OK — no issue found (checked: {', '.join(checked_list(snap))})"
 
 
 def render_health_lines(snap: StatusSnapshot, *, prefix: str = "• ",
-                        limit: Optional[int] = None) -> List[str]:
+                        limit: Optional[int] = None, brief: bool = False) -> List[str]:
     """The mandatory first block: headline + one line per ranked issue."""
-    lines = [health_headline(snap)]
+    lines = [health_headline(snap, brief=brief)]
     items = snap.health if limit is None else snap.health[:max(1, int(limit))]
     for h in items:
         mark = "⛔" if h.severity == SEVERITY_CRIT else "⚠"
@@ -275,10 +285,18 @@ def render_status_lines(snap: StatusSnapshot, *, prefix: str = "• ",
 def render_status_text(snap: StatusSnapshot, *, title: str = "Status:",
                        prefix: str = "• ", health_limit: Optional[int] = None,
                        resume_hint: str = CHAT_RESUME_HINT,
-                       pause_hint: str = CHAT_PAUSE_HINT) -> str:
-    return "\n".join([title] + render_status_lines(snap, prefix=prefix,
-                                                   resume_hint=resume_hint, pause_hint=pause_hint,
-                                                   health_limit=health_limit))
+                       pause_hint: str = CHAT_PAUSE_HINT, brief: bool = False) -> str:
+    """``brief``: the health block and :data:`BRIEF_SECTIONS`, then the pointer
+    to the whole snapshot."""
+    if not brief:
+        return "\n".join([title] + render_status_lines(
+            snap, prefix=prefix, resume_hint=resume_hint, pause_hint=pause_hint,
+            health_limit=health_limit))
+    out = ([title, pause_headline(snap, resume_hint=resume_hint, pause_hint=pause_hint)]
+           + render_health_lines(snap, prefix=prefix, limit=health_limit, brief=True))
+    for name in BRIEF_SECTIONS:
+        out.extend(render_section_lines(snap, name, prefix=prefix))
+    return "\n".join(out + [BRIEF_FOOTER])
 
 
 def wallet_note_lines(snap: StatusSnapshot) -> List[str]:

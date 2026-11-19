@@ -13,7 +13,8 @@ from __future__ import annotations
 from cli.ui.commands.registry import CommandContext
 
 _USAGE = ("usage: /avatar [show] · /avatar set <file|url> · "
-          "/avatar set nft <chain>:<contract>:<token_id> · /avatar clear")
+          "/avatar set nft <chain>:<contract>:<token_id> · /avatar clear · "
+          "/avatar push [x] [telegram] [discord]")
 
 
 async def h_avatar(ctx: CommandContext) -> None:
@@ -22,16 +23,16 @@ async def h_avatar(ctx: CommandContext) -> None:
 
     from cli.commands import avatar as avatar_cli   # module import so tests can monkeypatch
     try:
-        home, instance_id = avatar_cli._home(write=(sub in ("set", "clear")))
+        home, instance_id = avatar_cli._home(write=(sub in ("set", "clear", "push")))
     except Exception as e:
         ctx.emit(f"avatar: cannot resolve the data home ({e})", title="avatar")
         return
 
     if sub in ("show", "status", "info"):
         _show(ctx, home)
-    elif sub == "clear":
+    elif sub in ("clear", "push"):
         from surfaces.telegram.owner_ops import avatar_change
-        text, _img = await avatar_change(home, ["clear"])
+        text, _img = await avatar_change(home, [sub] + args[1:])
         ctx.emit(text, title="avatar")
     elif sub == "set" and len(args) >= 2:
         await _set(ctx, home, instance_id, args[1:])
@@ -47,22 +48,14 @@ def _show(ctx, home) -> None:
 
 
 async def _set(ctx, home, instance_id, rest) -> None:
-    from core.avatar import AvatarError, describe, set_avatar, set_avatar_from_file
+    from core.avatar import AvatarError, describe, set_avatar
     from tools import avatar_sources
+    # `set nft <ref>` is the terminal's older spelling of `set nft:<ref>`.
+    ref = (f"nft:{rest[1]}" if rest[0].lower() == "nft" and len(rest) >= 2
+           else " ".join(rest))
     try:
-        if rest[0].lower() == "nft" and len(rest) >= 2:
-            chain, contract, token_id = avatar_sources.parse_nft_ref(rest[1])
-            data, source = await avatar_sources.image_from_nft(chain, contract, token_id)
-            st = set_avatar(home, instance_id, data, source=source)
-        elif rest[0].lower().startswith("nft:"):
-            chain, contract, token_id = avatar_sources.parse_nft_ref(rest[0][len("nft:"):])
-            data, source = await avatar_sources.image_from_nft(chain, contract, token_id)
-            st = set_avatar(home, instance_id, data, source=source)
-        elif "://" in rest[0] or rest[0].startswith("data:"):
-            data, source = await avatar_sources.image_from_url(rest[0])
-            st = set_avatar(home, instance_id, data, source=source)
-        else:
-            st = set_avatar_from_file(home, instance_id, " ".join(rest))
+        data, source = await avatar_sources.image_from_ref(ref, local_files=True)
+        st = set_avatar(home, instance_id, data, source=source)
     except AvatarError as e:
         ctx.emit(f"avatar not set: {e}", title="avatar")
         return

@@ -20,9 +20,8 @@ The wallet is the agent's on-chain identity and treasury. **Off by default**
 
 - **Custody — hub-and-spoke** (`core/wallet/agent_wallet.py`): one master seed
   (`AGENT_WALLET_MASTER_SEED`, required ≥32 chars when enabled) derives a treasury key
-  plus domain-separated per-venue keys via PBKDF2-HMAC-SHA256. Backend
-  `AGENT_WALLET_BACKEND=local_eoa` (a local `eth_account` EOA; the raw key never crosses
-  a tool boundary or a log). Venues: `{treasury, x402, polymarket, hyperliquid}`; only
+  plus domain-separated per-venue keys via PBKDF2-HMAC-SHA256. The key
+  is a local `eth_account` EOA; the raw key never crosses a tool boundary or a log. Venues: `{treasury, x402, polymarket, hyperliquid}`; only
   `{treasury, x402}` can hold a spendable float. The **operational venue**
   (`AGENT_WALLET_OPERATIONAL_VENUE`, default `treasury`) is the key that same-chain
   spends sign with, so the "fund me" address the owner sees equals the address that
@@ -219,7 +218,7 @@ Exposed as the
 | `x402_sweep` | no | not needed | Probe MANY endpoints → one scored ledger |
 | `x402_quote` | no | not needed | Price a single URL (thin; `x402_probe` is the fuller read) |
 | `x402_fetch` | **yes** | required | Fetch, paying up to `max_amount_usd` only to the approved `expected_pay_to` |
-| `x402_wallet_status` | no | required | Address, on-chain balance, caps, audit |
+| `x402_wallet_status` | no | required | Address, on-chain balance, caps, the unaccounted submissions that block every send (the operator settles them), audit |
 
 ### Discovery (`x402_probe` / `x402_sweep`) — read-only, $0
 

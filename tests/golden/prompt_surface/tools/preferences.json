@@ -1,6 +1,6 @@
 {
   "function": {
-    "description": "Read and change your typed preferences (approvals, budget caps, goal quotas, digest/delivery, reply style, session defaults). operation='list' shows every preference (value/source/applies); 'get' with `key` shows one; 'explain' with `key` shows the provenance chain of ANY setting (preference or env flag) — use it to answer 'why is X off?'. 'set' with `key`+`value`: a SAFE key applies from your next step unless the result says next session; a GUARDED key (budget/approval ceiling) only queues a proposal for the owner (/pending). ",
+    "description": "Read and change your typed preferences (approvals, budget caps, goal quotas, digest/delivery, reply style, session defaults). operation='list' shows every preference (value/source/applies); 'get' with `key` shows one; 'explain' with `key` shows the provenance chain of ANY setting (preference or env flag) — use it to answer 'why is X off?'; 'search' (`query`) finds a setting; 'changed' lists those off their default; 'check' names broken env or preference lines. 'set' with `key`+`value`: a SAFE key applies from your next step unless the result says next session; a GUARDED key (budget/approval ceiling) only queues a proposal for the owner (/pending). 'unset' with `key` removes a SAFE preference. ",
     "name": "preferences",
     "parameters": {
       "additionalProperties": false,
@@ -16,8 +16,18 @@
             "list",
             "get",
             "set",
-            "explain"
+            "unset",
+            "explain",
+            "search",
+            "changed",
+            "check"
           ],
+          "type": "string"
+        },
+        "query": {
+          "default": null,
+          "description": "search only: words to match",
+          "nullable": true,
           "type": "string"
         },
         "reason": {

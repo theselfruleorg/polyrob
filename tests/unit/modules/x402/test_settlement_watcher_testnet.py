@@ -32,7 +32,6 @@ async def _setup_db(tmp_path):
 def _env(monkeypatch):
     monkeypatch.setenv("X402_PAYMENT_RECIPIENT", TREASURY)
     monkeypatch.setenv("X402_SETTLE_ONCHAIN_DETECT", "true")
-    monkeypatch.setenv("X402_INVOICE_AMOUNT_JITTER", "false")
     for var in ("X402_SETTLEMENT_RPC", "DEFI_EVM_RPC_BASE",
                 "X402_SETTLEMENT_SCAN_MAX_SPAN", "X402_SETTLEMENT_CONFIRMATIONS"):
         monkeypatch.delenv(var, raising=False)

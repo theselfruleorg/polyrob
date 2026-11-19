@@ -27,6 +27,7 @@ DOCUMENTED_PUBLIC_PATHS = [
     "/webhooks/telegram",
     "/.well-known/agent.json",
     "/eip8004/registration.json",
+    "/avatar.png",               # 120: the image that registration file publishes
     # 099: an anonymous HTTP buyer (the order token guards its own order)
     "/api/offers",
     "/api/offers/custom-art",

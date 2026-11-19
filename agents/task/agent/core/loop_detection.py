@@ -54,6 +54,11 @@ PAGING_ARGS = frozenset({
     "start_line", "end_line", "line", "lines", "max_results", "count",
     "since_id", "until_id", "pagination_token", "next_token",
 })
+#: A lookup of the agent's own tools (prod 2026-11-17: 101 tool_search calls with 64
+#: word orders and 30 load_tool calls on names it made up, for an ability that did
+#: not exist). A new query or a new name is not a new target: like a send, a lookup
+#: is never new work. A step that also uses a tool restarts the count.
+LOOKUP_ACTIONS = frozenset({"tool_search", "tool_describe", "load_tool"})
 #: A run-ending or waiting call: it is neither progress nor a lack of progress.
 _NEUTRAL_ACTIONS = REPEAT_OK_ACTIONS | {"done"}
 #: A browser page changes under the same call, so its calls prove nothing here.
@@ -357,8 +362,8 @@ TAKE A DIFFERENT ACTION IMMEDIATELY.{_next}""", MessageOrigin.INTERVENTION)
 
     @staticmethod
     def _step_targets(dump: list) -> Optional[List[tuple]]:
-        """``(is_send, target)`` per call of a step, or None for a step made only of
-        neutral calls."""
+        """``(never_new, target)`` per call of a step, or None for a step made only of
+        neutral calls. A send and a tool lookup (LOOKUP_ACTIONS) are never new."""
         out: List[tuple] = []
         for d in dump:
             if not isinstance(d, dict):
@@ -371,7 +376,7 @@ TAKE A DIFFERENT ACTION IMMEDIATELY.{_next}""", MessageOrigin.INTERVENTION)
                 is_send = name == 'send_message' or (
                     name == 'message' and params.get('action') in (None, 'send'))
                 identity = {k: v for k, v in params.items() if k not in PAGING_ARGS}
-                out.append((is_send, f"{name}:{json.dumps(identity, sort_keys=True, default=str)}"))
+                out.append((is_send or name in LOOKUP_ACTIONS, f"{name}:{json.dumps(identity, sort_keys=True, default=str)}"))
         return out or None
 
     def _step_is_stale(self, dump: list) -> Optional[bool]:
@@ -400,7 +405,8 @@ TAKE A DIFFERENT ACTION IMMEDIATELY.{_next}""", MessageOrigin.INTERVENTION)
             self.logger.warning(f"🔄 LOOP DETECTED: {self._stale_steps} steps with nothing new")
             self.message_manager.add_message(make_control_message(
                 f"Your last {self._stale_steps} steps added nothing new to this run. A new "
-                "offset on a file you already read, or one more message, is not new work. "
+                "offset on a file you already read, one more message, or one more search for "
+                "a tool is not new work. A tool you did not find does not exist here: say so. "
                 "Use what you already have: do the next write or post now, or call done "
                 "with the result. Soon these calls are refused, and then the run ends.",
                 MessageOrigin.INTERVENTION))

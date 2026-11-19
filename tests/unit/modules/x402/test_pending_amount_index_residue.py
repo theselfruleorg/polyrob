@@ -30,8 +30,7 @@ async def _setup_db(tmp_path):
 def _treasury_env(monkeypatch):
     monkeypatch.setenv("X402_PAYMENT_RECIPIENT", "0xTREASURY")
     monkeypatch.setenv("X402_DEFAULT_CHAIN", "base")
-    for var in ("X402_INVOICE_MAX_USD", "X402_INVOICE_DAILY_MAX",
-                "X402_INVOICE_AMOUNT_JITTER"):
+    for var in ("X402_INVOICE_MAX_USD", "X402_INVOICE_DAILY_MAX"):
         monkeypatch.delenv(var, raising=False)
 
 

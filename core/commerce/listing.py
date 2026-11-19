@@ -46,6 +46,10 @@ def public_offer(m: OfferManifest, *, base_url: str = "") -> Dict[str, Any]:
            "description": m.description, "price": m.price_label(),
            "pricing": {"kind": m.pricing_kind, "amount_usd": m.amount_usd},
            "pay_with": [a for a, _mode in m.rails], "delivers": m.deliverable_kind,
+           # The buyer's terms: whether a failed order is refunded and how long the buyer
+           # may dispute a delivery. A machine buyer reads them nowhere else (found by the
+           # level-1 interface rig, scenario DS6).
+           "terms": {"refund": m.refund, "acceptance_days": m.acceptance_days},
            "inputs": input_schema(m)}
     if base_url:
         out["order_url"] = f"{base_url.rstrip('/')}/api/offers/{m.id}/orders"

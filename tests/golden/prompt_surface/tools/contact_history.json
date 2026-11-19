@@ -1,6 +1,6 @@
 {
   "function": {
-    "description": "Show the durable conversation history with an external correspondent (what we sent and what they replied, across sessions). Omit surface+address to LIST all conversations (who replied, who has not). Read-only.",
+    "description": "Show the durable conversation history with an external correspondent (what we sent and what they replied, across sessions). Omit surface+address to LIST all conversations with each contact's state (active, pending, expired). Read-only.",
     "name": "contact_history",
     "parameters": {
       "additionalProperties": false,

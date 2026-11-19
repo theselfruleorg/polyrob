@@ -11,6 +11,7 @@ import logging
 from typing import List, Optional
 
 from core.surfaces import cards
+from core.surfaces.card_groups import receipt_facts
 
 logger = logging.getLogger(__name__)
 
@@ -53,18 +54,39 @@ def _count(word: str) -> str:
     return f"{v:,.6f}".rstrip("0").rstrip(".")
 
 
-def card_summary(card: "cards.Card") -> str:
-    """One short line: WHAT the card does. A /send reads as the send itself
-    (`Send 177,103 0xabab…abab → 0xcdcd…cdcd on base`), every other card
-    as its title. Who raised it is the prefix (🤖 the agent)."""
-    a = list(card.args or [])
-    who = "🤖 " if card.origin == cards.ORIGIN_AGENT else ""
-    if card.verb == "/send" and len(a) >= 6 and a[2].lower() == "to" and a[4].lower() == "on":
+def order_line(verb: str, args: List[str]) -> str:
+    """WHAT a confirmable command does, in one short line. A /send reads as
+    the send itself (`💸 Send 177,103 0xabab…abab → 0xcdcd…cdcd on base`),
+    every other verb as its words with each address shortened."""
+    a = list(args or [])
+    if verb == "/send" and len(a) >= 6 and a[2].lower() == "to" and a[4].lower() == "on":
         amount = a[0] if a[0].startswith("$") else _count(a[0])
         token = "native" if a[1].lower() == "native" else _addr(a[1])
-        line = f"💸 Send {amount} {token} → {_addr(a[3])} on {a[5]}"
-    elif card.verb and card.kind in (cards.KIND_QUOTE, cards.KIND_PROPOSAL):
-        line = cards._short(" ".join([card.verb] + [_addr(x) for x in a]), cards.MAX_TITLE_CHARS)
+        return f"💸 Send {amount} {token} → {_addr(a[3])} on {a[5]}"
+    return cards._short(" ".join([verb] + [_addr(x) for x in a]), cards.MAX_TITLE_CHARS)
+
+
+def started_line(verb: str, text: str, word: str) -> str:
+    """The "started" answer to an executing money verb: it NAMES the order
+    (owner 2026-11-18: "Send started" did not say which send). ``word`` is the
+    verb's ``core.verbs.background_word``."""
+    args = [w for w in (text or "").split()[1:] if not cards.is_go_word(w)]
+    what = order_line(verb, args) if args else ""
+    for lead in (f"💸 {word} ", verb + " "):      # the word is already said
+        if what.startswith(lead):
+            what = what[len(lead):]
+            break
+    return (f"⏳ {word} started" + (f": {what}" if what else "")
+            + "\nThe result comes here (up to two minutes).")
+
+
+def card_summary(card: "cards.Card") -> str:
+    """One short line: WHAT the card does (:func:`order_line`), or its title.
+    Who raised it is the prefix (🤖 the agent)."""
+    who = "🤖 " if card.origin == cards.ORIGIN_AGENT else ""
+    if card.verb and (card.verb == "/send" or card.kind in (cards.KIND_QUOTE,
+                                                            cards.KIND_PROPOSAL)):
+        line = order_line(card.verb, list(card.args or []))
     else:
         line = cards._short(card.title, cards.MAX_TITLE_CHARS)
     kind = {cards.KIND_QUOTE: "quote", cards.KIND_PROPOSAL: "proposal"}.get(card.kind, card.kind)
@@ -134,13 +156,17 @@ def agent_view(user_id: str, *, hours: float = 24.0,
     for c in decided:
         when = _time.strftime("%H:%MZ", _time.gmtime(c.updated_at))
         what = c.outcome or c.state
+        facts = receipt_facts(c.result)
         out.append(f"- {when} {c.card_id} {c.kind} {c.state}"
-                   + (f" ({what})" if c.outcome else "") + f": {c.line or c.title}")
+                   + (f" ({what})" if c.outcome else "") + f": {c.line or c.title}"
+                   + (f" | {facts}" if facts else ""))
     if not decided:
         out.append("- none")
     out.append("A replaced card is NOT open and NOT paid; a quote 'done (sent)' paid once. "
-               "Quote these ids and counts, never your notes.")
+               "Quote these ids and counts, never your notes. Copy a tx hash from "
+               "this list only; a card with no tx here has none you can name.")
     return "\n".join(out)
 
 
-__all__ = ["agent_view", "cancel_reply", "card_reason", "card_summary", "list_reply"]
+__all__ = ["agent_view", "cancel_reply", "card_reason", "card_summary", "list_reply",
+           "receipt_facts"]

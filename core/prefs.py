@@ -732,11 +732,6 @@ def render_style_line(prefs: dict[str, object]) -> str:
 
 # --- resolver (pref > env > default, guarded keys merge most-restrictive) -----
 
-def prefs_enabled() -> bool:
-    from core.env import bool_env
-    return bool_env("PREFS_ENABLED", True)
-
-
 def resolve_with_source(key: str, user_id: Optional[str], home_dir: Path | str,
                         *, env_value: object = None, default: object = None,
                         instance_id: Optional[str] = None) -> tuple[object, str]:
@@ -752,7 +747,7 @@ def resolve_with_source(key: str, user_id: Optional[str], home_dir: Path | str,
     instance_id, key = instance_id or resolve_instance_id(), PREF_ALIASES.get(key, key)
     spec = PREF_SCHEMA.get(key)
     base, base_src = (env_value, "env") if env_value is not None else (default, "default")
-    if spec is None or not prefs_enabled():
+    if spec is None:
         return base, base_src
     pref = load_preferences(home_dir, user_id, instance_id).get(key)
     if pref is None:
@@ -1090,7 +1085,7 @@ def check_env_files(paths: list[Path]) -> list[str]:
         except Exception:
             e = None
         if e:
-            findings.append(e)
+            findings.append(e.split("; got ", 1)[0])  # key names only, never the value
             continue
         shape = shape_of_default(documented_default)
         if not value_matches_shape(value, shape):

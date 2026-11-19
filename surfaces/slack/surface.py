@@ -51,6 +51,7 @@ class SlackSurface(Surface):
             max_message_bytes=_SLACK_MAX,
             markdown_flavor="none",    # Slack mrkdwn accepts plain text safely
             media_out=True,            # 030 D6: external-upload flow
+            supports_actions=True,     # order 0017: explicit actions → Block Kit buttons (blocks.py)
         )
 
     async def send(self, msg: OutboundMessage) -> SendResult:
@@ -60,9 +61,17 @@ class SlackSurface(Surface):
         thread_ts = thread_ts_from_session_key(msg.session_key)
         last_ts = None
         try:
-            for chunk in split_message(msg.text or "", _SLACK_MAX):
+            from surfaces.slack.blocks import SECTION_MAX, render_blocks
+            has_actions = bool(render_blocks(" ", msg.actions))   # explicit actions only
+            # A section holds 3000 chars: with buttons the text splits to that.
+            chunks = split_message(msg.text or "",
+                                   SECTION_MAX if has_actions else _SLACK_MAX)
+            for i, chunk in enumerate(chunks):
+                # The buttons ride the LAST chunk; the text keeps the commands.
+                extra = ({"blocks": render_blocks(chunk, msg.actions)}
+                         if has_actions and i == len(chunks) - 1 else {})
                 sent = await self._client.send_message(channel, chunk,
-                                                       thread_ts=thread_ts)
+                                                       thread_ts=thread_ts, **extra)
                 last_ts = (sent or {}).get("ts")
             if msg.media:
                 await self._send_media(channel, msg.media)

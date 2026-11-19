@@ -981,6 +981,10 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"Pricing endpoints not available: {e}")
 
+    # 120 T2: the avatar image the ERC-8004 card publishes on this origin (public).
+    from api.avatar_endpoint import router as avatar_router
+    app.include_router(avatar_router, tags=["identity"])
+
     # Mount A2A (Agent-to-Agent) Protocol routers
     try:
         from api.a2a.agent_card import router as a2a_card_router

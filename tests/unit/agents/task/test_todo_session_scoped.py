@@ -2,8 +2,7 @@
 
 B2/C3: project-root mode returned <CWD>/.polyrob/todo.md for EVERY session, so parallel
 sessions/sub-agents shared one todo.md. Nest it under the per-session tree instead.
-This is unconditional; CLI_TODO_DOT_ROB=off still
-restores the bare workspace todo.md. Server (non-project-root pm) is unchanged.
+This is unconditional. Server (non-project-root pm) is unchanged.
 """
 from agents.task.path import PathManager
 
@@ -24,14 +23,6 @@ def test_todo_is_session_scoped_in_project_root_mode(tmp_path):
     assert "sessionaaa" in str(a) and "sessionbbb" in str(b)
     # Not the single shared <CWD>/.polyrob/todo.md.
     assert a != tmp_path / ".polyrob" / "todo.md"
-
-
-def test_todo_dot_rob_off_restores_bare(tmp_path, monkeypatch):
-    monkeypatch.setenv("CLI_TODO_DOT_ROB", "off")
-    pm = _project_pm(tmp_path)
-    p = pm.get_todo_file_path("sessionccc", user_id="local")
-    assert p == tmp_path / "todo.md"
-
 
 def test_server_mode_todo_unchanged(tmp_path):
     pm = PathManager(data_root=str(tmp_path / "data" / "task"))

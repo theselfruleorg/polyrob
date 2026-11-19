@@ -247,7 +247,7 @@ def _build_core(user_id: str, *, data_dir: Optional[str], task_agent: Any,
         "posture": _guarded("posture", _posture_section),
         "security": _guarded("security", _security_section, uid, data_dir, now, window_sec),
         "identity": _guarded("identity", _identity_section,
-                             resolve_instance_id(), data_dir),
+                             resolve_instance_id(), data_dir, container),
         # 060 WS-7: is a written rule IN EFFECT? (per instruction surface)
         "rules": _guarded("rules", rules_section, uid, data_dir, cron_db, tele),
         "apps": _guarded("apps", _apps_section, uid, data_dir),

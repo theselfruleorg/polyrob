@@ -394,9 +394,13 @@ class TaskAgentLifecycleMixin:
             if not has_credits:
                 balance = await balance_mgr.get_balance(user_id)
                 available = balance.get('balance', 0) if balance else 0
+                # The marker keeps this status text out of the provider credit-death
+                # readers (the goal dispatcher, the outage notice): it is this user's
+                # balance, not the provider's account.
+                from core.exceptions import InsufficientCreditsError
                 raise AgentError(
-                    f"Insufficient credits. Required: {min_credits}, Available: {available}. "
-                    f"Please add credits at /api/payments/deposit to continue."
+                    f"{InsufficientCreditsError.MARKER}: required {min_credits}, "
+                    f"available {available}. Top up at /api/payments/deposit to continue."
                 )
         except AgentError:
             raise  # Re-raise our own error

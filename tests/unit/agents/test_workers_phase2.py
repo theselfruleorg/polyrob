@@ -144,11 +144,8 @@ def _manager(orch_agents=None):
     return SubAgentManager(orch)
 
 
-def test_forced_child_controller_for_a_worker_tool_list(monkeypatch):
-    """A worker's own list narrows the child even with least-privilege OFF."""
-    from agents.task.constants import TimeoutConfig
-    monkeypatch.setattr(TimeoutConfig, "get_subagent_least_privilege",
-                        staticmethod(lambda: False))
+def test_child_controller_for_a_worker_tool_list(monkeypatch):
+    """A worker's own list narrows the child."""
     loaded = {}
 
     class _Ctrl:
@@ -166,9 +163,8 @@ def test_forced_child_controller_for_a_worker_tool_list(monkeypatch):
     mgr = _manager()
     mgr.orchestrator.controller = SimpleNamespace(
         list_tools=lambda: ["web_fetch", "filesystem", "shell"])
-    assert asyncio.run(mgr._build_child_controller()) is None       # unforced: shared
     ctrl = asyncio.run(mgr._build_child_controller(
-        requested_tools=["web_fetch", "shell", "email"], force=True))
+        requested_tools=["web_fetch", "shell", "email"]))
     assert ctrl is not None
     assert "shell" not in loaded["ids"] and "email" not in loaded["ids"]
     assert "web_fetch" in loaded["ids"]

@@ -44,7 +44,8 @@ OPS = {"text": "OPS_SENTINEL"}
 def _builder(monkeypatch):
     OPS["text"] = "OPS_SENTINEL"
     monkeypatch.setattr(live_health, "build_operations_text", lambda *a, **k: OPS["text"])
-    monkeypatch.setenv("LIVE_HEALTH_CONTEXT", "false")  # this file is about <operations>
+    # this file is about <operations>
+    monkeypatch.setattr(live_health, "live_health_injected", lambda a: False)
 
 
 def _deltas(agent):

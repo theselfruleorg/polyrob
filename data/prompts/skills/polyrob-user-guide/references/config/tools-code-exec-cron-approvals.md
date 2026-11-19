@@ -107,7 +107,6 @@ One line per setting: NAME — default — meaning. Code anchors and full prose:
 - DELIVERABLES_ATTACH_MAX_FILES — default: 3 — Max files attached to one completion message; the remainder is listed by name+size+path.
 - DELIVERABLES_MAX_LINES — default: 5 — UNCONDITIONAL cap on individually-listed deliverable lines in one owner message; everything past it becomes ONE roll-up line plus the console link (chat-first review 2026-08-22, G1/G4).
 - MESSAGE_MEDIA_MAX_MB — default: 45 — Per-file cap for the explicit `message` tool `media_paths` send (owner-directed; Telegram hard limit ~50 MB).
-- INBOUND_MEDIA_ENABLED — default: ON — Master switch for the INBOUND media rail: a photo/document/video arriving on a chat surface is stored in the session workspace under `inbound/` and described on the turn (image ⇒ a vision block, small text file ⇒ inlined, anything else ⇒ r…
 - INBOUND_MEDIA_MAX_MB — default: 20 — Per-file cap for a file arriving from a chat surface.
 - INBOUND_VIDEO_MAX_MB — default: 500 — Per-file cap for a video a surface streams to disk (Telegram).
 - INBOUND_MEDIA_MAX_FILES — default: 5 — Max attachments read from ONE inbound message; the remainder is counted on the turn ("N more attachment(s) … were not read"), never dropped in silence.
@@ -122,10 +121,7 @@ One line per setting: NAME — default — meaning. Code anchors and full prose:
 - POLYROB_TOOL_DENYLIST — default: '' — Comma list of tools vetoed by the pre-tool-call guardrail (fail-closed).
 - POLYROB_AGENT_TOOLSET — default: unset — Named toolset driving the CLI session's tool list (`resolve_toolset`), same as `polyrob run --toolset <name>`.
 - TOOL_SCHEMA_ERROR_POLICY — default: DROP_TOOL — Invalid native schema handling: `DROP_TOOL`/`RAISE`/`WARN`.
-- TOOL_SCHEMA_SANITIZE — default: ON ('true') — Fix hostile JSON-Schema constructs in the emitted tools list.
-- UNTRUSTED_TOOL_RESULT_WRAP — default: **ON** — Frame untrusted tool-result strings in `<untrusted_tool_result>` delimiters.
 - ENABLE_GIF_CREATION — default: OFF — (Legacy/dead) GIF creation.
-- FS_REALPATH_CONFINE — default: ON ("on") — Confine filesystem ops via realpath.
 - BROWSER_ALLOW_PRIVATE_URLS — default: OFF ('false') — Allow browser navigation to private/loopback URLs only for explicit `1/true/yes/on`; unknown values keep protection enabled.
 - BROWSER_CDP_URL — default: unset — Chrome DevTools Protocol endpoint of a browser running as its OWN principal (`polyrob browser install` → `polyrob-browser.service`, `http://127.0.0.1:9222`).
 - BROWSER_WSS_URL — default: unset — Playwright-server WebSocket endpoint of a remote browser (`ws://<private-ip>:3000/<token>`), for a browser on a SECOND host; requires the same Playwright version on both ends.

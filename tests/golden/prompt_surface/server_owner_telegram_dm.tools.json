@@ -94,7 +94,7 @@
     },
     {
       "name": "agent_status",
-      "sha": "8fc50f12c5ac"
+      "sha": "da215f7a197b"
     },
     {
       "name": "load_tool",
@@ -105,20 +105,24 @@
       "sha": "b3cde26d9db1"
     },
     {
+      "name": "agent_avatar",
+      "sha": "91568f31a436"
+    },
+    {
       "name": "autonomy_control",
       "sha": "b0d4a83e3e43"
     },
     {
       "name": "cards_read",
-      "sha": "1a33b0223606"
+      "sha": "d3e2cf4ed61d"
     },
     {
       "name": "delegate_task",
-      "sha": "24cec158d9c4"
+      "sha": "760269be1b7b"
     },
     {
       "name": "offer_manage",
-      "sha": "8f2695997d09"
+      "sha": "8c45ad365088"
     },
     {
       "name": "order_deliver",
@@ -130,7 +134,7 @@
     },
     {
       "name": "preferences",
-      "sha": "3d2b5f4db8b4"
+      "sha": "5858f954627d"
     },
     {
       "name": "propose_action",
@@ -141,12 +145,20 @@
       "sha": "a10e0c5bdc0d"
     },
     {
+      "name": "delegation_status",
+      "sha": "1f3b46e4bd0a"
+    },
+    {
       "name": "propose_setting",
-      "sha": "fc030760ca08"
+      "sha": "4b6e4ba7fb15"
     },
     {
       "name": "session_search",
       "sha": "5dcee213b089"
+    },
+    {
+      "name": "usage_summary",
+      "sha": "f91f10890aeb"
     }
   ]
 }

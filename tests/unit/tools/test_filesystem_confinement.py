@@ -64,14 +64,12 @@ def _pm(tmp_path):
 
 
 def test_filesystem_raises_on_traversal_to_secrets(_pm, monkeypatch):
-    monkeypatch.setenv("FS_REALPATH_CONFINE", "on")
     tool = _fs_tool()
     with pytest.raises(ServiceError):
         tool._normalize_path("../../../../../../config/.env.production")
 
 
 def test_filesystem_clamps_absolute_secret_path_inside_workspace(_pm, monkeypatch):
-    monkeypatch.setenv("FS_REALPATH_CONFINE", "on")
     tool = _fs_tool()
     workspace_abs = os.path.abspath(str(_pm.get_workspace_dir("s1", "u1")))
     # absolute external path is either rejected or clamped INSIDE the workspace —
@@ -85,7 +83,6 @@ def test_filesystem_clamps_absolute_secret_path_inside_workspace(_pm, monkeypatc
 
 
 def test_filesystem_raises_on_symlink_escape(_pm, tmp_path, monkeypatch):
-    monkeypatch.setenv("FS_REALPATH_CONFINE", "on")
     tool = _fs_tool()
     workspace = _pm.get_workspace_dir("s1", "u1")
     os.makedirs(workspace, exist_ok=True)
@@ -158,7 +155,6 @@ def test_filesystem_cannot_read_install_source(_pm, tmp_path, monkeypatch):
     subtree of the session workspace (both under tmp_path, neither an ancestor of
     the other), mirroring the install-vs-workspace structural separation.
     """
-    monkeypatch.setenv("FS_REALPATH_CONFINE", "on")
     tool = _fs_tool()
     workspace_abs = os.path.abspath(str(_pm.get_workspace_dir("s1", "u1")))
 
@@ -184,7 +180,6 @@ def test_filesystem_cannot_read_install_source(_pm, tmp_path, monkeypatch):
 
 def test_filesystem_cannot_read_env_production(_pm, tmp_path, monkeypatch):
     """An absolute read of a fake config/.env.production is unreachable from the workspace."""
-    monkeypatch.setenv("FS_REALPATH_CONFINE", "on")
     tool = _fs_tool()
     workspace_abs = os.path.abspath(str(_pm.get_workspace_dir("s1", "u1")))
 

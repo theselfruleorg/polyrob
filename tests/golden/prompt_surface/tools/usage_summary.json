@@ -1,0 +1,18 @@
+{
+  "function": {
+    "description": "What your AI use cost over `days`: the total, the cache share and the split by kind of work, job or goal, model, upstream, purpose and day (the owner's /usage). Read-only.",
+    "name": "usage_summary",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "days": {
+          "default": 0,
+          "description": "The window in days (1-90; 0 = 7).",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

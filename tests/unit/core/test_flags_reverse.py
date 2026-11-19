@@ -38,6 +38,7 @@ READ_RE = re.compile(
       | os\.environ\[\s*['"](?P<g3>[A-Za-z_][A-Za-z0-9_]*)['"]\s*\](?!\s*=[^=])
       | \b\w*(?:bool|int|float)_env\(\s*['"](?P<g4>[A-Za-z_][A-Za-z0-9_]*)['"]
       | \b\w*env_value\(\s*['"](?P<g5>[A-Za-z_][A-Za-z0-9_]*)['"]
+      | \b\w*env\w*\.get\(\s*['"](?P<g6>[A-Za-z_][A-Za-z0-9_]*)['"]
     )""",
     re.VERBOSE,
 )
@@ -62,6 +63,11 @@ ALLOWLIST = {
     "CREDENTIALS_DIRECTORY",  # set by systemd for a unit with LoadCredential= (116 W9.2)
     "INVOCATION_ID",     # set by systemd for every unit: "a supervisor restarts me" (077)
     "XPC_SERVICE_NAME",  # set by launchd to the job label: the same fact on macOS (077)
+    "DBUS_SESSION_BUS_ADDRESS",  # the user's D-Bus session: can systemd --user be reached
+    "XDG_RUNTIME_DIR",   # the same question; the runtime dir of the login session
+    "LOCALAPPDATA",      # the Windows per-user data root (where Playwright keeps browsers)
+    "PLAYWRIGHT_BROWSERS_PATH",  # Playwright's own variable for its browser folder
+    "PIPX_HOME",         # pipx's own variable: is this install a pipx install
     "TMPDIR",            # the OS temp dir; an operator's value wins over the on-disk
                          # <data home>/tmp the pip/lock steps pick (core/runtime_paths.py)
 }
@@ -131,6 +137,41 @@ def test_every_env_read_is_cataloged():
         "anchor), then run BOTH `python scripts/gen_flags_catalog.py` AND "
         "`python scripts/gen_user_guide_refs.py` — or delete the dead read, or "
         f"(genuine OS/runtime var only) extend the allowlist here: {missing}"
+    )
+
+
+#: A pattern row whose name the code builds from more than one part: the
+#: fragment that the builder spells (core/wallet/dex_registry.py).
+_BUILT_FROM_PARTS = {
+    "UNISWAP_V3_POSITION_MANAGER_<CHAIN>": "_POSITION_MANAGER_",
+    "UNISWAP_V4_POSITION_MANAGER_<CHAIN>": "_POSITION_MANAGER_",
+}
+
+
+def test_every_row_has_a_reader_in_the_tree():
+    """The other direction, at its cheapest: a catalog row whose name is in no
+    shipped source file has no reader. A pattern row (``<...>``) is checked by
+    the text before its placeholder. This does not prove the value is USED —
+    a row read into an attribute nobody reads still passes (the 2026-11-17
+    configuration review found 22 of those by hand)."""
+    from core.flags_catalog import CATALOG
+
+    text = "\n".join(
+        p.read_text(errors="ignore") for p in _source_files()
+        if p.name not in ("flags_catalog.py", "retired_flags.py"))
+    words = set(re.findall(r"[A-Z][A-Z0-9_]{2,}", text))
+    dead = []
+    for row in CATALOG:
+        name = row[0]
+        if "<" in name:
+            stem = _BUILT_FROM_PARTS.get(name) or name.split("<", 1)[0]
+            if stem and stem not in text:
+                dead.append(name)
+        elif name not in words:
+            dead.append(name)
+    assert not dead, (
+        f"{len(dead)} catalog row(s) that no shipped code names — retire the row "
+        f"(docs/CONFIGURATION.md, retired_flags.py, the count): {dead}"
     )
 
 

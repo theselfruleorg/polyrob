@@ -8,7 +8,7 @@ default (partials buffer, one send on finalize). Fail-open sends.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from core.surfaces.envelopes import (OutboundMessage, SendResult,
                                      SurfaceCapabilities)
@@ -27,9 +27,15 @@ def channel_id_from_session_key(session_key: str) -> str:
 
 
 class DiscordSurface(Surface):
-    def __init__(self, client: Any) -> None:
+    def __init__(self, client: Any, gateway: Any = None) -> None:
         super().__init__()
         self._client = client
+        self._gateway = gateway
+
+    @property
+    def bot_username(self) -> Optional[str]:
+        """The bot's own handle, once the gateway's READY arrived (else None)."""
+        return getattr(self._gateway, "bot_username", None) if self._gateway else None
 
     @property
     def surface_id(self) -> str:

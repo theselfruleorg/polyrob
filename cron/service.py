@@ -409,13 +409,22 @@ class CronService:
         via = self._actor(via)
         note = {"by": str(user_id or ""), "via": via, "at": self._now().isoformat()}
         ok = self.store.pause(job_id, user_id=user_id, note=note)
+        if not ok:
+            # The job is paused already by a weaker hand (the agent, or the agent on
+            # an owner turn): this pause takes the note over, so the lift is this
+            # hand's too. An owner seat never loses to the agent's own note.
+            from core.cron_lanes import weaker_pause_vias
+            ok = self.store.take_over_pause(job_id, user_id=user_id, note=note,
+                                            from_vias=weaker_pause_vias(via))
         if ok:
             self._audit(CRON_PAUSED, user_id=user_id, via=via, job_id=job_id)
         return ok
 
-    def resume(self, job_id: str, *, user_id: str, via: str) -> bool:
+    def resume(self, job_id: str, *, user_id: str, via: str,
+               note_via: Optional[str] = None) -> bool:
         """Resume a paused job at its next slot (a one-shot whose time passed
-        while paused runs on the next tick). True iff it moved."""
+        while paused runs on the next tick). True iff it moved. *note_via* = the
+        pause note the caller judged; a note that changed since is a miss."""
         via = self._actor(via)
         job = self.store.get(job_id, user_id=user_id)
         if job is None or job.status != "paused":
@@ -425,7 +434,8 @@ class CronService:
             nxt = parse_schedule(job.schedule_spec).next_run_after(now)
         except ScheduleError:
             nxt = None
-        ok = self.store.resume(job_id, user_id=user_id, next_run_at=nxt or now)
+        ok = self.store.resume(job_id, user_id=user_id, next_run_at=nxt or now,
+                               note_via=note_via, keep_streak=(via == "agent"))
         if ok:
             self._audit(CRON_RESUMED, user_id=user_id, via=via, job_id=job_id)
         return ok

@@ -206,3 +206,124 @@ async def test_an_unreadable_rollup_is_an_error_not_zeros(monkeypatch):
     assert result.error and "could not be read (OperationalError: database is locked)" in result.error
     assert "This is not $0" in result.error
     assert not result.extracted_content
+
+
+# --- 120 W3: the owner's cost breakdown, on every posture ------------------------
+
+def _owner_ledger(tmp_path, monkeypatch, cost=0.42):
+    import sqlite3
+    db = tmp_path / "database" / "bot.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE usage_records (id INTEGER PRIMARY KEY, user_id TEXT, "
+                "session_id TEXT, input_tokens INTEGER, cached_tokens INTEGER, "
+                "output_tokens INTEGER, api_cost_usd REAL, metadata TEXT, timestamp TEXT)")
+    con.execute("INSERT INTO usage_records (user_id, session_id, input_tokens, cached_tokens, "
+                "output_tokens, api_cost_usd, metadata, timestamp) VALUES "
+                "('owner','s1',100,50,5,?,'{}',strftime('%Y-%m-%d %H:%M:%S','now'))", (cost,))
+    con.commit()
+    con.close()
+    monkeypatch.setenv("DB_PATH", str(db))
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+
+
+@pytest.fixture
+def _owner_is(monkeypatch):
+    import core.instance as inst
+    monkeypatch.setattr(inst, "is_owner_uid", lambda uid, **k: str(uid) == "owner")
+
+
+def _owner_controller(monkeypatch, flag="false"):
+    monkeypatch.setenv("USAGE_INVOICE_BRIDGE_ENABLED", flag)
+    c = _controller(user_id="owner")
+    c._register_usage_summary_action()
+    return c
+
+
+class _Owner:
+    user_id = "owner"
+
+
+def test_the_owner_tenant_has_usage_summary_with_the_flag_off(monkeypatch, _owner_is):
+    c = _owner_controller(monkeypatch)
+    assert "usage_summary" in c.registry.registry.actions
+
+
+@pytest.mark.asyncio
+async def test_the_breakdown_is_the_usage_verb_text(tmp_path, monkeypatch, _owner_is):
+    _owner_ledger(tmp_path, monkeypatch)
+    import cron.digest
+    monkeypatch.setattr(cron.digest, "rail_names", lambda *a, **k: {})
+    c = _owner_controller(monkeypatch)
+    action = c.registry.registry.actions["usage_summary"]
+    result = await action.function(action.param_model(days=1), execution_context=_Owner())
+    from surfaces.telegram.usage_ops import usage_reply
+    assert result.error is None
+    assert result.extracted_content == usage_reply("owner", str(tmp_path), ["1"])
+    assert "AI cost, the last 24 h: $0.42" in result.extracted_content
+    assert "Suggested invoice" not in result.extracted_content   # the draft stays gated
+
+
+@pytest.mark.asyncio
+async def test_days_default_and_clamp(tmp_path, monkeypatch, _owner_is):
+    _owner_ledger(tmp_path, monkeypatch)
+    c = _owner_controller(monkeypatch)
+    action = c.registry.registry.actions["usage_summary"]
+    text = (await action.function(action.param_model(), execution_context=_Owner())).extracted_content
+    assert "the last 7 days" in text
+    text = (await action.function(action.param_model(days=500),
+                                  execution_context=_Owner())).extracted_content
+    assert "the last 90 days" in text
+
+
+@pytest.mark.asyncio
+async def test_owner_with_the_bridge_on_gets_both_parts(tmp_path, monkeypatch, _owner_is):
+    _owner_ledger(tmp_path, monkeypatch)
+
+    async def _fake_rollup(user_id, *, session_id=None, since=None, db=None):
+        return {"user_id": user_id, "session_id": session_id, "since": since,
+                "api_cost_usd": 0.42, "credits": 42.0, "calls": 1}
+
+    import modules.credits.usage_rollup as ur
+    monkeypatch.setattr(ur, "usage_rollup", _fake_rollup)
+    c = _owner_controller(monkeypatch, flag="true")
+    action = c.registry.registry.actions["usage_summary"]
+    result = await action.function(action.param_model(), execution_context=_Owner())
+    text = result.extracted_content
+    assert text.index("AI cost, the last 7 days") < text.index("Suggested invoice")
+    assert result.metadata["rollup"]["calls"] == 1
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_ledger_is_named_not_zero(tmp_path, monkeypatch, _owner_is):
+    bad = tmp_path / "bot.db"
+    bad.write_text("not sqlite")
+    monkeypatch.setenv("DB_PATH", str(bad))
+    c = _owner_controller(monkeypatch)
+    action = c.registry.registry.actions["usage_summary"]
+    text = (await action.function(action.param_model(), execution_context=_Owner())).extracted_content
+    assert "could not read the records" in text and "not a zero" in text
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_run_index_is_named(tmp_path, monkeypatch, _owner_is):
+    _owner_ledger(tmp_path, monkeypatch)
+    (tmp_path / "memory.db").write_text("not sqlite")
+    c = _owner_controller(monkeypatch)
+    action = c.registry.registry.actions["usage_summary"]
+    text = (await action.function(action.param_model(days=1),
+                                  execution_context=_Owner())).extracted_content
+    assert "could not read the run records" in text and "not zero" in text
+
+
+@pytest.mark.asyncio
+async def test_a_tenant_turn_on_an_owner_controller_without_the_bridge_is_refused(
+        tmp_path, monkeypatch, _owner_is):
+    c = _owner_controller(monkeypatch)
+    action = c.registry.registry.actions["usage_summary"]
+
+    class _Other:
+        user_id = "tenant-b"
+
+    result = await action.function(action.param_model(), execution_context=_Other())
+    assert result.error and "the cost breakdown is the owner's" in result.error

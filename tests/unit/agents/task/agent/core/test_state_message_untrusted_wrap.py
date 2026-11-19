@@ -10,10 +10,8 @@ was never framed at all.
 
 The fix stamps the resolved `(action, tool)` on the result where the ToolMessage
 path already resolves it (ONE resolution, not a second taxonomy), and the render
-site wraps from that stamp. Flag OFF ⇒ byte-identical.
+site wraps from that stamp.
 """
-from unittest.mock import patch
-
 import pytest
 
 from agents.task.agent.core.result_processing import _pair_results_to_calls
@@ -48,14 +46,13 @@ class _State:
         self.element_tree = _Tree(dom)
 
 
-def _render(results, state=None, wrap=True):
+def _render(results, state=None):
     # F14: `results_in_tool_messages=False` is the LEGACY no-native-tools path, the
     # one where this render is the results' only appearance. Stated explicitly —
     # on the native path the wrap that matters is the ToolMessage's.
-    with patch("agents.task.constants.UNTRUSTED_TOOL_RESULT_WRAP", wrap):
-        msg = AgentMessagePrompt(state=state or _State(), result=results,
-                                 results_in_tool_messages=False)
-        return msg.get_user_message(use_vision=False).content
+    msg = AgentMessagePrompt(state=state or _State(), result=results,
+                             results_in_tool_messages=False)
+    return msg.get_user_message(use_vision=False).content
 
 
 def _stamped(content, action, tool, error=None):
@@ -129,16 +126,6 @@ def test_empty_page_marker_is_not_wrapped():
     assert "untrusted_tool_result" not in text
 
 
-# --- flag OFF ⇒ byte-identical ---------------------------------------------
-
-def test_flag_off_is_byte_identical():
-    results = [_stamped(PAYLOAD, "browser_extract_content", "browser")]
-    state = _State(dom=DOM, url="https://evil.example.com", title="Shop")
-    off = _render(results, state=state, wrap=False)
-    assert "untrusted_tool_result" not in off
-    assert PAYLOAD in off and "Buy" in off
-
-
 def test_unstamped_result_renders_raw():
     """A result that never went through the pairing resolver (legacy/non-native
     path) is not guessed at — it renders exactly as before."""
@@ -197,11 +184,10 @@ class _Host:
             get_action_details=lambda n: types.SimpleNamespace(tool=tools.get(n)))
 
 
-def _stamp(actions, results, tools, tool_calls=None, wrap=True):
+def _stamp(actions, results, tools, tool_calls=None):
     import types
-    with patch("agents.task.constants.UNTRUSTED_TOOL_RESULT_WRAP", wrap):
-        _Host(tools)._stamp(results, types.SimpleNamespace(
-            action=[_Action(a) for a in actions]), tool_calls or [])
+    _Host(tools)._stamp(results, types.SimpleNamespace(
+        action=[_Action(a) for a in actions]), tool_calls or [])
 
 
 def test_non_native_browser_result_is_stamped_and_rendered_wrapped():
@@ -235,13 +221,6 @@ def test_id_paired_result_uses_its_own_call():
                        {"id": "c2", "name": "web_fetch"}])
     assert a1.metadata["untrusted_source"]["action"] == "filesystem_read_file"
     assert a2.metadata["untrusted_source"]["action"] == "web_fetch"
-
-
-def test_stamping_off_when_flag_off():
-    ar = ActionResult(extracted_content=PAYLOAD)
-    _stamp(["browser_extract_content"], [ar], {"browser_extract_content": "browser"},
-           wrap=False)
-    assert not (ar.metadata or {}).get("untrusted_source")
 
 
 @pytest.mark.parametrize("action,tool", [

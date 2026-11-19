@@ -254,3 +254,63 @@ def test_a_token_send_is_unchanged_and_never_reads_a_price():
     out = asyncio.run(send_ops.send_reply(
         "owner", ["22", TOKEN, "to", ADDR, "on", "base"], tool=tool))
     assert tool.calls[0][0].amount == 22.0 and "amount: $" not in out
+
+
+def test_the_quote_and_the_send_share_one_price_decision():
+    """2026-11-18: one Confirm read each price five times and met the indexer's
+    rate limit. Both guard passes run inside ONE ``one_decision`` block."""
+    from tools.intel import price as P
+    seen = []
+
+    class _Watch(_Tool):
+        async def transfer(self, params, ctx):
+            seen.append(P._DECISION.get())
+            return await super().transfer(params, ctx)
+
+    asyncio.run(send_ops.send_reply(
+        "owner", ["1", "native", "to", ADDR, "on", "base", "go"], tool=_Watch()))
+    assert len(seen) == 2 and seen[0] is not None and seen[0] is seen[1]
+    assert P._DECISION.get() is None
+
+
+def test_a_typed_go_delivers_the_owner_view_and_a_card_deliver_gets_every_line(monkeypatch):
+    """2026-11-18: the result message is the short view; a card's own deliver
+    stores the whole result first (the agent reads its tx from there)."""
+    from types import SimpleNamespace
+    from surfaces.telegram import harness
+    report = ("transfer 1 native -> x\n  simulated value: $5.0100\n"
+              "  value sent: $5.0000 (without the network fee)\n  guard: authorized\n"
+              "  lane:  owner_direct\n  RESULT: SENT AND CONFIRMED\n  tx: 0xabc\n  block: 7")
+
+    async def _admin(task_agent, result, cmd):
+        return report
+
+    monkeypatch.setattr(harness, "_handle_owner_admin", _admin)
+    monkeypatch.setattr("surfaces.telegram.card_ops.record_out", lambda *a, **k: None)
+
+    def _result():
+        return SimpleNamespace(
+            decision=SimpleNamespace(command="/send", session_key="telegram:dm:1", session_id="s"),
+            inbound=SimpleNamespace(text=f"/send 1 native to {ADDR} on base go",
+                                    identity=SimpleNamespace(user_id="alice")))
+
+    async def _go(deliver):
+        reply = await harness._handle_command(None, _result(), spawn=None, deliver=deliver)
+        await asyncio.gather(*list(harness._BACKGROUND_COMMANDS))
+        return reply
+
+    plain, stored = [], []
+
+    async def _plain(text):
+        plain.append(text)
+
+    async def _card(text):
+        stored.append(text)
+    _card.stores_result = True
+
+    started = asyncio.run(_go(_plain))
+    asyncio.run(_go(_card))
+    assert started.startswith("⏳ Send started: 1 native → ") and "on base" in started
+    assert "guard:" not in plain[0] and "lane:" not in plain[0]
+    assert "value: $5.00 + network fee $0.01" in plain[0] and "tx: 0xabc" in plain[0]
+    assert stored == [report]

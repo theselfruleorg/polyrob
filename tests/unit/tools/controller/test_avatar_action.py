@@ -50,7 +50,6 @@ def _write_pfp(home, instance="alice"):
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("AVATAR_TOOL_ENABLED", "true")
     monkeypatch.setattr("core.instance.resolve_instance_id", lambda *a, **k: "alice")
     return tmp_path
 
@@ -193,7 +192,9 @@ async def test_set_from_a_workspace_file_on_an_owner_turn(home, tmp_path, monkey
     assert st.path.read_bytes() == PNG + b"new"
     # set_from writes the slot only; it must not claim the profile photos changed
     assert "every surface" not in res.extracted_content
-    assert "polyrob avatar push" in res.extracted_content
+    # 120: the reply names the agent's own push, never a command it cannot run
+    assert "agent_avatar push=[]" in res.extracted_content
+    assert "polyrob avatar push" not in res.extracted_content
 
 
 @pytest.mark.asyncio
@@ -251,21 +252,166 @@ async def test_set_from_is_refused_on_an_autonomous_run(home, tmp_path, monkeypa
     assert res.error and "autonomous" in res.error
 
 
-def test_the_action_reaches_no_push(home):
-    """Pushing the image to X / Discord is an owner CLI act, never a model turn."""
+def test_the_action_holds_no_push_procedure_of_its_own(home):
+    """120 W1 (owner decision D1): the agent may push, through the ONE procedure
+    (`modules.avatar.push.push_avatar`) the CLI and `/avatar push` run. It never
+    calls a platform itself, and it names no command the agent cannot run."""
     import inspect
     from tools.controller import avatar_action
     src = inspect.getsource(avatar_action)
-    for forbidden in ("push_twitter", "push_discord"):
+    assert "push_avatar" in src
+    for forbidden in ("push_twitter", "push_discord", "push_telegram", "pushed.json",
+                      "polyrob avatar push", "bool_env"):
         assert forbidden not in src
 
 
-def test_the_flag_off_registers_nothing(home, monkeypatch):
+# --- push / clear (120 W1) --------------------------------------------------
+
+@pytest.fixture
+def owner_turn(monkeypatch):
+    monkeypatch.setattr("core.security.owner_turn.owner_turn_refusal", lambda *a, **k: None)
+
+
+@pytest.fixture
+def pushes(monkeypatch):
+    """The platform calls, recorded."""
+    calls = []
+    monkeypatch.setattr("modules.avatar.push.push_twitter", lambda p: calls.append("twitter"))
+    monkeypatch.setattr("modules.avatar.push.push_discord", lambda p: calls.append("discord"))
+    monkeypatch.setattr("modules.avatar.push.push_telegram_bot", lambda p: calls.append("telegram"))
+    monkeypatch.setattr("modules.avatar.push.push_telegram_chat",
+                        lambda p, chat: calls.append(f"telegram:{chat}"))
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_push_updates_every_account_and_is_idempotent(home, owner_turn, pushes):
+    _write_pfp(home)
+    fn, model = _action(_Controller(home))
+    res = await fn(model(push=[]), _ctx())
+    assert res.error is None, res.error
+    assert pushes == ["twitter", "discord", "telegram"]
+    assert "twitter: profile image updated" in res.extracted_content
+    again = await fn(model(push=["x"]), _ctx())
+    assert "twitter: unchanged, skipped" in again.extracted_content
+    assert pushes == ["twitter", "discord", "telegram"]        # no second call
+
+
+@pytest.mark.asyncio
+async def test_push_skips_an_account_that_is_not_connected(home, owner_turn, pushes, monkeypatch):
+    from modules.avatar import push as push_mod
+
+    def no_creds(p):
+        raise push_mod.TwitterCredsMissing("missing Twitter OAuth1 creds: TWITTER_API_KEY")
+    monkeypatch.setattr("modules.avatar.push.push_twitter", no_creds)
+    _write_pfp(home)
+    fn, model = _action(_Controller(home))
+    res = await fn(model(push=[]), _ctx())
+    assert "twitter: not connected, skipped" in res.extracted_content
+    assert "discord: bot avatar updated" in res.extracted_content      # the others still run
+    assert pushes == ["discord", "telegram"]
+
+
+@pytest.mark.asyncio
+async def test_set_and_push_in_one_call_sets_first(home, tmp_path, owner_turn, pushes):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "new.png").write_bytes(PNG + b"new")
+    fn, model = _action(_Controller(home, workspace=str(ws)))
+    res = await fn(model(set_from="new.png", push=["telegram"]), _ctx())
+    assert res.error is None, res.error
+    assert "set (file:new.png)" in res.extracted_content
+    assert "telegram: bot photo updated" in res.extracted_content
+    assert "keep the old image" not in res.extracted_content
+
+
+@pytest.mark.asyncio
+async def test_a_failed_set_pushes_nothing(home, tmp_path, owner_turn, pushes):
+    fn, model = _action(_Controller(home, workspace=str(tmp_path)))
+    res = await fn(model(set_from="missing.png", push=[]), _ctx())
+    assert res.error and "refused" in res.error and pushes == []
+
+
+@pytest.mark.asyncio
+async def test_push_of_an_svg_is_refused_with_the_reason(home, owner_turn, pushes):
+    from core.avatar import set_avatar
+    set_avatar(home, "alice", b'<svg xmlns="http://www.w3.org/2000/svg"></svg>', source="x")
+    fn, model = _action(_Controller(home))
+    res = await fn(model(push=[]), _ctx())
+    assert "SVG" in res.extracted_content and pushes == []
+
+
+@pytest.mark.asyncio
+async def test_a_room_photo_needs_a_room_the_owner_put_me_in(home, owner_turn, pushes,
+                                                             monkeypatch):
+    from tools.controller import avatar_action
+    _write_pfp(home)
+    monkeypatch.setattr(avatar_action, "_allowed_telegram_rooms", lambda c, h: {"-1001"})
+    fn, model = _action(_Controller(home))
+    res = await fn(model(push=["telegram:-1009"]), _ctx())
+    assert "not a Telegram room the owner put me in" in res.extracted_content
+    assert pushes == []
+    ok = await fn(model(push=["telegram:-1001"]), _ctx())
+    assert "chat -1001 photo updated" in ok.extracted_content
+    assert pushes == ["telegram:-1001"]            # the room only: the bot photo was not named
+
+    def _boom(c, h):
+        raise OSError("locked")
+    monkeypatch.setattr(avatar_action, "_allowed_telegram_rooms", _boom)
+    bad = await fn(model(push=["telegram:-1001"]), _ctx())
+    assert "could not be read" in bad.extracted_content       # unreadable, never "not a room"
+
+
+@pytest.mark.asyncio
+async def test_clear_returns_the_default_mark(home, owner_turn):
+    _write_pfp(home)
+    fn, model = _action(_Controller(home))
+    res = await fn(model(clear=True), _ctx())
+    assert "avatar: cleared" in res.extracted_content and "default" in res.extracted_content
+    from core.avatar import load_avatar
+    assert load_avatar(home, "alice").is_default
+    both = await fn(model(clear=True, set_from="x.png"), _ctx())
+    assert both.error and "opposites" in both.error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("params", [{"push": []}, {"clear": True}])
+async def test_push_and_clear_follow_the_set_rule(home, pushes, params, monkeypatch):
+    """A leaf, a forged turn and an autonomous run never change the face."""
+    _write_pfp(home)
+    fn, model = _action(_Controller(home))
+    leaf = _ctx()
+    leaf.is_sub_agent = True
+    res = await fn(model(**params), leaf)
+    assert res.error and "denied" in res.error
+    monkeypatch.setattr("core.security.owner_turn.owner_turn_refusal", lambda *a, **k: None)
+    monkeypatch.setattr("agents.task.session_class.is_autonomous_session", lambda sid: True)
+    # A standing job is no exception: a goal the agent made itself is one too.
+    monkeypatch.setattr("core.security.owner_turn.is_owner_standing_run", lambda ctx: True)
+    res = await fn(model(**params), _ctx())
+    assert res.error and "autonomous" in res.error
+    from core.avatar import load_avatar
+    assert not load_avatar(home, "alice").is_default and pushes == []
+
+
+def test_the_registration_note_never_says_now_for_a_snapshot(monkeypatch):
+    """120 T6: a `data:` URI registration is a snapshot."""
+    from tools.controller import avatar_action
+    monkeypatch.setenv("A2A_BASE_URL", "http://localhost:9000")
+    note = avatar_action._registration_note()
+    assert "snapshot" in note and "set_agent_uri" in note and "shows it now" not in note
+    monkeypatch.setenv("A2A_BASE_URL", "https://agent.example")
+    monkeypatch.delenv("EIP8004_AGENT_URI_MODE", raising=False)
+    assert "shows it now" in avatar_action._registration_note()
+
+
+def test_the_action_has_no_switch(home, monkeypatch):
     monkeypatch.setenv("AVATAR_TOOL_ENABLED", "false")
+    monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     from tools.controller.avatar_action import register_avatar_action
     c = _Controller(home)
     register_avatar_action(c)
-    assert "agent_avatar" not in c.registry.actions
+    assert "agent_avatar" in c.registry.actions
 
 
 def test_the_module_has_no_future_annotations_import():
