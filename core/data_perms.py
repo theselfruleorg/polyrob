@@ -52,6 +52,12 @@ DEFAULT_DATA_GROUP = "polyrob-data"
 #: tree, the wallet directory, and the cross-process turn/tick locks.
 ROOT_SENSITIVE_DIRS = ("auto", "wallet", "locks")
 
+#: Top-level trees whose writer sets the mode BY DESIGN, so the deploy ownership pass
+#: skips them too (deployment/hardening/data_permissions.py): the installer overlay,
+#: the update snapshots (0700 raw secret copies; restore refuses a widened one) and the
+#: app supervisor's tree (root-owned, no group write, its setgid bit kept for logs.txt).
+WRITER_MODE_DIRS = ("pylibs", "snapshots", "apps")
+
 #: Judged on group + root-ownership only — mode 750 is the deploy's rule.
 GROUP_WRITE_EXEMPT_DIRS = ("wallet",)
 
@@ -97,7 +103,7 @@ def apply_birth_mode(path) -> None:
             try:
                 info = os.fstat(fd)
                 if stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
-                    os.fchmod(fd, (stat.S_IMODE(info.st_mode) | 0o060) & ~0o007)
+                    os.fchmod(fd, (stat.S_IMODE(info.st_mode) | 0o060) & 0o770)
             finally:
                 os.close(fd)
     except OSError:
@@ -311,7 +317,7 @@ def audit_data_perms(data_dir: str, group: str = DEFAULT_DATA_GROUP,
         # installer code. Prune before judging/counting it, not just its children.
         at_root = os.path.normpath(dirpath) == os.path.normpath(data_dir)
         dirnames[:] = [d for d in dirnames if d not in _SKIP_NAMES
-                       and not (at_root and d == "pylibs")]
+                       and not (at_root and d in WRITER_MODE_DIRS)]
         for name, is_dir in [(d, True) for d in dirnames] + [(f, False) for f in filenames]:
             if report.scanned >= budget:
                 report.truncated = True

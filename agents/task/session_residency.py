@@ -63,7 +63,7 @@ def lock_is_idle(lock: Optional[asyncio.Lock]) -> bool:
 
 
 def _memory_dir(session_id: str, user_id: Optional[str]):
-    from agents.task.path import pm
+    from core.session_paths import pm
     return pm().create_file_path(session_id=session_id, subdir_name="memory",
                                  filename=SNAPSHOT, user_id=user_id).parent
 

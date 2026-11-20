@@ -27,16 +27,10 @@ from cli.commands._options import json_option, yes_option
 from cli.commands.config import _upsert_env
 from cli._admin_home import as_root_option
 from core.paths import polyrob_home
-from core.wallet.onchain import VENUE_CHAIN as _VENUE_CHAIN, balances as _balances
+from core.wallet.onchain import FUNDABLE_VENUES, VENUE_CHAIN as _VENUE_CHAIN, balances as _balances
 from core.wallet.token_template import TokenTemplateError, format_supply as _fmt_supply, to_exact_supply, validate_token_names  # noqa: E501
-# C60: the venue rule lived here AND in `surfaces/telegram/owner_ops.py`, each
-# with its own comment explaining the same footgun. One tuple, imported.
-from surfaces.telegram.owner_ops import _FUNDABLE_VENUES
-
-#: Venues that hold a same-chain float the agent spends directly. hyperliquid
-#: (delegated signer, collateral in the master account) and polymarket (per-user
-#: proxy creds) NEVER hold funds at their derived address.
-_FUNDABLE = set(_FUNDABLE_VENUES)
+# C60 / 125 S14: the venue rule is ONE tuple, `core.wallet.onchain.FUNDABLE_VENUES`.
+_FUNDABLE = set(FUNDABLE_VENUES)
 
 # kind -> the env var it writes. Both are read directly by
 # core.wallet.config.load_wallet_config (env-authoritative).
@@ -1246,7 +1240,8 @@ def wallet_deploy_token(symbol, supply, name, chain, decimals, max_usd,
 @click.option("--x", "twitter", default="", help="X/Twitter URL.")
 @click.option("--site", default="", help="Website URL.")
 @click.option("--max-usd", type=float, default=0.0,
-              help="The most this launch may cost. Default: sized from --buy.")
+              help="The most this launch may cost. Default: --buy plus fee and gas at "
+                   "the native spend price, with room (at least $25).")
 @click.option("--execute", is_flag=True, default=False,
               help="Actually broadcast. Without it this reads the live terms, "
                    "prices the opening buy and reports.")
@@ -1268,10 +1263,13 @@ def wallet_launch(symbol, name, buy, creator_tax_bps, logo, desc, twitter,
     """
     import asyncio
 
-    from tools.launchpad.tool import LaunchParams, LaunchpadTool
+    from tools.launchpad import tool as launchpad
 
     label = " ".join(name)
-    ceiling = max_usd if max_usd > 0 else max(25.0, (buy + 0.01) * 6000.0)
+    ceiling = max_usd if max_usd > 0 else launchpad.default_launch_ceiling(buy)
+    if ceiling is None:
+        raise click.ClickException("no native price right now, so no default ceiling; "
+                                   "give --max-usd")
     if execute and not yes:
         click.echo(click.style(
             f"About to launch {symbol} ({label}) on Pons"
@@ -1284,11 +1282,11 @@ def wallet_launch(symbol, name, buy, creator_tax_bps, logo, desc, twitter,
         click.echo(click.style(
             "note: no --logo. On a launchpad that is how a token looks "
             "abandoned.", fg="yellow"))
-    params = LaunchParams(name=label, symbol=symbol, buy_amount=buy,
-                          creator_tax_bps=creator_tax_bps, logo=logo,
-                          description=desc, twitter=twitter, website=site,
-                          max_spend_usd=ceiling, dry_run=not execute)
-    result = asyncio.run(LaunchpadTool().launchpad_launch(params, _owner_ctx()))
+    params = launchpad.LaunchParams(name=label, symbol=symbol, buy_amount=buy,
+                                    creator_tax_bps=creator_tax_bps, logo=logo,
+                                    description=desc, twitter=twitter, website=site,
+                                    max_spend_usd=ceiling, dry_run=not execute)
+    result = asyncio.run(launchpad.LaunchpadTool().launchpad_launch(params, _owner_ctx()))
     _echo_result(result, what="launch")
 
 

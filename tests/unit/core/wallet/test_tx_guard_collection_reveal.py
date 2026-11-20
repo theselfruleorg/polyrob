@@ -21,6 +21,13 @@ IDS = (3, 4, 7)
 
 
 @pytest.fixture(autouse=True)
+def _owner_approved(monkeypatch):
+    """124 W5: a reveal runs only with the owner's approval of the call — a tap or a mandate
+    (both stamp the owner grant). The card itself is pinned below."""
+    monkeypatch.setattr(tx_guard, "owner_authority", lambda *a, **k: (False, True))
+
+
+@pytest.fixture(autouse=True)
 def _pinned(monkeypatch):
     pin(monkeypatch, COLLECTION)
 
@@ -104,15 +111,16 @@ def test_a_fee_above_max_spend_refuses():
 # --- the destination is pinned ------------------------------------------------
 
 def test_no_pinned_collection_refuses(monkeypatch):
-    pin(monkeypatch)
+    pin(monkeypatch)    # 124 W4: no pin reads the chain; this fake proves no ERC-721
     d = _authorize(_intent(), _deltas())
-    assert d.allowed is False and "no collection with the reveal capability is pinned" in d.reason
+    assert d.allowed is False and "could not be read" in d.reason
 
 
-def test_a_collection_pinned_without_the_reveal_capability_refuses(monkeypatch):
+def test_a_capability_grants_nothing_any_more(monkeypatch):
+    """124 W5: a pin without the reveal capability is a pin like any other — the owner's
+    approval (a tap or a mandate) decides, not the field."""
     pin(monkeypatch, profile(COLLECTION, capabilities=("mint",)))
-    d = _authorize(_intent(), _deltas())
-    assert d.allowed is False and "reveal capability" in d.reason
+    assert _authorize(_intent(), _deltas()).allowed is True
 
 
 def test_an_untrusted_registry_refuses(monkeypatch):
@@ -120,7 +128,7 @@ def test_an_untrusted_registry_refuses(monkeypatch):
         raise collection_registry.CollectionRegistryError("unknown spec")
     monkeypatch.setattr(collection_registry, "profiles", boom)
     d = _authorize(_intent(), _deltas())
-    assert d.allowed is False and "cannot be trusted" in d.reason
+    assert d.allowed is False and "could not be read" in d.reason   # no pin, no proof
 
 
 def test_the_ids_are_held_to_the_profiles_max_supply(monkeypatch):
@@ -131,7 +139,7 @@ def test_the_ids_are_held_to_the_profiles_max_supply(monkeypatch):
 
 def test_an_intent_to_an_unpinned_contract_refuses():
     d = _authorize(_intent(to=OTHER), _deltas(), tx=_tx(to=OTHER))
-    assert d.allowed is False and "not a pinned collection" in d.reason
+    assert d.allowed is False and "could not be read" in d.reason
 
 
 def test_a_transaction_to_another_contract_refuses():
@@ -142,7 +150,7 @@ def test_a_transaction_to_another_contract_refuses():
 def test_a_collection_pinned_on_another_chain_refuses(monkeypatch):
     pin(monkeypatch, profile(COLLECTION, chain_id=46630))
     d = _authorize(_intent(), _deltas())
-    assert d.allowed is False and "pinned" in d.reason
+    assert d.allowed is False and "could not be read" in d.reason
 
 
 # --- value and calldata -------------------------------------------------------
@@ -278,3 +286,15 @@ def test_a_changed_collection_runtime_refuses():
     assert d.allowed is False and "not the pinned" in d.reason, d.reason
     d = _authorize(_intent(), _deltas(), rpc=code_rpc(code="0x"))
     assert d.allowed is False and "could not be read" in d.reason, d.reason
+
+
+def test_with_no_approval_every_reveal_is_the_owners_card(monkeypatch):
+    """124 W5: pinned or not, a reveal with no tap and no mandate is queued for the card."""
+    from core.wallet import nft_rules
+    monkeypatch.setattr(tx_guard, "owner_authority", lambda *a, **k: (False, False))
+    d = _authorize(_intent(), _deltas())
+    assert d.allowed is False and d.lane == "owner_queue" and "REVEAL" in d.reason, d.reason
+    pin(monkeypatch)
+    monkeypatch.setattr(nft_rules, "is_nft_contract", lambda rpc, to: True)
+    d = _authorize(_intent(), _deltas())
+    assert d.allowed is False and d.lane == "owner_queue" and "REVEAL" in d.reason, d.reason

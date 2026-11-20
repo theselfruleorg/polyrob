@@ -30,7 +30,7 @@ def test_registration_when_enabled(monkeypatch):
 
 
 def test_leaf_delegation_blocked():
-    from tools.controller.delegation import DELEGATE_BLOCKED_TOOLS
+    from core.delegation_policy import DELEGATE_BLOCKED_TOOLS
     assert "x402_invoice" in DELEGATE_BLOCKED_TOOLS
 
 

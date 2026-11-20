@@ -197,7 +197,7 @@ class TaskAgentChatMixin:
             m = re.match(r"^\s*(?:```|~~~)[^\n]*\n(.*?)\n?(?:```|~~~)\s*$", t, re.DOTALL)
             if m:
                 t = m.group(1).strip()
-        from modules.llm.brain_scrubber import BRAIN_KEYS as _brain_keys  # ONE set (S7)
+        from core.brain_scrubber import BRAIN_KEYS as _brain_keys  # ONE set (S7)
         if t.startswith("{"):
             try:
                 obj, _end = json.JSONDecoder().raw_decode(t)
@@ -525,7 +525,7 @@ class TaskAgentChatMixin:
                 from agents.task.agent.messages.context_references import (
                     preprocess_context_references,
                 )
-                from agents.task.path import pm
+                from core.session_paths import pm
                 _root = str(pm().get_workspace_dir(session_id, user_id)) if session_id else None
                 text = preprocess_context_references(
                     text, root=_root, confine_to_root=True,

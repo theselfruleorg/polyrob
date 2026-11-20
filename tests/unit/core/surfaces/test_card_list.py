@@ -91,3 +91,19 @@ def test_an_unreadable_store_is_not_no_cards():
         def open_cards(self, *a, **k):
             raise OSError("disk")
     assert agent_view("u1", st=Broken()).startswith("UNREADABLE")
+
+
+def test_the_agent_read_names_untappable_cards_and_moves_overdue_ones(tmp_path):
+    """126 wave 2: an overdue OPEN card is shown as expired (not hidden from both
+    lists), and the decided list says it has no buttons."""
+    import time
+    from core.surfaces import card_list, cards as C
+    st = C.CardStore(str(tmp_path / "cards.db"))
+    c = C.choice_card("owner", "Which?", ["a", "b"], st=st)
+    conn = st._conn()
+    conn.execute("UPDATE cards SET expires_at=? WHERE card_id=?", (time.time() - 5, c.card_id))
+    conn.commit()
+    conn.close()
+    view = card_list.agent_view("owner", st=st)
+    assert f"{c.card_id} choice expired" in view
+    assert "NO buttons" in view and "Only an OPEN card above can be tapped" in view

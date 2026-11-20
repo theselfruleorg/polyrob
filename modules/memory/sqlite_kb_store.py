@@ -9,6 +9,7 @@ module ``logger``; ``SqliteMemoryProvider`` composes it and calls ``_init_kb_sch
 import logging
 from typing import Optional
 
+from core.async_bridge import offloaded
 from core.sqlite_util import execute_retry, wal_connect
 
 logger = logging.getLogger("modules.memory.sqlite_memory_provider")
@@ -327,7 +328,9 @@ class KbStoreMixin:
             await self._run_blocking(self.kb_mark_hits, user_id=user_id,
                                      source_paths=[src for _, src, _ in rows])
         return "\n".join(f"[{src} #{idx}] {content}" for content, src, idx in rows)
-    async def kb_list_sources(self, *, user_id, collection: str = None) -> list:
+
+    @offloaded
+    def kb_list_sources(self, *, user_id, collection: str = None) -> list:
         """Return list of source dicts for this tenant, optionally filtered by collection.
 
         Each dict has: user_id, collection, source_path, source_hash, chunk_count, mime,

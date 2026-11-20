@@ -96,11 +96,12 @@ def settings_lines(user_id: Optional[str]) -> List[str]:
         model = tiers.get(tier)
         lines.append(f"{tier.capitalize()} model: {model or 'not set (it uses the main model)'}"
                      + (" — set by you" if own and own.get("model") == model else
-                        (" — operator env" if model else "")))
+                        (" — set by the operator" if model else "")))
     lines.append("What I may choose for a helper, a goal or a job: "
                  + CHOICE_WORDS[mc.choice_mode(user_id)] + ".")
     lines += recent_choices(user_id)
-    lines.append("Set: /model heavy <name> · /model light <name> · /model choice free|listed")
+    lines.append("Set them: `/model heavy <name>` · `/model light <name>` · "
+                 "`/model choice free|listed`")
     return lines
 
 

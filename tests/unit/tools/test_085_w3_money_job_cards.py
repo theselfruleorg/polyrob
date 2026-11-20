@@ -11,7 +11,7 @@ import types
 
 import pytest
 
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from core.surfaces import cards
 from cron.jobs import CronJobStore
 from cron.service import CronService
@@ -83,7 +83,7 @@ def test_owner_turn_money_rig_goal_is_a_card_and_no_row(tmp_path, _env):
 
 
 def test_confirm_writes_the_goal_with_the_owner_seat(tmp_path):
-    from surfaces.telegram.owner_ops import goal_reply
+    from cron.owner_goals import goal_reply
     tool = _goal_tool(tmp_path)
     asyncio.run(tool.goal_create(
         GoalCreateAction(title="buy back the token hourly", tools=["defi_trade"],
@@ -124,7 +124,7 @@ def test_owner_goal_update_with_a_money_tool_is_a_card(tmp_path):
     assert after.payload["acceptance"] == "a report"          # the other field landed
     card = _only_card()
     assert card.args[:2] == ["grant", goal.id]
-    from surfaces.telegram.owner_ops import goal_reply
+    from cron.owner_goals import goal_reply
     reply = goal_reply("alice", str(tmp_path), _confirm(card)[1:], board=tool._resolve_board())
     assert reply.startswith("✅"), reply
     granted = tool._resolve_board().get(goal.id).payload
@@ -134,7 +134,7 @@ def test_owner_goal_update_with_a_money_tool_is_a_card(tmp_path):
 # --- scheduled jobs -----------------------------------------------------------
 
 def test_owner_turn_money_job_is_a_card_and_confirm_schedules_it(tmp_path, monkeypatch):
-    from surfaces.telegram.job_ops import jobs_reply
+    from cron.owner_jobs import jobs_reply
     monkeypatch.setattr("core.cron_lanes.check_pinned_skills", lambda *a, **k: None)
     tool = _cron_tool(tmp_path)
     res = asyncio.run(tool.cronjob_schedule(
@@ -146,7 +146,7 @@ def test_owner_turn_money_job_is_a_card_and_confirm_schedules_it(tmp_path, monke
     card = _only_card()
     assert card.line.startswith("/job new 0 */6 * * * | buy back the token")
     words = _confirm(card)
-    monkeypatch.setattr("surfaces.telegram.job_ops._service", lambda d: tool._cron_service)
+    monkeypatch.setattr("cron.owner_jobs._service", lambda d: tool._cron_service)
     reply = jobs_reply("alice", str(tmp_path), words[1:], via="telegram")
     assert reply.startswith("✅"), reply
     job = tool._cron_service.list_jobs(user_id="alice")[0]
@@ -168,7 +168,7 @@ def test_non_money_owner_job_writes_at_once(tmp_path):
 
 
 def test_owner_job_edit_to_a_money_rig_is_a_card(tmp_path, monkeypatch):
-    from surfaces.telegram import job_ops
+    from cron import owner_jobs as job_ops
     tool = _cron_tool(tmp_path)
     asyncio.run(tool.cronjob_schedule(
         CronScheduleAction(task="summarise the week for the owner", schedule="1d"),

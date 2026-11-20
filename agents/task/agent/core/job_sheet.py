@@ -103,8 +103,8 @@ def _asks(job_id: str, user_id: Optional[str], data_dir: Optional[str]) -> Part:
     db = goals_db_path(data_dir)
     if not os.path.exists(db):
         return f"{head} none", False
-    from agents.task.goals.board import GoalBoard
-    from agents.task.goals.rail_answers import open_rail_asks
+    from modules.goals.board import GoalBoard
+    from modules.goals.rail_answers import open_rail_asks
     asks = open_rail_asks(GoalBoard(db), str(user_id or ""), f"cron:{job_id}")
     if not asks:
         return f"{head} none", False

@@ -12,6 +12,14 @@ from pydantic import BaseModel, Field
 from tools.code_exec import tool_rpc
 from tools.code_exec.tool import CodeExecutionTool, RunCodeParams
 
+
+@pytest.fixture(autouse=True)
+def _not_under_a_systemd_unit(monkeypatch):
+    """A CI runner can itself run under systemd (INVOCATION_ID set): these tests mean
+    a plain process, so the deep-path fallback to /tmp is allowed."""
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+
+
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="AF_UNIX sockets")
 
 

@@ -37,9 +37,7 @@ be acted through.
 """
 from __future__ import annotations
 
-import json
 import logging
-import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -50,7 +48,6 @@ logger = logging.getLogger(__name__)
 INTERVAL_SEC = 300
 #: C8: consecutive failed passes before the owner is told the watch is blind (6 × 5 min).
 FAILED_PASSES_ALERT = 6
-STATE_FILE = ("agent_nft", "holdings.json")
 LOG_STEP = 50_000
 LOST_KEEP = 50
 TOPIC_TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
@@ -73,6 +70,13 @@ class WatchResult:
     #: lost its readiness with no transfer (an act through its account, or cancelReady).
     ready: List[Dict[str, Any]] = field(default_factory=list)
     unready: List[Dict[str, Any]] = field(default_factory=list)
+    #: 124 N1: NFTs that arrived inside an account the agent holds.
+    nested: List[Dict[str, Any]] = field(default_factory=list)
+    #: 124 O2: held ids unreadable for a long time (reported once a day).
+    unreadable: List[Dict[str, Any]] = field(default_factory=list)
+    #: Audit 2026-11-21 M-3: ``(chain, count)`` of new unpinned collections NOT watched today
+    #: (over :data:`DISCOVERY_DAILY_CAP`) — ONE owner line per chain per day.
+    skipped: List[Tuple[str, int]] = field(default_factory=list)
 
     def as_dict(self) -> Dict[str, int]:
         return {"arrived": len(self.arrived), "lost": len(self.lost), "kept": self.kept,
@@ -81,42 +85,7 @@ class WatchResult:
 
 # ------------------------------------------------------------------------------ state
 
-def state_path(home_dir=None, user_id: Optional[str] = None, instance_id: Optional[str] = None) -> Path:
-    from core.instance import resolve_instance_id, resolve_owner_user_id, self_tier_root
-    from core.runtime_paths import resolve_data_home
-    home_dir = home_dir if home_dir is not None else resolve_data_home()
-    root = Path(self_tier_root(home_dir, user_id or resolve_owner_user_id(),
-                              instance_id or resolve_instance_id()))
-    return root.joinpath(*STATE_FILE)
-
-
-def load_state(path: Path) -> Dict[str, Any]:
-    """The state; no file = empty. An unreadable file RAISES (never "holds nothing")."""
-    p = Path(path)
-    if not p.exists():
-        return {"version": 1, "tracked": {}, "scanned": {}, "lost": []}
-    data = json.loads(p.read_text(encoding="utf-8"))
-    if not isinstance(data, dict) or not isinstance(data.get("tracked"), dict):
-        raise ValueError(f"{p} is not a holdings state file")
-    data.setdefault("scanned", {})
-    data.setdefault("lost", [])
-    return data
-
-
-def save_state(path: Path, state: Dict[str, Any]) -> None:
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(p.suffix + f".{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(state, indent=1, sort_keys=True), encoding="utf-8")
-    tmp.replace(p)
-
-
-def tracked(home_dir=None, user_id=None, instance_id=None, *, chain: Optional[str] = None) -> List[Dict[str, Any]]:
-    """The tracked NFTs (optionally on one chain), oldest first. Raises when unreadable."""
-    rows = list(load_state(state_path(home_dir, user_id, instance_id))["tracked"].values())
-    if chain:
-        rows = [r for r in rows if r.get("chain") == chain]
-    return sorted(rows, key=lambda r: (r.get("since") or 0, r.get("token_id") or 0))
+from core.wallet.holdings_state import load_state, save_state, state_path, tracked  # noqa: E402
 
 
 # ------------------------------------------------------------------------------ the scan
@@ -153,12 +122,19 @@ def scan(treasury: str, *, state: Dict[str, Any], rpc_for: Callable[[str], Rpc],
 
     result = WatchResult()
     try:
-        profiles = collection_registry.profiles()
-    except Exception as exc:  # noqa: BLE001 — an untrusted registry: change nothing
-        result.errors.append(f"the collection registry cannot be trusted ({exc})")
-        return result
+        profiles = list(collection_registry.profiles())
+        pins_read = True
+    except Exception as exc:  # noqa: BLE001 — 124 section 5.5: an unreadable pin store is no pin
+        result.errors.append(f"the collection pins cannot be read ({exc}); watching the rest")
+        profiles, pins_read = [], False
     tracked_rows: Dict[str, Dict[str, Any]] = state.setdefault("tracked", {})
     scanned: Dict[str, int] = state.setdefault("scanned", {})
+    if pins_read:
+        # An unreadable pin store is not "no pins": discovery would count a PINNED arrival
+        # against the daily cap of unpinned ones and move past it. Its cursor waits instead.
+        _discover(treasury, state, rpc_for, result,
+                  pinned={f"{p.chain_id}:{p.address}" for p in profiles}, now=now)
+    profiles += _unpinned_profiles(state, profiles, rpc_for, result)
     for p in profiles:
         chain = chain_name_for_id(p.chain_id)
         ckey = f"{p.chain_id}:{p.address}"
@@ -181,9 +157,12 @@ def scan(treasury: str, *, state: Dict[str, Any], rpc_for: Callable[[str], Rpc],
             try:
                 owner = read_owner_of(rpc, p.address, token_id)
             except Exception as exc:  # noqa: BLE001 — unknown is not lost
-                complete = False
-                result.errors.append(f"{p.address} #{token_id}: ownerOf unreadable ({exc})")
+                row = tracked_rows.get(key) or _candidate_row(p, chain, token_id)
+                if not _unreadable(state, key, row, str(exc), now, result):
+                    complete = False
+                    result.errors.append(f"{p.address} #{token_id}: ownerOf unreadable ({exc})")
                 continue
+            state.get("unreadable", {}).pop(key, None)
             owned = owner.lower() == str(treasury).lower()
             label = f"{p.journal_prefix or p.address[:10] + '…'} #{token_id}"
             if owned and key in tracked_rows:
@@ -194,7 +173,8 @@ def scan(treasury: str, *, state: Dict[str, Any], rpc_for: Callable[[str], Rpc],
                 account, _version = p.account_of(token_id)
                 row = {"chain": chain, "chain_id": p.chain_id, "collection": p.address,
                        "token_id": token_id, "account": account, "label": label,
-                       "since": float(now())}
+                       "kind": _version.kind.name, "since": float(now()),
+                       "pinned": bool(getattr(p, "pinned", True))}
                 tracked_rows[key] = row
                 result.arrived.append(row)
                 _readiness(rpc, p, row, None)
@@ -211,7 +191,203 @@ def scan(treasury: str, *, state: Dict[str, Any], rpc_for: Callable[[str], Rpc],
                 result.lost.append(row)
         if complete:
             scanned[ckey] = head + 1
+    _nested(state, rpc_for, result, now)
     return result
+
+
+#: 124 W3: the first discovery pass of a chain looks back this many blocks (no indexer).
+DISCOVERY_LOOKBACK = 50_000
+#: Audit 2026-11-21 M-3: new UNPINNED collections watched per chain per UTC day. Anyone can
+#: deploy an ERC-721 and send the treasury a token; past this the rest are counted, not watched,
+#: and summed up in ONE owner line (a pinned collection is never capped).
+DISCOVERY_DAILY_CAP = 5
+#: 124 O2: passes an id may stay unreadable before the cursor moves past it (one hour).
+UNREADABLE_PASSES = 12
+UNREADABLE_REPORT_SEC = 86_400
+
+
+def _discovery_chains(state: Dict[str, Any]) -> List[str]:
+    """The EVM chains the money rail runs on with a pinned RPC — where an NFT can arrive."""
+    try:
+        from core.wallet import chains
+        return [c for c in chains.money_chains()
+                if (chains.get(c) and chains.get(c).family == "evm" and chains.rpc_is_pinned(c))]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _day(now) -> str:
+    import datetime as _dt
+    return _dt.datetime.fromtimestamp(float(now()), tz=_dt.timezone.utc).strftime("%Y-%m-%d")
+
+
+def _discover(treasury: str, state: Dict[str, Any], rpc_for, result: WatchResult, *,
+              pinned=frozenset(), now: Callable[[], float] = time.time) -> None:
+    """124 W3: an ERC-721 ``Transfer(*, treasury, id)`` of ANY contract adds that contract to the
+    watched collections (``state["collections"]``) — a pin is no longer needed to be seen.
+
+    Audit 2026-11-21 M-3: at most :data:`DISCOVERY_DAILY_CAP` NEW unpinned collections per chain
+    per UTC day; the rest are counted in ``state["discovery_cap"]`` (not watched, no notice
+    each) and reported in ONE line per chain per day (``result.skipped``)."""
+    found = state.setdefault("collections", {})
+    cursors = state.setdefault("discovered", {})
+    caps = state.setdefault("discovery_cap", {})
+    today = _day(now)
+    for chain in _discovery_chains(state):
+        cap = caps.get(chain)
+        if not isinstance(cap, dict) or cap.get("day") != today:
+            cap = caps[chain] = {"day": today, "added": 0, "skipped": [], "told": False}
+        skipped_before = len(cap["skipped"])
+        try:
+            rpc = rpc_for(chain)
+            head = int(rpc("eth_blockNumber", []), 16)
+            start = int(cursors.get(chain, max(0, head - DISCOVERY_LOOKBACK)))
+            block = start
+            while block <= head:
+                end = min(block + LOG_STEP - 1, head)
+                logs = rpc("eth_getLogs", [{"fromBlock": hex(block), "toBlock": hex(end),
+                                            "topics": [TOPIC_TRANSFER, None, _word(treasury)]}])
+                if not isinstance(logs, list):
+                    raise RuntimeError(f"eth_getLogs {block}-{end} returned no list")
+                for log in logs:
+                    topics = log.get("topics") or []
+                    if len(topics) == 4 and str(topics[2]).lower() == _word(treasury):
+                        from core.wallet.collection_registry import chain_id_of
+                        ckey = f"{chain_id_of(chain)}:{str(log.get('address')).lower()}"
+                        if ckey in found or ckey in pinned or ckey in cap["skipped"]:
+                            continue
+                        if cap["added"] >= DISCOVERY_DAILY_CAP:
+                            cap["skipped"].append(ckey)
+                            continue
+                        cap["added"] += 1
+                        found[ckey] = {"chain": chain}
+                block = end + 1
+            cursors[chain] = head + 1
+        except Exception as exc:  # noqa: BLE001 — a pin still watches; discovery retries
+            logger.warning("nft holdings watch: discovery on %s failed (%s)", chain, exc)
+        if len(cap["skipped"]) > skipped_before and not cap["told"]:
+            cap["told"] = True
+            result.skipped.append((chain, len(cap["skipped"])))
+
+
+def _unpinned_profiles(state: Dict[str, Any], pinned, rpc_for, result: WatchResult) -> list:
+    """The chain profiles of the discovered and tracked collections that are not pinned."""
+    from core.wallet.collection_registry import NotACollection, chain_profile
+    have = {f"{p.chain_id}:{p.address}" for p in pinned}
+    keys = set(state.get("collections", {}))
+    keys |= {f"{r.get('chain_id')}:{str(r.get('collection') or '').lower()}"
+             for r in state.get("tracked", {}).values() if r.get("chain_id") and r.get("collection")}
+    out = []
+    for ckey in sorted(keys - have):
+        chain_id, _, address = ckey.partition(":")
+        if not chain_id.isdigit() or not address:
+            continue
+        from core.wallet.nft_account import chain_name_for_id
+        chain = chain_name_for_id(int(chain_id))
+        if not chain:
+            continue
+        try:
+            out.append(chain_profile(chain, address, rpc=rpc_for(chain)))
+        except NotACollection as exc:   # the chain's definite answer: not one this build reads
+            state.get("collections", {}).pop(ckey, None)
+            result.errors.append(f"{address} on {chain} is not watched ({exc})")
+        except Exception as exc:  # noqa: BLE001 — a read that failed: kept, read again next pass
+            result.errors.append(f"{address} on {chain}: its profile is unread ({exc}); "
+                                 f"I try again on the next pass")
+    return out
+
+
+def _candidate_row(profile, chain: str, token_id: int) -> Dict[str, Any]:
+    """What the owner is told of an id that ARRIVED (a Transfer to the treasury) but whose
+    ``ownerOf`` stays unreadable: it is not tracked, so it has no row of its own."""
+    try:
+        account = profile.account_of(token_id)[0]
+    except Exception:  # noqa: BLE001
+        account = None
+    return {"label": f"{profile.journal_prefix or profile.address[:10] + '…'} #{token_id}",
+            "chain": chain, "account": account, "untracked": True}
+
+
+def _unreadable(state: Dict[str, Any], key: str, row, why: str, now, result: WatchResult) -> bool:
+    """124 O2: count the passes an id stays unreadable (burned, or ``ownerOf`` reverts). After
+    :data:`UNREADABLE_PASSES` the cursor moves past it (True) and the owner is told once a day:
+    "<id> unreadable since <date>; its account holds …". Before that it holds the cursor."""
+    rows = state.setdefault("unreadable", {})
+    u = rows.setdefault(key, {"since": float(now()), "passes": 0, "told": None})
+    u["passes"] += 1
+    if u["passes"] < UNREADABLE_PASSES:
+        return False
+    told = u.get("told")
+    if told is None or float(now()) - float(told) >= UNREADABLE_REPORT_SEC:
+        u["told"] = float(now())
+        result.unreadable.append(dict(row, unreadable_since=u["since"], why=why[:160]))
+    return True
+
+
+#: The arrival events into held accounts remembered (so a pass that re-reads a block range
+#: reports each once); the oldest are dropped past this.
+NESTED_KEEP = 200
+
+
+def _nested(state: Dict[str, Any], rpc_for, result: WatchResult, now) -> None:
+    """124 N1: an ERC-721 that arrives in an account the agent holds (one level) is reported
+    once PER ARRIVAL (``state["nested"]`` keys each ``Transfer`` log by its transaction and log
+    index): an NFT swept out and nested again is a new arrival, and is reported again."""
+    nested = state.setdefault("nested", {})
+    cursors = state.setdefault("nested_scanned", {})
+    for row in list(state.get("tracked", {}).values()):
+        account, chain = str(row.get("account") or ""), str(row.get("chain") or "")
+        if not account or not chain:
+            continue
+        try:
+            rpc = rpc_for(chain)
+            head = int(rpc("eth_blockNumber", []), 16)
+            start = int(cursors.get(account.lower(), max(0, head - DISCOVERY_LOOKBACK)))
+            block = start
+            while block <= head:
+                end = min(block + LOG_STEP - 1, head)
+                logs = rpc("eth_getLogs", [{"fromBlock": hex(block), "toBlock": hex(end),
+                                            "topics": [TOPIC_TRANSFER, None, _word(account)]}])
+                if not isinstance(logs, list):
+                    raise RuntimeError(f"eth_getLogs {block}-{end} returned no list")
+                for log in logs:
+                    topics = log.get("topics") or []
+                    if len(topics) != 4 or str(topics[2]).lower() != _word(account):
+                        continue
+                    key = (f"{str(log.get('transactionHash') or '').lower()}:"
+                           f"{log.get('logIndex')}:{str(log.get('address')).lower()}:"
+                           f"{int(topics[3], 16)}")
+                    if key not in nested:
+                        nested[key] = {"collection": str(log.get("address")).lower(),
+                                       "token_id": int(topics[3], 16), "chain": chain,
+                                       "held_by": account, "held_by_label": row.get("label"),
+                                       "since": float(now())}
+                        result.nested.append(nested[key])
+                block = end + 1
+            cursors[account.lower()] = head + 1
+            for old in list(nested)[:-NESTED_KEEP]:
+                nested.pop(old, None)
+        except Exception as exc:  # noqa: BLE001 — the cursor stays; the next pass retries
+            logger.warning("nft holdings watch: arrivals into %s on %s unread (%s)", account, chain, exc)
+
+
+def nested_text(row: Dict[str, Any]) -> str:
+    return (f"{row['collection']} #{row['token_id']} arrived inside {row.get('held_by_label') or row['held_by']}'s "
+            f"account {row['held_by']} on {row['chain']} — it is nested there. To use it, sweep it "
+            f"to the treasury first.")
+
+
+def unreadable_text(row: Dict[str, Any]) -> str:
+    import datetime as _dt
+    since = _dt.datetime.fromtimestamp(float(row.get("unreadable_since") or 0),
+                                       tz=_dt.timezone.utc).strftime("%Y-%m-%d")
+    if row.get("untracked"):
+        return (f"{row.get('label')} on {row.get('chain')} was sent to the treasury, but its "
+                f"ownerOf has been unreadable since {since} ({row.get('why')}), so I do not track "
+                f"it and the watch moved past it. agent_nft_inspect reads it.")
+    return (f"{row.get('label')} on {row.get('chain')} has been unreadable since {since} "
+            f"(burned, or its ownerOf reverts: {row.get('why')}). Its account {row.get('account')} "
+            f"may still hold assets; agent_nft_inspect reads it.")
 
 
 def _readiness(rpc: Rpc, profile, row: Dict[str, Any], result: Optional[WatchResult]) -> None:
@@ -327,10 +503,34 @@ def _seed_tokens(state: Dict[str, Any], rpc_for: Callable[[str], Rpc], user_id: 
     return said
 
 
+def skipped_text(chain: str, count: int) -> str:
+    """M-3: the ONE line for the unpinned collections over the day's discovery cap."""
+    return (f"{count} more collection(s) I do not know sent NFTs to my treasury on {chain} today, "
+            f"past the {DISCOVERY_DAILY_CAP} I watch per day. I do not watch them, act on them "
+            f"or report them one by one (anyone can deploy a collection and send me a token). "
+            f"To work with one, pin it: /nft trust <collection> on {chain}.")
+
+
 def arrived_text(row: Dict[str, Any]) -> str:
+    if row.get("pinned") is False:
+        # M-3: the truth for an unpinned collection — its own contract answers ownerOf, so
+        # "you gave me" and "I can work from it as its owner" are not facts here.
+        return (f"An NFT of a collection you did not pin arrived on my treasury: {row['label']} "
+                f"({row['collection']} #{row['token_id']}) on {row['chain']}. Its collection "
+                f"contract controls who owns it, so I do not count it as mine to work from: "
+                f"every act through its account {row['account']} needs your Confirm, and no "
+                f"verb picks it by default. To work from it, pin the collection: "
+                f"/nft trust {row['collection']} on {row['chain']}.")
+    from core.wallet.account_kinds import kind_named
+    kind = kind_named(str(row.get("kind") or ""))
+    if kind is not None and kind.standing_approvals == "refused":
+        grants = (f" {kind.approvals_text}; {kind.residuals_text}." if kind.residuals_text else "")
+    else:   # 124 R1: an earlier owner's approvals survive a sale on this kind
+        grants = (" An earlier owner's approvals may survive on this account: I scan them before "
+                  "any deposit, and agent_nft_revoke_all clears them.")
     return (f"You gave me {row['label']} on {row['chain']}. Its account is {row['account']}; I can "
-            f"now work from it as its owner. /nft lists what I hold; /nft send {row['token_id']} "
-            f"<address> gives it away (clear its approvals first).")
+            f"now work from it as its owner.{grants} /nft lists what I hold; /nft send "
+            f"{row['token_id']} <address> gives it away (clear its approvals first).")
 
 
 def lost_text(row: Dict[str, Any]) -> str:
@@ -426,6 +626,12 @@ async def tick(container: Any = None, *, treasury: Optional[str] = None,
         seeded = await asyncio.to_thread(_seed_tokens, state, rpc_for, user_id)
         ended = await asyncio.to_thread(_prune_orders, rpc_for, home_dir, user_id, instance_id,
                                         result)
+        for row in result.nested:
+            await notifier(container, user_id, nested_text(row))
+        for row in result.unreadable:
+            await notifier(container, user_id, unreadable_text(row))
+        for chain, count in result.skipped:
+            await notifier(container, user_id, skipped_text(chain, count))
         if result.arrived or result.lost or result.ready or result.unready:
             for row in result.arrived:
                 await notifier(container, user_id, arrived_text(row) + seeded.get(_row_key(row), ""))
@@ -484,20 +690,38 @@ async def _default_notify(container, user_id, text) -> None:
 
 # ------------------------------------------------------------------------------ selection
 
+def _pinned_row(row: Dict[str, Any]) -> bool:
+    """The row's collection is pinned NOW (the owner's pins, read live; an unreadable pin store
+    is no pin, 124 section 5.5). A row's own ``pinned`` field is a hint, never the authority."""
+    try:
+        from core.wallet import collection_registry
+        want = (int(row.get("chain_id") or 0), str(row.get("collection") or "").lower())
+        return any((int(p.chain_id), str(p.address).lower()) == want
+                   for p in collection_registry.profiles())
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def select(chain: str, nft: Optional[str], *, rpc: Rpc, treasury: str, account: Optional[str] = None,
            home_dir=None, user_id=None, instance_id=None):
     """The NFT a verb acts on: the one named (``nft=`` / ``account=``), else the ONLY tracked NFT
-    on *chain*. Always re-verified now (``nft_account.resolve``: pinned, code hash, deployed
-    account, ``ownerOf == treasury``). Raises ``NftAccountError``."""
+    of a PINNED collection on *chain* (audit 2026-11-21 M-3: an NFT anyone can send — an
+    unpinned collection — is never the default; it is acted on only when named). Always
+    re-verified now (``nft_account.resolve``: pinned, code hash, deployed account,
+    ``ownerOf == treasury``). Raises ``NftAccountError``."""
     from core.wallet.nft_account import NftAccountError, resolve
     if not nft and not account:
         try:
-            rows = tracked(home_dir, user_id, instance_id, chain=chain)
+            held = tracked(home_dir, user_id, instance_id, chain=chain)
         except Exception as exc:  # noqa: BLE001
             raise NftAccountError(f"the holdings record is unreadable ({exc}) — name the NFT") from exc
+        rows = [r for r in held if _pinned_row(r)]
         if not rows:
+            extra = (f"; it holds {len(held)} NFT(s) of collections you did not pin, which are "
+                     f"never the default" if held else "")
             raise NftAccountError(f"this treasury holds no tracked NFT of a pinned collection on "
-                                  f"{chain} (give it one, or name it: nft=<collection>#<id>)")
+                                  f"{chain}{extra} (give it one, or name it: "
+                                  f"nft=<collection>#<id>)")
         if len(rows) > 1:
             names = ", ".join(f"{r['collection']}#{r['token_id']}" for r in rows)
             raise NftAccountError(f"this treasury holds {len(rows)} NFTs on {chain} — name one: {names}")

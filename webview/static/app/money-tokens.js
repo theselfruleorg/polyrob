@@ -17,7 +17,7 @@
  * functions `/wallet trust`, `/writeoff` and `/unquarantine` call on Telegram
  * and the REPL. Every word comes from the copy layer on `#money-copy`.
  */
-import { postJson } from "./http.js";
+import { postJson, serverAnswer } from "./http.js";
 import { fmtUsd } from "./format.js";
 
 function el(tag, className, text) {
@@ -190,7 +190,8 @@ export async function runTokenAction(act, row, copy, opts = {}) {
       { chain: row.chain, address: row.address, symbol: row.symbol || "",
         reason: row.reason || "" }, { fetcher: opts.fetcher });
     const ok = Boolean(res.ok && res.body && res.body.ok);
-    return { ok, message: (res.body && res.body.message) || (copy && copy.tok_failed) || "" };
+    return { ok, message: ok ? ((res.body && res.body.message) || "")
+                             : serverAnswer(res.body, (copy && copy.tok_failed) || "") };
   } catch (err) {
     console.error("[money] token action did not reach the console", err);
     return { ok: false, message: (copy && copy.tok_failed) || "" };

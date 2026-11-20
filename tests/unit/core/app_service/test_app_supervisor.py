@@ -398,6 +398,15 @@ def test_a_tree_edited_after_the_tested_digest_is_not_published(rig):
     assert rig.docker.argv_of(["run", "-d"]) == []
 
 
+def test_a_snapshot_whose_digest_mismatches_is_deleted(rig):
+    """Audit 2026-11-21 M-9: a refused snapshot never stays on disk."""
+    (rig.proj / "server.py").write_text("changed after the tests\n")
+    asyncio.run(rig.sup.tick())
+    assert rig.reg.get("demo-status", "owner-1")["status"] == "failed"
+    snaps = rig.tmp / "data" / "apps" / "owner-1" / "demo-status" / "snapshots"
+    assert snaps.is_dir() and list(snaps.iterdir()) == []
+
+
 # --- the end of the lifecycle: remove, and the owner's start --------------------
 
 def test_remove_of_a_live_app_tears_down_and_deletes_files_and_row(rig):

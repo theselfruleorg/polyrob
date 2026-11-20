@@ -1,7 +1,7 @@
 """M21 (2026-07-15 wallet/crypto security review): `ValidationManager` is a
-process-volatile in-memory simulation — a restart wipes it — yet its read endpoints are served even when
-`EIP8004_ENABLED` is off (M21's own fix direction: don't hard-gate the reads,
-label them honest instead). Every read response here must carry an explicit
+process-volatile in-memory simulation — a restart wipes it. Its data reads sit
+behind `EIP8004_ENABLED` like the writes (L-17, audit 2026-11-21); only the static
+`/eip8004/validation` index stays open. Every read response here must carry an explicit
 `simulated: true` marker so a consumer can't mistake local in-memory state for
 an on-chain registry.
 """
@@ -29,8 +29,8 @@ def _client():
     return TestClient(app, raise_server_exceptions=False)
 
 
-def test_validation_summary_marked_simulated_even_when_disabled(monkeypatch):
-    monkeypatch.setenv("EIP8004_ENABLED", "false")
+def test_validation_summary_marked_simulated(monkeypatch):
+    monkeypatch.setenv("EIP8004_ENABLED", "true")
     c = _client()
     r = c.get("/eip8004/validation/summary/42")
     assert r.status_code == 200, r.text
@@ -56,7 +56,6 @@ def test_validation_pending_marked_simulated(monkeypatch):
     )
     assert req.status_code == 200, req.text
 
-    monkeypatch.setenv("EIP8004_ENABLED", "false")
     r = c.get("/eip8004/validation/pending")
     assert r.status_code == 200, r.text
     body = r.json()
@@ -66,7 +65,7 @@ def test_validation_pending_marked_simulated(monkeypatch):
 
 
 def test_validation_validators_marked_simulated(monkeypatch):
-    monkeypatch.setenv("EIP8004_ENABLED", "false")
+    monkeypatch.setenv("EIP8004_ENABLED", "true")
     c = _client()
     r = c.get("/eip8004/validation/validators")
     assert r.status_code == 200, r.text
@@ -77,7 +76,7 @@ def test_validation_validators_marked_simulated(monkeypatch):
     assert all(desc.endswith(" (simulated)") for desc in body.values())
 
 
-def test_validation_status_marked_simulated_even_when_disabled(monkeypatch):
+def test_validation_status_marked_simulated(monkeypatch):
     # Seeding a request/response goes through the write endpoints, which ARE
     # gated on EIP8004_ENABLED (+ /respond requires admin) — flip those just
     # long enough to create state, then prove the READ stays open (and
@@ -102,7 +101,31 @@ def test_validation_status_marked_simulated_even_when_disabled(monkeypatch):
     )
     assert resp.status_code == 200, resp.text
 
-    monkeypatch.setenv("EIP8004_ENABLED", "false")
     status = c.get(f"/eip8004/validation/status/{request_hash}")
     assert status.status_code == 200, status.text
     assert status.json()["simulated"] is True
+
+
+def test_the_advertised_validation_url_answers_a_get(monkeypatch):
+    """F12: the registration file advertises `/eip8004/validation`; a GET there
+    answered 404. It is an index of the reads, stamped simulated."""
+    monkeypatch.setenv("EIP8004_ENABLED", "false")
+    r = _client().get("/eip8004/validation")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["simulated"] is True
+    assert "/eip8004/validation/pending" in body["reads"].values()
+
+
+@pytest.mark.parametrize("path", [
+    "/eip8004/validation/status/0xabc",
+    "/eip8004/validation/summary/42",
+    "/eip8004/validation/pending",
+    "/eip8004/validation/validators",
+])
+def test_validation_reads_are_hidden_when_disabled(monkeypatch, path):
+    """L-17 (audit 2026-11-21): the validation reads sit behind the same
+    EIP8004_ENABLED gate as the writes; only the static index stays open."""
+    monkeypatch.setenv("EIP8004_ENABLED", "false")
+    r = _client().get(path)
+    assert r.status_code == 404, (path, r.status_code)

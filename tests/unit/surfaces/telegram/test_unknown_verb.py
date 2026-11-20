@@ -4,7 +4,7 @@ import pytest
 from core.surfaces.dispatcher import _command_token
 from core.verbs import verb_for
 from surfaces.telegram.harness import _help_for, _unknown_command_text
-from surfaces.telegram.unknown_verb import elsewhere_text, unknown_command_text
+from core.surfaces.command_catalog import elsewhere_text, unknown_command_text
 
 
 def test_a_verb_of_another_seat_names_the_seat_instead_of_unknown():

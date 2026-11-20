@@ -8,6 +8,7 @@
  * entry with the reason behind a disclosure, never a zero. It reads when the
  * Cash pane is first shown. Words come from `#money-usage-copy`.
  */
+import { getJson } from "./http.js";
 import { stateBlock } from "./state.js";
 
 function el(tag, className, text) {
@@ -48,13 +49,13 @@ export function renderUsage(root, body, copy, days, pick) {
   return body.no_ledger ? "empty" : "usage";
 }
 
-export async function loadUsage(root, copy, days = 7, fetcher = fetch) {
+export async function loadUsage(root, copy, days = 7, fetcher) {
   const pick = (n) => loadUsage(root, copy, n, fetcher);
   let body = null;
   try {
-    const resp = await fetcher(`/api/webgate/usage?days=${days}`, { credentials: "include" });
-    body = await resp.json().catch(() => null);
-    if (!resp.ok) body = { readable: false, error: (body && (body.detail || body.error)) || String(resp.status) };
+    const res = await getJson(`/api/webgate/usage?days=${days}`, { fetcher });
+    body = res.body;
+    if (!res.ok) body = { readable: false, error: (body && (body.detail || body.error)) || String(res.status) };
   } catch (err) {
     console.error("[money-usage] the AI cost read did not reach the console", err);
     body = { readable: false, error: String((err && err.message) || err) };

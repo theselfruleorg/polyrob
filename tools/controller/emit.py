@@ -93,7 +93,7 @@ def publish_context(controller, reply_to: Optional[str] = None) -> dict:
 			# Layering: core/ never imports modules.*, so the injection scanner is
 			# supplied from this (tools) tier — the same contract
 			# screen_attachment_path(scanner=) already requires.
-			from modules.memory.task.threat_scan import is_suspicious as _raw_scanner
+			from core.security.threat_scan import is_suspicious as _raw_scanner
 		except ImportError:
 			_raw_scanner = None
 		if _raw_scanner is not None:

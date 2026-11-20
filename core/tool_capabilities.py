@@ -12,6 +12,11 @@ fully blocked):
                           also the MONEY effect ceiling.
 - ``high_impact``      — the WHOLE tool_id is denied while a session is
                           correspondent-tainted (correspondent_gate Layer 2).
+- ``owner_workspace``  — reads or writes the owner's own workspace. Denied in the
+                          owner's own chat while a correspondent's reply taints it (the
+                          gate's scoped reply could carry the bytes out); a
+                          correspondent's own session and a goal/cron run keep it
+                          (``correspondent_gate._is_owner_chat``).
 - ``delegate_blocked`` — a delegated leaf child never gets this tool_id
                           (default set; ``DELEGATE_BLOCKED_TOOLS`` env still overrides).
 - ``exec``             — executes code/commands; also the CODE effect ceiling.
@@ -129,10 +134,10 @@ _ROW_DEFAULTS: Dict[str, object] = {
 # gated everywhere but not yet registrable (see T12's _ASPIRATIONAL_IDS).
 TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
     # -- core / read-only -----------------------------------------------------
-    "filesystem": ToolRow(untrusted_output=True, cli="static"),
+    "filesystem": ToolRow({"owner_workspace"}, untrusted_output=True, cli="static"),
     "task": ToolRow(cli="static", room_grantable=True),   # the TODO tool, NOT delegation — never block
     # No tool-id capability, but its four verbs are gated BY NAME while
-    # correspondent-tainted (correspondent_gate._HIGH_IMPACT_NAMES, M03) — the
+    # correspondent-tainted (core.security.high_impact._HIGH_IMPACT_NAMES, M03) — the
     # same shape as `memory`/`session_search`.
     "knowledge": ToolRow(
         cli="optional", cli_registrar="tools.knowledge_ingest:register_knowledge_tool",
@@ -266,10 +271,8 @@ TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
     # agent can never self-serve it via load_tool.
     "defi_trade": ToolRow({"money", "high_impact", "delegate_blocked"},
         gate=ToolGate(flag="DEFI_TRADE_ENABLED")),
-    # 050/069: agent NFTs (an ERC-6551 token-bound account of an NFT the treasury owns). Its package
-    # verbs live in the optional agent-NFT package (AGENT_NFT_PACKAGE_MODULES) and register via register_optional_tool, which
-    # refuses an unclassified tool — so the row lands in core BEFORE the package.
-    # Every write goes through tx_guard with `via_account`.
+    # 050/069/123: agent NFTs (an ERC-6551 token-bound account of an NFT the treasury owns).
+    # Every verb is core (tools/agent_nft/); every write goes through tx_guard.
     "agent_nft": frozenset({"money", "high_impact", "delegate_blocked"}),
     # 090: classified off-chain signatures with the operational key. MONEY because the
     # key is the treasury's (a signature can be authority, so it is explicit-grant-only,
@@ -393,7 +396,7 @@ EFFECT_CAPABILITIES: FrozenSet[str] = frozenset({
 })
 
 KNOWN_CAPABILITIES: FrozenSet[str] = frozenset({
-    "money", "high_impact", "delegate_blocked", "exec", "shared_identity",
+    "money", "high_impact", "delegate_blocked", "exec", "shared_identity", "owner_workspace",
 }) | EFFECT_CAPABILITIES
 
 
@@ -543,8 +546,3 @@ def lacks_effect_ceiling(tool_id: str) -> bool:
     write_capable = bool(caps & {"money", "exec"}) or tool_id in high_risk_tool_ids()
     return write_capable and not (caps & EFFECT_CAPABILITIES)
 
-
-#: The optional agent-NFT package, by import name, in preference order. ``polyrob_drop`` is
-#: the current name; the second entry is the pre-rename fallback, read until the package
-#: renames (069 v4).
-AGENT_NFT_PACKAGE_MODULES = ("polyrob_drop", "polyrob_desk")

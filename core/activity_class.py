@@ -30,7 +30,7 @@ from core import event_kinds as ek
 
 #: The ordered set of owner-facing classes. The Log renders one filter chip per
 #: entry, in this order; ``classify`` never returns anything outside it.
-CLIENT_CLASSES = ("goal", "cron", "money", "message", "system", "tool")
+CLIENT_CLASSES = ("goal", "cron", "money", "message", "owner", "system", "tool")
 
 # --- money ---------------------------------------------------------------------
 # Wallet spend, every payment/invoice leg, subscriptions, paid-room actions and
@@ -109,7 +109,24 @@ _TOOL_KINDS = frozenset({
 _TOOL_PREFIXES = ("tool_",)
 
 # --- cron ----------------------------------------------------------------------
-_CRON_KINDS = frozenset({ek.CRON_RUN})
+# A run, and the service-level domain events of a job (scheduled, stopped,
+# changed, paused, resumed, pulled forward) — whichever seat drove them.
+_CRON_KINDS = frozenset({
+    ek.CRON_RUN,
+    ek.CRON_SCHEDULED,
+    ek.CRON_CANCELLED,
+    ek.CRON_EDITED,
+    ek.CRON_PAUSED,
+    ek.CRON_RESUMED,
+    ek.CRON_RUN_NOW,
+})
+
+# --- owner ---------------------------------------------------------------------
+# The owner's own acts: every console write (``console_*``, 043 W4) and every
+# owner verb typed on a seat (``owner_command``, 116 W3.7). They are not the
+# agent's doing, so they never read as "the agent itself".
+_OWNER_KINDS = frozenset({ek.OWNER_COMMAND})
+_OWNER_PREFIXES = ("console_",)
 
 # --- diagnostics ---------------------------------------------------------------
 # Low-signal engine-internal kinds the Log hides until "show diagnostics". These
@@ -136,7 +153,7 @@ def classify(kind, effect=None):
     """Map a durable/feed/unknown ``kind`` to one member of ``CLIENT_CLASSES``.
 
     Total and pure: an empty, unknown, or non-string kind is ``"system"``.
-    Precedence is money → cron → goal → tool → message → system, so a family
+    Precedence is owner → money → cron → goal → tool → message → system, so a family
     prefix never steals a kind another class owns (no kind starts with another
     class's prefix). ``effect`` only refines ``external_write`` (033).
     """
@@ -144,6 +161,8 @@ def classify(kind, effect=None):
         return "system"
     if kind == ek.EXTERNAL_WRITE:
         return _EFFECT_CLASS.get(effect if isinstance(effect, str) else "", "tool")
+    if kind in _OWNER_KINDS or kind.startswith(_OWNER_PREFIXES):
+        return "owner"
     if kind in _MONEY_KINDS or kind.startswith(_MONEY_PREFIXES):
         return "money"
     if kind in _CRON_KINDS:

@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 TOOL_GATE_FLAGS: Dict[str, str] = gate_flag_map()
 
 
-#: Ids the GOAL vocabulary grants (`tools/goal_tools.py::_SELF_GOAL_ALLOWED_TOOLS`,
+#: Ids the GOAL vocabulary grants (`core/tool_grants.py::SELF_GOAL_ALLOWED_TOOLS`,
 #: proposal 009) that name a controller ACTION registered by
 #: `_register_default_actions`, not a container tool object: `message` is the
 #: `_register_message_action` verb behind MESSAGE_TOOL_ENABLED. Requesting such an

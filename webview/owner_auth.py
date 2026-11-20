@@ -25,6 +25,7 @@ import jwt as pyjwt
 from argon2 import PasswordHasher
 from fastapi import Response
 
+from core.env import is_development_env
 from core.token_denylist import OWNER_COOKIE_TTL_SECONDS
 from webview import webgate
 
@@ -101,13 +102,12 @@ def issue_owner_session_cookie(response: Response) -> str:
     payload["aud"] = SESSION_AUDIENCE
     token = pyjwt.encode(payload, jwt_secret, algorithm="HS256")
 
-    is_production = os.environ.get("ENVIRONMENT", "production") == "production"
     response.set_cookie(
         key="auth_token",
         value=token,
         max_age=OWNER_COOKIE_TTL_SECONDS,
         path="/",
-        secure=is_production and not webgate.is_local(),
+        secure=not is_development_env() and not webgate.is_local(),
         httponly=True,
         samesite="strict",
     )

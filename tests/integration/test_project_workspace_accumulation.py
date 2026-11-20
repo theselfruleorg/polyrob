@@ -18,7 +18,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _reset_pm():
-    from agents.task.path import reset_path_manager
+    from core.session_paths import reset_path_manager
     reset_path_manager()
     yield
     reset_path_manager()
@@ -53,7 +53,7 @@ def _toolkit_goal_run(pm, session_id, tool_name, user_id="local"):
 
 def test_project_root_mode_accumulates_one_toolkit(tmp_path):
     # Model C: explicit project dir => all goal runs share ONE workspace folder.
-    from agents.task.path import get_path_manager, set_path_manager
+    from core.session_paths import get_path_manager, set_path_manager
     project = tmp_path / "project"
     pm = get_path_manager(
         data_root=str(tmp_path / "data" / "sessions"),
@@ -82,7 +82,7 @@ def test_project_root_mode_accumulates_one_toolkit(tmp_path):
 def test_per_session_mode_fragments_control(tmp_path):
     # Control: legacy per-session ephemeral workspaces => each run sees an EMPTY
     # toolkit, so INDEX.md never accumulates and the files scatter (the original bug).
-    from agents.task.path import get_path_manager, set_path_manager
+    from core.session_paths import get_path_manager, set_path_manager
     pm = get_path_manager(data_root=str(tmp_path / "data" / "sessions"))
     set_path_manager(pm)
 

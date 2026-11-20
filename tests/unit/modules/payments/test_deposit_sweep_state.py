@@ -261,8 +261,8 @@ async def test_a_credited_reading_carries_its_deposit_address(monkeypatch):
         _Config, _FakeBalanceManager, _FakeDB, _fake_web3_module)
     from modules.payments.deposit_monitor import DepositMonitor
     monkeypatch.setitem(sys.modules, "web3", _fake_web3_module(2 * 10**18))
-    monkeypatch.setenv("ETH_PRICE_USD_OVERRIDE", "3000.0")
-    monitor = DepositMonitor(_FakeDB(), _FakeBalanceManager(), _Config())
+    monitor = DepositMonitor(_FakeDB(), _FakeBalanceManager(), _Config(),
+                             price_fn=lambda: 3000.0)
     readings = await monitor._check_chain_deposits(
         ADDRESS, "ethereum", {"rpc_url": "http://fake-rpc.invalid", "chain_id": 1})
     assert readings and all(r["address"] == ADDRESS for r in readings)

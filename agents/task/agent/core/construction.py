@@ -192,7 +192,7 @@ except ImportError:
 from agents.task.logging_config import get_task_logger
 
 # Import centralized path management
-from agents.task.path import pm
+from core.session_paths import pm
 
 
 # Generic logger for the module itself (not instances)
@@ -905,7 +905,7 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 
 				# Save skills info to session directory for webview
 				try:
-					from agents.task.path import pm
+					from core.session_paths import pm
 					import json
 					# P2-25: user-authored skill ids come from the tenant's rules.
 					_user_skill_ids = set()
@@ -1051,6 +1051,8 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 		# Recheck disclosure at assembly/replay: a correspondent can enter later.
 		from agents.task.session_class import may_write_owner_memory
 		self.message_manager._owner_context_allowed = lambda: may_write_owner_memory(self.orchestrator)
+		from agents.task.agent.core.correspondent_gate import owner_chat_tainted as _oct
+		self.message_manager._owner_chat_tainted = lambda: _oct(self.orchestrator)
 
 	def _init_self_context(self, p) -> None:
 		"""SOUL / owner facts / contract / SELF doc foundation blocks (none in a room)."""
@@ -1083,14 +1085,14 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 			from core.doc_age import measure_doc_age as _doc_age, render_age_header as _age_hdr
 			if _owner_doc:
 				# 057 WS-D: once the doc carries `[from: … <date>]` stamps, the
-				# heading states its AGE — `## Owner facts (last write 2026-09-19;
+				# heading states its AGE — `## Owner rules (last write 2026-09-19;
 				# 3 line(s) older than 30 days; 2 line(s) undated)`. A line with no
 				# stamp is reported as UNDATED, never as fresh. A doc with no stamps
 				# at all (every doc before this flag is armed) keeps the bare
 				# heading, so the injected block is byte-identical to pre-057.
 				_owner_doc = (
-					(_age_hdr("Owner facts", _owner_doc)
-					 if _doc_age(_owner_doc).dated else "## Owner facts")
+					(_age_hdr("Owner rules", _owner_doc)
+					 if _doc_age(_owner_doc).dated else "## Owner rules")
 					+ "\n\n" + _owner_doc)
 			if _self_doc and _doc_age(_self_doc).dated:
 				# The evolving SELF doc has never had a heading, so it gets one ONLY
@@ -1143,6 +1145,15 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 			))
 		except Exception as e:
 			self.logger.debug(f"Could not load self-context (non-fatal): {e}")
+		# The operator's public knowledge goes to EVERY session, a room and a
+		# correspondent included: the one instance text written for any audience.
+		# Its own try: a failed owner or self doc above must not drop it too.
+		try:
+			from core.instance import load_public_doc
+			from core.runtime_paths import prefs_home_dir
+			self.message_manager.set_public_knowledge(load_public_doc(prefs_home_dir()))
+		except Exception as e:
+			self.logger.warning(f"Could not load the public knowledge (identity/public.md): {e}")
 
 	def _init_runtime_context(self, p) -> None:
 		"""Project context, the runtime identity line and the <environment> block."""
@@ -1162,8 +1173,12 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 			# 095 W1a: a recreated session re-renders the owner's switch from its pin.
 			from agents.task.model_pin_state import session_switch
 			_switch = session_switch(getattr(self, "session_id", None), _ident_model)
+			from agents.task.session_class import correspondent_facing as _cf
+			from core.surfaces.room_policy import is_public_session as _ips
+			_orch_id = getattr(self, "orchestrator", None)
 			self.message_manager.set_runtime_identity(
 				_ident_model, _ident_provider,
+				public=bool(_ips(_orch_id) or _cf(_orch_id)),
 				**({"switched_from": _switch[0], "cause": "owner", "at": _switch[1]}
 				   if _switch else {}))
 		except Exception as e:
@@ -1280,7 +1295,7 @@ class AgentConstructionMixin(AgentConstructionHelpersMixin):
 		if should_restore_agent_state(is_sub_agent=getattr(self, "_is_sub_agent", False),
 		                              session_id=self.session_id, orchestrator=orchestrator):
 			try:
-				from agents.task.path import pm
+				from core.session_paths import pm
 				state_file = pm().create_file_path(
 					session_id=self.session_id,
 					subdir_name="data",

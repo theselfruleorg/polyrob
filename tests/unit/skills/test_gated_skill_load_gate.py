@@ -76,7 +76,7 @@ def test_external_content_suspicious_helper(tmp_path, monkeypatch):
 
     # scanner flags anything containing SENTINEL
     monkeypatch.setattr(
-        "modules.memory.task.threat_scan.is_suspicious",
+        "core.security.threat_scan.is_suspicious",
         lambda text: "SENTINEL" in text,
     )
     assert sm._external_content_suspicious("x", "SENTINEL here", "body") is True
@@ -89,7 +89,7 @@ def test_external_scan_fails_closed_on_raise(tmp_path, monkeypatch):
     def _boom(_):
         raise RuntimeError("scanner blew up")
 
-    monkeypatch.setattr("modules.memory.task.threat_scan.is_suspicious", _boom)
+    monkeypatch.setattr("core.security.threat_scan.is_suspicious", _boom)
     # a scanner error must exclude the external skill (fail-closed)
     assert sm._external_content_suspicious("x", "desc", "body") is True
 

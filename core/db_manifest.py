@@ -24,7 +24,7 @@ Homes:
 - ``bot``     -> config-driven ``DB_PATH`` (default ``<data_home>/database/bot.db``,
   see :data:`_BOT_DB_RELATIVE_LAYOUTS`)
 - ``wallet``  -> ``<data_home>/wallet/<name>`` (backed up with the ``wallet/`` dir,
-  cli/update/context.py)
+  core/update_snapshot/context.py)
 - ``signer``  -> the signer's own state dir (root-owned; never in the agent backup)
 - ``session`` -> one file per session directory (pruned with the session)
 """
@@ -61,8 +61,8 @@ DB_REGISTRY: Tuple[DbSpec, ...] = (
        note="owner-login budgets shared by workers"),
     _S("x_write_attempts.db", "data", "packs/x/polyrob_x/write_budget.py",
        note="shared API/browser write budget"),
-    _S("goals.db", "data", "agents/task/goals/board.py", "GoalBoard._init_schema"),
-    _S("cron.db", "data", "cron/jobs.py", "CronJobStore"),
+    _S("goals.db", "data", "modules/goals/board.py", "GoalBoard._init_schema"),
+    _S("cron.db", "data", "core/cron_store.py", "CronJobStore"),
     _S("skill_usage.db", "data", "modules/skills/skill_usage.py",
        "SkillUsageTracker._init_schema"),
     _S("users.db", "data", "tools/user_directory.py", "UserDirectory"),
@@ -70,7 +70,7 @@ DB_REGISTRY: Tuple[DbSpec, ...] = (
     # D11 (2026-07-11) / R-2 T1 (2026-07-17): resolves via
     # core.runtime_paths.sidecar_db_path — a pre-existing install may still hold
     # it under the session tree until core/sidecar_relocate.py moves it;
-    # cli/update/context.py passes those legacy paths via `extra_dbs`.
+    # core/update_snapshot/context.py passes those legacy paths via `extra_dbs`.
     _S("telemetry_events.db", "data", "core/event_log.py"),
     _S("surfaces.db", "data", "core/surfaces/outbound_allowlist.py", "OutboundAllowlist",
        note="outbound allowlist + group roles"),
@@ -123,6 +123,8 @@ DB_REGISTRY: Tuple[DbSpec, ...] = (
        note="099: offers, their confirmed versions, resources and orders"),
     _S("lp_seeds.db", "data", "core/wallet/lp_seed.py", "init_schema",
        note="117: the owner's v4 pool seed declarations; a confirmed one is one use"),
+    _S("nav.db", "data", "core/surfaces/nav.py", "NavStore",
+       note="the command line behind each reply button; a lost row = an expired button"),
     # --- not sidecars: their own homes ------------------------------------------
     _S("bot.db", "bot", "modules/database/database_manager.py", backup=True,
        note="relational DB; schema = migrations/ + the modules/database table classes"),

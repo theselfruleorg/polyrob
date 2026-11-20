@@ -73,14 +73,14 @@ def widen_mode_for_container(mode: int) -> int:
     sandbox can execute). Only the low nine bits are touched — setuid/setgid/sticky
     are never propagated.
     """
-    mode = stat.S_IMODE(mode)
+    mode = stat.S_IMODE(mode) & 0o777
     widened = mode | 0o066                     # group + other: read & write
     if mode & stat.S_IXUSR:
         widened |= 0o011                       # keep an executable file executable
     return widened
 
 
-def _chmod_nofollow(path: str, mode: int, *, want_dir: bool) -> None:
+def _chmod_nofollow(path: str, mode: int, *, want_dir: bool, required: bool = True) -> None:
     """chmod *path* WITHOUT ever following a symlink (H10).
 
     Opens the entry with ``O_NOFOLLOW`` (a symlink swapped in after the caller's
@@ -104,21 +104,31 @@ def _chmod_nofollow(path: str, mode: int, *, want_dir: bool) -> None:
         ok = stat.S_ISDIR(st.st_mode) if want_dir else stat.S_ISREG(st.st_mode)
         if not ok:
             raise OSError(f"refusing to chmod unexpected file type: {path}")
-        os.fchmod(fd, mode)
+        if want_dir:
+            # Keep the data home's inherited setgid bit (runtime-sandbox contract;
+            # core.fs_copy.widen_dir_mode — the same rule, by path).
+            from core.fs_copy import widen_dir_mode
+            # required: a container uid that is NOT the owner must get in, even at
+            # the cost of the setgid bit; else the bit is kept and the call skipped.
+            widen_dir_mode(path, mode, required=required)
+            return
+        os.fchmod(fd, mode & 0o777)
     finally:
         os.close(fd)
 
 
 def _install_root() -> str:
     """Host root for the dev-mode ``/install`` dirs — OUTSIDE every bind-mounted
-    workspace (H02). ``<data_home>/sandbox_installs``; a tempdir fallback (per
-    uid) only when the data home cannot be resolved."""
+    workspace (H02). ``<data_home>/sandbox_installs`` — one of the trees the
+    rootless sandbox daemon sees. No ``/tmp`` fallback: inside the unit that is a
+    private mount the daemon cannot see (``-v`` would mount an EMPTY dir it
+    creates), so an unresolvable data home refuses with its cause."""
     try:
         from core.runtime_paths import effective_data_home
         return os.path.join(str(effective_data_home()), "sandbox_installs")
-    except Exception:
-        uid = os.geteuid() if hasattr(os, "geteuid") else "u"
-        return os.path.join(tempfile.gettempdir(), f"polyrob_sandbox_installs_{uid}")
+    except Exception as exc:
+        raise ExecutionBackendError(
+            f"no install dir: the data home cannot be resolved ({exc})") from exc
 
 
 def _rmtree_install_dir(path: str) -> None:
@@ -884,7 +894,10 @@ class DockerBackend(ExecutionBackend):
                 os.mkdir(path, 0o777)
             except FileExistsError:
                 pass
-            _chmod_nofollow(path, 0o777, want_dir=True)
+            # A non-root host runs the container as its own uid (the owner): 0777 is
+            # a courtesy there, never worth the data home's setgid bit.
+            _chmod_nofollow(path, 0o777, want_dir=True,
+                            required=hasattr(os, "geteuid") and os.geteuid() == 0)
         except Exception:
             logger.warning("dev-mode: could not prepare install dir %s", path, exc_info=True)
         return path
@@ -959,11 +972,12 @@ class DockerBackend(ExecutionBackend):
         persistent sandbox's confinement boundary is the session workspace, not some
         other host path. Falls back to a dedicated tempdir if the session/path
         machinery is unavailable (e.g. a bare construction with a synthetic
-        session_id that was never a real session).
+        session_id that was never a real session): a dir the sandbox daemon can
+        see (``core.runtime_paths.sandbox_scratch_dir``), never the private ``/tmp``.
         """
         if self._session_id:
             try:
-                from agents.task.path import pm
+                from core.session_paths import pm
                 return str(pm().get_workspace_dir(self._session_id))
             except Exception:
                 logger.warning(
@@ -971,11 +985,11 @@ class DockerBackend(ExecutionBackend):
                     "falling back to a dedicated tempdir",
                     self._session_id, exc_info=True,
                 )
-        fallback = os.path.join(
-            tempfile.gettempdir(), f"polyrob_docker_persistent_{self._session_id or 'anon'}"
-        )
-        os.makedirs(fallback, exist_ok=True)
-        return fallback
+        from core.runtime_paths import ScratchUnavailable, sandbox_scratch_dir
+        try:
+            return sandbox_scratch_dir("persistent-", name=self._session_id or "anon")
+        except ScratchUnavailable as exc:
+            raise ExecutionBackendError(str(exc)) from exc
 
     def _build_run_argv(
         self,
@@ -1051,7 +1065,15 @@ class DockerBackend(ExecutionBackend):
                 exit_code=2, backend=self.name,
             )
         timeout = self._clamp_timeout(request.timeout, getattr(request, "ceiling", None))
-        workdir = request.workdir or tempfile.mkdtemp(prefix="polyrob_docker_")
+        if request.workdir:
+            workdir = request.workdir
+        else:
+            # Not the private /tmp: the (rootless) daemon would mount an empty dir.
+            from core.runtime_paths import ScratchUnavailable, sandbox_scratch_dir
+            try:
+                workdir = sandbox_scratch_dir("run-")
+            except ScratchUnavailable as exc:
+                return ExecutionResult(stderr=str(exc), exit_code=2, backend=self.name)
         created_tmp = request.workdir is None
         os.makedirs(workdir, exist_ok=True)
         if self._workspace_needs_chmod:

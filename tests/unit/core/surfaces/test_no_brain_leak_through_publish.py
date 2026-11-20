@@ -1,6 +1,6 @@
 """Regression lock (P1a top risk): NO brain-state shape may survive MessageRouter.publish.
 
-Every leak shape from modules/llm/brain_scrubber.py's docstring is fed through the
+Every leak shape from core/brain_scrubber.py's docstring is fed through the
 unified outbound seam; the subscribed surface must receive scrubbed text. This is the
 single most expensive known live bug (OR-7/B4) — a second un-scrubbed outbound path
 would re-create it on a new surface.

@@ -558,7 +558,7 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
         if not repl_sid or not sid:
             return True  # fail-open: don't accidentally mute the user's own events
         try:
-            from agents.task.path import pm
+            from core.session_paths import pm
             return pm().clean_session_id(sid) == pm().clean_session_id(repl_sid)
         except Exception:
             return sid == repl_sid
@@ -818,7 +818,7 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
         # (the live path writes usage to disk, not the push feed — §0 amend. 1).
         session_dir: Optional[Path] = None
         try:
-            from agents.task.path import pm
+            from core.session_paths import pm
             session_dir = pm().get_session_root(session_id, user_id)
         except Exception:
             session_dir = None

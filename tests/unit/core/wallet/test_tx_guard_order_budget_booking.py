@@ -67,7 +67,7 @@ def order(monkeypatch, tmp_path):
 def _send(order_id, *, key="k1", per_tx=100.0):
     amount = 10 ** 14                                     # 0.0001 ETH at $2000 = $0.20
     intent = tx_guard.TxIntent(chain="base", token=None, to=RECIPIENT, amount_raw=amount,
-                               max_spend_usd=0.2, idempotency_key=key)
+                               max_spend_usd=0.2, idempotency_key=key, why="fulfil the order")
     ctx = SimpleNamespace(user_id="owner", session_id="s", metadata={"mandate": order_id},
                           is_sub_agent=False, role="orchestrator")
     return tx_guard.authorize(

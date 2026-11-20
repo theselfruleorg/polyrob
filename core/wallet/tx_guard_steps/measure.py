@@ -247,7 +247,8 @@ def step_6_assert_deltas(c: GuardContext) -> Optional[Decision]:
         # exactly the declared ids arrive from the pinned collection, and nothing else of the
         # signer's moves or is named (core.wallet.collection_mint). The value is what the caps are charged below.
         from core.wallet import collection_mint as _collection_mint
-        _mint_err = _collection_mint.assert_simulation(intent, deltas, holder)
+        _mint_err = _collection_mint.assert_simulation(
+            intent, deltas, holder, c.account_rpc or _tg.simulation._default_rpc_for(intent.chain))
         if _mint_err:
             _tg._record_money_refusal("money_gate", tool_self, execution_context,
                                       detail=f"collection_mint: {_mint_err}")
@@ -649,19 +650,33 @@ def step_6g_account_nesting(c: GuardContext) -> Optional[Decision]:
     # OwnershipCycle there, and its collection refuses it in `_update`), and two tokens can own
     # each other. The contract refuses it in `_update`; this is the mirror for
     # every NFT the guarded wallet moves — measured moves, any verb, any shape.
-    _nest = _tg._collection_account_destination_refusal(intent.chain, tx, deltas.holder_nft_out)
-    if not _nest and deltas.holder_nft_out:
-        _nest = _tg._nft_nesting_refusal(
-            intent.chain, deltas.holder_nft_out,
-            account_rpc or _tg.simulation._default_rpc_for(intent.chain))
+    # 124 W1/W2: the rules are read from the chain for every collection (core.wallet.nft_rules);
+    # a pin adds an implementation to derive, an unreadable pin store removes no rule.
+    from core.wallet import nft_rules
+    _call = nft_rules.call_nesting_refusal(_tg._chain_id(intent.chain), tx)
+    if _call:
+        _tg._record_money_refusal("money_gate", tool_self, execution_context, detail=f"account: {_call}")
+        return Decision(False, f"refused: {_call}")
+    if not deltas.holder_nft_out:
+        return None
+    found = _tg._nft_nesting_refusal(
+        intent.chain, deltas.holder_nft_out,
+        account_rpc or _tg.simulation._default_rpc_for(intent.chain), tx=tx, holder=c.holder)
+    _nest = found if isinstance(found, str) else getattr(found, "refusal", None)
     if _nest:
         _tg._record_money_refusal("money_gate", tool_self, execution_context, detail=f"account: {_nest}")
         return Decision(False, f"refused: {_nest}")
+    if getattr(found, "nested", ()):
+        # 124 N4: an NFT into an account the agent itself holds is the owner's call, in every
+        # lane; the card says how to get it back (step 9 queues it).
+        c.card_reasons.append(("NESTED", found.card_line()))
+        c.notes.append(found.card_line())
     return None
 
 
 def step_6g2_future_account(c: GuardContext) -> Optional[Decision]:
-    """6g''. No asset into the account of a token not minted yet."""
+    """6g''. No asset into the account of a token not minted yet, nor to an agent account's
+    address on another chain (124 C1)."""
     intent = c.intent
     tx = c.tx
     holder = c.holder
@@ -669,6 +684,25 @@ def step_6g2_future_account(c: GuardContext) -> Optional[Decision]:
     tool_self = c.tool_self
     account_rpc = c.account_rpc
     deltas = c.deltas
+    # -- 124 C1: never to the address of an agent account that lives on another chain.
+    from core.wallet import nft_rules as _rules
+    if _rules.held_accounts() is None and (int((tx or {}).get("value") or 0) > 0
+                                           or deltas.holder_transfers or deltas.holder_nft_out):
+        # The review (2026-11-20): unreadable is not empty — with no holdings state the
+        # cross-chain and deposit rules cannot run, so a move of value is the owner's card.
+        c.card_reasons.append(("HOLDINGS UNREADABLE", "the record of the NFT accounts I hold "
+                               "cannot be read, so I cannot rule out one of my own accounts "
+                               "as the recipient"))
+    _other = _tg._cross_chain_refusal(intent, tx, deltas)
+    if not _other:
+        # 124 R1: no deposit into a held account that still carries an earlier owner's grant.
+        from core.wallet import nft_rules
+        _other = nft_rules.deposit_refusal(
+            account_rpc or _tg.simulation._default_rpc_for(intent.chain), intent.chain,
+            _tg._chain_id(intent.chain), intent, tx, deltas, holder)
+    if _other:
+        _tg._record_money_refusal("money_gate", tool_self, execution_context, detail=f"account: {_other}")
+        return Decision(False, f"refused: {_other}")
     # -- 6g''. C5: no asset of ANY kind into the account of a token not minted yet. Whoever mints
     # k later owns what sits in accountOf(k) — ETH, ERC-20 or NFT alike.
     _future = _tg._future_account_refusal(
@@ -676,6 +710,21 @@ def step_6g2_future_account(c: GuardContext) -> Optional[Decision]:
     if _future:
         _tg._record_money_refusal("money_gate", tool_self, execution_context, detail=f"account: {_future}")
         return Decision(False, f"refused: {_future}")
+    return None
+
+
+def step_6h_internal_move(c: GuardContext) -> Optional[Decision]:
+    """6h. 124 M1: a move between the treasury and its own NFT account is internal (no cap use)."""
+    from core.wallet import nft_rules
+    try:
+        c.internal_move = nft_rules.internal_move(
+            c.intent.chain, c.intent, c.tx, c.deltas, c.holder, sender=c.sender,
+            rpc=c.account_rpc or _tg.simulation._default_rpc_for(c.intent.chain))
+    except Exception:  # noqa: BLE001 — not provably internal: charged like any move
+        c.internal_move = False
+    if c.internal_move:
+        c.notes.append("an internal move between the treasury and its own NFT account: the fee "
+                       "only counts against the caps")
     return None
 
 

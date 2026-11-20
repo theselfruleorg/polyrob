@@ -167,7 +167,7 @@ async def test_status_bound_and_idle_session(env):
 
 @pytest.mark.asyncio
 async def test_status_reflects_goal_counts(env):
-    from agents.task.goals.board import STATUS_RUNNING, GoalBoard
+    from modules.goals.board import STATUS_RUNNING, GoalBoard
     board = GoalBoard(os.path.join(str(env), "goals.db"))
     board.create(user_id="alice", title="Draft the quarterly report")
     board.create(user_id="alice", title="Migrate the billing database",
@@ -276,7 +276,7 @@ async def test_goals_empty_board(env):
 
 @pytest.mark.asyncio
 async def test_goals_summary_with_seeded_rows(env):
-    from agents.task.goals.board import STATUS_DONE, STATUS_RUNNING, GoalBoard
+    from modules.goals.board import STATUS_DONE, STATUS_RUNNING, GoalBoard
     board = GoalBoard(os.path.join(str(env), "goals.db"))
     board.create(user_id="alice", title="Write the report")
     board.create(user_id="alice", title="Deploy the release", status=STATUS_RUNNING)
@@ -284,11 +284,16 @@ async def test_goals_summary_with_seeded_rows(env):
     other = board.create(user_id="someone_else", title="Not mine")
     assert other.user_id == "someone_else"
 
-    out = await act_on_inbound(_Agent(str(env)), _cmd("/goals", "/goals"))
+    reply = await act_on_inbound(_Agent(str(env)), _cmd("/goals", "/goals"))
+    from core.surfaces.command_reply import reply_actions, reply_text
+    out = reply_text(reply)
     assert "3 goal(s)" in out
     assert "Write the report" in out
     assert "Deploy the release" in out
     assert "Not mine" not in out  # tenant-scoped
+    # 2026-11-20 UX review H8: one button per open goal, the running one first
+    labels = [a.label for a in reply_actions(reply)]
+    assert labels == ["Deploy the release", "Write the report"]
 
 
 # --- /prefs ------------------------------------------------------------------
@@ -325,7 +330,7 @@ async def test_prefs_summary_hides_untouched_defaults(env):
 
 @pytest.mark.asyncio
 async def test_help_mentions_new_verbs(env):
-    out = await act_on_inbound(_Agent(str(env)), _cmd("/help", "/help"))
+    out = await act_on_inbound(_Agent(str(env)), _cmd("/help", "/help all"))
     assert "/status" in out and "/journey" in out and "/goals" in out and "/prefs" in out
 
 
@@ -397,7 +402,7 @@ async def test_status_leads_with_degraded_health(env, monkeypatch):
     with open(os.path.join(str(env), "CREDIT_SENTINEL"), "w") as f:
         json.dump({"providers": {"openrouter": {"ts": time.time() - 60, "release_ts": None,
                                                "reason": "Error code: 402"}}}, f)
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     GoalBoard(os.path.join(str(env), "goals.db")).create_ask(
         user_id="alice", what="Grant defi_trade on the treasury objective", why="")
     out = await act_on_inbound(_Agent(str(env)), _cmd("/status", "/status"))

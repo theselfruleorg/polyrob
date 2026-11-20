@@ -44,6 +44,7 @@ the two read-both/write-new rules for a store that historically lived elsewhere.
 """
 
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -109,7 +110,7 @@ def _local_default_data_home() -> Path:
     ``data/`` keeps the sidecar DBs apart from ``.env``/``auth.json`` (027 WP5).
     """
     from core.paths import polyrob_home
-    return (polyrob_home() / "data").resolve()
+    return (polyrob_home() / PROFILE_DATA_DIRNAME).resolve()
 
 
 def _warn_ignored_project_home(data_home: Path) -> None:
@@ -202,28 +203,10 @@ def resolve_data_home() -> Path:
     return resolve_runtime_paths(local=True).data_home
 
 
-#: ``polyrob update`` snapshots (``cli/update/snapshot.py``) live in
+#: ``polyrob update`` snapshots (``core/update_snapshot/snapshot.py``) live in
 #: ``<data home>/snapshots/<name>/``; the copied env files sit in its ``config/``.
 UPDATE_SNAPSHOTS_DIRNAME = "snapshots"
 UPDATE_SNAPSHOT_CONFIG_SUBDIR = "config"
-
-
-def install_tmp_dir() -> Optional[Path]:
-    """A private scratch dir ON DISK for pip/lock steps: ``<data home>/tmp``.
-
-    A small tmpfs ``/tmp`` (1.9 GB on a 4 GB box) failed an extras install with
-    ``Errno 122`` (2026-10-29). An operator-set ``TMPDIR`` wins; ``None`` when
-    the data home cannot hold the dir (the caller keeps the default)."""
-    if (os.environ.get("TMPDIR") or "").strip():
-        return None
-    try:
-        path = effective_data_home() / "tmp"
-        path.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if os.access(str(path), os.W_OK):
-            return path
-    except Exception:
-        pass
-    return None
 
 
 def update_snapshots_root(data_home: Optional[Path] = None) -> Path:
@@ -351,13 +334,30 @@ def container_data_home(container: Optional[Any]) -> str:
     return data_dir_or_home(getattr(cfg, "data_dir", None))
 
 
+def pinned_data_home() -> Optional[Path]:
+    """The data home the operator PINNED with ``POLYROB_DATA_DIR``, absolute, or None.
+
+    The ONE raw read of the env for a reader that must tell "pinned" from
+    "resolved by default" (the lock dir, the turn marker, the owner verbs, the
+    wallet's fail-closed path). A reader that only wants the home calls
+    :func:`effective_data_home` / :func:`data_dir_or_home`. Ratchet:
+    ``tests/test_data_home_read_ratchet.py`` (A-16)."""
+    raw = (os.environ.get("POLYROB_DATA_DIR") or "").strip()
+    if not raw:
+        return None
+    try:
+        return Path(raw).resolve()
+    except Exception:
+        return Path(os.path.abspath(raw))
+
+
 def effective_data_home() -> Path:
     """``<data_home>`` with the local-vs-server default split applied.
 
     :func:`resolve_data_home` is the LOCAL rule (``POLYROB_DATA_DIR`` else
     ``<polyrob_home>/data``); a headless deploy that left the env unset lands on the
     server default instead. Per-tenant stores that must agree with the update
-    snapshot/rollback paths (``cli/update/context.py``) resolve through here.
+    snapshot/rollback paths (``core/update_snapshot/context.py``) resolve through here.
     """
     try:
         from core.config_policy import local_mode_enabled
@@ -567,3 +567,97 @@ def sidecar_db_path(name: str) -> Path:
     except Exception:
         pass
     return new
+
+
+# --- scratch space (the runtime-sandbox contract) ---------------------------- #
+# Inside the hardened units the system temp dir is the unit's PRIVATE /tmp: a
+# separate mount (a rename into the data home is EXDEV), empty after every
+# restart, invisible to every other process (the rootless sandbox daemon, a
+# sibling unit), and on some boxes a small tmpfs. So: big or long scratch, and a
+# temp renamed into the data home, use scratch_root()/scratch_mkdtemp() (on disk);
+# a dir the code-exec sandbox daemon bind-mounts uses sandbox_scratch_dir(); an
+# atomic write puts its temp next to its target. tests/test_fs_copy_ratchet.py
+# keeps every other tempfile call dir=-pinned or named on its allow-list.
+
+#: The data-home subdir that holds scratch (``core.runtime_paths`` names no other).
+SCRATCH_DIRNAME = "tmp"
+#: The profile subdir that is its data home (``<polyrob_home>/data``).
+PROFILE_DATA_DIRNAME = "data"
+#: Under ``<data home>/sandbox_installs`` — a tree the sandbox daemon sees.
+SANDBOX_SCRATCH_DIRNAME = "_scratch"
+
+
+class ScratchUnavailable(OSError):
+    """No scratch dir on the required mount: the caller refuses with this cause."""
+
+
+def scratch_root() -> Optional[Path]:
+    """``<data home>/tmp`` (mode 0770 + the inherited setgid, on disk), or ``None``.
+
+    ``None`` when the operator set ``TMPDIR`` (it wins) or the data home cannot
+    hold the dir; the caller then keeps the system default. Never ``chmod``-ed
+    after creation: under a setgid data home the dir inherits the group."""
+    if (os.environ.get("TMPDIR") or "").strip():
+        return None
+    try:
+        path = effective_data_home() / SCRATCH_DIRNAME
+        # 0770, shared: whichever unit creates it first (agent, console, email),
+        # the others must write it too, or their pip falls back to the private /tmp.
+        path.mkdir(mode=0o770, parents=True, exist_ok=True)
+        if os.access(str(path), os.W_OK):
+            return path
+    except Exception:
+        pass
+    return None
+
+
+def _mkdtemp_shared(prefix: str, base: Path) -> str:
+    """``mkdtemp`` born 0770: in the setgid data home the dir then carries the group
+    bits AND the inherited setgid bit, which no later chmod can give it under
+    ``RestrictSUIDSGID`` (``mkdtemp``'s 0700 is a perms-audit offender there)."""
+    import secrets
+    for _ in range(100):
+        path = base / f"{prefix}{secrets.token_hex(4)}"
+        try:
+            os.mkdir(path, 0o770)
+            return str(path)
+        except FileExistsError:
+            continue
+    raise FileExistsError(f"no free scratch name under {base}")
+
+
+def scratch_mkdtemp(prefix: str) -> str:
+    """A fresh dir on disk (``<data home>/tmp``), else the system default."""
+    root = scratch_root()
+    if root is None:
+        return tempfile.mkdtemp(prefix=prefix)
+    return _mkdtemp_shared(prefix, root)
+
+
+def sandbox_scratch_dir(prefix: str, *, name: Optional[str] = None) -> str:
+    """A dir (0770 + setgid, like a session workspace) the sandbox daemon can bind-mount.
+
+    Short on purpose (an ``AF_UNIX`` path holds ~104 bytes):
+    ``<data home>/sandbox_installs/_scratch/<prefix>XXXXXXXX`` (fresh), or
+    ``…/_scratch/<prefix><name>`` (stable, for one session). Raises
+    :class:`ScratchUnavailable` with the cause — never a silent ``/tmp`` fallback,
+    which the rootless daemon cannot see."""
+    try:
+        base = effective_data_home() / "sandbox_installs" / SANDBOX_SCRATCH_DIRNAME
+        # 0770 + the inherited setgid: whoever makes the base first, every agent
+        # identity can add its own run dir under it.
+        base.mkdir(mode=0o770, parents=True, exist_ok=True)
+        if name is None:
+            return _mkdtemp_shared(prefix, base)
+        import hashlib
+        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)[:40] or "anon"
+        # The hash keeps two ids that sanitise alike ("a.b", "a_b") apart.
+        path = base / f"{prefix}{safe}-{hashlib.sha256(name.encode()).hexdigest()[:8]}"
+        path.mkdir(mode=0o770, exist_ok=True)
+        if path.is_symlink() or not path.is_dir():
+            raise OSError(f"{path} is not a real directory")
+        return str(path)
+    except Exception as exc:
+        raise ScratchUnavailable(
+            f"no sandbox scratch dir under the data home ({exc}); the sandbox daemon "
+            f"cannot see the private /tmp, so the run is refused") from exc

@@ -245,7 +245,7 @@ def test_every_money_spend_verb_is_on_an_owner_approval_lane(runtime_names):
 def test_every_money_spend_verb_is_high_impact_by_NAME(runtime_names):
     """A correspondent-tainted session must be blocked by the NAME layer alone,
     not only by tool-id resolution (which a resolver fault can void)."""
-    from agents.task.agent.core.correspondent_gate import is_high_impact
+    from core.security.high_impact import is_high_impact
 
     spend = _money_verbs(runtime_names) - set(NON_SPEND_MONEY_VERBS)
     unprotected = sorted(v for v in spend if not is_high_impact(v))

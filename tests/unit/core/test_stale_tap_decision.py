@@ -61,6 +61,7 @@ def test_decide_verb_answers_already_approved(monkeypatch):
                                             "item_id": "promo-bounty",
                                             "ts": 1760504859.0})
     c = SimpleNamespace(cmd="/approve", args=[alias], user_id="alice", data_dir="/x",
-                        instance_id="alice", board=None, task_agent=None)
+                        instance_id="alice", board=None, task_agent=None,
+                        result=None)
     out = asyncio.run(approval_ops.decide_verb(c))
     assert out.startswith("Already approved at 2025-10-15 05:07Z — skill:promo-bounty")

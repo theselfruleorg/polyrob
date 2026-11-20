@@ -467,11 +467,9 @@ def data_dir() -> str:
     respects ``POLYROB_DATA_DIR`` and falls back to the legacy ``./data``
     instead of raising. Do NOT re-implement resolution logic at call sites.
     """
-    env = os.environ.get("POLYROB_DATA_DIR")
-    if env:
-        return env
     try:
-        # 080 WS-1: the SAME rule as every container's ``config.data_dir``.
+        # 080 WS-1: the SAME rule as every container's ``config.data_dir`` (a
+        # pinned POLYROB_DATA_DIR wins inside it, resolved).
         from core.runtime_paths import effective_data_home
         return str(effective_data_home())
     except Exception:

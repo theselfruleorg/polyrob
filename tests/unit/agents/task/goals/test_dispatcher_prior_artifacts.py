@@ -7,7 +7,7 @@ offered.
 """
 import pytest
 
-from agents.task.goals.board import Goal
+from modules.goals.board import Goal
 from agents.task.goals.dispatcher import GoalDispatcher
 from core.artifacts import get_artifact_ledger
 

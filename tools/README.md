@@ -41,8 +41,7 @@ tools/
 │
 ├── web_fetch/                      # Stateless lightweight web fetch (WebFetchTool — always registered)
 │   ├── __init__.py
-│   ├── tool.py                     # WebFetchTool
-│   ├── fetcher.py                  # HTTP fetch
+│   ├── tool.py                     # WebFetchTool (the SSRF-safe fetch is core/security/safe_fetch.py)
 │   └── render.py                   # HTML → markdown rendering
 │
 ├── code_exec/                      # Sandboxed code execution (gated CODE_EXEC_ENABLED)

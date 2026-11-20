@@ -30,7 +30,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-from agents.task.goals.board import STATUS_RUNNING as _STATUS_RUNNING, Goal
+from modules.goals.board import STATUS_RUNNING as _STATUS_RUNNING, Goal
+from core.async_bridge import off_loop, run_off_loop, shielded
 from core.money.classify import is_money_class as _money_class  # 112 F2
 from core.model_routing import record_stored_tier  # 112 W2
 
@@ -83,6 +84,18 @@ _HOLD_ENDINGS = {"pause": "held", "restart": "cut_by_restart"}
 
 
 class GoalRunMixin:
+    # 125 S18b (B-H1): a board call from async code awaits through the store pool.
+    # Properties, so a test that swaps ``self.board`` is still the one called.
+    @property
+    def _board_io(self):
+        return off_loop(self.board)
+
+    @property
+    def _board_final(self):
+        """A terminal write (record_success/failure, set_outcome, block_from_ready):
+        a cancel lets it finish, then the CancelledError goes on."""
+        return off_loop(self.board, shield=True)
+
     async def _run_goal(self, goal: Goal) -> None:
         """Run one claimed goal on the task-agent core, then record + self-wake."""
         from core.config_policy import AutonomyConfig
@@ -115,7 +128,8 @@ class GoalRunMixin:
             await self._goal_run_failed(ctx, e)
         finally:
             self._goal_run_release(ctx)
-            self._goal_run_record_cost(ctx)
+            # 125 S18b: a payload write, off the loop; it finishes under a cancel.
+            await shielded(run_off_loop(self._goal_run_record_cost, ctx))
 
     async def _goal_run_start(self, ctx: _GoalRunCtx) -> None:
         """Mark the run started (busy gate on a shared workspace, event, start notice)."""
@@ -124,7 +138,7 @@ class GoalRunMixin:
         _shared_ws = False
         try:
             try:
-                from agents.task.path import pm
+                from core.session_paths import pm
                 _shared_ws = bool(pm().is_project_root_workspace)
             except Exception:
                 _shared_ws = False
@@ -202,12 +216,12 @@ class GoalRunMixin:
             # same "nothing can serve" signal `dispatch_blocked_by_providers`
             # already treats as a $0 skip, just scoped to this one goal.
             hb_task.cancel()
-            _g = self.board.record_failure(
+            _g = await self._board_final.record_failure(
                 goal.id,
                 error=f"{_d().LLM_EXHAUSTED_MARKER}: no live provider for this goal "
                       f"(pinned={payload.get('provider') or '(none)'!r}, "
                       f"default={default_provider!r}, both credit-dead)", claim_token=goal.claim_token)
-            if getattr(_g, "claim_token", None) != goal.claim_token:
+            if _g is None or getattr(_g, "claim_token", None) != goal.claim_token:
                 return False
             await self._maybe_escalate_blocked(_g, block_kind_hint="provider_outage")
             return False
@@ -244,7 +258,7 @@ class GoalRunMixin:
                                         workspace_root=_d()._deliverables_root(),
                                         prior_artifacts=self._prior_artifacts(goal),
                                         previous_runs=_previous_runs,
-                                        upstream=self._upstream_results(goal)),
+                                        upstream=await run_off_loop(self._upstream_results, goal)),
             "provider": provider,
             "model": model,
             "tools": self._resolve_tools(goal),
@@ -279,7 +293,7 @@ class GoalRunMixin:
             _target = normalize_target(payload.get(PAYLOAD_KEY))
         except ValueError as exc:
             hb_task.cancel()
-            self.board.record_failure(goal.id, error=f"invalid {PAYLOAD_KEY}: {exc}", claim_token=goal.claim_token)
+            await self._board_final.record_failure(goal.id, error=f"invalid {PAYLOAD_KEY}: {exc}", claim_token=goal.claim_token)
             return False
         if _target:
             # W0: a target the owner typed is trust for this run.
@@ -320,7 +334,7 @@ class GoalRunMixin:
                 logger.info("goal %s: room %s:%s — $0 skip (%s)",
                             goal.id, _src.surface_id, _src.chat_id, _skip)
                 hb_task.cancel()
-                self.board.record_success(
+                await self._board_final.record_success(
                     goal.id, result=f"skipped: {_skip} — no service work for "
                                     f"{_src.surface_id}:{_src.chat_id} this run", claim_token=goal.claim_token)
                 _d()._goal_ev(goal, "skipped", _skip)
@@ -344,8 +358,8 @@ class GoalRunMixin:
         _gate_err = unmetered_money_gate(self.task_agent, request.get("tools"))
         if _gate_err is not None:
             hb_task.cancel()
-            _g = self.board.record_failure(goal.id, error=_gate_err, claim_token=goal.claim_token)
-            if getattr(_g, "claim_token", None) != goal.claim_token:
+            _g = await self._board_final.record_failure(goal.id, error=_gate_err, claim_token=goal.claim_token)
+            if _g is None or getattr(_g, "claim_token", None) != goal.claim_token:
                 return False
             await self._maybe_escalate_blocked(_g)
             return False
@@ -384,7 +398,7 @@ class GoalRunMixin:
             # buy target, room skip, unmetered money) that stops the run before
             # it starts must leave the note for the run that really happens.
             try:
-                self.board.merge_payload(goal.id, {"resume_note": None})
+                await self._board_io.merge_payload(goal.id, {"resume_note": None})
             except Exception:
                 logger.debug("resume-note clear failed for %s", goal.id,
                              exc_info=True)
@@ -440,8 +454,8 @@ class GoalRunMixin:
         ctx.session_id = session_id = run.session_id
         if session_id is None:
             hb_task.cancel()
-            _g = self.board.record_failure(goal.id, error="create_session returned no id", claim_token=goal.claim_token)
-            if getattr(_g, "claim_token", None) != goal.claim_token:
+            _g = await self._board_final.record_failure(goal.id, error="create_session returned no id", claim_token=goal.claim_token)
+            if _g is None or getattr(_g, "claim_token", None) != goal.claim_token:
                 return False
             await self._maybe_escalate_blocked(_g)
             return False
@@ -498,7 +512,7 @@ class GoalRunMixin:
             # A budget halt is NOT a timer: deferring it re-runs (and re-spends).
             if (run.retry_after_sec and block_kind_hint is None and not refused
                     and _d().RUN_BUDGET_MARKER not in error):
-                _d_g = self.board.defer_run(
+                _d_g = await self._board_io.defer_run(
                     goal.id, retry_after_sec=run.retry_after_sec,
                     claim_token=goal.claim_token, reason=str(run.status or "")[:200])
                 if _d_g is not None:
@@ -507,14 +521,14 @@ class GoalRunMixin:
                     await self._goal_record(goal, session_id, "deferred", run=run,
                                             reason="a rate guard asked to retry later")
                     return False
-            _g = self.board.record_failure(
+            _g = await self._board_final.record_failure(
                 goal.id, error=error, session_id=session_id, claim_token=goal.claim_token)
-            if getattr(_g, "claim_token", None) != goal.claim_token:
+            if _g is None or getattr(_g, "claim_token", None) != goal.claim_token:
                 return False
             if refused and getattr(_g, "status", None) == _d().STATUS_READY:
                 try:
-                    if self.board.block_from_ready(goal.id, error=error):
-                        _g = self.board.get(goal.id) or _g
+                    if await self._board_final.block_from_ready(goal.id, error=error):
+                        _g = await self._board_io.get(goal.id) or _g
                 except Exception:
                     logger.debug("block_from_ready failed for %s", goal.id, exc_info=True)
             # T2.1 Task-3 review fix (finding #1, CRITICAL): this path never
@@ -681,7 +695,7 @@ class GoalRunMixin:
         if gap_note:
             result_record = f"{result_record}\n\n{gap_note.strip()}"
         hb_task.cancel()
-        accepted = self.board.record_success(
+        accepted = await self._board_final.record_success(
             goal.id, session_id=session_id, result=result_record[:4000],
             claim_token=goal.claim_token)
         if accepted is False:
@@ -694,7 +708,7 @@ class GoalRunMixin:
         # proceed) so a board without a working get() (fakes in older tests)
         # doesn't lose success recording.
         try:
-            refreshed = self.board.get(goal.id)
+            refreshed = await self._board_io.get(goal.id)
         except Exception:
             refreshed = None
         if refreshed is not None and refreshed.status != _d().STATUS_DONE:
@@ -730,7 +744,7 @@ class GoalRunMixin:
             logger.warning("goal episodic write failed", exc_info=True)
         if outcome:
             try:
-                self.board.set_outcome(goal.id, outcome)
+                await self._board_final.set_outcome(goal.id, outcome)
             except Exception:
                 logger.debug("set_outcome failed for %s", goal.id, exc_info=True)
         # Tell the OWNER a background goal COMPLETED — decoupled from the
@@ -808,11 +822,11 @@ class GoalRunMixin:
             logger.error("goal %s: heartbeat cancel failed", goal.id, exc_info=True)
         _g = None
         try:
-            _g = self.board.record_failure(goal.id, error=error_text, session_id=session_id, claim_token=goal.claim_token)
+            _g = await self._board_final.record_failure(goal.id, error=error_text, session_id=session_id, claim_token=goal.claim_token)
         except Exception:
             logger.error("goal %s: the failure was not recorded", goal.id, exc_info=True)
         if _g is not None:
-            if getattr(_g, "claim_token", None) != goal.claim_token:
+            if _g is None or getattr(_g, "claim_token", None) != goal.claim_token:
                 return
             # T2.1 Task-3 review fix (finding #1, CRITICAL): this path also
             # never goes through _fail_run — same hint mechanism, same
@@ -939,7 +953,7 @@ class GoalRunMixin:
         try:
             if ctx.recorded_success:
                 return
-            self._cut_ending(ctx)
+            await run_off_loop(self._cut_ending, ctx)
             sid = ctx.session_id or self._own_pre_sid(ctx)
             if not sid:
                 return
@@ -1082,13 +1096,13 @@ class GoalRunMixin:
         classified failed must not be recorded steps=0/spend=0. Optional with safe
         zero defaults so a call site without an envelope still works.
         """
-        _g = self.board.record_failure(goal.id, error=error, session_id=session_id, claim_token=goal.claim_token)
-        if getattr(_g, "claim_token", None) != goal.claim_token:
+        _g = await self._board_final.record_failure(goal.id, error=error, session_id=session_id, claim_token=goal.claim_token)
+        if _g is None or getattr(_g, "claim_token", None) != goal.claim_token:
             return  # a late failure must not block or publish for a newer claim
         if block and getattr(_g, "status", None) == _d().STATUS_READY:
             try:
-                if self.board.block_from_ready(goal.id, error=error):
-                    _g = self.board.get(goal.id) or _g
+                if await self._board_final.block_from_ready(goal.id, error=error):
+                    _g = await self._board_io.get(goal.id) or _g
             except Exception:
                 logger.debug("block_from_ready failed for %s", goal.id, exc_info=True)
         # T2.1 Task 3 (review-fixed, finding #1): classify the failure ONCE (do
@@ -1112,7 +1126,7 @@ class GoalRunMixin:
                  stop_reason=getattr(run, "stop_reason", None))
         if outcome:
             try:
-                self.board.set_outcome(goal.id, outcome)
+                await self._board_final.set_outcome(goal.id, outcome)
             except Exception:
                 logger.debug("set_outcome failed for %s", goal.id, exc_info=True)
         await self._maybe_escalate_blocked(_g, agent_reported=agent_reported,

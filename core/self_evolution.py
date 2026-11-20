@@ -198,46 +198,83 @@ _TOKEN_RE = re.compile(r"/(approve|reject)_p_([0-9a-f]{6})(?:_[0-9a-f]{%d})?\b" 
                        re.IGNORECASE)
 
 
+_STILL_PENDING = re.compile(r"\b(pending|waiting|waits|not (yet )?in effect|your tap|to activate)\b",
+                            re.IGNORECASE)
+_LIST_MARK = re.compile(r"\s*(?:[-*\u2022]|\d+[.)])\s+")
+
+
+def _decided_span(text: str, start: int, end: int) -> Tuple[int, int, bool]:
+    """127 W3: the smallest span that talks about the token at ``[start, end)``:
+    its parenthetical on the same line, else its sentence (a list marker kept)."""
+    line_s = text.rfind("\n", 0, start) + 1
+    line_e = text.find("\n", end)
+    line_e = len(text) if line_e < 0 else line_e
+    o, c = text.rfind("(", line_s, start), text.find(")", end, line_e)
+    if o >= 0 and c >= 0 and ")" not in text[o:start] and "(" not in text[end:c]:
+        return o, c + 1, True
+    s = max([text.rfind(p, line_s, start) + 2 for p in (". ", "; ", "! ", "? ")
+             if text.rfind(p, line_s, start) >= 0] or [line_s])
+    if s == line_s:
+        mark = _LIST_MARK.match(text, line_s)
+        s = mark.end() if mark else line_s
+    stops = [i for i in (text.find(p, end, line_e) for p in ".;!?") if i >= 0]
+    return s, (min(stops) + 1 if stops else line_e), False
+
+
 def annotate_decided_tokens(text: str, *, user_id: str, live_items: List[dict],
                             events=None) -> str:
-    """Rewrite each ``/approve_p_<hex>`` / ``/reject_p_<hex>`` in an owner-bound
-    text whose item the owner ALREADY decided as ``(approved <time>)``.
+    """Rewrite what an owner-bound text says about each ``/approve_p_<hex>`` /
+    ``/reject_p_<hex>`` whose item the owner ALREADY decided.
 
     2026-10-17 01:52Z: the agent told the owner "Still waiting on your one tap …:
     /approve_p_a9d770" — the owner had approved it at 10-16 17:16Z. The decision
     lands outside the agent's turn, so the agent's own context still says
     pending. A token that resolves in the LIVE queue is left alone (a re-proposed
     draft keeps its alias); only a token with no live item and a recorded
-    decision is rewritten. Never raises; on any doubt the text is unchanged."""
+    decision is rewritten.
+
+    127 W3 (2026-11-21): swapping only the token left "(waiting on your tap:
+    (already approved …))" plus a Correction line — a message that contradicts
+    itself. The whole parenthetical, else the whole sentence, that holds the
+    token is replaced; the Correction line is added only when pending wording
+    still stands elsewhere in the text. Never raises; on any doubt the text is
+    unchanged."""
     if not text or "_p_" not in text:
         return text
     try:
-        def _sub(m: "re.Match") -> str:
+        import datetime as _dt
+        decided = []
+        for m in _TOKEN_RE.finditer(text):
             alias = f"{PENDING_ALIAS_PREFIX}{m.group(2).lower()}"
             if resolve_pending_alias(alias, live_items or []) is not None:
-                return m.group(0)
+                continue
             dec = last_decision_for_alias(alias, user_id=user_id, events=events)
             if not dec:
-                return m.group(0)
+                continue
             word = "approved" if dec["action"] == "promote" else "rejected"
             when = ""
             try:
-                import datetime as _dt
                 when = " " + _dt.datetime.fromtimestamp(
                     float(dec["ts"]), _dt.timezone.utc).strftime("%m-%d %H:%MZ")
             except Exception:
                 pass
-            done.append(f"{word}{when}")
-            return f"(already {word}{when} — nothing to tap)"
-        done: List[str] = []
-        out = _TOKEN_RE.sub(_sub, text)
-        if done:
-            # 2026-10-17: the token was fixed but the prose around it ("still a
-            # draft, the jobs read the old rules") survived 5 turns. Say it once,
-            # in the message itself, so the owner reads the truth and the
-            # agent's own history carries it into the next turn.
-            out += ("\n\n(Correction: that item was already " + "; ".join(done)
-                    + " — it is in effect now, not a pending draft.)")
+            decided.append((m.start(), m.end(), f"{word}{when}"))
+        if not decided:
+            return text
+        out, done, cut_to = text, [], len(text) + 1
+        for start, end, what in reversed(decided):
+            done.append(what)
+            s, e, paren = _decided_span(out, start, end)
+            if e > cut_to:   # an earlier token in the same span: already rewritten
+                continue
+            effect = "in effect" if what.startswith("approved") else "not in effect"
+            repl = (f"(already {what} — {effect})" if paren
+                    else f"That item is already {what} — {effect}.")
+            out = out[:s] + repl + out[e:]
+            cut_to = s
+        if _STILL_PENDING.search(out):
+            out += ("\n\n(Correction: that item was already " + "; ".join(reversed(done))
+                    + " — it is not a pending draft; nothing waits for a tap.)")
         return out
     except Exception:
         logger.debug("self_evolution: decided-token annotation skipped", exc_info=True)
@@ -1289,7 +1326,8 @@ def _record_owner_notice(text: str) -> None:
 async def _push_owner_message_outcome(container, text: Optional[str],
                                       attachments: Optional[list] = None,
                                       priority: Optional[str] = None,
-                                      source: Optional[str] = None) -> Optional[str]:
+                                      source: Optional[str] = None,
+                                      buttons: Optional[list] = None) -> Optional[str]:
     """Rail outcome of a proactive owner push, or ``None`` when nothing entered
     the rail (empty text / no container / resolver crash). Shared by
     :func:`push_owner_message` (bool facade) and
@@ -1311,7 +1349,8 @@ async def _push_owner_message_outcome(container, text: Optional[str],
             owner = ""
         return await deliver_user_message(
             container, owner, str(text), source=source or "self_evolution",
-            attachments=attachments, priority=priority)
+            attachments=attachments, priority=priority,
+            **({"buttons": buttons} if buttons else {}))
     except Exception as e:  # never let a notification failure break a write
         logger.debug("self_evolution: owner notify failed (fail-open): %s", e)
         return None
@@ -1320,7 +1359,8 @@ async def _push_owner_message_outcome(container, text: Optional[str],
 async def push_owner_message(container, text: Optional[str],
                              attachments: Optional[list] = None,
                              priority: Optional[str] = None,
-                             source: Optional[str] = None) -> bool:
+                             source: Optional[str] = None,
+                             buttons: Optional[list] = None) -> bool:
     """Best-effort proactive push to the owner's Telegram (fail-open).
 
     Reuses the same sink + owner-chat resolution as ``cron/delivery`` so a
@@ -1345,10 +1385,14 @@ async def push_owner_message(container, text: Optional[str],
     ``"goal_blocked"`` for a need the agent cannot proceed without — that source
     is in ``_CRITICAL_SOURCES`` and the daily cap may not drop it. Omitted =>
     ``self_evolution``, unchanged.
+
+    ``buttons`` (2026-11-20): the ``Action``s (``core.surfaces.nav.actions``) a
+    CODE-written notice offers as its next steps (Telegram draws them; the text
+    must still name each command). Never build one from model text.
     """
     return (await _push_owner_message_outcome(
         container, text, attachments=attachments, priority=priority,
-        source=source)) == "sent"
+        source=source, buttons=buttons)) == "sent"
 
 
 async def maybe_notify_owner_pending(container, user_id: str, *, home_dir: Path | str,

@@ -28,11 +28,11 @@ def replies(monkeypatch):
             return text
         return _reply
 
-    monkeypatch.setattr("surfaces.telegram.send_ops.send_reply",
+    monkeypatch.setattr("tools.defi.owner_verbs.send.send_reply",
                         _fake("send", "quote\nTo send it: /send 1 native to 0xabc on base go"))
-    monkeypatch.setattr("surfaces.telegram.swap_ops.swap_reply",
+    monkeypatch.setattr("tools.defi.owner_verbs.swap.swap_reply",
                         _fake("swap", "❌ The quote did not run: boom. Nothing was swapped."))
-    monkeypatch.setattr("surfaces.telegram.check_ops.check_reply", _fake("check", "holdings"))
+    monkeypatch.setattr("tools.defi.owner_verbs.check.check_reply", _fake("check", "holdings"))
     return seen
 
 
@@ -66,6 +66,8 @@ def test_check_is_the_chat_check(replies):
 
 def test_the_handler_comes_from_the_verb_row(monkeypatch):
     from cli.commands import wallet_verbs
+    from cli.ui.commands.seat_handlers import ensure
+    ensure()                                 # 125 S14: the REPL registers its own handlers
     from core.verbs import handler_ref
     assert handler_ref("repl", "/send") == "cli.ui.commands.h_send:h_send"
     monkeypatch.setattr(wallet_verbs, "ensure_env_loaded", lambda: None)

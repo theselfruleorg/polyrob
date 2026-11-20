@@ -47,7 +47,7 @@ def get_webview_url(session_id: str) -> str:
     protocol = 'http' if 'localhost' in domain or '127.0.0.1' in domain else 'https'
 
     # Clean session ID using PathManager
-    from agents.task.path import pm
+    from core.session_paths import pm
     clean_id = pm().clean_session_id(session_id)
 
     # Build URL - simple and consistent

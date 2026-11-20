@@ -6,7 +6,7 @@ teaches `OUTCOME: BLOCKED — <need>`, `parse_blocked_outcome` recognises it
 robustly, and the board can flip a below-breaker 'ready' row straight to
 'blocked' when the agent itself declared retrying won't help.
 """
-from agents.task.goals.board import GoalBoard, STATUS_BLOCKED, STATUS_READY
+from modules.goals.board import GoalBoard, STATUS_BLOCKED, STATUS_READY
 from agents.task.goals.context import (
     build_goal_run_task,
     extract_outcome_line,

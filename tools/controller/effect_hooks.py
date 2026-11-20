@@ -186,15 +186,32 @@ def _record(controller, action_name, params, execution_context, tool_id, verdict
     except Exception:
         logger.warning("effect record: no subject for %s", action_name, exc_info=True)
         subject = ""
+    autonomous = _autonomous(execution_context, controller)
     record_external_write(
         effect=verdict.effect, tool=tool_id or "", action=action_name,
         target=_target(params), surface=_surface(execution_context),
-        autonomous=_autonomous(execution_context, controller),
+        autonomous=autonomous,
         confidence=verdict.confidence, outcome=outcome,
         user_id=str(getattr(execution_context, "user_id", "") or ""),
         session_id=str(getattr(execution_context, "session_id", "") or ""),
         fingerprint=_fingerprint(params), subject=subject,
-        extra={"ref": ref} if ref else None)
+        extra=_act_fields(params, execution_context, autonomous, ref))
+
+
+def _act_fields(params, execution_context, autonomous, ref=""):
+    """122 W1: the act record's own fields — the reason, the short params and who decided.
+    The content of a post or a mail never enters (``core.act_reason.short_params``)."""
+    from core.act_reason import act_source, clean_why, current_act_why, short_params
+    p = _params_dict(params)
+    meta = getattr(execution_context, "metadata", None)
+    fields = {"why": clean_why(p.get("why")) or current_act_why(),
+              "params": short_params(p),
+              "source": act_source(getattr(execution_context, "session_id", None),
+                                   autonomous=autonomous,
+                                   metadata=meta if isinstance(meta, dict) else None)}
+    if ref:
+        fields["ref"] = ref
+    return fields
 
 
 def record_approved_send(action_name, params, *, user_id, ok, text):
@@ -215,7 +232,7 @@ def record_approved_send(action_name, params, *, user_id, ok, text):
             confidence=verdict.confidence, outcome="ok" if ok else "error",
             user_id=str(user_id or ""), fingerprint=_fingerprint(params),
             subject=str(params.get(row.subject) or "").strip() if row.subject else "",
-            extra={"ref": ref} if ref else None)
+            extra=_act_fields(params, None, False, ref))
     except Exception:
         logger.warning("approved send of %s: no row", action_name, exc_info=True)
 

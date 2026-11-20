@@ -117,7 +117,7 @@ except ImportError:
 from agents.task.logging_config import get_task_logger
 
 # Import centralized path management
-from agents.task.path import pm
+from core.session_paths import pm
 
 
 

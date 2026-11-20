@@ -4,7 +4,7 @@
 the shell, and a broken shell left it no rail at all. This verb is
 that rail, kept narrow:
 
-- ONE SSRF validator: every call goes through ``tools.web_fetch.fetcher.safe_fetch``
+- ONE SSRF validator: every call goes through ``core.security.safe_fetch.safe_fetch``
   (per-hop validation, IP pinning, caps). A write follows no redirect; a GET
   follows one only to the SAME host.
 - No ambient credentials: a fresh client per call (no cookie jar carried over, no
@@ -110,7 +110,7 @@ def _parse_body(text: str) -> Any:
 
 
 def _ask_board():
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from core.runtime_paths import goals_db_path
     return GoalBoard(goals_db_path(None))
 
@@ -251,7 +251,7 @@ class HttpRequestTool(BaseTool):
         if refusal:
             return self._ar(error=f"http_request refused: {refusal}")
 
-        from tools.web_fetch.fetcher import WebFetchError, safe_fetch
+        from core.security.safe_fetch import WebFetchError, safe_fetch
         try:
             result = await safe_fetch(
                 url, method=method, json_body=body, extra_headers=headers,

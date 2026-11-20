@@ -24,16 +24,25 @@ def _share_with_parent_group(directory: int, name: str, *, is_dir: bool) -> None
             # entry already has the group; open its group bits too (prod
             # 2026-10-15: a promoted SKILL.md landed 0600 beside 660 siblings).
             if os.fstat(directory).st_mode & stat.S_ISGID:
-                os.chmod(name, 0o770 if is_dir else 0o660, dir_fd=directory,
-                         follow_symlinks=False)
+                _open_group_bits(directory, name, is_dir=is_dir)
             return
         parent_gid = os.fstat(directory).st_gid
         if parent_gid == 0:
             return
         os.chown(name, -1, parent_gid, dir_fd=directory, follow_symlinks=False)
-        os.chmod(name, 0o770 if is_dir else 0o660, dir_fd=directory, follow_symlinks=False)
+        _open_group_bits(directory, name, is_dir=is_dir)
     except OSError:
         pass  # ownership is a courtesy for the service; never fail the write over it
+
+
+def _open_group_bits(directory: int, name: str, *, is_dir: bool) -> None:
+    """Dirs 0770 KEEPING the inherited setgid bit (a plain chmod clears it; the
+    runtime-sandbox contract, ``core.fs_copy.widen_dir_mode``); files 0660."""
+    if is_dir:
+        from core.fs_copy import widen_dir_mode
+        widen_dir_mode(name, 0o770, dir_fd=directory)
+    else:
+        os.chmod(name, 0o660, dir_fd=directory, follow_symlinks=False)
 
 
 def confined_path(path: Path, root: Path) -> Path:
@@ -61,7 +70,10 @@ def confined_parent(path: Path, root: Path, *, create: bool = False):
         for component in path.parts[1:-1]:
             if create:
                 try:
-                    os.mkdir(component, mode=0o700, dir_fd=directory)
+                    # A shared (setgid) store: born 0770, so the group bits need no
+                    # chmod that would clear the inherited setgid bit under the unit.
+                    shared = os.fstat(directory).st_mode & stat.S_ISGID
+                    os.mkdir(component, mode=0o770 if shared else 0o700, dir_fd=directory)
                     _share_with_parent_group(directory, component, is_dir=True)
                 except FileExistsError:
                     pass

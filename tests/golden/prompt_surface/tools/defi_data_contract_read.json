@@ -1,6 +1,6 @@
 {
   "function": {
-    "description": "Raw read-only eth_call against a contract. Returns the raw hex; any decoding is best-effort and unverified. No state change.",
+    "description": "Read-only eth_call against any contract: the args are ABI-encoded from the signature (e.g. ownerOf(uint256) with [5]); give `returns` (e.g. 'address') to decode the result. Returns the raw hex too. No state change.",
     "name": "defi_data_contract_read",
     "parameters": {
       "additionalProperties": false,
@@ -10,12 +10,18 @@
           "type": "string"
         },
         "args": {
-          "description": "Arguments (currently unencoded; prefer no-arg views)",
+          "description": "Arguments, ABI-encoded from the signature, e.g. signature 'ownerOf(uint256)' with args [5]",
           "items": {},
           "type": "array"
         },
         "chain": {
           "description": "Chain to read from — the same address is a DIFFERENT token on a different chain, so name it deliberately. Readable: ethereum, base, robinhood, robinhood-testnet, arbitrum, polygon, optimism, bnb, solana.",
+          "type": "string"
+        },
+        "returns": {
+          "default": null,
+          "description": "ABI types of the result, e.g. 'address' or '(uint256,address)'. Given: the result is decoded as these types. Omitted: raw hex plus a best-effort number",
+          "nullable": true,
           "type": "string"
         },
         "signature": {

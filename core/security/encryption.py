@@ -14,6 +14,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from core.env import is_production_env
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,12 +42,6 @@ _KEY_FILE_PATH = _legacy_key_file_path()  # re-exported name; the legacy locatio
 #: The dev key, once resolved, for the life of the process — kept HERE rather
 #: than copied into ``os.environ``, where every child process would inherit it.
 _DEV_KEYS: Dict[str, str] = {}
-
-
-def _is_production() -> bool:
-    """Check if running in production mode."""
-    env = os.getenv('POLYROB_ENV', os.getenv('ENVIRONMENT', 'development')).lower()
-    return env in ('production', 'prod')
 
 
 def _read_key(path: Path) -> Optional[str]:
@@ -101,7 +97,7 @@ def _load_or_generate_key() -> str:
         return key_str
 
     # 2. In production, fail hard - no fallbacks allowed
-    if _is_production():
+    if is_production_env():
         raise RuntimeError(
             "CRITICAL: MCP_ENCRYPTION_KEY environment variable is required in production! "
             "Generate a key with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""

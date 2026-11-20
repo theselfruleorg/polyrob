@@ -25,7 +25,10 @@ from surfaces.email.dedup import MessageDedup
 # re-derived — and imported DOWNWARD, which is what the layering ratchet allows
 # (`surfaces` may read `tools`; `tools` may not read `surfaces`).
 from tools.email_providers.agentmail import normalize_agentmail_attachments
-from tools.email_providers.mime import sender_address, sender_authenticated
+from tools.email_providers.mime import (
+    KNOWN_AUTHSERV, authserv_ids_for_host, sender_address, sender_authenticated,
+    topmost_header,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +161,9 @@ class ImapFetcher:
             raise MailFetchError(
                 f"IMAP read failed: {type(e).__name__}: {e}",
                 auth=self._is_auth_error(e), key=self._verdict_key()) from e
+        # 125 S35: the MX of this mailbox host is the only one whose header counts;
+        # an unknown (self-hosted) host authenticates no sender.
+        authserv_ids = authserv_ids_for_host(getattr(tool, "imap_server", None))
         out: List[Tuple[Any, dict]] = []
         for uid in uids:
             handle = ImapHandle(validity, uid)
@@ -171,7 +177,8 @@ class ImapFetcher:
                 # CHAT-7: MIME + HTML parsing of mail anyone can send runs OFF
                 # the event loop (it can be large; it must never stall the bot).
                 msg = await asyncio.to_thread(
-                    lambda b=raw: normalize_email_message(_email.message_from_bytes(b)))
+                    lambda b=raw: normalize_email_message(
+                        _email.message_from_bytes(b), authserv_ids=authserv_ids))
                 out.append((handle, msg))
             except Exception as e:
                 logger.warning("email fetch uid %s failed: %s", uid, e, exc_info=True)
@@ -327,16 +334,19 @@ class AgentMailFetcher:
                           if thread_id else None)
                 if minted:
                     in_reply_to = minted
-            hdrs = full.get("headers") if isinstance(full.get("headers"), dict) else {}
-            auth = next((str(v) for k, v in hdrs.items()
-                         if str(k).lower() == "authentication-results"), None)
+            # Audit 2026-11-21 M-2: only an ORDERED header shape names the
+            # topmost header; a plain mapping loses order and a second header.
+            auth = topmost_header(full.get("headers"), "Authentication-Results")
             out.append((mid, {
                 "message_id": str(mid),
                 "from": sender,
                 # CHAT-6: the managed inbox is the receiving MX; its
                 # Authentication-Results (when passed) is the only proof of From.
+                # 125 S35: the agentmail row (empty = not pinned yet, so no
+                # sender is authenticated; the pin waits for a real sample).
                 "sender_authenticated": sender_authenticated(
-                    auth, sender_address(sender)),
+                    auth, sender_address(sender),
+                    authserv_ids=KNOWN_AUTHSERV.get("agentmail") or frozenset()),
                 "subject": str(full.get("subject") or ""),
                 "body": str(full.get("extracted_text") or full.get("text") or ""),
                 "in_reply_to": in_reply_to,

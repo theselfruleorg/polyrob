@@ -3,14 +3,10 @@ quote → card wrap, and the in-place edit (``core.surfaces.cards``).
 
 A tap reaches here as the presser TYPING the token (``surfaces/telegram/
 actions.py``), after the allowlist, the dedup and the tier. This module adds
-the owner gate and then does one of two things:
-
-* the card answers by itself (cancel, a choice pick, an expired card);
-* the card names a command line — the confirm line its quote printed, or the
-  quote line of a refresh — and this seat runs it EXACTLY as if the owner had
-  typed it: the same room refusal, the same owner gate, the same background
-  rule, the same money gates underneath. A card adds no authority; it only
-  saves re-typing a line the owner already saw.
+the owner gate and the reads (``/cards``, ``/card_<id>``); a press is the ONE
+press every owner seat shares (``surfaces/card_press.py``), with this seat's
+executor as the way a card's line runs — the same room refusal, owner gate,
+background rule and money gates as a typed line. A card adds no authority.
 
 Then the card is edited in place, so a decided card has no live buttons.
 """
@@ -44,6 +40,18 @@ def is_card_command(text: str) -> bool:
             or _read_id(token) is not None)
 
 
+def typed_card_tap(result: Any) -> bool:
+    """126: a typed ``/approve|/reject <call card id>`` becomes that card's tap
+    (``surfaces/card_press.call_card_tap``), so it is the SAME press as the button —
+    a Confirm runs off the poll loop. True when the line was rewritten."""
+    from surfaces.card_press import call_card_tap
+    tap = call_card_tap(result.inbound.identity.user_id, result.inbound.text)
+    if tap is None:
+        return False
+    result.inbound.text = tap
+    return True
+
+
 async def handle(task_agent: Any, result: Any, spawn=None, deliver=None,
                  fetch_media=None) -> Optional[Any]:
     """``/cards`` and every card tap. Returns the reply (or None)."""
@@ -66,97 +74,25 @@ async def handle(task_agent: Any, result: Any, spawn=None, deliver=None,
         if len(args) != 2 or cards.parse_act(args[1]) is None:
             return USAGE
         cid, act = args[0].lower(), cards.parse_act(args[1])
-    p = cards.press(cid, act, user_id)
-    logger.info("card %s: press act=%s verb=%s state=%s", cid, act,
-                getattr(p.card, "verb", "") or getattr(p.card, "kind", "?"),
-                getattr(p.card, "state", "none"))
-    if p.pick is not None and p.card is not None:
-        from surfaces.card_builder import advance
-        step = advance(p.card, p.pick, user_id)
-        if not step.run:
-            # Telegram edits the builder message in place (the card listener),
-            # so a new message would only repeat it. Other seats print it.
-            src = getattr(getattr(result.inbound, "identity", None), "source", None)
-            if (getattr(src, "surface_id", "") == "telegram" and step.card is not None
-                    and step.text == cards.render_text(step.card)):
-                return None     # advanced: the edited card IS the answer
-            return step.text
-        p.run, act = step.run, "re"      # the last pick: run the verb's QUOTE
-    if not p.run:
-        # A cancel, a pick, an expired or decided card: the seat's own answer.
-        return record_out(task_agent, result, "/cards", p.reply)
-    card = p.card
-    verb = p.run.split()[0]
-    result.inbound.text = p.run
-    result.decision.command = verb
-    if act != "ok":
-        # A refresh, or a proposal's quote: the verb quotes and the owner-verb
-        # branch turns the quote into a fresh card — of the same session and
-        # group as this one (084 lineage).
-        reply = None
-        try:
-            with cards.lineage(card):
-                reply = await h._handle_command(task_agent, result, spawn, deliver,
-                                                fetch_media)
-        except Exception as e:
-            reply = f"Command failed: {str(e)[:200]}"
-            raise
-        finally:
-            if card is not None and getattr(reply, "card_id", None) is None:
-                # No new card (a refused quote, an error): the line's reply is
-                # this card's outcome, so its group can still settle.
-                cards.note_result(card.card_id, reply_text(reply) or "no quote")
-        return reply
+    from surfaces.card_press import PressSeat, press
+    from tools.controller.call_card_run import seat_of
+    src = getattr(getattr(result.inbound, "identity", None), "source", None)
 
-    background = deliver is not None and h._runs_in_background(verb, result)
+    async def _run_line(line: str, line_deliver):
+        # The line runs EXACTLY as if the owner typed it: the same room refusal,
+        # owner gate, background rule and money gates underneath.
+        result.inbound.text = line
+        result.decision.command = line.split()[0]
+        return await h._handle_command(task_agent, result, spawn, line_deliver, fetch_media)
 
-    async def _deliver_and_finish(out: str) -> None:
-        await _recover(task_agent, card, out)
-        _finish(card.card_id, verb, out)      # the stored result keeps every line
-        from core.surfaces.money_report import owner_view
-        await deliver(owner_view(out))
-    _deliver_and_finish.stores_result = True
-
-    try:
-        with cards.lineage(card):
-            reply = await h._handle_command(task_agent, result, spawn,
-                                            _deliver_and_finish if background else deliver,
-                                            fetch_media)
-    except Exception as e:
-        logger.error("card %s: the confirm line raised: %s", card.card_id, e, exc_info=True)
-        _finish(card.card_id, verb, f"Command failed: {str(e)[:200]}")
-        raise
-    if not background:
-        await _recover(task_agent, card, reply_text(reply))
-        _finish(card.card_id, verb, reply_text(reply))
-    return reply
-
-
-async def _recover(task_agent: Any, card: Any, text: str) -> None:
-    """084 R13: a confirm that stopped at the extra check for a value that is
-    NOT VERIFIED offers that step as a card (it was plain text, so the owner
-    re-typed the address by hand). Made BEFORE the confirmed card finishes, so
-    the open recovery card keeps the group from settling. Fail-open."""
-    try:
-        if card is None or card.kind != cards.KIND_QUOTE or not cards.failed_result(text):
-            return
-        with cards.lineage(card):
-            ack = cards._ack_step_card(card.user_id, card.verb, list(card.typed or card.args),
-                                       text)
-        if ack is None:
-            return
-        await cards.push(getattr(task_agent, "container", None), card.user_id, ack,
-                         session_id=card.session_id)
-    except Exception:
-        logger.warning("card %s: recovery card skipped", getattr(card, "card_id", "?"),
-                       exc_info=True)
-
-
-def _finish(card_id: str, verb: str, text: str) -> None:
-    """``cards.finish`` plus the one INFO line per finished card (079 W5)."""
-    done = cards.finish(card_id, text)
-    logger.info("card %s: finish verb=%s state=%s", card_id, verb,
-                getattr(done, "state", "unchanged"))
+    seat = PressSeat(
+        seat=seat_of(getattr(src, "surface_id", "")), user_id=user_id,
+        container=getattr(task_agent, "container", None), run_line=_run_line,
+        deliver=deliver,
+        record=lambda text: record_out(task_agent, result, "/cards", text),
+        line_records=True,
+        edits_in_place=getattr(src, "surface_id", "") == "telegram")
+    return await press(seat, cid, act)
 
 
 def thread_line(text: str, user_id: str) -> str:
@@ -262,19 +198,6 @@ def builder_reply(user_id: str, verb: str, fallback: Any) -> Any:
     return CommandReply(cards.render_text(card), card_id=card.card_id)
 
 
-def reply_actions(reply: Any) -> list:
-    """The buttons of a carded command reply (none for anything else)."""
-    cid = getattr(reply, "card_id", None) if isinstance(reply, CommandReply) else None
-    if not cid:
-        return []
-    try:
-        card = cards.store().get(cid)
-        return cards.card_actions(card) if card is not None else []
-    except Exception:
-        logger.debug("card actions unavailable (fail-open)", exc_info=True)
-        return []
-
-
 def record_ref(reply: Any, chat_id: Any, message_id: Any) -> None:
     cid = getattr(reply, "card_id", None) if isinstance(reply, CommandReply) else None
     if not cid or message_id is None:
@@ -290,20 +213,61 @@ def record_ref(reply: Any, chat_id: Any, message_id: Any) -> None:
 _KEEP_BUTTONS = ("🔒", "Command failed", "Unknown command")
 
 
+def _decision_target(token: str) -> Optional[str]:
+    """What a DECISION tap decides (an approval item, an ask, a card), or None for a
+    navigation tap (a menu button, a bare verb), whose buttons stay usable."""
+    from core.surfaces.tappable import parse_ask_option, parse_tappable
+    verb, arg = parse_tappable(token)
+    if verb in ("/approve", "/reject"):
+        return f"item:{arg}"
+    ask, _letter = parse_ask_option(token)
+    if ask:
+        return f"ask:{ask}"
+    cid, act = cards.parse_card_token(token)
+    if cid and act:
+        return f"card:{cid}"
+    return None
+
+
+def _remaining_rows(markup: Any, target: str) -> list:
+    """The keyboard rows without every button that decides ``target``."""
+    rows = (markup or {}).get("inline_keyboard") if isinstance(markup, dict) else None
+    out = []
+    for row in rows or ():
+        keep = [b for b in row if isinstance(b, dict)
+                and _decision_target(str(b.get("callback_data") or "")) != target]
+        if keep:
+            out.append(keep)
+    return out
+
+
 async def retire_tapped_buttons(bot: Any, update: Any, reply: str) -> bool:
-    """Remove the inline keyboard from the message a button was pressed on,
-    once the press was handled. True when an edit was sent. Fail-open."""
+    """After a DECISION tap, remove the buttons of the item it decided from the
+    message it was pressed on; the other items keep theirs (2026-11-20 UX review M1).
+    A navigation tap (a menu, a picker, a list) keeps every button. True when an
+    edit was sent. Fail-open."""
     msg = (update or {}).get("message") if isinstance(update, dict) else None
     if not isinstance(msg, dict) or msg.get("callback_of") is None or bot is None:
         return False
     if (reply or "").lstrip().startswith(_KEEP_BUTTONS):
         return False
+    target = _decision_target(str(msg.get("text") or "").strip())
+    if target is None:
+        return False
     chat = (msg.get("chat") or {}).get("id")
     edit = getattr(bot, "edit_message_reply_markup", None)
     if chat is None or not callable(edit):
         return False
+    rows = _remaining_rows(msg.get("callback_markup"), target)
     try:
-        await edit(chat_id=chat, message_id=int(msg["callback_of"]), reply_markup=None)
+        markup = None
+        if rows:
+            try:
+                from aiogram.types import InlineKeyboardMarkup
+                markup = InlineKeyboardMarkup(inline_keyboard=rows)
+            except Exception:   # no aiogram (tests): the raw Bot API shape
+                markup = {"inline_keyboard": rows}
+        await edit(chat_id=chat, message_id=int(msg["callback_of"]), reply_markup=markup)
         return True
     except Exception as e:   # "message is not modified", a deleted message
         logger.debug("telegram: tapped buttons not retired: %s", e)

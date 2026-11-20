@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from agents.task.goals.board import Goal, GoalBoard
+from modules.goals.board import Goal, GoalBoard
 from agents.task.goals.context import build_goal_run_task
 from agents.task.goals.dispatcher import GoalDispatcher
 from agents.task.runtime.run_outcome import RunOutcome
@@ -75,7 +75,7 @@ def test_a_goal_cut_by_its_wall_clock_cap_leaves_a_record(monkeypatch, records):
     asyncio.run(disp._run_goal(Goal(id="g2", user_id="u1", title="post")))
     rec = records[-1]
     assert rec["outcome"] == "partial"
-    assert "wall-clock cap" in rec["summary"] and TX in rec["summary"]
+    assert "time limit" in rec["summary"] and TX in rec["summary"]
 
 
 def test_a_paused_goal_leaves_a_record(monkeypatch, records):

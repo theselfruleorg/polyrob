@@ -129,7 +129,7 @@ except ImportError:
 from agents.task.logging_config import get_task_logger
 
 # Import centralized path management
-from agents.task.path import pm
+from core.session_paths import pm
 
 
 # Generic logger for the module itself (not instances)
@@ -321,7 +321,7 @@ class RunLoopMixin:
 							# Use proper path handling for conversation path
 							try:
 								# Create proper path in the results directory
-								from agents.task.path import pm
+								from core.session_paths import pm
 								self.save_conversation_path = str(pm().create_file_path(
 									self.session_id,
 									"logs",
@@ -332,7 +332,7 @@ class RunLoopMixin:
 
 								# Fallback to direct utility functions
 								try:
-									from agents.task.path import pm
+									from core.session_paths import pm
 									self.save_conversation_path = str(pm().create_file_path(
 										self.session_id,
 										"logs",
@@ -340,7 +340,7 @@ class RunLoopMixin:
 									))
 								except ImportError:
 									# Last resort - still use central PathManager to avoid nested path issues
-									from agents.task.path import pm
+									from core.session_paths import pm
 									self.save_conversation_path = str(pm().create_file_path(
 										self.session_id,
 										"logs",
@@ -348,7 +348,7 @@ class RunLoopMixin:
 									))
 						else:
 							# Fallback path handling using centralized PathManager to avoid directory issues
-							from agents.task.path import pm
+							from core.session_paths import pm
 							self.save_conversation_path = str(pm().create_file_path(
 								self.session_id,
 								"logs",

@@ -38,7 +38,7 @@ async def h_kb(ctx) -> None:
         from cli.commands.kb import _kb_enabled
 
         if not _kb_enabled():
-            from surfaces.telegram.kb_ops import KB_OFF   # one sentence on every seat
+            from modules.memory.kb_reply import KB_OFF   # one sentence on every seat
             ctx.emit(KB_OFF, title="kb")
             return
     except Exception as exc:  # gate resolution itself failed → treat as disabled

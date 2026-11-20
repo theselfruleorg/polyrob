@@ -41,14 +41,11 @@ def _email_tool_drop_note() -> str:
     """Whether a standing SMTP 535 actually removes `email` from the autonomous
     toolset right now — the condition, never an assertion.
 
-    ⚠️ Layering: `agents/task/constants.py::effective_autonomous_tools` OWNS
-    this rule and core may not import it (`tests/test_layering_ratchet.py`
-    forbids every `core/ -> agents.task.constants` edge). The two inputs it
-    reads are both core-readable, so the CONDITION is re-derived from the same
-    sources and pinned against the owner by
-    `tests/unit/core/test_status_snapshot.py`.
+    `core.config_policy.autonomous_tools.effective_autonomous_tools` OWNS this
+    rule; the note reads the same `stable_autonomous_toolset()` switch, and
+    `tests/unit/core/test_status_delivery_audit.py` pins the two together.
     """
-    from core.env import bool_env
+    from core.config_policy.autonomous_tools import stable_autonomous_toolset
     try:
         from core.config_policy.capability_toggles import email_provider
         provider = email_provider()
@@ -56,7 +53,7 @@ def _email_tool_drop_note() -> str:
         return ""  # cannot tell => claim nothing
     if provider != "smtp":
         return " — the agent's mail rides AgentMail, so sending is unaffected"
-    if bool_env("STABLE_AUTONOMOUS_TOOLSET", True):  # default mirrors agents/task/constants.py
+    if stable_autonomous_toolset():
         return (" — autonomous runs still load the email tool (the toolset is "
                 "frozen); every send refuses with this reason")
     return " — autonomous runs no longer request the email tool"
@@ -72,7 +69,7 @@ def _rail_verdict_line(v):
     if v.kind == "smtp":
         # D69: the old text asserted "autonomous runs no longer request the
         # email tool" unconditionally. That drop is conditional
-        # (`agents/task/constants.py::effective_autonomous_tools`): it does not
+        # (`core/config_policy/autonomous_tools.py::effective_autonomous_tools`): it does not
         # happen under an AgentMail transport, and it does not happen at all
         # when the requested toolset is frozen. Asserting it either way is a
         # confident claim about a thing this module cannot see, so the line now

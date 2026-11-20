@@ -73,7 +73,7 @@ def test_every_owner_seat_stop_passes_via():
     """`/job stop` (Telegram, console chat, REPL) and the console route record
     their seat too; 080 WS-2 made ``via`` a required argument of the stop."""
     import inspect
-    from surfaces.telegram import job_ops
+    from cron import owner_jobs as job_ops
     from webview import job_routes
     assert "stop_job(svc, job, user_id=user_id, via=via" in inspect.getsource(job_ops)
     assert 'service.cancel(job_id, user_id=user_id, via="webview")' in inspect.getsource(job_routes.api_cron_cancel)

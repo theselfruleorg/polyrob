@@ -47,7 +47,9 @@ Telegram (which has its own allowlist, checked first), a DM from anyone who is
 not the owner or a paired sender is DENIED, even when the correspondent model is
 off. An email sender reaches OWNER or CORRESPONDENT only when the receiving
 server's topmost `Authentication-Results` shows `dmarc=pass` or an aligned DKIM/SPF
-pass; a forged `From` gets no tier. A WhatsApp webhook without
+pass, and only when that header comes from your mail provider's own server (Gmail and
+Outlook/Office 365 are known). A self-hosted mail server keeps email senders at the lowest
+tier (denied). A forged `From` gets no tier. A WhatsApp webhook without
 `WHATSAPP_WEBHOOK_SECRET` rejects every payload, and a Signal surface refuses a
 plain-HTTP `signal-cli` daemon on a non-loopback host.
 
@@ -85,6 +87,13 @@ the code, not of the mechanism.
 
 It also does not read the text. The taint is a fact about where the turn's context
 came from, not a judgement of whether the content was hostile.
+
+When a person's reply comes into your own chat (the agent wrote to them from it), the
+agent also stops seeing your SOUL and owner facts, the model it runs on, the host
+details and the chat's memory summary, and it cannot read or write files. Your next
+message brings them back. Your earlier messages in that chat stay visible to the agent:
+the reply it may send back to that person is the one way out, and only the agent's own
+judgement keeps your earlier messages out of it.
 
 ### Standing work and the money regime
 
@@ -195,7 +204,9 @@ process. Under `shadow` the agent still signs and also logs the signer's verdict
 socket that checks the connecting UID, re-runs `tx_guard` on its own pinned RPC against
 the hard limits in `signer.toml`, keeps its own spend record, and only then signs; above
 its hard limit the owner approves on the box, as root. This is the one money gate that
-does not share the agent's process. Set-up and cut-over:
+does not share the agent's process. However the signer is set up, the wallet signs an EVM transaction
+only when `tx_guard` allowed that exact transaction in the same process; a send that
+skipped the guard (or a dry run) is refused before anything is signed. Set-up and cut-over:
 [wallet.md](wallet.md#where-the-signatures-come-from--the-signer).
 
 ### The on-chain transaction guard (`core/wallet/tx_guard.py`)

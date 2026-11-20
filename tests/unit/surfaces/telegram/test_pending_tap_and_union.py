@@ -74,7 +74,7 @@ def _seed_tool_approval(home, uid="alice"):
     """An OPEN tool-approval ask — the second queue, the one that held money."""
     import os
 
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from tools.controller.approval_queue import TOOL_APPROVAL_ASK_KIND
     board = GoalBoard(os.path.join(str(home), "goals.db"))
     board.create_ask(user_id=uid, what="Approve defi_trade?", why="swap 5 USDC",
@@ -184,7 +184,7 @@ async def test_pending_and_approve_read_the_same_set(env):
     chooser = await act_on_inbound(_Agent(str(env)), _cmd("/approve", "/approve"))
 
     assert "2 pending" in listed
-    assert "2 pending" in chooser
+    assert "2 decisions wait" in chooser
 
 
 @pytest.mark.asyncio

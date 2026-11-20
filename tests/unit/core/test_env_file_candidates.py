@@ -68,7 +68,7 @@ def test_update_context_captures_home_and_legacy_env(tmp_path, monkeypatch):
     monkeypatch.delenv("POLYROB_HOME", raising=False)
     monkeypatch.delenv("POLYROB_DATA_DIR", raising=False)
     monkeypatch.chdir(proj)
-    from cli.update.context import resolve_update_context
+    from core.update_snapshot.context import resolve_update_context
     ctx = resolve_update_context(local=True)
     assert home / ".polyrob" / ".env" in ctx.config_paths
     assert home / ".rob" / ".env" in ctx.config_paths

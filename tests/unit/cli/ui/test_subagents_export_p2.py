@@ -101,7 +101,7 @@ def test_export_defaults_into_session_dir(tmp_path, monkeypatch):
         def get_session_root(self, sid, uid):
             return session_dir
 
-    monkeypatch.setattr("agents.task.path.pm", lambda: _PM())
+    monkeypatch.setattr("core.session_paths.pm", lambda: _PM())
 
     convo = type("C", (), {"turns": []})()
     ctx, r = _ctx(conversation=convo)

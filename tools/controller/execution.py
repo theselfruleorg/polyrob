@@ -257,6 +257,9 @@ class ExecutionMixin:
 		_ident_token = set_exec_identity(
 			getattr(execution_context, 'user_id', '') or '',
 			getattr(execution_context, 'session_id', '') or '')
+		# 122 W1: the `why` of the action in flight (core.act_reason), bound per action below.
+		from core.act_reason import reset_act_why, set_act_why
+		_why_token = set_act_why("")
 		try:
 			action_count = len(actions)
 			self.logger.info(f"Executing {action_count} actions")
@@ -309,6 +312,7 @@ class ExecutionMixin:
 					_meta = getattr(execution_context, "metadata", None)
 					if isinstance(_meta, dict):
 						_meta.pop("owner_grant", None)
+					set_act_why(action_params.get("why") if isinstance(action_params, dict) else None)
 					# pre_tool_call hooks: allow a hook to veto this action before execution.
 					deny_reason = await self._run_pre_tool_call_hooks(action_type, action_params, execution_context)
 					if deny_reason:
@@ -529,6 +533,7 @@ class ExecutionMixin:
 			return results
 		finally:
 			reset_exec_identity(_ident_token)
+			reset_act_why(_why_token)
 
 	async def _observe_error_result(self, action_type, action_params, result, execution_context):
 		"""Run the transform + post tool-call hooks on an error/timeout result, mirroring

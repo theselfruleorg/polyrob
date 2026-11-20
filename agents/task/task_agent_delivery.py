@@ -688,7 +688,7 @@ class TaskAgentDeliveryMixin:
         """
         from agents.task.agent.core.self_wake import (
             effective_self_wake_enabled, get_reentry_budget, format_self_wake,
-            SELF_WAKE_KIND,
+            SELF_WAKE_KIND, BudgetStoreUnreadable,
         )
         from core.runtime_paths import data_dir_or_home
         _data_dir = getattr(getattr(self, "config", None), "data_dir", None)
@@ -716,7 +716,13 @@ class TaskAgentDeliveryMixin:
         # concurrent producers can't both pass the check and exceed the cap. A slot
         # consumed on a subsequently-failed dispatch errs toward FEWER wakes — the
         # safe direction for a runaway guard.
-        if not budget.try_consume(session_id, user_id or ""):  # 098 AG-11: the real tenant on the row
+        try:
+            _consumed = budget.try_consume(session_id, user_id or "")  # 098 AG-11: the real tenant on the row
+        except BudgetStoreUnreadable as e:  # 125 S30 (D9): fail closed
+            logger.warning(f"self-wake budget store unreadable for session {session_id} — dropping: {e}")
+            _wake_ev("skipped", "budget_unreadable")
+            return False
+        if not _consumed:
             logger.info(f"🛌 self-wake budget exhausted for session {session_id} — dropping")
             _wake_ev("skipped", "budget_exhausted")
             return False

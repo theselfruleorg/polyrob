@@ -53,7 +53,7 @@ def _board_for(container, board):
 async def _wait_ask_fulfilled(board, user_id: str, ask_id: str,
                               timeout_sec: float, poll_interval: float) -> bool:
     """Poll until the ask leaves the OPEN set (owner fulfilled/decided it)."""
-    from agents.task.goals.board import ASK_OPEN
+    from polyrob.sdk import ASK_OPEN
     waited = 0.0
     while waited < timeout_sec:
         try:

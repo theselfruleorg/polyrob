@@ -4,7 +4,7 @@ B2/C3: project-root mode returned <CWD>/.polyrob/todo.md for EVERY session, so p
 sessions/sub-agents shared one todo.md. Nest it under the per-session tree instead.
 This is unconditional. Server (non-project-root pm) is unchanged.
 """
-from agents.task.path import PathManager
+from core.session_paths import PathManager
 
 
 def _project_pm(tmp_path):

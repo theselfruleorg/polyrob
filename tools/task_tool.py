@@ -110,7 +110,7 @@ class TaskTool(BaseTool):
     def release_session(self, session_id: str) -> None:
         """Forget a session that left memory. Each write saved to todo.md, and
         ``_get_todos`` reloads it on a miss."""
-        from agents.task.path import pm
+        from core.session_paths import pm
         clean_id = pm().clean_session_id(session_id)
         self._todos.pop(clean_id, None)
         self._next_id.pop(clean_id, None)
@@ -127,7 +127,7 @@ class TaskTool(BaseTool):
         Returns:
             List of TodoItem objects for this session
         """
-        from agents.task.path import pm
+        from core.session_paths import pm
 
         # Clean session ID
         clean_id = pm().clean_session_id(session_id)
@@ -145,7 +145,7 @@ class TaskTool(BaseTool):
             session_id: Session identifier
             user_id: Optional user identifier
         """
-        from agents.task.path import pm
+        from core.session_paths import pm
 
         # Get file path
         todo_path = pm().get_todo_file_path(session_id, user_id)
@@ -206,7 +206,7 @@ class TaskTool(BaseTool):
             session_id: Session identifier
             user_id: Optional user identifier
         """
-        from agents.task.path import pm
+        from core.session_paths import pm
 
         # Get file path
         todo_path = pm().get_todo_file_path(session_id, user_id)
@@ -396,7 +396,7 @@ class TaskTool(BaseTool):
             session_id = self._get_session_id(execution_context)
             user_id = self._get_user_id(execution_context)
 
-            from agents.task.path import pm
+            from core.session_paths import pm
             clean_id = pm().clean_session_id(session_id)
 
             # Get or initialize todos
@@ -449,7 +449,7 @@ class TaskTool(BaseTool):
             session_id = self._get_session_id(execution_context)
             user_id = self._get_user_id(execution_context)
 
-            from agents.task.path import pm
+            from core.session_paths import pm
             clean_id = pm().clean_session_id(session_id)
 
             todos = self._get_todos(clean_id, user_id)

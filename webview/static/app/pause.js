@@ -28,7 +28,7 @@
  * `live.js` dropped that refusal on the floor, so the console simply stopped
  * updating with no explanation.
  */
-import { postJson, serverAnswer } from './http.js';
+import { getJson, postJson, serverAnswer } from './http.js';
 import { onLiveChange } from './live.js';
 
 /** The copy the server handed over, as a plain object. */
@@ -77,10 +77,8 @@ export function applyState(button, paused, copy) {
 /** Read the live pause record. Returns the body, or `null` on any refusal. */
 export async function readState(fetcher) {
   try {
-    const call = fetcher || fetch;
-    const resp = await call('/api/webgate/pause', { credentials: 'include' });
-    if (!resp.ok) return null;
-    return await resp.json();
+    const res = await getJson('/api/webgate/pause', { fetcher });
+    return res.ok ? res.body : null;
   } catch (err) {
     return null;
   }

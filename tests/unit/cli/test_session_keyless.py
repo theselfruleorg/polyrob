@@ -136,7 +136,7 @@ def _patch_rig(monkeypatch, tmp_path):
     monkeypatch.setattr("polyrob.app.bootstrap.build_cli_container", _fake_build)
     fake_pm = MagicMock()
     fake_pm.data_root = tmp_path
-    monkeypatch.setattr("agents.task.path.pm", lambda: fake_pm)
+    monkeypatch.setattr("core.session_paths.pm", lambda: fake_pm)
     return calls
 
 

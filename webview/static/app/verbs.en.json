@@ -188,7 +188,7 @@
     {
       "name": "/lp",
       "group": "money",
-      "help": "Liquidity positions: inspect, quote, add, remove, collect fees, declare a new pool, or move a position",
+      "help": "Liquidity positions: inspect, quote, add, remove, collect fees, declare a new pool, move a position, or see and grant token launches",
       "aliases": []
     },
     {
@@ -459,6 +459,12 @@
       "name": "/model",
       "group": "set up",
       "help": "The model this chat runs on — switch it live, set your default, pick reasoning; set the heavy and light models and what the agent may choose",
+      "aliases": []
+    },
+    {
+      "name": "/persona",
+      "group": "set up",
+      "help": "The personas, and the one new chats use",
       "aliases": []
     },
     {

@@ -7,7 +7,7 @@ import pytest
 
 from core.surfaces import cards
 from core.wallet import dex_registry, liquidity_guard as G, lp_seed as S, univ3_math as M
-from surfaces.telegram import lp_ops
+from tools.defi.owner_verbs import lp as lp_ops
 from tools.defi import lp_reads as R, lp_v4 as V4, lp_v4_move as MOVE, lp_v4_seed as SEED, lp_verbs as LV
 from tools.defi.trade_tool import LpAddParams
 from tests.unit.tools.defi.test_deploy_and_call_verbs import HOLDER
@@ -36,7 +36,7 @@ def world(monkeypatch):
     monkeypatch.setenv("LP_ETH_FLOOR", "0")
     monkeypatch.setattr(cards, "_STORE", None)
     monkeypatch.setattr(dex_registry, "verify_pins", lambda *a: None)
-    monkeypatch.setattr("core.instance.is_owner_uid", lambda uid: uid == "owner")
+    monkeypatch.setattr("core.instance.is_owner_uid", lambda uid, **kw: uid == "owner")
     monkeypatch.setattr(SEED, "_uid", lambda ctx: "owner")
     state = {"liquidity": LIQ, "owner": HOLDER.lower(), "pushed": [], "fees": (0, 0)}
     monkeypatch.setattr(V4, "position_fees", lambda rpc, chain, pos: state["fees"])
@@ -48,13 +48,27 @@ def world(monkeypatch):
     monkeypatch.setattr(R, "allowance", lambda *a: BIG)
     monkeypatch.setattr(V4, "permit2_allowance", lambda *a: (BIG, int(time.time()) + 9999))
     monkeypatch.setattr(R, "view", lambda rpc, to, spec, args=None:
-                        "TKN" if spec["name"] == "symbol" else BIG)
+                        "TKN" if spec["name"] == "symbol" else 18 if spec["name"] == "decimals"
+                        else BIG)
+
+    # 126: the agent's move call dry-runs the move for its card; the rails are fake.
+    real = LV._perform
+
+    async def dry_remove(tool, p, ctx, verb):
+        if verb == "lp_remove" and p.dry_run:
+            return SimpleNamespace(error=None, extracted_content="RESULT: DRY RUN.")
+        return await real(tool, p, ctx, verb)
+    monkeypatch.setattr(LV, "_perform", dry_remove)
 
     async def push(container, user_id, card, session_id=None):
         state["pushed"].append(card)
         return "sent"
     monkeypatch.setattr(cards, "push", push)
     return state
+
+
+#: The owner's own chat turn (126: a card goes to the owner only).
+OWNER = SimpleNamespace(user_id="owner", role="orchestrator", is_sub_agent=False, metadata={})
 
 
 def _move(**kw):
@@ -121,15 +135,16 @@ def test_the_step_is_read_from_the_liquidity_and_the_moves_own_mark():
 @pytest.mark.asyncio
 async def test_a_move_is_a_card_and_sends_nothing(world):
     t, gate = _tool([])
-    res = await t.lp_add(_move())
-    assert res.error is None and "NOT sent: this is a move" in res.extracted_content
+    res = await t.lp_add(_move(), OWNER)
+    assert res.error is None and "NOT sent yet: card" in res.extracted_content
     card = world["pushed"][-1]
     assert "Move a pool position" in card.title and "MOVE: first withdraw 50%" in card.body
+    assert card.kind == cards.KIND_CALL      # 126: ONE card: the dry run and the exact call
     assert not gate.recorded
 
 
 async def _confirmed(t):
-    res = await t.lp_add(_move())
+    res = await t.lp_add(_move(), OWNER)
     ref = res.extracted_content.split("Declaration ")[1].split(" ")[0]
     assert "Declared" in lp_ops.seed_confirm_reply("owner", ref)
     return ref
@@ -180,8 +195,10 @@ async def test_a_mint_that_would_refuse_stops_the_move_before_the_withdrawal(wor
     ref = await _confirmed(t)
     calls = _fake_perform(world, monkeypatch)
     monkeypatch.setattr(V4, "permit2_allowance", lambda *a: (0, 0))
-    res = await t.lp_add(_run(ref, dry_run=False))
-    assert calls == [] and "nothing was withdrawn" in res.error and "Permit2 grant" in res.error
+    res = await t.lp_add(_run(ref, dry_run=True))
+    # 126: a dry run names the Permit2 grants the live run makes first; it does not refuse.
+    assert res.error is None and "the run first makes the Permit2 grant(s)" in res.extracted_content
+    calls.clear()
     monkeypatch.setattr(V4, "permit2_allowance", lambda *a: (BIG, 2 ** 40))
     monkeypatch.setenv("LP_ETH_CAP", "0")
     res = await t.lp_add(_run(ref, dry_run=False))
@@ -264,7 +281,7 @@ async def test_a_mint_that_did_not_land_is_an_error_and_says_where_the_funds_are
 @pytest.mark.asyncio
 async def test_a_dry_run_shows_both_steps_and_sends_nothing(world, monkeypatch):
     t, _ = _tool([])
-    res = await t.lp_add(_move())
+    res = await t.lp_add(_move(), OWNER)
     ref = res.extracted_content.split("Declaration ")[1].split(" ")[0]     # still PROPOSED
     calls = _fake_perform(world, monkeypatch)
     res = await t.lp_add(_run(ref))
@@ -418,3 +435,146 @@ async def test_a_live_increase_meets_the_program_cap(world, monkeypatch):
     t, _ = _tool([])
     res = await _priced(t).lp_add(_increase(dry_run=False))
     assert "LP_ETH_CAP is 0" in res.error
+
+
+@pytest.mark.asyncio
+async def test_a_confirmed_move_makes_its_own_permit2_grants(world, monkeypatch):
+    """2026-11-20: the run makes the Permit2 legs itself (ERC-20 -> Permit2, then the
+    exact Permit2 grant) and moves; nothing is asked of the owner."""
+    import time
+    from tools.defi import approve_verb
+    t, _ = _tool([])
+    ref = await _confirmed(t)
+    calls = _fake_perform(world, monkeypatch)
+    have = {"erc20": 0, "permit2": 0}
+    monkeypatch.setattr(R, "allowance", lambda *a: have["erc20"])
+    monkeypatch.setattr(V4, "permit2_allowance",
+                        lambda *a: (have["permit2"], int(time.time()) + 900))
+    grants = []
+
+    async def approve(tool, p, ctx=None):
+        grants.append((p.via, p.spender.lower(), p.dry_run))
+        have[p.via] = BIG
+        return SimpleNamespace(error=None, extracted_content="RESULT: success")
+    monkeypatch.setattr(approve_verb, "perform_approve_token", approve)
+    res = await t.lp_add(_run(ref, dry_run=False))
+    assert res.error is None, res.error
+    permit2 = dex_registry.row_for("robinhood", "v4").permit2.lower()
+    assert grants == [("erc20", permit2, False), ("permit2", NPM_ADDR.lower(), False)]
+    assert calls == [("lp_remove", False), ("lp_add", False)]
+
+
+@pytest.mark.asyncio
+async def test_the_grants_are_sized_to_the_mints_maxima_not_the_declaration(world, monkeypatch):
+    """Audit 2026-11-21 L-10: the ERC-20 allowance to Permit2 has no expiry, so the run
+    grants the mint's computed maxima at the price now (lp_v4_seed.mint_bounds), not
+    the declared amount x 1.000001 — what the mint does not pull stays a standing claim."""
+    import time
+    from decimal import Decimal
+    from tools.defi import approve_verb, lp_v4_seed
+    t, _ = _tool([])
+    ref = await _confirmed(t)
+    _fake_perform(world, monkeypatch)
+    have = {"erc20": 0, "permit2": 0}
+    monkeypatch.setattr(R, "allowance", lambda *a: have["erc20"])
+    monkeypatch.setattr(V4, "permit2_allowance",
+                        lambda *a: (have["permit2"], int(time.time()) + 900))
+    asked = []
+
+    async def approve(tool, p, ctx=None):
+        asked.append((p.via, p.token.lower(), p.amount))
+        have[p.via] = BIG
+        return SimpleNamespace(error=None, extracted_content="RESULT: success")
+    monkeypatch.setattr(approve_verb, "perform_approve_token", approve)
+    rows = []
+    real_load = lp_v4_seed.load
+    monkeypatch.setattr(lp_v4_seed, "load", lambda p, ctx: rows.append(real_load(p, ctx)) or rows[-1])
+    res = await t.lp_add(_run(ref, dry_run=False))
+    assert res.error is None, res.error
+    from core.wallet import lp_seed as S
+    f = rows[0]["fields"]
+    _liq, maxima = lp_v4_seed.mint_bounds(f, SQRT)
+    key = S.key_of(f)
+    by_cur = {key["currency0"].lower(): (maxima[0], int(f["amount0_raw"]), int(f["dec0"])),
+              key["currency1"].lower(): (maxima[1], int(f["amount1_raw"]), int(f["dec1"]))}
+    erc20 = [(c, a) for via, c, a in asked if via == "erc20"]
+    assert erc20
+    for cur, amount in erc20:
+        mx, declared, dec = by_cur[cur]
+        raw = int(round(amount * 10 ** dec))
+        assert raw >= mx, "the grant must cover the mint"
+        assert raw <= mx + max(2, mx // 10 ** 12) + mx // 10 ** 14, "a hair above the maxima only"
+        if mx < declared:
+            assert raw < int(Decimal(declared) * Decimal("1.000001"))
+
+
+def test_the_pinned_permit2_is_a_route_spender_and_nothing_else_is_added():
+    """2026-11-20: the v4 Permit2 is pinned like the v3 PositionManager, so the agent
+    may grant the ERC-20 leg of a v4 mint without an owner turn."""
+    from core.wallet import tx_guard
+    pinned = tx_guard.pinned_route_spenders("robinhood")
+    assert dex_registry.row_for("robinhood", "v4").permit2.lower() in pinned
+    assert NPM_ADDR.lower() not in pinned          # the v4 manager takes Permit2 grants only
+    assert "0x" + "9" * 40 not in pinned
+
+
+@pytest.mark.asyncio
+async def test_a_grant_the_guard_refuses_stops_the_move_before_the_withdrawal(world, monkeypatch):
+    from tools.defi import approve_verb
+    t, _ = _tool([])
+    ref = await _confirmed(t)
+    calls = _fake_perform(world, monkeypatch)
+    monkeypatch.setattr(R, "allowance", lambda *a: 0)
+
+    async def approve(tool, p, ctx=None):
+        return SimpleNamespace(error="refused: over the daily cap", extracted_content=None)
+    monkeypatch.setattr(approve_verb, "perform_approve_token", approve)
+    res = await t.lp_add(_run(ref, dry_run=False))
+    assert calls == [] and "erc20 grant" in res.error and "over the daily cap" in res.error
+    assert "RESULT: NOT SENT" in res.error and world["liquidity"] == LIQ
+
+
+# --- audit 2026-11-21 L-11: a move's withdrawal minimums are bound to the anchor ---------
+
+def _remove_plan(monkeypatch, floor=None, token_id=7):
+    from tools.defi import lp_v4_verbs as LVV
+    from tools.defi.trade_params import LpRemoveParams
+    monkeypatch.setattr(dex_registry, "hook_pinned", lambda *a: True)
+    monkeypatch.setattr(dex_registry, "verify_hook", lambda *a: None)
+    monkeypatch.setattr(LV, "pool_price_check", lambda *a, **k: "pool price check: stub\n")
+    p = LpRemoveParams(chain="robinhood", protocol="v4", token_id=token_id, liquidity_pct=50,
+                       slippage_bps=100, max_spend_usd=1.0, dry_run=True)
+    npm = dex_registry.resolve_position_manager("robinhood", "v4")
+    if floor is None:
+        return LVV.prepare_remove_v4(p, None, HOLDER, npm)
+    with LVV.move_floor(7, floor):
+        return LVV.prepare_remove_v4(p, None, HOLDER, npm)
+
+
+def _spot_amounts():
+    return M.amounts_for_liquidity(SQRT, M.sqrt_price_at_tick(FULL[0]),
+                                   M.sqrt_price_at_tick(FULL[1]), LIQ // 2)
+
+
+def test_a_move_withdrawal_whose_spot_return_is_below_the_anchor_floor_refuses(monkeypatch):
+    """The pool was walked away from the anchor (the indexer's price of a one-pool token
+    follows it): spot minimums alone would pass; the anchor floor refuses before a build."""
+    a0, a1 = _spot_amounts()
+    with pytest.raises(ValueError, match="the pool moved"):
+        _remove_plan(monkeypatch, floor=(a0 * 2, a1 // 2))
+
+
+def test_a_move_withdrawal_takes_the_anchor_floor_as_its_minimums(monkeypatch):
+    a0, a1 = _spot_amounts()
+    floor = (a0 - a0 // 1000, a1 - a1 // 1000)   # the anchor, less a 0.1% gap: above spot - 1%
+    plan = _remove_plan(monkeypatch, floor=floor)
+    mins = [m for _cur, m in plan.intent.lp_inflows]
+    assert mins == list(floor)
+
+
+def test_a_plain_withdrawal_or_another_position_keeps_the_spot_minimums(monkeypatch):
+    a0, a1 = _spot_amounts()
+    spot = [a0 * 9900 // 10000, a1 * 9900 // 10000]
+    assert [m for _c, m in _remove_plan(monkeypatch).intent.lp_inflows] == spot
+    other = _remove_plan(monkeypatch, floor=(a0, a1), token_id=8)
+    assert [m for _c, m in other.intent.lp_inflows] == spot

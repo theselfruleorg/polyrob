@@ -13,7 +13,7 @@ import os
 import pytest
 
 from core.dapp_session_store import default_dapp_session_store_path
-from surfaces.telegram.dapp_ops import dapp_reply
+from tools.defi.owner_verbs.dapp import dapp_reply
 
 
 @pytest.fixture

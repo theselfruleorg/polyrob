@@ -321,9 +321,10 @@ def _change_line(seat: str) -> str:
                 "/pause and /resume apply at once.")
     if seat == "console":
         return "To change: Agent > Settings, or the terminal. Pause applies at once."
-    return ("To change from here: `/config set AUTONOMY_ENABLED true|false` or "
-            "`/config set AUTONOMY_POSTURE silent|owner-visible|full` (next start). The rest needs "
-            "the computer it runs on. /pause and /resume apply at once.")
+    return ("To change from here: /pause and /resume apply at once. What runs when you are "
+            "away: `/config set AUTONOMY_POSTURE silent|owner-visible|full`; all of it off: "
+            "`/config set AUTONOMY_ENABLED false` (both apply after /restart). The rest needs "
+            "the computer it runs on.")
 
 
 def _level_line(user_id: Optional[str]) -> str:

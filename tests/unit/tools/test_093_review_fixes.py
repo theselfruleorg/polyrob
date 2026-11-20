@@ -28,7 +28,7 @@ class _Board:
         return [a for a in self.rows if a.status == status]
 
     def create_ask(self, *, user_id, what, why="", extra_payload=None, force=False, **kw):
-        from agents.task.goals.board_asks import title_similarity
+        from modules.goals.board_asks import title_similarity
         if not force:
             for a in self.rows:
                 if title_similarity(what, a.title) >= 0.6:
@@ -269,7 +269,7 @@ def test_mcp_gate_label_and_http_request_is_leaf_blocked():
     from core.tool_capabilities import TOOL_CAPABILITIES, row_field
     assert row_field("mcp", "gate").label == "MCP_ENABLED + an MCP server"
     assert "delegate_blocked" in TOOL_CAPABILITIES["http_request"]
-    from tools.controller.delegation import DELEGATE_BLOCKED_TOOLS
+    from core.delegation_policy import DELEGATE_BLOCKED_TOOLS
     assert "http_request" in DELEGATE_BLOCKED_TOOLS
 
 

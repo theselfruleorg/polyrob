@@ -198,7 +198,9 @@ class HFSpacesBroker:
         # snapshot): symlinks are not followed, `.git`/caches never ship, and
         # every file is copied O_NOFOLLOW — so the digest, the scan and the
         # upload all describe the SAME bytes.
-        stage_root = tempfile.mkdtemp(prefix="polyrob-hf-")
+        # On disk, not the unit's private /tmp: a 500 MB stage fills a small tmpfs.
+        from core.runtime_paths import scratch_mkdtemp
+        stage_root = scratch_mkdtemp("polyrob-hf-")
         try:
             return await self._deploy_staged(space_repo=space_repo, token=token,
                                              workspace_dir=workspace_dir,

@@ -519,19 +519,34 @@ def _pad_topic(address: str) -> str:
     return "0x" + "00" * 12 + _addr20(address).hex()
 
 
+#: The smallest window the approval scan halves to before it gives up. A node caps the range of
+#: an address-less ``eth_getLogs`` (Robinhood Chain: 30,000 blocks), so a fixed 50,000 window
+#: failed on its first query there and every approval table read UNREADABLE (2026-11-20).
+SCAN_WINDOW_FLOOR = 2_000
+
+
 def _scan_logs(rpc: Rpc, account: str, since_block: int, to_block: int, step: int) -> List[dict]:
+    """The approval logs of *account* over ``since_block..to_block``. The window starts at *step*
+    and halves on a refused query (down to :data:`SCAN_WINDOW_FLOOR`), then stays at the size that
+    worked. A range it still cannot read raises: an unread range is never "none"."""
     logs: List[dict] = []
-    start = int(since_block)
+    start, window = int(since_block), int(step)
     while start <= to_block:
-        end = min(start + step - 1, to_block)
-        got = rpc("eth_getLogs", [{
-            "fromBlock": hex(start), "toBlock": hex(end),
-            "topics": [[TOPIC_APPROVAL, TOPIC_APPROVAL_FOR_ALL, TOPIC_PERMIT2_APPROVAL,
-                        TOPIC_PERMIT2_PERMIT, TOPIC_PERMIT2_LOCKDOWN, TOPIC_6909_APPROVAL,
-                        TOPIC_6909_OPERATOR_SET], _pad_topic(account)],
-        }])
-        if not isinstance(got, list):
-            raise Erc6551Error(f"eth_getLogs {start}-{end} returned no list — refusing to report 'none'")
+        end = min(start + window - 1, to_block)
+        try:
+            got = rpc("eth_getLogs", [{
+                "fromBlock": hex(start), "toBlock": hex(end),
+                "topics": [[TOPIC_APPROVAL, TOPIC_APPROVAL_FOR_ALL, TOPIC_PERMIT2_APPROVAL,
+                            TOPIC_PERMIT2_PERMIT, TOPIC_PERMIT2_LOCKDOWN, TOPIC_6909_APPROVAL,
+                            TOPIC_6909_OPERATOR_SET], _pad_topic(account)],
+            }])
+            if not isinstance(got, list):
+                raise Erc6551Error(f"eth_getLogs {start}-{end} returned no list — refusing to report 'none'")
+        except Exception:
+            if window > SCAN_WINDOW_FLOOR:
+                window = max(SCAN_WINDOW_FLOOR, window // 2)
+                continue
+            raise
         logs.extend(got)
         start = end + 1
     return logs

@@ -131,7 +131,8 @@ class ContractReadParams(BaseModel):
     chain: str = Field(..., description=_chain_field("read from"))
     address: str = Field(..., description="Contract address to read from (0x…). EVM chains only — there is no eth_call on solana.")
     signature: str = Field(..., description="Function signature, e.g. 'totalSupply()'")
-    args: List[Any] = Field(default_factory=list, description="Arguments (currently unencoded; prefer no-arg views)")
+    args: List[Any] = Field(default_factory=list, description="Arguments, ABI-encoded from the signature, e.g. signature 'ownerOf(uint256)' with args [5]")
+    returns: Optional[str] = Field(None, description="ABI types of the result, e.g. 'address' or '(uint256,address)'. Given: the result is decoded as these types. Omitted: raw hex plus a best-effort number")
 
 
 class NftHoldingsParams(BaseModel):
@@ -145,6 +146,12 @@ class NftInfoParams(BaseModel):
     chain: str = Field(..., description=_chain_field("read the token on"))
     contract: str = Field(..., description="The NFT collection contract (0x…). EVM chains only.")
     token_id: int = Field(..., ge=0, description="The token id to read.")
+
+
+class NftAccountParams(BaseModel):
+    target: str = Field(..., description=(
+        "Any agent NFT (ERC-6551 / ERC-6551P), as '<chain>:<collection>/<token_id>' or "
+        "'<chain>:<token_id>' on the chain's one pinned collection."))
 
 
 class LpPositionsParams(BaseModel):

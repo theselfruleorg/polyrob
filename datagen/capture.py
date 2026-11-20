@@ -15,7 +15,7 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
-from agents.task.path import pm
+from core.session_paths import pm
 
 from datagen.assemble import assemble_record
 from datagen.formats import render_raw

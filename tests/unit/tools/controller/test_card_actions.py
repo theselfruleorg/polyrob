@@ -49,7 +49,7 @@ def _owner(monkeypatch, tmp_path):
         return "sent"
 
     monkeypatch.setattr("core.surfaces.user_delivery.deliver_user_message", _deliver)
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     board = GoalBoard(str(tmp_path / "goals.db"))
     monkeypatch.setattr("tools.controller.owner_ask_action._board", lambda c: board)
     return sent

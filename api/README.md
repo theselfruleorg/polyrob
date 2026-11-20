@@ -498,7 +498,7 @@ JSON-RPC form: calling it on `/a2a/rpc` answers 501 naming this route.
 GET  /eip8004/config              # config/discovery
 GET  /eip8004/registration.json   # registration descriptor
 POST /eip8004/validation/*        # validation request/response (gated EIP8004_ENABLED)
-GET  /eip8004/validation/*        # validation status/summary/pending/validators
+GET  /eip8004/validation/*        # validation status/summary/pending/validators (gated EIP8004_ENABLED)
 ```
 
 ## Authentication

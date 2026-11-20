@@ -1,0 +1,410 @@
+"""`/nft` — the owner's seat over the non-fungible plane (E7).
+
+``nft_holdings`` / ``nft_info`` / ``nft_transfer`` / ``nft_revoke_approval``
+shipped as AGENT actions and reached no human seat at all, so the owner could
+not see what his own treasury held, could not send one, and — the one that
+matters — could not RETIRE a standing ``ApprovalForAll`` he had discovered.
+
+⚠️ REACH, not policy. Every gate underneath is untouched:
+
+* ``defi_trade_nft_transfer`` is priced at its worst-case FEE (an NFT is
+  unpriceable, so the caps cannot bound it) and stays ALWAYS owner-approved —
+  this seat cannot and does not exempt it;
+* ``nft_revoke_approval`` is risk-reducing and rides the capped lane;
+* the guard's three NFT refusals (an undeclared NFT outflow, a declared move
+  the simulation does not emit, and ANY ``ApprovalForAll(operator, true)``) run
+  on every transaction whatever this file does;
+* there is deliberately no GRANT verb here, because there is none underneath.
+
+⚠️ Enumeration needs an indexer. Without ``ALCHEMY_API_KEY`` the read SAYS SO
+rather than printing an empty list — "you own nothing" and "I could not look"
+are different facts, and the rail already answers honestly; this seat only
+forwards its words.
+
+Every seat runs :func:`nft_reply` (proposal 125 S14: the body lives below the
+seats); each tool call runs through the seat policy chain (the operator denylist).
+"""
+from __future__ import annotations
+
+import logging
+from typing import Any, List, Optional
+
+from core.surfaces.cards import is_go_word, with_go_hint
+
+logger = logging.getLogger(__name__)
+
+USAGE = (
+    "Usage: /nft — the agent NFTs I own (pinned collections), their accounts and holdings\n"
+    "/nft trust <collection> on <chain> [go] — let me use the NFTs of a collection that I "
+    "own (shows the facts first)\n"
+    "/nft untrust <collection|all> on <chain> [go]\n"
+    "/nft trust <collection> on <chain> autonomous <mint,reveal,buy,sale,account> band <min>-<max> "
+    "count <n> total <usd> days <d> [go] — also let me run those acts with no card, inside that "
+    "scope (one mandate)\n"
+    "/nft mandate — the mandates you gave; /nft mandate end <id> [go] ends one\n"
+    "/nft send <id|collection#id> <to> on <chain> [go] — give one away (its account goes "
+    "with it; its approvals must be cleared first)\n"
+    "/nft ready <id|collection#id> on <chain> [go] — make it ready for sale (a plain "
+    "marketplace fill may then take it and its account; I hold my own acts through it)\n"
+    "/nft unready <id|collection#id> on <chain> [go] — end its sale readiness\n"
+    "/nft list on <chain> [address <0x…>]\n"
+    "/nft account [<id>] on <chain> — one agent NFT's account: approvals, owner, lock, "
+    "balance, journal\n"
+    "/nft info <contract> <token-id> on <chain>\n"
+    "/nft transfer <contract> <token-id> <to> on <chain> "
+    "[std erc721|erc1155] [amount <n>] [go]\n"
+    "/nft revoke <contract> <operator> on <chain> [go]\n\n"
+    "There is no default chain: name it with `on <chain>`. Writes simulate unless you add "
+    "`go`.\n"
+    "⚠️ A transfer is irreversible and a collectible has no reliable price, so "
+    "it ALWAYS comes to you for approval — the spend caps cannot bound it.\n"
+    "⚠️ `revoke` retires a standing approval over a whole collection. There is "
+    "no verb here that GRANTS one, by design."
+)
+
+
+def _name_the_chain(verb: str) -> str:
+    """There is no default chain: a verb that does not name one is refused with the fix."""
+    from core.wallet import chains
+    return (f"Name the network: {verb} … on <network>. There is no default network. "
+            f"Networks: {', '.join(chains.names())}.")
+
+
+def _pull(tokens: List[str], key: str) -> Optional[str]:
+    """Remove ``<key> <value>`` from ``tokens`` and return the value, or None."""
+    for i, word in enumerate(tokens):
+        if str(word).lower() == key and i + 1 < len(tokens):
+            value = tokens[i + 1]
+            del tokens[i:i + 2]
+            return value
+    return None
+
+
+def _render(result: Any) -> str:
+    if getattr(result, "error", None):
+        return f"❌ {result.error}"
+    body = getattr(result, "extracted_content", None)
+    if not body:
+        return ("The verb returned neither an error nor a report. That is a "
+                "bug — do NOT retry until it is understood; assume nothing "
+                "about what happened.")
+    return str(body)
+
+
+async def _call(tool, method: str, params, ctx):
+    """One NFT tool call through the seat policy chain."""
+    from tools.defi.owner_verbs._seat import run_tool
+    return await run_tool(tool, tool_id=getattr(tool, "name", ""), verb=method,
+                          params=params, ctx=ctx,
+                          call=lambda: getattr(tool, method)(params, ctx))
+
+
+async def nft_reply(user_id: Optional[str], args: List[str], *,
+                    seat: str = "telegram") -> str:
+    """``/nft list|info|transfer|revoke`` — one chat-ready string. Never raises."""
+    if not user_id:
+        return "Only the owner can use /nft."
+    tokens = [str(a) for a in (args or []) if str(a).strip()]
+    typed = " ".join(tokens)
+    if not tokens:
+        return await agent_nft_overview()
+
+    verb = tokens.pop(0).lower()
+    if verb in ("ls", "holdings"):
+        verb = "list"
+    if verb in ("mandate", "mandates"):
+        return await _mandate(user_id, tokens, typed=typed, seat=seat)
+    if verb not in ("list", "info", "transfer", "revoke", "send", "trust", "untrust",
+                    "account", "ready", "unready"):
+        return f"Unknown /nft verb {verb!r}.\n{USAGE}"
+
+    execute = False
+    if tokens and is_go_word(tokens[-1]):
+        execute = True
+        tokens.pop()
+
+    chain = _pull(tokens, "on")
+    if not chain:
+        return _name_the_chain(f"/nft {verb}")
+    if verb in ("trust", "untrust"):
+        return await _collection_trust(user_id, verb, tokens, typed=typed,
+                                       chain=chain, execute=execute, seat=seat)
+    from tools.defi.owner_verbs._seat import owner_ctx
+    ctx = owner_ctx(user_id, seat=seat, verb="nft")
+
+    try:
+        from tools.defi.data_tool import (DefiDataTool, NftHoldingsParams,
+                                          NftInfoParams)
+        from tools.defi.trade_tool import (DefiTradeTool, NftRevokeParams,
+                                           NftTransferParams)
+    except Exception as exc:                       # pragma: no cover - import guard
+        return f"The NFT rail is unavailable: {exc}"
+
+    try:
+        if verb == "list":
+            address = _pull(tokens, "address") or (tokens[0] if tokens else None)
+            result = await _call(DefiDataTool(), "nft_holdings",
+                                 NftHoldingsParams(chain=chain, address=address), ctx)
+            return _render(result)
+
+        if verb == "account":
+            # 113 W6 G-5: the account of an NFT this treasury owns — a read
+            # (``agent_nft_snapshot``); it sends nothing.
+            from tools.agent_nft.tool import AgentNftTool, SnapshotParams
+            try:
+                params = SnapshotParams(chain=chain, nft=tokens[0] if tokens else None)
+            except Exception as exc:
+                return f"❌ {exc}"
+            return _render(await _call(AgentNftTool(), "agent_nft_snapshot", params, ctx))
+
+        if verb in ("ready", "unready"):
+            if len(tokens) != 1:
+                return f"Usage: /nft {verb} <id|collection#id> on <chain> [go]"
+            return await _agent_nft_sale(ctx, verb, tokens[0], chain=chain, execute=execute)
+
+        if verb == "send":
+            if len(tokens) < 2:
+                return "Usage: /nft send <id|collection#id> <to> on <chain> [go]"
+            return await _agent_nft_send(ctx, tokens[0], tokens[1],
+                                         chain=chain, execute=execute)
+
+        if verb == "info":
+            if len(tokens) < 2:
+                return "Usage: /nft info <contract> <token-id> on <chain>"
+            try:
+                token_id = int(tokens[1])
+            except (TypeError, ValueError):
+                return f"The token id must be a whole number, got {tokens[1]!r}."
+            result = await _call(DefiDataTool(), "nft_info", NftInfoParams(
+                chain=chain, contract=tokens[0], token_id=token_id), ctx)
+            return _render(result)
+
+        if verb == "transfer":
+            standard = (_pull(tokens, "std") or _pull(tokens, "standard")
+                        or "erc721")
+            amount_raw = _pull(tokens, "amount") or "1"
+            if len(tokens) < 3:
+                return ("Usage: /nft transfer <contract> <token-id> <to> "
+                        "on <chain> [std erc721|erc1155] [amount <n>] [go]")
+            try:
+                token_id = int(tokens[1])
+                amount = int(amount_raw)
+            except (TypeError, ValueError):
+                return "The token id and amount must both be whole numbers."
+            result = await _call(DefiTradeTool(), "nft_transfer",
+                NftTransferParams(chain=chain, contract=tokens[0],
+                                  token_id=token_id, to=tokens[2],
+                                  standard=standard.lower(), amount=amount,
+                                  dry_run=not execute), ctx)
+            body = _render(result)
+            if not execute and not body.startswith("❌"):
+                body = with_go_hint(body, "\n\nAdd `go` to send it: /nft transfer "
+                                    f"{tokens[0]} {token_id} {tokens[2]} on {chain} go\n"
+                                    "⚠️ It is irreversible, and it will come to you for "
+                                    "approval whatever your caps say.")
+            return body
+
+        if len(tokens) < 2:
+            return "Usage: /nft revoke <contract> <operator> on <chain> [go]"
+        result = await _call(DefiTradeTool(), "nft_revoke_approval", NftRevokeParams(chain=chain, contract=tokens[0],
+                            operator=tokens[1], dry_run=not execute), ctx)
+        body = _render(result)
+        if not execute and not body.startswith("❌"):
+            body = with_go_hint(body, "\n\nAdd `go` to retire it: /nft revoke "
+                                f"{tokens[0]} {tokens[1]} on {chain} go")
+        return body
+    except Exception as exc:
+        logger.warning("nft verb %s failed", verb, exc_info=True)
+        return f"The NFT verb did not run: {exc}"
+
+
+async def agent_nft_overview() -> str:
+    """``/nft`` with no words (069 v4 A4): the NFTs of pinned collections the treasury owns,
+    each with its account, the account's native balance, its open approvals and its book rows.
+    Reads only; an arrival or a loss found here is reported here."""
+    from core.env import bool_env
+    if not bool_env("AGENT_NFT_ENABLED", False):
+        return ("Agent NFTs are off. Turn them on with "
+                "`polyrob config set AGENT_NFT_ENABLED true` (it applies on my next restart).\n\n"
+                + USAGE)
+    try:
+        import asyncio
+
+        from core.wallet import nft_holdings
+        from core.wallet.factory import get_agent_wallet
+        wallet = get_agent_wallet()
+        if wallet is None:
+            return "No agent wallet is configured, so I own no NFT.\n\n" + USAGE
+        treasury = wallet.operational_signer().address
+        text = await asyncio.to_thread(nft_holdings.overview, treasury=treasury)
+        from core.wallet import collection_trust
+        text = "\n".join(collection_trust.status_lines()) + "\n\n" + text
+    except Exception as exc:
+        logger.warning("/nft overview failed", exc_info=True)
+        return f"The agent-NFT view did not run: {exc}"
+    return text + "\n\n" + USAGE
+
+
+async def _agent_nft_send(ctx, target: str, to: str, *, chain: str, execute: bool) -> str:
+    """``/nft send <id> <to> [go]`` — ``agent_nft_withdraw_token`` from the owner's seat."""
+    from tools.agent_nft.tool import AgentNftTool, TakeParams
+    try:
+        params = TakeParams(to=to, nft=target, chain=chain, dry_run=not execute)
+    except Exception as exc:
+        return f"❌ {exc}"
+    result = await _call(AgentNftTool(), "agent_nft_withdraw_token", params, ctx)
+    body = _render(result)
+    if not execute and not body.startswith("❌"):
+        body = with_go_hint(body, f"\n\nAdd `go` to send it: /nft send {target} {to} on {chain} go\n"
+                            "⚠️ It is irreversible: the NFT and its account leave this treasury.")
+    return body
+
+
+async def _agent_nft_sale(ctx, verb: str, target: str, *, chain: str, execute: bool) -> str:
+    """``/nft ready|unready <id> [go]`` — ``agent_nft_sale_ready`` / ``agent_nft_sale_unready``
+    from the owner's seat (115 W7). The owner asking IS the owner's act: the guard's sale hold
+    and the ready lane (``owner_always``) see an owner turn."""
+    from tools.agent_nft.tool import AgentNftTool, SaleReadyParams
+    try:
+        params = SaleReadyParams(nft=target, chain=chain, dry_run=not execute)
+    except Exception as exc:
+        return f"❌ {exc}"
+    method = "agent_nft_sale_ready" if verb == "ready" else "agent_nft_sale_unready"
+    body = _render(await _call(AgentNftTool(), method, params, ctx))
+    if not execute and not body.startswith("❌") and "no transaction" not in body:
+        hint = (f"\n\nAdd `go` to make it ready: /nft ready {target} on {chain} go\n"
+                "⚠️ Once ready, a plain marketplace fill can take the NFT and everything its "
+                "account holds, with no check for the buyer." if verb == "ready" else
+                f"\n\nAdd `go` to end it: /nft unready {target} on {chain} go")
+        body = with_go_hint(body, hint)
+    return body
+
+
+async def _collection_trust(user_id: str, verb: str, tokens: List[str], *, typed: str,
+                            chain: str, execute: bool, seat: str = "telegram") -> str:
+    """``/nft trust|untrust <collection>`` — the owner pins a collection from chat
+    (``core.wallet.collection_trust``); without ``go`` it only reads and quotes."""
+    import asyncio
+
+    from core.wallet import collection_trust
+    from core.wallet.token_trust import owner_seat_ctx
+    max_raw, from_raw = _pull(tokens, "max"), _pull(tokens, "from")
+    grant = _pull_grant(tokens) if verb == "trust" else None
+    if isinstance(grant, str):
+        return grant
+    if len(tokens) != 1:
+        return f"Usage: /nft {verb} <collection> on <chain> [go]"
+    try:
+        max_supply = int(max_raw) if max_raw else None
+        from_block = int(from_raw) if from_raw else None
+    except ValueError:
+        return "`max` and `from` must be whole numbers."
+    address = tokens[0]
+    if verb == "untrust":
+        if not execute and address.lower() == "all":
+            return ("This clears every collection you trusted from chat (the system admin's "
+                    f"pins stay).\n\nAdd `go` to clear them: /nft {typed} go")
+        if not execute:
+            return (f"This stops me acting from the accounts of {address} on {chain}.\n\n"
+                    f"Add `go` to untrust it: /nft {typed} go")
+        _ok, msg = await asyncio.to_thread(collection_trust.untrust, owner_seat_ctx(user_id, seat),
+                                           chain, address)
+        return msg
+    if not execute:
+        quote = await asyncio.to_thread(collection_trust.trust_quote, chain, address,
+                                        max_supply=max_supply, from_block=from_block,
+                                        confirm_line=f"/nft {typed}")
+        if grant:
+            quote += ("\n\nWith `go` I also take ONE mandate: " + _grant_text(grant, chain, address)
+                      + ". The caps and /pause still bind; a changed code or SALE() sends the act "
+                      "back to your card; /nft mandate end <id> stops it.")
+        return quote
+    ctx = owner_seat_ctx(user_id, seat)
+    ok, msg = await asyncio.to_thread(collection_trust.trust, ctx, chain, address,
+                                      max_supply=max_supply, from_block=from_block)
+    if ok and grant:
+        msg += "\n" + await asyncio.to_thread(_make_grant, ctx, chain, address, grant)
+    return msg
+
+
+def _pull_grant(tokens: List[str]):
+    """``autonomous <acts> band <min>-<max> count <n> total <usd> days <d>`` → a dict, an error
+    string, or None (no grant asked). Every field is required (122 section 3: no default)."""
+    acts = _pull(tokens, "autonomous")
+    if acts is None:
+        return None
+    from core.wallet.standing_grant import NFT_ACTS
+    names = [a.strip().lower() for a in acts.split(",") if a.strip()]
+    bad = [a for a in names if a not in NFT_ACTS]
+    if not names or bad:
+        return f"`autonomous` takes acts from {', '.join(NFT_ACTS)} (comma-separated); got {acts!r}"
+    band, count, total, days = (_pull(tokens, k) for k in ("band", "count", "total", "days"))
+    if None in (band, count, total, days):
+        return ("a mandate names every field: autonomous <acts> band <min>-<max> count <n> "
+                "total <usd> days <d>")
+    try:
+        lo, hi = (float(x) for x in band.split("-", 1))
+        return {"acts": names, "band": (lo, hi), "count": int(count), "total": float(total),
+                "days": float(days)}
+    except ValueError:
+        return "band is <min>-<max> in USD; count, total and days are numbers"
+
+
+def _grant_text(grant: dict, chain: str, address: str) -> str:
+    return (f"{', '.join(grant['acts'])} on {address} ({chain}), ${grant['band'][0]:g}-"
+            f"${grant['band'][1]:g} an act, at most {grant['count']} acts and ${grant['total']:g}, "
+            f"for {grant['days']:g} days")
+
+
+def _make_grant(ctx, chain: str, address: str, grant: dict) -> str:
+    """The mandate scoped to this collection, with the chain facts of the trust (124 5.2)."""
+    from core.wallet import standing_grant
+    from core.wallet import collection_registry, collection_sale
+    from core.wallet.simulation import _default_rpc_for
+    verbs = [v for a in grant["acts"] for v in standing_grant.NFT_ACTS[a]]
+    facts = {}
+    try:
+        rpc = _default_rpc_for(chain)
+        facts["runtime_sha256"] = collection_registry.runtime_sha256_of(rpc, address)
+        try:
+            facts["sale"] = collection_sale._addr(rpc, address, collection_sale.SALE_OF_SELECTOR)
+        except Exception:  # noqa: BLE001 — a collection with no sale
+            pass
+        facts["implementation_slot"] = str(rpc("eth_getStorageAt", [
+            address, standing_grant._ERC1967_SLOT, "latest"]))
+    except Exception as exc:  # noqa: BLE001
+        return f"❌ No mandate: the collection's facts could not be read ({exc})."
+    try:
+        m = standing_grant.create(ctx, verbs=verbs, chains=[chain], assets=[address],
+                                  band_usd=grant["band"], count=grant["count"],
+                                  total_usd=grant["total"], days=grant["days"],
+                                  facts={address: facts}, note="/nft trust")
+    except Exception as exc:  # noqa: BLE001
+        return f"❌ No mandate: {exc}"
+    return f"✅ Mandate {m.id}: {m.line()}"
+
+
+async def _mandate(user_id: str, tokens: List[str], *, typed: str, seat: str) -> str:
+    """``/nft mandate`` lists; ``/nft mandate end <id> [go]`` ends one."""
+    import asyncio
+
+    from core.wallet import standing_grant
+    from core.wallet.token_trust import owner_seat_ctx
+    execute = bool(tokens) and is_go_word(tokens[-1])
+    if execute:
+        tokens = tokens[:-1]
+    if not tokens:
+        return "\n".join(["Mandates (standing owner grants):"]
+                         + await asyncio.to_thread(standing_grant.status_lines))
+    if tokens[0].lower() == "end" and len(tokens) == 2:
+        if not execute:
+            return f"This ends mandate {tokens[1]} at once.\n\nAdd `go`: /nft {typed} go"
+        try:
+            m = await asyncio.to_thread(standing_grant.end, owner_seat_ctx(user_id, seat), tokens[1])
+        except Exception as exc:  # noqa: BLE001
+            return f"❌ Not ended: {exc}"
+        return f"✅ Ended: {m.line()}"
+    return "Usage: /nft mandate | /nft mandate end <id> [go]"
+
+
+__all__ = ["USAGE", "agent_nft_overview", "nft_reply"]

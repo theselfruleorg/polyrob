@@ -71,7 +71,7 @@ deliberately, because a container flag can't express them:
   `tools/controller/approval.py::DEFAULT_APPROVAL_REQUIRED_TOOLS`); and (3) a delegated
   **leaf** sub-agent can never reach `code_execution`, `git`, `github`, `coding`,
   `process`, `tool_manage`, or `mcp` at all — they're in the leaf tool blocklist
-  (`tools/controller/delegation.py::DELEGATE_BLOCKED_TOOLS`), independent of what the
+  (`core/delegation_policy.py::DELEGATE_BLOCKED_TOOLS`), independent of what the
   parent agent has loaded. The sandbox's job is containment of what the code *can touch*;
   exfil-via-credentialed-tool is a capability question, answered by approval + delegation
   policy, not by `docker run` flags.

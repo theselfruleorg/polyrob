@@ -26,14 +26,14 @@ from typing import TYPE_CHECKING
 # `from agents.task import pm, get_session_manager` keeps working unchanged
 # (P1b, 2026-06-26 runtime-architecture finalization).
 _LAZY_ATTRS = {
-    "pm": (".path", "pm"),
-    "get_safe_singleton": (".path", "get_safe_singleton"),
+    "pm": ("core.session_paths", "pm"),
+    "get_safe_singleton": ("core.session_paths", "get_safe_singleton"),
     "send_telemetry": (".utils", "send_telemetry"),
     "get_session_manager": (".agent.session", "get_session_manager"),
 }
 
 if TYPE_CHECKING:  # static analysis / IDEs only — no runtime import
-    from agents.task.path import pm, get_safe_singleton
+    from core.session_paths import pm, get_safe_singleton
     from agents.task.utils import send_telemetry
     from agents.task.agent.session import get_session_manager
 

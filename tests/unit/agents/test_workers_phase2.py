@@ -129,7 +129,7 @@ def test_message_manager_pins_the_catalog_in_the_foundation():
 # --- dispatch: tools ⊆ parent − DELEGATE_BLOCKED ----------------------------------
 
 def test_worker_tools_never_widen_the_parent():
-    from tools.controller.delegation import LEAF, narrow_child_tools
+    from core.delegation_policy import LEAF, narrow_child_tools
     blocked = frozenset({"defi_trade", "shell"})
     got = narrow_child_tools(parent_tools=["web_fetch", "filesystem", "shell"],
                              requested_tools=["web_fetch", "defi_trade", "shell", "email"],
@@ -239,7 +239,7 @@ def test_capability_row_is_high_impact_and_delegate_blocked():
     assert {"high_impact", "delegate_blocked"} <= TOOL_CAPABILITIES["worker_manage"]
     from agents.task.agent.skill_manager import VALID_TOOL_IDS
     assert "worker_manage" not in VALID_TOOL_IDS          # an action, not a container tool
-    from agents.task.agent.core.correspondent_gate import is_high_impact
+    from core.security.high_impact import is_high_impact
     assert is_high_impact("worker_manage")
 
 

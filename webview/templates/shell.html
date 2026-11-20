@@ -48,7 +48,7 @@
 <link rel="icon" href="/static/img/favicon.ico">
 <script src="/static/js/theme.js?v=20260916theme"></script>
 </head>
-<body class="console-shell" data-show-avatar="{{ 'true' if show_avatar(request) else 'false' }}"{% block body_attrs %}{% endblock %}>
+<body class="console-shell" data-show-avatar="{{ 'true' if show_avatar(request) else 'false' }}" data-live-activity="{{ 'true' if owner_console else 'false' }}"{% block body_attrs %}{% endblock %}>
 <a class="skip-link" href="#main">{{ t('shell.skip') }}</a>
 <div class="app">
   <nav class="nav" aria-label="Main">
@@ -59,7 +59,7 @@
   <header class="head">
     <div class="face" aria-hidden="true"></div>
     <span class="mark">{{ wordmark }}</span>
-    <p class="head-truth">{% if pause_headline %}{{ pause_headline }} {% endif %}{{ waiting_line }}</p>
+    <p class="head-truth" title="{% if pause_headline %}{{ pause_headline }} {% endif %}{{ waiting_line }}">{% if pause_headline %}{{ pause_headline }} {% endif %}{{ waiting_line }}</p>
     <button class="icon-btn chats-btn" id="chats-open" type="button" aria-haspopup="dialog" aria-label="{{ t('shell.search') }}"><span class="glyph" aria-hidden="true">&#8981;</span><span class="btn-label">{{ t('shell.chats') }}</span><span class="kbd">&#8984;K</span></button>
     {# 113 W5 (IA-2): the command palette had no control on screen; ⌘⇧P was
        written nowhere. palette.js opens it on a click. #}

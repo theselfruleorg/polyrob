@@ -12,7 +12,7 @@ import asyncio
 import pytest
 
 from api.mcp_serve.handlers import MCPUnknownTool, handle
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 
 
 def _run(coro):

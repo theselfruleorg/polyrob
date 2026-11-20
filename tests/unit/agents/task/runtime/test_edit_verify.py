@@ -2,7 +2,7 @@
 run_tests" check (dedup decision D1).
 
 Pure, deterministic, ledger-derived (reuses ``evidence.py::_walk_ledger`` — the
-SAME ledger walker ``build_evidence``/``build_action_evidence`` already read),
+SAME ledger walker ``build_evidence`` already reads),
 no LLM, no timestamp markers. Mirrors the fake-ledger style already proven
 against ``_walk_ledger`` in ``tests/unit/agents/task/runtime/test_evidence.py``
 (``_Action.model_dump(exclude_unset=True)`` — the real signature
@@ -105,7 +105,7 @@ def test_edit_with_no_test_at_all_needs_verify():
 
 def test_failed_edit_does_not_count_as_edit():
     """A str_replace that errored didn't actually change anything real — the
-    ledger's own error signal (same one build_evidence/build_action_evidence
+    ledger's own error signal (the same one build_evidence
     read) is trusted, not re-derived."""
     from agents.task.runtime.edit_verify import edited_since_last_test
 

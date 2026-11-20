@@ -28,7 +28,7 @@ def _call(receive_token, receive_min_raw, price_fn=_price):
     intent = tx_guard.TxIntent(chain="base", token=None, to=ATTACKER, amount_raw=VALUE,
                                max_spend_usd=25, idempotency_key=f"k-{receive_token}-{receive_min_raw}",
                                inflow_token=receive_token, min_inflow_raw=receive_min_raw,
-                               payout_shape=payout)
+                               payout_shape=payout, why="a fair trade")
     deltas = Deltas(ok=True, native_delta=-VALUE,
                     token_deltas={receive_token: receive_min_raw}, gas_used=60000)
     return payout, _authorize(intent, tx, deltas, price_fn=price_fn)

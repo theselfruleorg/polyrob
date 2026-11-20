@@ -2,7 +2,9 @@
 
 ``GET  /api/webgate/model`` — the owner's choice for new chats
 (``core.model_pins.chat_runtime_for``), the aliases, and names to pick from.
-``POST /api/webgate/model`` — ``{"name": …}`` or ``{"reset": true}``: runs
+``POST /api/webgate/model`` — ``{"name": …}`` or ``{"reset": true}``; or a 121 owner
+setting: ``{"tier": "heavy"|"light", "name": …}``, ``{"tier": …, "reset": true}``,
+``{"choice": "free"|"listed"}`` (the words of ``/model heavy <name>`` …). Each runs
 ``agents.task.model_switch_service.model_command`` with the words of
 ``/model <name> default`` / ``/model reset default`` — the one ``/model``
 pipeline every seat calls (parse, resolve, validate, guard, pin). With no chat
@@ -44,8 +46,10 @@ def _choice(user_id: str) -> Dict[str, Any]:
     out = {"readable": not err, "provider": provider, "model": model,
            "reasoning": reasoning, "source": source,
            "mine": model_pins.chat_pin_for(user_id) is not None}
-    if err:
-        out["error"] = str(err)
+    if err:  # the store's own words name its path: log them, send the type at most
+        logger.warning("model: the model choice could not be read: %s", err)
+        typed = re.search(r"\((\w+)\)$", str(err))
+        out["error"] = typed.group(1) if typed else "unreadable"
     return out
 
 
@@ -69,6 +73,39 @@ def _suggestions(user_id: str) -> List[str]:
     return names
 
 
+def _settings(user_id: str) -> List[str]:
+    """The 121 owner settings — the SAME lines the bare ``/model`` shows on every seat."""
+    try:
+        from agents.task.model_settings import settings_lines
+        return list(settings_lines(user_id))
+    except Exception as e:  # noqa: BLE001 — named, never an empty list
+        logger.warning("model: the model settings could not be read", exc_info=True)
+        from webview.copy import t
+        return [t("agent.model.settings_unreadable").replace("{reason}", type(e).__name__)]
+
+
+def _words(body: Dict[str, Any]):
+    """The ``/model`` words a POST body means, or None for a malformed body."""
+    def _name_ok(words):
+        return 1 <= len(words) <= 2 and not any(
+            not _WORD.match(w) or w.lower() in _RESERVED or "=" in w for w in words)
+    choice = body.get("choice")
+    if choice is not None:
+        return ["choice", choice] if choice in ("free", "listed") else None
+    tier = body.get("tier")
+    if tier is not None:
+        if tier not in ("heavy", "light"):
+            return None
+        if body.get("reset") is True:
+            return [tier, "reset"]
+        words = str(body.get("name") or "").split()
+        return [tier] + words if _name_ok(words) else None
+    if body.get("reset") is True:
+        return ["reset", "default"]
+    words = str(body.get("name") or "").split()
+    return words + ["default"] if _name_ok(words) else None
+
+
 @router.get("/api/webgate/model")
 async def api_model(request: Request):
     from webview.pages import _effective_user_id
@@ -77,8 +114,9 @@ async def api_model(request: Request):
         body = _choice(user_id)
     except Exception as e:  # noqa: BLE001 — named, never the operator default as yours
         logger.warning("model: the choice for new chats could not be read", exc_info=True)
-        body = {"readable": False, "error": f"{type(e).__name__}: {str(e)[:160]}"}
+        body = {"readable": False, "error": type(e).__name__}  # logged, never sent
     body["suggestions"] = _suggestions(user_id)
+    body["settings"] = _settings(user_id)
     body["can_set"] = webgate.is_owner_console() and not webgate.read_only()
     return JSONResponse(body)
 
@@ -94,21 +132,16 @@ async def api_model_set(request: Request):
     except Exception:
         body = {}
     body = body if isinstance(body, dict) else {}
-    if body.get("reset") is True:
-        words = ["reset", "default"]
-    else:
-        words = str(body.get("name") or "").split()
-        if not 1 <= len(words) <= 2 or any(
-                not _WORD.match(w) or w.lower() in _RESERVED or "=" in w for w in words):
-            return JSONResponse({"ok": False, "error": "bad_name"}, status_code=400)
-        words = words + ["default"]
+    words = _words(body)
+    if words is None:
+        return JSONResponse({"ok": False, "error": "bad_name"}, status_code=400)
     from webview.server import _in_process_task_agent
     try:
         reply = await model_command(_in_process_task_agent(), user_id=user_id, words=words,
                                     chat_key=None, session_id=None, seat="console")
     except Exception as e:  # noqa: BLE001 — the answer is shown, never dropped
         logger.warning("model: the /model pipeline raised", exc_info=True)
-        reply = f"❌ {type(e).__name__}: {str(e)[:160]}"
+        reply = t("agent.model.set_failed").replace("{reason}", type(e).__name__)
     ok = str(reply or "").lstrip().startswith("✅")
     console_write(CONSOLE_MODEL_SET, user_id=user_id,
                   attrs={"words": " ".join(words), "ok": ok})
@@ -116,7 +149,8 @@ async def api_model_set(request: Request):
         now = _choice(user_id)
     except Exception:
         now = {"readable": False}
-    return JSONResponse({"ok": ok, "message": str(reply or ""), "now": now},
+    return JSONResponse({"ok": ok, "message": str(reply or ""), "now": now,
+                         "settings": _settings(user_id)},
                         status_code=200 if ok else 409)
 
 

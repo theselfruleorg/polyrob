@@ -146,7 +146,7 @@ def _delegate_controller(monkeypatch, build):
 
     import agents.task.model_choice as choice
 
-    async def _allow(parent_agent, model, provider, route=None):
+    async def _allow(parent_agent, model, provider, route=None, *, detected=None):
         return ""
     monkeypatch.setattr(choice, "child_model_check", _allow)
     monkeypatch.setattr(TimeoutConfig, "get_sub_agents_enabled", classmethod(lambda cls: True))

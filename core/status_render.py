@@ -69,6 +69,8 @@ _SECTION_TITLES = {
     "custody": "Custody",
     "packs": "Packs",
     "money": "Money",
+    "income_rule": "Income rule",
+    "mandates": "Mandates",
     "economics": "Economics",
 }
 

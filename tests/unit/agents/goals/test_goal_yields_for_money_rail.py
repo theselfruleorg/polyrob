@@ -118,7 +118,7 @@ async def test_a_human_turn_is_never_yielded(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_dispatcher_yield_for_rail_returns_row_to_ready_with_note(tmp_path, monkeypatch):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from agents.task.goals.dispatcher import GoalDispatcher
     board = GoalBoard(str(tmp_path / "goals.db"))
     g = board.create(user_id="alice", title="Round 15", body="do things", priority=5)

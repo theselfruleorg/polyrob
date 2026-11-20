@@ -20,25 +20,21 @@ import re
 from dataclasses import dataclass
 from core.config_policy.members import flag_raw, member_display_default  # noqa: I001
 from core.key_suggest import did_you_mean, flag_hint
+from core.prefs_launch import build_launch_specs
 
 logger = logging.getLogger(__name__)
 
 SENSITIVITY_SAFE = "safe"
 SENSITIVITY_GUARDED = "guarded"
 
-# 018 P0.4 — enforcement honesty: "enforced" = a runtime path resolves this
-# pref and behavior changes; "advisory" = it only steers the prompt (the
-# style.* design). The panel renders the label so an owner never sets a key
-# and wonders why nothing hard-changes.
+# 018 P0.4: "enforced" = a runtime path resolves this pref and behavior changes;
+# "advisory" = it only steers the prompt (style.*). The panel renders the label.
 ENFORCEMENT_ENFORCED = "enforced"
 ENFORCEMENT_ADVISORY = "advisory"
 
-# Format rules for structured str prefs that are rendered VERBATIM into the
-# SELF_CONTEXT style line (P2 T1 review fix). Format validation is STRONGER
-# than threat-scanning here: a structured field is simply incapable of
-# carrying injected prose. Because ``load_preferences`` re-validates every
-# entry via ``validate_pref``, a hand-edited preferences.toml is neutralized
-# on load too (the bad entry is dropped), not only at write time.
+# Format rules for structured str prefs rendered VERBATIM into the SELF_CONTEXT style
+# line: a structured field cannot carry injected prose, and ``load_preferences``
+# re-validates every entry, so a hand-edited file is neutralized on load too.
 _QUIET_HOURS_RE = re.compile(r"^(\d{1,2})-(\d{1,2})$")
 _LANGUAGE_RE = re.compile(r"^[A-Za-z][A-Za-z-]{0,31}$")
 #: Characters that would break a value rendered INLINE into a prompt block
@@ -210,6 +206,12 @@ PREF_SCHEMA: dict[str, PrefSpec] = _AliasedSchema((
                       "(local time), e.g. '23-08'. Enforced on the user-delivery "
                       "rail: sends inside the window are held and released at "
                       "window-end (018 P0.3)"),
+    # 122 W1: which of the agent's own acts reach the owner beside the money notices.
+    _spec("report.acts", "enum", SENSITIVITY_SAFE, "override", "live",
+          enum_values=("every_act", "money_only", "digest"), default_display="money_only",
+          description="Acts the agent takes on its own: every_act = each other act in an hourly report, "
+                      "money_only = money notices only, digest = one daily report"),
+    *build_launch_specs(_spec, SENSITIVITY_GUARDED),  # 122 W3: core/prefs_launch.py
     _spec("owner.timezone", "str", SENSITIVITY_SAFE, "override", "live",
           default_display="server clock",
           description="Your IANA timezone, e.g. 'Europe/Berlin': quiet hours, the "
@@ -246,7 +248,7 @@ PREF_SCHEMA: dict[str, PrefSpec] = _AliasedSchema((
           "POLYROB_AGENT_TOOLSET", description="Default toolset for new terminal (CLI) sessions only"),
     _spec("session.persona", "str", SENSITIVITY_GUARDED, "override", "next-session",
           "POLYROB_PERSONA",
-          description="Default persona for terminal (CLI) sessions only (template key or literal text; threat-scanned)"),
+          description="The owner's persona for every new chat, set by /persona on every seat (template key, character slug or literal text; threat-scanned)"),
     _spec("autonomy.self_wake", "bool", SENSITIVITY_SAFE, "and", "next-session",
           "SELF_WAKE_ENABLED",
           description="Self-wake loop; pref can only disable (consumed by "
@@ -393,22 +395,21 @@ from core.instance import (DEFAULT_INSTANCE_ID, is_safe_tenant_id, resolve_insta
 
 from core import prefs_io as _prefs_io
 from core.prefs_io import PrefsUnreadable  # noqa: F401 (re-export)
+from core.prefs_io import flatten as _flatten, render_toml as _render_toml
 
 _PREFS_NAME = "preferences.toml"
 # path -> (mtime_ns, parsed dict); tiny process-local cache
 _CACHE: dict[str, tuple[int, dict]] = {}
 
-# Free-text prompt-level str keys threat-scanned at write time (owner-UX P1
-# final review, item 2): these values are injected verbatim into the running
-# agent's prompt/identity next session (style.tone -> reply-tone hint,
-# session.persona -> the session's <identity> source), so — unlike the other
-# schema keys, which are bool/int/enum/list-shaped and can't carry free-form
-# injected text — they are a genuine prompt-injection **persistence** vector.
-# Scanned with the SAME stricter identity scanner as the evolving SELF/owner
-# docs (`modules.memory.task.threat_scan.is_identity_suspicious`), fail-CLOSED
-# on a scan hit, a scan error, or the scanner being unavailable at all. Kept
-# OFF the hot path for every other (non-prompt, non-str, or str-but-not-listed)
-# key — this is not a blanket str-value scan.
+# Free-text prompt-level str keys threat-scanned at write time (owner-UX P1 final review, item 2):
+# these values are injected verbatim into the running agent's prompt/identity next session
+# (style.tone -> reply-tone hint, session.persona -> the session's <identity> source), so — unlike
+# the other schema keys, which are bool/int/enum/list-shaped and can't carry free-form injected
+# text — they are a genuine prompt-injection **persistence** vector. Scanned with the SAME
+# stricter identity scanner as the evolving SELF/owner docs
+# (`core.security.threat_scan.is_identity_suspicious`), fail-CLOSED on a scan hit, a scan error,
+# or the scanner being unavailable at all. Kept OFF the hot path for every other (non-prompt, non-
+# str, or str-but-not-listed) key — this is not a blanket str-value scan.
 _THREAT_SCANNED_PREF_KEYS = frozenset({"style.tone", "session.persona",
                                        # 044 T17: both land verbatim in a room
                                        # session's prompt, exactly like their
@@ -455,14 +456,13 @@ def chat_preferences_path(home_dir: Path | str, user_id: Optional[str],
         f"{safe_surface}_{safe_chat}.toml"
 
 
-def _flatten(nested: dict, prefix: str = "") -> dict[str, object]:
-    flat: dict[str, object] = {}
-    for k, v in nested.items():
-        dotted = f"{prefix}{k}"
-        if isinstance(v, dict):
-            flat.update(_flatten(v, f"{dotted}."))
-        else:
-            flat[dotted] = v
+def _parse_flat(text: str) -> dict[str, object]:
+    """The RAW flat view a write merges into (125 S19): every key, the old alias names
+    folded into the new one (the new name wins, as on a read)."""
+    flat = _flatten(tomllib.loads(text))
+    for old, new in PREF_ALIASES.items():
+        if old in flat:
+            flat.setdefault(new, flat.pop(old))
     return flat
 
 
@@ -515,45 +515,6 @@ def load_preferences(home_dir: Path | str, user_id: Optional[str],
     return prefs
 
 
-def _to_toml_value(v: object) -> str:
-    if isinstance(v, bool):
-        return "true" if v else "false"
-    if isinstance(v, (int, float)):
-        return str(v)
-    if isinstance(v, list):
-        return "[" + ", ".join(_to_toml_value(i) for i in v) + "]"
-    # Escape for TOML basic string: backslash first (already done), then quotes,
-    # then control chars per TOML spec (newline, tab, CR, and other < U+0020).
-    s = str(v)
-    s = s.replace("\\", "\\\\")  # backslash first
-    s = s.replace('"', '\\"')    # double-quote
-    s = s.replace("\n", "\\n")   # newline
-    s = s.replace("\r", "\\r")   # carriage return
-    s = s.replace("\t", "\\t")   # tab
-    # Escape any other control character (< U+0020 or U+007F DEL) as \uXXXX
-    result = []
-    for c in s:
-        if (ord(c) < 0x20 and c not in "\n\r\t") or ord(c) == 0x7F:
-            result.append(f"\\u{ord(c):04x}")
-        else:
-            result.append(c)
-    return '"' + "".join(result) + '"'
-
-
-def _render_toml(flat: dict[str, object]) -> str:
-    groups: dict[str, dict[str, object]] = {}
-    for dotted, v in sorted(flat.items()):
-        group, _, leaf = dotted.partition(".")
-        groups.setdefault(group, {})[leaf] = v
-    out: list[str] = ["# POLYROB per-user preferences — managed via /config, "
-                      "`polyrob config`, chat, or hand-edit.", ""]
-    for group, leaves in groups.items():
-        out.append(f"[{group}]")
-        out.extend(f"{leaf} = {_to_toml_value(v)}" for leaf, v in leaves.items())
-        out.append("")
-    return "\n".join(out)
-
-
 def _refuse_room_key(key: str) -> str:
     """One sentence when a ``chat.*`` key is aimed at the TENANT store.
 
@@ -593,7 +554,7 @@ def _threat_scan_pref_value(key: str, value: object) -> tuple[bool, str]:
     through because the scanner happened to be unavailable.
     """
     try:
-        from modules.memory.task.threat_scan import is_identity_suspicious
+        from core.security.threat_scan import is_identity_suspicious
     except Exception as e:
         logger.warning(
             "preference write rejected (scanner unavailable, fail-closed): %s: %s", key, e
@@ -631,10 +592,42 @@ def write_preference(home_dir: Path | str, user_id: Optional[str], key: str,
         ok, err = _threat_scan_pref_value(key, coerced)
         if not ok:
             return False, err
-    # ST-1: a strict read under the lock — an unreadable file refuses, never overwritten.
-    return _prefs_io.locked_write(
-        path, lambda: load_preferences(home_dir, user_id, instance_id, strict=True),
-        key, coerced, _render_toml, _CACHE)
+    # ST-1 + 125 S19: a raw merge under the lock; an unreadable file refuses.
+    return _prefs_io.locked_write(path, _parse_flat, key, coerced, _render_toml, _CACHE)
+
+
+#: The pref-change proposal operations that name ONE list entry (P2 T4; 125 S20).
+_ENTRY_OPS = ("remove_entry", "add_entry")
+
+
+def _locked_list(home_dir: Path | str, user_id: Optional[str], key: str, mutate,
+                 instance_id: Optional[str] = None) -> tuple[bool, str, list, list]:
+    """Read, change and write ONE list preference inside the file lock (125 S20):
+    ``(ok, err, before, after)``. A stored list that does not validate refuses and
+    stays. The public verbs are :mod:`core.prefs_lists`."""
+    spec = PREF_SCHEMA.get(key)
+    if spec is None or spec.type != "list":
+        return False, (unknown_pref_error(key) if spec is None
+                       else f"{key} is not a list preference"), [], []
+    path = preferences_path(home_dir, user_id, instance_id)
+    if path is None:
+        return False, "empty or unsafe user_id refused (tenant scope)", [], []
+    seen: dict = {}
+
+    def fn(current):
+        ok, base, err = (True, [], "") if current is None else validate_pref(key, current)
+        if not ok:
+            return False, None, (f"nothing written: the stored {key} is not valid ({err}); "
+                                 f"fix it in {path} first")
+        ok, after, err = validate_pref(key, mutate(list(base)))
+        if ok and key in _THREAT_SCANNED_PREF_KEYS:
+            ok, err = _threat_scan_pref_value(key, after)
+        if not ok:
+            return False, None, err
+        seen.update(before=list(base), after=list(after))
+        return True, after, ""
+    ok, err = _prefs_io.locked_update(path, _parse_flat, key, fn, _render_toml, _CACHE)
+    return (True, "", seen["before"], seen["after"]) if ok else (False, err, [], [])
 
 
 # --- style-line rendering (owner-UX Phase 2, contract/style injection) ------
@@ -867,11 +860,7 @@ def _builtin_default(spec: PrefSpec) -> Optional[tuple]:
 def display_effective(key: str, user_id: Optional[str], home_dir: Path | str,
                       instance_id: Optional[str] = None) -> tuple[object, str]:
     """Effective (value, source) for *key* — the actual value in force, not a
-    partial view (owner-UX P1 final review, item 4; lifted from
-    ``cli/ui/commands/h_config.py::_display_value_source`` in owner-UX P2 T2 so
-    both the ``/config`` REPL handler and the agent-callable ``preferences``
-    action render identically, without the agent-facing action reaching into
-    ``cli/``).
+    partial view; ``/config``, ``preferences`` and the console render the same.
 
     Two display bugs this fixes (kept from the original CLI-side helper):
       (a) an env var set alongside a pref used to short-circuit and show the
@@ -895,14 +884,14 @@ def display_effective(key: str, user_id: Optional[str], home_dir: Path | str,
     output re-enters the model's context (``include_in_memory=True``), so an
     unscanned echo is an injection-laundering channel. On a scan hit, a scan
     error, or the scanner being unavailable, the value is replaced with
-    ``"[BLOCKED: failed identity safety scan]"`` (parity with
-    ``self_context_manage``'s read guard). Non-pref sources (operator env /
+    ``"[BLOCKED: failed identity safety scan]"``. Non-pref sources (operator env /
     default) and every other key are never scanned — no cost on the hot path.
 
-    Returns ``(None, "unknown")`` for a key not in :data:`PREF_SCHEMA`.
+    ``budget.wallet_per_tx_usd`` shows at most the daily cap: the gate checks
+    spent + amount against it, so one payment never moves more (display only).
 
-    ``instance_id=None`` resolves via :func:`core.instance.resolve_instance_id`
-    (owner-UX P2-4 final review, item 1).
+    Returns ``(None, "unknown")`` for a key not in :data:`PREF_SCHEMA`;
+    ``instance_id=None`` resolves via :func:`core.instance.resolve_instance_id`.
     """
     instance_id, key = instance_id or resolve_instance_id(), PREF_ALIASES.get(key, key)
     spec = PREF_SCHEMA.get(key)
@@ -930,6 +919,10 @@ def display_effective(key: str, user_id: Optional[str], home_dir: Path | str,
         ok, _err = _threat_scan_pref_value(key, value)
         if not ok:
             return _BLOCKED_PREF_DISPLAY, source
+    if key == "budget.wallet_per_tx_usd":  # display only: the daily cap binds one payment too
+        daily = display_effective("budget.wallet_daily_usd", user_id, home_dir, instance_id)[0]
+        if all(isinstance(v, (int, float)) for v in (daily, value)) and 0 < daily < value:
+            value, source = daily, f"{source}; the daily cap ${daily:g} binds one payment first"
     bad = _prefs_io.unreadable(preferences_path(home_dir, user_id, instance_id))
     return value, (f"{source}; preferences.toml UNREADABLE ({bad}), the last good values "
                    "stay in force — fix the file" if bad else source)
@@ -1230,24 +1223,27 @@ def propose_pref_change(user_id: Optional[str], key: str, value: object,
         erase any entry the owner ADDED between propose and promote. ``value``
         may be omitted (``None``). Refused unless the key is list-typed with
         union merge and ``entry`` is a non-empty string.
+      - ``op="add_entry"`` (125 S20): the same shape for a queued widening.
 
     On success returns ``(True, proposal_id)`` (the proposal id is the pref
     ``key`` itself); on failure returns ``(False, error)``.
     """
     instance_id = instance_id or resolve_instance_id()
-    if op not in ("set", "remove_entry"):
-        return False, f"unknown pref-change op: {op!r} (known: set, remove_entry)"
-    if op == "remove_entry":
+    if op not in ("set",) + _ENTRY_OPS:
+        return False, f"unknown pref-change op: {op!r} (known: set, remove_entry, add_entry)"
+    if op in _ENTRY_OPS:
         spec = PREF_SCHEMA.get(key)
         if spec is None:
             return False, f"unknown preference key: {key}"
         if spec.type != "list" or spec.merge != "union":
-            return False, (f"{key}: op='remove_entry' only applies to list-typed "
+            return False, (f"{key}: op='{op}' only applies to list-typed "
                            "(union-merge) preferences")
         if not isinstance(entry, str) or not entry.strip():
-            return False, "op='remove_entry' requires a non-empty string entry"
-        coerced = None  # the value is recomputed at promote time, never stored
-        entry = entry.strip()
+            return False, f"op='{op}' requires a non-empty string entry"
+        coerced, entry = None, entry.strip()  # the value is recomputed at promote time
+        ok, _items, err = validate_pref(key, [entry])
+        if not ok:
+            return False, err
     else:
         refusal = _refuse_room_key(key)
         if refusal:
@@ -1262,7 +1258,7 @@ def propose_pref_change(user_id: Optional[str], key: str, value: object,
     if path is None:
         return False, "empty or unsafe user_id refused (tenant scope)"
     payload = {"user_id": str(user_id), "key": key, "value": coerced, "op": op,
-               "entry": entry if op == "remove_entry" else None}
+               "entry": entry if op in _ENTRY_OPS else None}
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".json.tmp")
@@ -1294,8 +1290,9 @@ def list_pending_pref_changes(user_id: Optional[str], home_dir: Path | str,
             continue
         key = payload.get("key", p.stem)
         from core.pref_preview import pref_change_preview
-        preview = pref_change_preview(payload, key, lambda: display_effective(
-            key, user_id, home_dir, instance_id)[0])
+        preview = f"add {payload.get('entry')!r} to {key}" if payload.get("op") == "add_entry" \
+            else pref_change_preview(payload, key, lambda: display_effective(
+                key, user_id, home_dir, instance_id)[0])
         items.append({"id": key, "preview": preview, "chars": len(preview), "path": str(p)})
     return items
 
@@ -1333,42 +1330,32 @@ def promote_pref_change(item_id: str, *, user_id: Optional[str], home_dir: Path 
         return False, ("embedded tenant mismatch — possible tampering, refusing "
                        "(proposal left pending)")
     key = payload.get("key", item_id)
-    if payload.get("op") == "remove_entry":
-        # Operation-based removal (P2 T4 review fix): recompute against the
-        # CURRENT list at promote time — a full-list snapshot queued at propose
-        # time would clobber any entry the owner added in between.
+    op = payload.get("op")
+    if op in _ENTRY_OPS:  # P2 T4 + 125 S20: against the list in force NOW, in the lock
         entry = payload.get("entry")
         if not isinstance(entry, str) or not entry.strip():
-            return False, "remove_entry proposal missing its entry (rejecting is safe)"
-        entry = entry.strip()
-        current = list(load_preferences(home_dir, user_id, instance_id).get(key, []) or [])
-        if entry not in current:
-            # Idempotent: the desired end-state already holds. Resolve the
-            # proposal (never leave it dangling) and say so honestly.
-            try:
-                os.remove(str(path))
-            except OSError:
-                pass
-            return True, (f"'{entry}' already removed from {key} — nothing to apply "
-                          "(proposal resolved)")
-        updated = [a for a in current if a != entry]
-        ok, err = write_preference(home_dir, user_id, key, updated, instance_id)
-        if not ok:
-            return False, err  # proposal stays pending — never silently lost
-        try:
-            os.remove(str(path))
-        except OSError:
-            pass
-        return True, f"removed '{entry}' from {key} (now {updated!r})"
-    value = payload.get("value")
-    ok, err = write_preference(home_dir, user_id, key, value, instance_id)
+            return False, f"{op} proposal missing its entry (rejecting is safe)"
+        entry, add = entry.strip(), op == "add_entry"
+        ok, err, before, after = _locked_list(home_dir, user_id, key, lambda cur: (
+            cur + [entry] * (entry not in cur) if add else [a for a in cur if a != entry]),
+            instance_id)
+        if add:
+            msg = (f"added '{entry}' to {key}" if entry not in before else
+                   f"'{entry}' already in {key} — nothing to apply (proposal resolved)")
+        else:
+            msg = (f"removed '{entry}' from {key} (now {after!r})" if entry in before else
+                   f"'{entry}' already removed from {key} — nothing to apply (proposal resolved)")
+    else:
+        value = payload.get("value")
+        ok, err = write_preference(home_dir, user_id, key, value, instance_id)
+        msg = f"{key} = {value!r} applied"
     if not ok:
         return False, err  # proposal stays pending — never silently lost
     try:
         os.remove(str(path))
     except OSError:
         pass
-    return True, f"{key} = {value!r} applied"
+    return True, msg
 
 
 def reject_pref_change(item_id: str, *, user_id: Optional[str], home_dir: Path | str,

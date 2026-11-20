@@ -8,7 +8,7 @@ polls/writes — covered here in isolation from the async provider (see
 """
 import pytest
 
-from agents.task.goals.board import (
+from modules.goals.board import (
     ASK_FULFILLED, ASK_OPEN, ASK_REJECTED, GoalBoard, STATUS_BLOCKED, STATUS_READY,
 )
 

@@ -1,7 +1,7 @@
 """E9 (A6 gap 6) — LIVE cross-tenant IDOR: any tenant could cancel another
 tenant's cron job via cronjob_cancel, because CronJobStore.cancel/get took no
 user_id filter. Mirrors the goal-cancel IDOR already fixed for
-GoalBoard.cancel (agents/task/goals/board.py:401-413) — same optional-kwarg,
+GoalBoard.cancel (modules/goals/board.py:401-413) — same optional-kwarg,
 DB-filtered pattern.
 """
 import types

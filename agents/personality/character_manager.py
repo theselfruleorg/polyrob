@@ -117,33 +117,6 @@ class CharacterManager:
             self.logger.error("Stack trace:", exc_info=True)
             raise
 
-    def _load_characters(self) -> None:
-        """Load all characters from JSON files."""
-        try:
-            if not self.characters_dir.exists():
-                self.logger.error(f"Characters directory not found: {self.characters_dir}")
-                raise ConfigurationError(f"Characters directory not found: {self.characters_dir}")
-
-            for char_file in self.characters_dir.glob("*.character.json"):
-                try:
-                    with char_file.open('r', encoding='utf-8') as f:
-                        char_data = json.load(f)
-                        character = Character(
-                            name=char_data.get('name', char_file.stem.replace('.character', '')),
-                            **{k: v for k, v in char_data.items() if k != 'name'}
-                        )
-                        self.characters[character.name] = character
-                        self.logger.debug(f"Loaded character: {character.name}")
-                except Exception as e:
-                    self.logger.error(f"Error loading character from {char_file}: {e}")
-                    continue
-
-            self.logger.info(f"Loaded {len(self.characters)} characters")
-
-        except Exception as e:
-            self.logger.error(f"Error loading character files: {e}")
-            raise
-
     async def _load_character(self, char_file: Path) -> Optional[Character]:
         """Load a character from file."""
         try:
@@ -202,53 +175,6 @@ class CharacterManager:
         except Exception as e:
             self.logger.error(f"Error during character manager cleanup: {e}")
 
-    def _copy_default_characters(self) -> None:
-        """Copy default character files from package."""
-        if self.package_chars_dir.exists():
-            for char_file in self.package_chars_dir.glob("*.character.json"):
-                dest = self.characters_dir / char_file.name
-                if not dest.exists():
-                    dest.write_text(char_file.read_text())
-                    self.logger.info(f"Copied default character: {char_file.name}")
-
-    async def get_character(self, character_name: str) -> Optional[Character]:
-        """Get a character by name."""
-        if character_name in self.characters:
-            return self.characters[character_name]
-
-        # Try loading from characters directory
-        char_path = self.characters_dir / f"{character_name}.character.json"
-        if char_path.exists():
-            try:
-                character = await self._load_character(char_path)
-                if character:
-                    self.characters[character_name] = character
-                    self.logger.info(f"Loaded character {character_name}")
-                    return character
-            except Exception as e:
-                self.logger.error(f"Error loading character {character_name}: {e}")
-
-        self.logger.warning(f"Character {character_name} not found")
-        return None
-
-    async def get_character_for_role(self, role_name: str) -> Optional[Character]:
-        """Get character for specific role."""
-        try:
-            # First check if we have a role-specific character
-            role_character = getattr(self.config, f'{role_name}_character', None)
-            if role_character:
-                return await self.get_character(role_character)
-            
-            # If no role-specific character, use default
-            if not self._default_character:
-                self._default_character = await self.get_default_character()
-            
-            return self._default_character
-            
-        except Exception as e:
-            self.logger.error(f"Error getting character for role {role_name}: {e}")
-            return None
-
     async def get_default_character(self) -> Optional[Character]:
         """Get default character."""
         try:
@@ -276,32 +202,6 @@ class CharacterManager:
             self.logger.error(f"Error getting default character: {e}")
             return None
 
-    async def list_characters(self) -> List[str]:
-        """Get list of available character names."""
-        try:
-            characters = []
-            for char_file in self.characters_dir.glob("*.character.json"):
-                characters.append(char_file.stem.replace('.character', ''))
-            return sorted(characters)
-        except Exception as e:
-            self.logger.error(f"Error listing characters: {e}")
-            return []
-
-    async def reload_character(self, character_name: str) -> Optional[Character]:
-        """Reload a character from disk."""
-        try:
-            # Remove from loaded characters if exists
-            if character_name in self.characters:
-                await self.characters[character_name].cleanup()
-                del self.characters[character_name]
-            
-            # Load fresh from disk
-            return await self.get_character(character_name)
-            
-        except Exception as e:
-            self.logger.error(f"Error reloading character {character_name}: {e}")
-            return None
-
     @property
     def required_services(self) -> Dict[str, str]:
         """Get required services."""
@@ -316,12 +216,3 @@ class CharacterManager:
         """Get currently active character."""
         return self._active_character
 
-    async def set_active_character(self, character_name: str) -> bool:
-        """Set active character."""
-        character = await self.get_character(character_name)
-        if character:
-            self._active_character = character
-            return True
-        return False
-
- 

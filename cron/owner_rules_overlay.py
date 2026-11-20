@@ -24,7 +24,7 @@ from typing import List, Optional
 #: At most this many rules (the newest), each clipped.
 MAX_RULES = 8
 #: A-10 (2026-10-14 review): the overlay reads the SAME doc the run's foundation
-#: pins as "Owner facts" (``load_owner_doc``, the same cap), so every rule it lists
+#: pins as "Owner rules" (``load_owner_doc``, the same cap), so every rule it lists
 #: is already in context verbatim. Up to 8 x 500 chars were repeated in every
 #: cron task. The overlay now keeps the override instruction and a POINTER per
 #: rule (its date and its head), not the rule text again.
@@ -79,7 +79,7 @@ def owner_rules_overlay(doc_text: str, since: Optional[datetime]) -> str:
     return (f"OWNER RULES NEWER THAN THIS JOB'S TEXT (the job was written "
             f"{since.date().isoformat()}). They OVERRIDE the job text below wherever "
             f"they conflict — follow the owner rule, not the job. "
-            f"Each one's full text is in the Owner facts block in your context:\n"
+            f"Each one's full text is in the Owner rules block in your context:\n"
             + "\n".join(f"- {r}" for r in pointers)
             + ("\n" + "\n".join(tail) if tail else ""))
 

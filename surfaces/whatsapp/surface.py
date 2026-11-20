@@ -27,7 +27,7 @@ class WhatsAppSurface(Surface):
     def capabilities(self) -> SurfaceCapabilities:
         return SurfaceCapabilities(
             supports_streaming=False, supports_edit=False, supports_interactive_ask=True,
-            is_multi_tenant=True, max_message_bytes=4096, markdown_flavor="none",
+            is_multi_tenant=True, max_message_bytes=4096, markdown_flavor="mrkdwn",
             service_window_secs=86400, requires_template_outside_window=True,
         )
 

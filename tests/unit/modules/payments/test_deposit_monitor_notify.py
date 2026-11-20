@@ -1,4 +1,4 @@
-"""C8: DepositMonitor must (a) use the live price oracle instead of the
+"""C8: DepositMonitor must (a) use the injected spend price instead of the
 hardcoded 3000.0 placeholder, and (b) notify the user when a deposit is
 credited (persist a row + best-effort invoke an injected callback).
 
@@ -8,8 +8,8 @@ Also covers the money-safety review fixes on top of C8:
     tick (CRITICAL double-credit bug).
   - A failed add_credits must leave the deposit re-processable, not
     permanently marked done (credit-then-record ordering).
-  - The price oracle must reject an implausibly high price rather than
-    credit a wild amount.
+  - A missing or failing price must credit nothing (proposal 125 S5: the
+    injected graded spend price replaced the CoinGecko oracle and its clamp).
 
 And the follow-up re-review (residual MEDIUM/LOW after the CRITICAL fix):
   - Crediting and recording the crypto_payments dedup row must be atomic —
@@ -17,7 +17,7 @@ And the follow-up re-review (residual MEDIUM/LOW after the CRITICAL fix):
     with no dedup row (which would let the next tick re-credit).
   - The dedup key ('amount') must be a hard requirement, never a silent
     price-derived fallback.
-  - The wild-oracle-price test must prove no credit is granted end-to-end,
+  - The failing-price test must prove no credit is granted end-to-end,
     not just that `_get_eth_price` raises in isolation.
 """
 import copy
@@ -306,9 +306,9 @@ class _Config:
 
 
 @pytest.mark.asyncio
-async def test_get_eth_price_uses_live_oracle_not_hardcoded_3000(monkeypatch):
-    monkeypatch.setenv("ETH_PRICE_USD_OVERRIDE", "4200.0")
-    monitor = DepositMonitor(_FakeDB(), _FakeBalanceManager(), _Config())
+async def test_get_eth_price_uses_the_injected_price_not_hardcoded_3000():
+    monitor = DepositMonitor(_FakeDB(), _FakeBalanceManager(), _Config(),
+                             price_fn=lambda: 4200.0)
     price = await monitor._get_eth_price()
     assert price == 4200.0  # not the old hardcoded 3000.0
 
@@ -370,12 +370,12 @@ async def test_eth_deposit_dedups_on_price_independent_amount_not_usd(monkeypatc
     """
     db = _FakeDB()
     balance_mgr = _FakeBalanceManager()
-    monitor = DepositMonitor(db, balance_mgr, _Config())
+    prices = {"now": 3000.0}
+    monitor = DepositMonitor(db, balance_mgr, _Config(), price_fn=lambda: prices["now"])
 
     eth_balance_wei = 2_000_000_000_000_000_000  # 2 ETH, un-swept the whole time
 
-    # Tick 1: oracle price = 3000.
-    monkeypatch.setenv("ETH_PRICE_USD_OVERRIDE", "3000.0")
+    # Tick 1: spend price = 3000.
     price1 = await monitor._get_eth_price()
     await monitor._process_deposit("user_eth", {
         "chain": "ethereum",
@@ -388,7 +388,7 @@ async def test_eth_deposit_dedups_on_price_independent_amount_not_usd(monkeypatc
     # Tick 2: SAME un-swept balance, but the live oracle price moved ->
     # amount_usd is different from tick 1, yet the on-chain amount (wei)
     # did not change.
-    monkeypatch.setenv("ETH_PRICE_USD_OVERRIDE", "3123.45")
+    prices["now"] = 3123.45
     price2 = await monitor._get_eth_price()
     assert price2 != price1
     await monitor._process_deposit("user_eth", {
@@ -417,13 +417,14 @@ async def test_check_chain_deposits_eth_amount_field_is_price_independent(monkey
     eth_balance_wei = 2_000_000_000_000_000_000  # 2 ETH, unchanged between calls
     monkeypatch.setitem(sys.modules, "web3", _fake_web3_module(eth_balance_wei))
 
-    monitor = DepositMonitor(_FakeDB(), _FakeBalanceManager(), _Config())
+    prices = {"now": 3000.0}
+    monitor = DepositMonitor(_FakeDB(), _FakeBalanceManager(), _Config(),
+                             price_fn=lambda: prices["now"])
     chain_config = {"rpc_url": "http://fake-rpc.invalid", "chain_id": 1}
 
-    monkeypatch.setenv("ETH_PRICE_USD_OVERRIDE", "3000.0")
     deposits1 = await monitor._check_chain_deposits("0xabc", "ethereum", chain_config)
 
-    monkeypatch.setenv("ETH_PRICE_USD_OVERRIDE", "3123.45")
+    prices["now"] = 3123.45
     deposits2 = await monitor._check_chain_deposits("0xabc", "ethereum", chain_config)
 
     eth1 = next(d for d in deposits1 if d["token_symbol"] == "ETH")
@@ -444,36 +445,33 @@ async def test_wrong_chain_cannot_create_deposit_readings(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_wildly_high_oracle_price_is_rejected_no_credit(monkeypatch):
-    """MEDIUM (C8 money-safety review): a schema hiccup or an
-    ETH_PRICE_USD_OVERRIDE typo (extra digit) must not translate into a
-    wildly-inflated credit grant. Drive the real detection path
+async def test_a_raising_price_source_credits_nothing_end_to_end(monkeypatch):
+    """A price source that raises (a network or schema failure) must not
+    translate into any credit. Drive the real detection path
     (`_check_chain_deposits`, which is what `_check_all_deposits` actually
-    calls) end-to-end with a real on-chain ETH balance present, and assert
-    NO deposit reaches `_process_deposit` / `add_credits` — not just that
-    `_get_eth_price()` happens to raise in isolation.
+    calls) end-to-end with a real on-chain ETH balance present. The graded
+    spend price (proposal 125 S5) replaced the old ETH_PRICE_USD_MAX clamp.
     """
     eth_balance_wei = 2_000_000_000_000_000_000  # 2 ETH sitting on-chain
     monkeypatch.setitem(sys.modules, "web3", _fake_web3_module(eth_balance_wei))
-    monkeypatch.setenv("ETH_PRICE_USD_OVERRIDE", "5000000")  # implausible, likely a typo
+
+    def _broken():
+        raise KeyError("ethereum")
 
     db = _FakeDB()
     balance_mgr = _FakeBalanceManager()
-    monitor = DepositMonitor(db, balance_mgr, _Config())
+    monitor = DepositMonitor(db, balance_mgr, _Config(), price_fn=_broken)
     chain_config = {"rpc_url": "http://fake-rpc.invalid", "chain_id": 1}
 
     deposits = await monitor._check_chain_deposits("0xabc", "ethereum", chain_config)
-
-    # The wild-price ETH deposit must never be queued for processing at all.
-    assert not any(d["token_symbol"] == "ETH" for d in deposits), (
-        "a wildly-high oracle price still produced an ETH deposit entry"
-    )
+    eth = [d for d in deposits if d["token_symbol"] == "ETH"]
+    assert eth and eth[0]["amount_usd"] is None, "an unpriced reading carries no USD value"
 
     for deposit in deposits:
         await monitor._process_deposit("user_wild_price", deposit)
 
     assert balance_mgr.add_calls == [], (
-        "a wildly-high oracle price resulted in a credit being granted"
+        "a failing price source resulted in a credit being granted"
     )
 
 

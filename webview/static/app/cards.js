@@ -15,7 +15,7 @@
  * 3. **It writes no copy.** The card text and the button labels come from the
  *    server; the two transport sentences ride on the section's data attributes.
  */
-import { detailText, postJson } from './http.js';
+import { detailText, getJson, postJson } from './http.js';
 
 export function cardsUrl() { return '/api/webgate/cards'; }
 
@@ -73,15 +73,15 @@ export async function press(id, act, { fetcher, fallback, refused } = {}) {
 }
 
 /** Load and draw the open cards into `section`. Returns how many were drawn. */
-export async function load(section, { fetcher = globalThis.fetch, postFetcher } = {}) {
+export async function load(section, { fetcher, postFetcher } = {}) {
   if (!section) return 0;
   const list = section.querySelector('[data-cards-list]');
   const copy = { ...section.dataset };
   const readOnly = copy.readOnly === 'true';
   let body = null;
   try {
-    const res = await fetcher(cardsUrl(), { credentials: 'include' });
-    body = res && res.ok ? await res.json() : null;
+    const res = await getJson(cardsUrl(), { fetcher });
+    body = res.ok ? res.body : null;
   } catch (err) {
     body = null;
   }
@@ -109,7 +109,9 @@ export async function load(section, { fetcher = globalThis.fetch, postFetcher } 
     }
     line.textContent = result.message || '';
     line.dataset.ok = result.ok ? 'true' : 'false';
-    if (!result.card) entry.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+    // Only a tap that did NOT act opens the buttons again: a done tap whose
+    // card could not be re-read keeps them shut (no second Confirm).
+    if (!result.ok && !result.card) entry.querySelectorAll('button').forEach((b) => { b.disabled = false; });
   };
   for (const card of cards) list.appendChild(drawCard(card, { readOnly, onPress }));
   section.hidden = cards.length === 0;

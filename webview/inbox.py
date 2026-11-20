@@ -304,7 +304,7 @@ def _decide(request: Request, kind: str, item_id: str, *, approved: bool,
                 answer=" ".join(str(answer or "").split())[:ANSWER_MAX_CHARS])
             msg = t("inbox.ask.gone") if not ok else _unblocked_text(unblocked)
             if ok and not unblocked:
-                from agents.task.goals.rail_answers import decision_note
+                from modules.goals.rail_answers import decision_note
                 msg = decision_note(board, item_id, 0) or msg
         else:
             kw = {"user_id": user_id, "home_dir": _data_dir(),

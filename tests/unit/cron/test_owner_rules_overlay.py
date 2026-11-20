@@ -94,11 +94,11 @@ async def test_cron_run_task_opens_with_the_newer_owner_rules(tmp_path):
 
 
 def test_overlay_points_at_the_owner_doc_instead_of_repeating_it():
-    """A-10 (2026-10-14 review): the rules are already in the Owner facts block."""
+    """A-10 (2026-10-14 review): the rules are already in the Owner rules block."""
     long_rule = ("LONG RULE (2026-10-05): owner said " + "z" * 900
                  + " [from: owner said 2026-10-05]")
     block = owner_rules_overlay(long_rule, datetime(2026, 10, 1))
-    assert "Owner facts block in your context" in block
+    assert "Owner rules block in your context" in block
     assert "z" * 200 not in block
     assert "[from:" not in block
     line = [l for l in block.splitlines() if l.startswith("- ")][0]

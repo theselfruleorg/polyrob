@@ -79,7 +79,7 @@ async def api_artifacts(request: Request, session_id: Optional[str] = None) -> J
                            "session_id": a.session_id} for a in recent[:RECENT_LIMIT]],
             "truncated": len(recent) > RECENT_LIMIT, "error": None})
 
-    from agents.task.path import pm
+    from core.session_paths import pm
     from webview.session_access import http_session_id
     clean_id = http_session_id(session_id, pm())
 
@@ -97,7 +97,7 @@ async def api_artifacts(request: Request, session_id: Optional[str] = None) -> J
     ws_root = None
     if rows:
         try:
-            from agents.task.path import pm
+            from core.session_paths import pm
             ws_root = os.path.realpath(str(pm().get_workspace_dir(clean_id, user_id=str(user_id))))
         except Exception:
             logger.debug("artifact rows: no workspace for %s", clean_id, exc_info=True)

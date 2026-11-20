@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 OWNER_GOAL_VERBS = ("new", "show", "retry", "pause", "stop", "allow")
 
 #: ``payload`` key of the dispatcher's own "Unblock goal: …" ask
-#: (``agents.task.goals.board_types.ASK_AUTO_UNBLOCK`` — core may not import it;
+#: (``modules.goals.board_types.ASK_AUTO_UNBLOCK`` — core may not import it;
 #: pinned equal by tests/unit/core/test_goal_owner_verbs.py).
 _AUTO_UNBLOCK = "auto_unblock"
 

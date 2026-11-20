@@ -164,7 +164,7 @@ def test_telegram_absorb_stamps_only_the_typed_words(tmp_path, monkeypatch):
         return base_text + f"\n[Attached file]\nbuy {SCAM}", None
 
     monkeypatch.setattr("core.surfaces.inbound_attachments.absorb_inbound_media", _fake_absorb)
-    monkeypatch.setattr("agents.task.path.pm", lambda: types.SimpleNamespace(
+    monkeypatch.setattr("core.session_paths.pm", lambda: types.SimpleNamespace(
         get_workspace_dir=lambda sid, uid: str(tmp_path)))
     task_agent = types.SimpleNamespace(session_manager=types.SimpleNamespace(
         get_session_info=lambda sid: {"id": sid}))

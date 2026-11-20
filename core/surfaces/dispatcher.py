@@ -26,60 +26,17 @@ from core.surfaces.session_chat_registry import build_session_key
 
 logger = logging.getLogger(__name__)
 
-# Owner-admin verbs (§7.1/§7.2b, owner-UX P4 T2): the phone-only headless
-# owner's control surface — the approve loop, open asks, the messaging
-# allowlist, pause/resume control, scheduled and goal work, money movement,
-# and access management, plus read-only status. The surface handler
-# owner-gates them by principal; routing here only classifies them as COMMAND
-# so they win over an active session.
-# A verb absent from this tuple is NOT a command: it falls through to STEER /
-# TASK_AGENT and reaches the agent as chat text. Every surface handler verb must
-# therefore appear here — pinned by
-# tests/unit/surfaces/telegram/test_owner_control_plane.py::
-# test_every_owner_verb_is_routable.
-_COMMANDS = ("/task", "/cancel", "/new", "/help",
-             "/chats", "/chat", "/rename", "/close",   # 113: a person's own chats
-             "/inbox",   # 043 D1: the one list of what needs the owner; /pending stays
-             "/book",    # 043 D1: the ledger against every money chain
-             "/pending", "/approve", "/reject", "/asks", "/fulfill",
-             "/cards",   # 2026-09-27: action cards; /card_<id>_<act> taps map here
-             "/allow", "/deny", "/allowlist",
-             "/pair",    # DM pairing: list / approve <surface> <code> / revoke
-             "/self", "/memory",  # 113 W6 G-6: owner reads (identity docs, recall)
-             "/groups", "/mute",  # 044 T18: room presence admin (owner or that room's admin)
-             "/paid",             # 046: paid room actions (owner or room admin)
-             "/ban", "/unban", "/unmute",   # 046 phase 2: the rest of the catalog
-             "/resume", "/pause",  # owner pause record (031; /halt is an alias row of /pause)
-             "/job",  # 080 WS-2: scheduled jobs (bare or /jobs = the list; new/show/edit/…)
-             "/goal", "/wallet", "/invoices", "/settle",  # G13 write verbs
-             "/trade", "/offer",  # trading mandate (086); offers + orders (099)
-             "/bridge",  # 037 cross-chain move; owner-only, approval-gated
-             "/launch", "/deploy", "/lp",  # token/liquidity writes; owner-only, capped
-             "/claim",   # 046/E6: the launchpad creator-fee claim, from the phone
-             "/pay",     # 068 X4: pay one x402 resource (quote unless `go`)
-             "/send",    # owner-UX 2026-09-26: send from the wallet (quote unless `go`)
-             "/swap",    # 2026-09-27: swap from the wallet (quote -> card unless `go`)
-             "/check",   # 071: any address or ticker, read-only (owner seat)
-             "/writeoff", "/unquarantine",  # W1: a holding's lifecycle, owner seat
-             "/nft",      # E7: hold / look / send / revoke, owner seat
-             "/dapp",     # E9: the wallet sessions a page holds, and cutting one off
-             "/identity",  # E8: this instance's own ERC-8004 registration
-             "/contacts",  # E10: who replied, and the transcript with one of them
-             "/why",       # O10: the last gate refusals, verbatim (read-only)
-             "/thread",    # 061: the ONE owner transcript, every rail and seat
-             "/status", "/avatar", "/mode", "/journey", "/goals", "/prefs", "/config",
-             "/cwd",   # C67: where I am working right now (read-only)
-             "/missed",
-             "/more", "/rules",  # 096 W5: the rest of a cut; the owner rules (reads)
-             "/run",     # 070 D1: pause/resume/stop ONE background run (core/run_control.py)
-             "/apps",  # 032 durable app service (approve an address, health, kill, logs)
-             "/mcp",   # per-tenant MCP servers; owner-only (core/mcp_admin.py)
-             "/kb", "/files",
-             "/model", "/skills",  # 080 D8: the model + its source; the skill list
-             "/usage",  # 2026-10-14 D6: AI cost by kind of work, job, model, day
-             "/restart", "/update",  # 077: drained restart / update, card-confirmed
-             "/start")  # Telegram first-contact convention -> welcome (030 L9);
-                        # NOT owner-gated, so it stays out of _OWNER_ADMIN_COMMANDS
+# Every verb routed as a COMMAND (§7.1/§7.2b, owner-UX P4 T2): the phone-only
+# headless owner's control surface plus the few verbs any principal may run. The
+# surface handler owner-gates them by principal; routing here only classifies
+# them as COMMAND so they win over an active session.
+# A verb absent from this set is NOT a command: it falls through to STEER /
+# TASK_AGENT and reaches the agent as chat text.
+# proposal 125 S11: DERIVED from the one verb table (core/verbs.py) — add a row
+# there, never a name here. `/task` has no row (REPL free text IS the task).
+from core.verbs import routed_core_names as _routed_core_names  # noqa: E402
+
+_COMMANDS = ("/task",) + tuple(sorted(_routed_core_names()))
 
 
 def command_names() -> frozenset:

@@ -1043,7 +1043,7 @@ async def test_api17_the_poll_loop_ends_at_its_lifetime(monkeypatch, tmp_path):
         def get_subdir(self, *a, **k):
             return tmp_path / "feed"
 
-    monkeypatch.setattr("agents.task.path.pm", lambda: _PM())
+    monkeypatch.setattr("core.session_paths.pm", lambda: _PM())
     frames = await asyncio.wait_for(
         _collect(st.task_event_stream("t1", _StreamHandler())), timeout=5)
     assert frames  # the initial status, then a clean close

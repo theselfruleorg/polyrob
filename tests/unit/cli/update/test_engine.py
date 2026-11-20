@@ -6,7 +6,7 @@ import sqlite3
 
 import pytest
 
-from cli.update.context import UpdateContext
+from core.update_snapshot.context import UpdateContext
 from cli.update.engine import UpdateRunners, apply_update
 
 

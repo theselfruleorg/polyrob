@@ -45,7 +45,7 @@ def test_compose_working_line_with_step_tool_and_count():
     tracker._tools = 2
     now[0] = 145.0
     text = tracker.compose_text()
-    assert text.startswith("⚙️ step 3 · → navigate · 2 tools · 45s")
+    assert text.startswith("⚙️ step 3 · → navigate · 45s")
 
 
 def test_compose_bare_start_keeps_legacy_wording():
@@ -67,9 +67,9 @@ def test_retry_and_compaction_wait_states():
     tracker = _tracker()
     tracker.on_feed_event({"type": "retry_wait",
                            "data": {"reason": "rate_limit", "delay_sec": 8.0}})
-    assert tracker.compose_text() == "↻ rate_limit — retrying in 8s"
+    assert tracker.compose_text() == "↻ rate limit — retrying in 8s"
     tracker.on_feed_event({"type": "compaction_started", "data": {"mode": "llm"}})
-    assert tracker.compose_text() == "📦 Compacting context…"
+    assert tracker.compose_text() == "📦 Shortening my notes…"
     tracker.on_feed_event({"type": "compaction_finished", "data": {}})
     assert "Compacting" not in tracker.compose_text()
 

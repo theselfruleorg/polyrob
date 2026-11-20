@@ -30,7 +30,7 @@ CHILD = textwrap.dedent('''
     import sqlite3, subprocess, sys, time
     from pathlib import Path
     repo, home, snaps, ready = map(Path, sys.argv[1:5])
-    from cli.update.context import UpdateContext
+    from core.update_snapshot.context import UpdateContext
     from cli.update.detect import GIT, InstallContext
     from cli.update.engine import UpdateRunners, apply_update
     from cli.update.journal import shield_signals, update_journal
@@ -116,7 +116,7 @@ def test_sigkill_mid_apply_is_rolled_back(tmp_path, monkeypatch):
 
     # Point the real rollback at the TEMP tree only; git runs, pip is recorded.
     import cli.commands.update as upd
-    from cli.update.context import UpdateContext
+    from core.update_snapshot.context import UpdateContext
     from cli.update.detect import GIT as GIT_METHOD, InstallContext
     from cli.update.runners import build_runners as real_build
     skipped = []

@@ -2,9 +2,9 @@
 Utility functions for the task package.
 
 Note: All session directory and path management is now handled through
-the centralized path management system in agents.task.path:
+the centralized path management system in core.session_paths:
     
-    from agents.task.path import pm
+    from core.session_paths import pm
     
     # Examples:
     clean_id = pm().clean_session_id(session_id)
@@ -45,7 +45,7 @@ def extract_session_from_agent_id(agent_id: str) -> Optional[str]:
         >>> extract_session_from_agent_id("invalid")
         None
     """
-    from agents.task.path import pm
+    from core.session_paths import pm
 
     if not agent_id or '_' not in agent_id:
         return None
@@ -128,29 +128,6 @@ P = ParamSpec('P')
 T = TypeVar('T')
 
 
-def handle_with_fallback(
-    primary_func: Callable[[], T], 
-    fallback_func: Callable[[], T],
-    logger: logging.Logger,
-    error_msg: str
-) -> T:
-    """Standard error handling with fallback.
-    
-    Args:
-        primary_func: Primary function to try first
-        fallback_func: Fallback function to use if primary fails
-        logger: Logger to use for error messages
-        error_msg: Message to log on error
-        
-    Returns:
-        Result from either primary or fallback function
-    """
-    try:
-        return primary_func()
-    except Exception as e:
-        logger.warning(f"{error_msg}: {e}")
-        return fallback_func()
-
 def safe_operation(
     func: Callable[[], T],
     logger: logging.Logger,
@@ -180,120 +157,7 @@ def safe_operation(
 from utils.time_utils import time_execution_sync, time_execution_async
 
 
-def log_llm_request(component: str, purpose: Optional[str] = None) -> Callable:
-    """
-    Decorator to log and track LLM requests with telemetry.
-    
-    This decorator provides consistent logging and telemetry capture for LLM operations.
-    Used primarily in tests and theatre scripts for tracking.
-    
-    Args:
-        component: Component name making the request
-        purpose: Purpose of the request (optional)
-    
-    Returns:
-        Decorated function with logging and telemetry
-    """
-    import asyncio
-    import time
-    import logging
-    from functools import wraps
-    
-    logger = logging.getLogger(__name__)
-    
-    def decorator(func: Callable) -> Callable:
-        @wraps(func)
-        async def async_wrapper(*args, **kwargs):
-            start_time = time.time()
-            
-            # Extract LLM info
-            llm = kwargs.get('llm') or (args[1] if len(args) > 1 else None)
-            agent = args[0] if args else None
-            
-            model_name = getattr(llm, 'model_name', 'unknown') if llm else 'unknown'
-            
-            # Log the request
-            purpose_str = f"/{purpose}" if purpose else ""
-            logger.info(f"🔄 LLM REQUEST [{component}{purpose_str}] - Model: {model_name}")
-            
-            try:
-                # Execute the function
-                result = await func(*args, **kwargs)
-                
-                # Extract token usage if available
-                if result and isinstance(result, dict):
-                    raw = result.get('raw')
-                    if raw and hasattr(raw, 'usage'):
-                        usage = raw.usage
-                        if usage:
-                            prompt_tokens = getattr(usage, 'prompt_tokens', 0)
-                            completion_tokens = getattr(usage, 'completion_tokens', 0)
-                            total_tokens = getattr(usage, 'total_tokens', 0)
-                            
-                            duration = time.time() - start_time
-                            logger.info(f"Token usage - Prompt: {prompt_tokens}, Completion: {completion_tokens}, Total: {total_tokens}")
-                            logger.info(f"Completed in {duration:.2f}s")
-                            
-                            # Capture telemetry
-                            try:
-                                from agents.task import capture_llm_request
-                                session_id = getattr(agent, 'agent_id', None) if agent else None
-                                
-                                capture_llm_request(
-                                    component=component,
-                                    purpose=purpose,
-                                    model_name=model_name,
-                                    duration_seconds=duration,
-                                    success=True,
-                                    prompt_tokens=prompt_tokens,
-                                    completion_tokens=completion_tokens,
-                                    total_tokens=total_tokens,
-                                    session_id=session_id,
-                                    temperature=getattr(llm, 'temperature', None) if llm else None,
-                                    max_tokens=getattr(llm, 'max_tokens', None) if llm else None
-                                )
-                            except Exception as e:
-                                logger.debug(f"Failed to capture telemetry: {e}")
-                
-                return result
-                
-            except Exception as e:
-                duration = time.time() - start_time
-                logger.error(f"LLM request failed after {duration:.2f}s: {e}")
-                
-                # Capture telemetry for failure
-                try:
-                    from agents.task import capture_llm_request
-                    session_id = getattr(agent, 'agent_id', None) if agent else None
-                    
-                    capture_llm_request(
-                        component=component,
-                        purpose=purpose,
-                        model_name=model_name,
-                        duration_seconds=duration,
-                        success=False,
-                        session_id=session_id
-                    )
-                except Exception:
-                    pass
-                    
-                raise
-        
-        @wraps(func)
-        def sync_wrapper(*args, **kwargs):
-            # For sync functions, just pass through (tests mostly use async)
-            return func(*args, **kwargs)
-        
-        # Return appropriate wrapper based on function type
-        if asyncio.iscoroutinefunction(func):
-            return async_wrapper
-        else:
-            return sync_wrapper
-    
-    return decorator
-
-
-# get_safe_singleton removed - use get_safe_singleton from agents.task.path instead
+# get_safe_singleton removed - use get_safe_singleton from core.session_paths instead
 
 
 def save_registry_items(items: Dict[str, Any], directory: Path, item_type: str = "item") -> None:
@@ -341,7 +205,7 @@ def send_telemetry(event: Any, agent_id: Optional[str] = None, session_id: Optio
         # Use the get_telemetry function instead of directly importing ProductTelemetry
         from agents.task.telemetry import get_telemetry
         # Import path manager for clean_session_id
-        from agents.task.path import pm
+        from core.session_paths import pm
         
         # Try to get correct ID to use for tracking
         tracking_id = None

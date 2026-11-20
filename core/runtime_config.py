@@ -113,6 +113,29 @@ def operator_provider_pin(env=None):
     return _pin(env, "DEFAULT_PROVIDER", "CHAT_PROVIDER")
 
 
+#: The telemetry kinds of the pin's start: the LATEST one is the fact the status reads.
+PIN_READY, PIN_UNAVAILABLE = "llm_pin_ready", "llm_pin_unavailable"
+
+
+def record_pin_outcome(clients, primary_client, results) -> None:
+    """Record whether the pinned provider's client started (``clients`` = the
+    started ``<provider>_client`` names, ``results`` = ``(provider, ok, error)``).
+
+    A pin whose client did not start falls through to another provider with a
+    log line only: an experiment box (2026-11-20) ran on OpenRouter while the status said
+    ``live provider: zai-coding``. Fail-open; nothing without a pin."""
+    pin = canonicalize_provider(operator_provider_pin())
+    if not pin:
+        return
+    from core.event_log import emit
+    started = f"{pin}_client" in set(clients or ())
+    error = next((str(e or "") for n, ok, e in results or ()
+                  if canonicalize_provider(n) == pin and not ok), "")
+    emit(PIN_READY if started else PIN_UNAVAILABLE, source="llm_manager", attrs={
+        "pin": pin, "primary": str(primary_client or "").removesuffix("_client"),
+        "error": (error or ("" if started else "no client: missing key or config"))[:300]})
+
+
 def operator_model_pin(env=None):
     """The operator's model pin (``DEFAULT_MODEL``), if any, read raw.
 

@@ -9,7 +9,7 @@ import types
 
 import pytest
 
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from core.wallet.buy_target import AUTHOR_KEY, OWNER, PAYLOAD_KEY, with_authorship
 from cron.jobs import CronJobStore
 from cron.service import CronService

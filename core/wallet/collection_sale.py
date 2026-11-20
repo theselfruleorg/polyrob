@@ -39,6 +39,7 @@ What this module adds to the claim shape for a pinned sale:
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
 
 from core.wallet import abi
@@ -220,6 +221,96 @@ def read_phase(rpc, sale: str) -> int:
 
 def read_owed(rpc, sale: str, who: str) -> int:
     return _uint(rpc, sale, OWED_SELECTOR + "0" * 24 + str(who).lower().removeprefix("0x"))
+
+
+# -- 124 section 7: the sale of ANY collection, read from the chain (the ERC-6551P kit's sale ABI)
+
+COLLECTION_SELECTOR = "0x697b2365"       # COLLECTION() on the sale
+SALE_OF_SELECTOR = "0x4db08aea"          # SALE() on the collection
+BASE_SELECTOR = "0xec342ad0"             # BASE()
+STEP_SELECTOR = "0x53d0f255"             # STEP()
+START_PRICE_SELECTOR = "0x3609ac8f"      # START_PRICE()
+MAX_PER_TX_SELECTOR = "0xf43a22dc"       # MAX_PER_TX()
+PRICE_NOW_SELECTOR = "0xfeaa7f29"        # priceNow()
+PUBLIC_CAPACITY_SELECTOR = "0xc3d70ada"  # publicCapacity()
+WL_MINTED_SELECTOR = "0x78a92380"        # wlMinted(address)
+TOTAL_MINTED_SELECTOR = "0xa2309ff8"     # totalMinted() on the collection
+MINT_OPEN_SELECTOR = "0x24bbd049"        # mintOpen() on the collection
+
+PHASE_CLOSED, PHASE_WHITELIST, PHASE_AUCTION, PHASE_SETTLED = 0, 1, 2, 3
+
+
+def _addr(rpc, to: str, data: str) -> str:
+    return "0x" + format(_uint(rpc, to, data), "064x")[-40:]
+
+
+@dataclass(frozen=True)
+class SaleFacts:
+    """What a mint needs, read from the chain now (124 section 7: never a pin, never a constant)."""
+    collection: str
+    sale: str
+    phase: int
+    mint_open: bool
+    total_minted: int
+    base_wei: int
+    step_wei: int
+    start_price_wei: int
+    max_per_tx: int
+    price_now_wei: int
+    public_capacity: int
+
+    def value_for(self, qty: int) -> int:
+        """The ``msg.value`` of a mint of *qty* in this phase: whitelist and settled = ``qty ×
+        BASE``; the auction = ``qty × min(priceNow + STEP, START_PRICE)`` (one step may pass
+        between the quote and the inclusion; the excess comes back at settle)."""
+        if self.phase == PHASE_AUCTION:
+            return int(qty) * min(self.price_now_wei + self.step_wei, self.start_price_wei)
+        if self.phase in (PHASE_WHITELIST, PHASE_SETTLED):
+            return int(qty) * self.base_wei
+        raise ValueError("the sale has not started (phase 0)")
+
+    def ids_for(self, qty: int) -> Tuple[int, ...]:
+        """The ids one mint creates: ``totalMinted + 1 … totalMinted + qty``."""
+        return tuple(range(self.total_minted + 1, self.total_minted + int(qty) + 1))
+
+
+def read_sale(rpc, collection: str) -> SaleFacts:
+    """The collection's ``SALE()`` and its facts. The sale must name the collection back
+    (``COLLECTION()``): a sale that does not is refused. Raises ``ValueError`` when unreadable."""
+    c = str(collection).lower()
+    try:
+        sale = _addr(rpc, c, SALE_OF_SELECTOR)
+        back = _addr(rpc, sale, COLLECTION_SELECTOR)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"{collection} names no sale I can read (SALE() / COLLECTION(): {exc})") from exc
+    if int(sale, 16) == 0:
+        raise ValueError(f"{collection} has no sale (SALE() is the zero address)")
+    if back != c:
+        raise ValueError(f"the sale {sale} names {back} as its collection, not {collection} — refusing")
+    try:
+        return SaleFacts(
+            collection=c, sale=sale, phase=_uint(rpc, sale, PHASE_SELECTOR),
+            mint_open=_uint(rpc, c, MINT_OPEN_SELECTOR) == 1,
+            total_minted=_uint(rpc, c, TOTAL_MINTED_SELECTOR),
+            base_wei=_uint(rpc, sale, BASE_SELECTOR), step_wei=_uint(rpc, sale, STEP_SELECTOR),
+            start_price_wei=_uint(rpc, sale, START_PRICE_SELECTOR),
+            max_per_tx=_uint(rpc, sale, MAX_PER_TX_SELECTOR),
+            price_now_wei=_uint(rpc, sale, PRICE_NOW_SELECTOR),
+            public_capacity=_uint(rpc, sale, PUBLIC_CAPACITY_SELECTOR))
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"the sale {sale} of {collection} could not be read ({exc})") from exc
+
+
+def read_wl_minted(rpc, sale: str, who: str) -> int:
+    return _uint(rpc, sale, WL_MINTED_SELECTOR + "0" * 24 + str(who).lower().removeprefix("0x"))
+
+
+def sale_collection(rpc, sale: str) -> str:
+    """The collection a sale names (``COLLECTION()``), checked both ways (its ``SALE()``)."""
+    coll = _addr(rpc, sale, COLLECTION_SELECTOR)
+    if _addr(rpc, coll, SALE_OF_SELECTOR) != str(sale).lower():
+        raise ValueError(f"{coll} does not name {sale} as its SALE()")
+    return coll
 
 
 def runtime_refusal(kind: str, intent, tx: dict, holder: str, rpc) -> Optional[str]:

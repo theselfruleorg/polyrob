@@ -220,7 +220,7 @@ def test_b4_every_acquiring_verb_consults_the_boundary():
     import inspect
     from tools.defi.trade_tool import DefiTradeTool
     from tools.defi import solana_swap_verb  # W9: the verb bodies moved
-    from tools.defi.swap_verb import perform_swap
+    from tools.defi.swap_verb import _swap as perform_swap  # 126 W4: the body is _swap
     from tools.goal_tools import GoalTool as GoalTools
     from tools.launchpad.tool import LaunchpadTool
     import tools.cronjob_tools as cj

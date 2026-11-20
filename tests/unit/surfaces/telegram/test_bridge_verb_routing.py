@@ -27,8 +27,8 @@ def test_the_verb_is_in_the_help_ssot():
 
 @pytest.mark.asyncio
 async def test_a_non_owner_is_refused():
-    from surfaces.telegram import owner_ops
-    assert "Only the owner" in await owner_ops.bridge_reply(
+    from tools.defi.owner_verbs import bridge as bridge_verbs
+    assert "Only the owner" in await bridge_verbs.bridge_reply(
         None, "/tmp", ["solana", "base", "1"])
 
 
@@ -38,8 +38,8 @@ async def test_incomplete_args_show_usage_not_a_traceback(args):
     """A15: the copy no longer says every bridge needs approval — under the
     autonomous ceiling it runs and reports; only above it does it wait in
     /pending (spend_lane.py DEFI_SPEND_VERBS, 2026-09-12)."""
-    from surfaces.telegram import owner_ops
-    out = await owner_ops.bridge_reply("alice", "/tmp", args)
+    from tools.defi.owner_verbs import bridge as bridge_verbs
+    out = await bridge_verbs.bridge_reply("alice", "/tmp", args)
     assert "Usage: /bridge" in out
     assert "pending" in out.lower()
 
@@ -47,8 +47,8 @@ async def test_incomplete_args_show_usage_not_a_traceback(args):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("bad", ["abc", "-1", "0"])
 async def test_a_bad_amount_is_refused_before_any_quote(bad):
-    from surfaces.telegram import owner_ops
-    out = await owner_ops.bridge_reply("alice", "/tmp", ["solana", "robinhood", bad])
+    from tools.defi.owner_verbs import bridge as bridge_verbs
+    out = await bridge_verbs.bridge_reply("alice", "/tmp", ["solana", "robinhood", bad])
     assert "positive number" in out
 
 
@@ -63,8 +63,8 @@ async def test_the_bare_form_is_a_QUOTE_not_an_execution(monkeypatch):
         return SimpleNamespace(error=None, extracted_content="report")
 
     monkeypatch.setattr("tools.defi.bridge_verb.perform_bridge", _fake)
-    from surfaces.telegram import owner_ops
-    out = await owner_ops.bridge_reply("alice", "/tmp", ["solana", "robinhood", "0.9"])
+    from tools.defi.owner_verbs import bridge as bridge_verbs
+    out = await bridge_verbs.bridge_reply("alice", "/tmp", ["solana", "robinhood", "0.9"])
     assert seen["dry_run"] is True
     assert "Add `go` to execute" in out
 
@@ -79,8 +79,8 @@ async def test_go_executes(monkeypatch):
         return SimpleNamespace(error=None, extracted_content="report")
 
     monkeypatch.setattr("tools.defi.bridge_verb.perform_bridge", _fake)
-    from surfaces.telegram import owner_ops
-    await owner_ops.bridge_reply("alice", "/tmp", ["solana", "robinhood", "0.9", "go"])
+    from tools.defi.owner_verbs import bridge as bridge_verbs
+    await bridge_verbs.bridge_reply("alice", "/tmp", ["solana", "robinhood", "0.9", "go"])
     assert seen["dry_run"] is False
 
 
@@ -91,8 +91,8 @@ async def test_an_empty_report_never_reads_as_nothing_happened(monkeypatch):
         return SimpleNamespace(error=None, extracted_content="")
 
     monkeypatch.setattr("tools.defi.bridge_verb.perform_bridge", _fake)
-    from surfaces.telegram import owner_ops
-    out = await owner_ops.bridge_reply("alice", "/tmp", ["solana", "robinhood", "0.9"])
+    from tools.defi.owner_verbs import bridge as bridge_verbs
+    out = await bridge_verbs.bridge_reply("alice", "/tmp", ["solana", "robinhood", "0.9"])
     assert "do NOT retry" in out
 
 
@@ -105,8 +105,8 @@ async def test_the_chain_list_comes_from_the_registry(monkeypatch):
     bridge will refuse.
     """
     from core.wallet import chains
-    from surfaces.telegram import owner_ops
-    out = await owner_ops.bridge_reply("alice", "/tmp", [])
+    from tools.defi.owner_verbs import bridge as bridge_verbs
+    out = await bridge_verbs.bridge_reply("alice", "/tmp", [])
     for name in chains.names():
         assert name in out
 
@@ -126,8 +126,8 @@ async def test_as_names_the_destination_asset(monkeypatch):
         return SimpleNamespace(error=None, extracted_content="report")
 
     monkeypatch.setattr("tools.defi.bridge_verb.perform_bridge", _fake)
-    from surfaces.telegram import owner_ops
-    await owner_ops.bridge_reply("alice", "/tmp",
+    from tools.defi.owner_verbs import bridge as bridge_verbs
+    await bridge_verbs.bridge_reply("alice", "/tmp",
                                  ["solana", "base", "0.9", "as", "usdc", "go"])
     assert seen["token_out"] == "usdc"
 

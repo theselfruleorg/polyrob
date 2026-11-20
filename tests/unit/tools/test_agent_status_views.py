@@ -73,7 +73,7 @@ def _seed(tmp_path, monkeypatch):
 async def test_refusals_view_is_the_why_text(tmp_path, monkeypatch):
     _seed(tmp_path, monkeypatch)
     result = await _run("owner", view="refusals")
-    from surfaces.telegram.why_ops import why_reply
+    from core.surfaces.owner_reads import why_reply
     text = result.extracted_content
     assert why_reply("owner", str(tmp_path), []) in text
     from core.security.untrusted_wrap import wrap_untrusted

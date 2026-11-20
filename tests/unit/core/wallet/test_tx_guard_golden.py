@@ -180,13 +180,13 @@ SCENARIOS = {
         env={"DEFI_AUTONOMOUS_TURN_TRADING": "true"},
         gate=dict(daily_cap_usd=None)),
     "forged_autonomous_allowed_daily_cap": S(
-        ctx="owner", forged=True, autonomous_ok=True,
+        ctx="owner", forged=True, autonomous_ok=True, intent=dict(why="rebalance"),
         env={"DEFI_AUTONOMOUS_TURN_TRADING": "true"}),
     "forged_autonomous_detector_raises": S(
         ctx="owner", forged=True, autonomous_ok=_raise(RuntimeError("x")),
         env={"DEFI_AUTONOMOUS_TURN_TRADING": "true"}),
     "monitor_exit_sell_allowed": S(SWAP_INTENT, SWAP_TX, SWAP_DELTAS, ctx="owner", forged=True,
-                                   env={"DEFI_MONITOR_EXITS": "true"}),
+                                   intent=dict(why="stop hit"), env={"DEFI_MONITOR_EXITS": "true"}),
     "monitor_exit_sell_no_inflow": S(SWAP_INTENT, SWAP_TX, SWAP_DELTAS, ctx="owner",
                                      forged=True, env={"DEFI_MONITOR_EXITS": "true"},
                                      intent=dict(min_inflow_raw=None),
@@ -513,7 +513,9 @@ MINT_DELTAS = dict(ok=True, native_delta=-(ETH // 1000), token_deltas={}, gas_us
                    holder_nft_in=((NFT, "erc721", ZERO, 1, 1),))
 MINT_OK = {"core.wallet.collection_mint.structural": _NONE,
            "core.wallet.collection_mint.assert_simulation": _NONE,
-           "core.wallet.collection_mint.runtime_refusal": _NONE}
+           "core.wallet.collection_mint.runtime_refusal": _NONE,
+           # a PINNED sale (an unpinned one is the owner's card, the 2026-11-20 review)
+           "core.wallet.collection_mint.profile_of_sale": lambda *a, **k: object()}
 
 REVEAL_INTENT = dict(chain="base", token=None, to=NFT, amount_raw=0, max_spend_usd=50.0,
                      is_collection_reveal=True, reveal_ids=(1,), idempotency_key="kv")
@@ -522,7 +524,9 @@ REVEAL_TX = {"to": NFT, "data": "0x1e2b6b5b", "value": 0, "chainId": 8453,
 REVEAL_DELTAS = dict(ok=True, native_delta=0, token_deltas={}, gas_used=100_000)
 REVEAL_OK = {"core.wallet.collection_reveal.structural": _NONE,
              "core.wallet.collection_reveal.assert_simulation": lambda *a, **k: (None, (1,), ()),
-             _TG + "_collection_runtime_refusal": _NONE}
+             _TG + "_collection_runtime_refusal": _NONE,
+             # 124 W4: a reveal runs with no card only on a pin WITH the reveal capability
+             "core.wallet.collection_reveal.pinned_collections": lambda *a, **k: (NFT.lower(),)}
 
 ACCOUNT_OK = {_TG + "_via_account_inner": lambda intent, tx: (
                   {"to": USDC, "data": "0xa9059cbb", "value": 0}, None),

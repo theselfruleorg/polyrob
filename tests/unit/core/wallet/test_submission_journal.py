@@ -16,6 +16,15 @@ def home(monkeypatch, tmp_path):
     monkeypatch.setenv('POLYROB_DATA_DIR', str(tmp_path))
 
 
+@pytest.fixture(autouse=True)
+def _authorized(monkeypatch):
+    """These tests pin the submission journal, not the guard: every transaction here
+    counts as authorized (125 S3; the guard record is pinned in
+    test_rail_requires_attestation.py)."""
+    from core.signer import attest
+    monkeypatch.setattr(attest, "peek", lambda tx, **_: "authorized")
+
+
 def rail(monkeypatch, response=None):
     signer = SimpleNamespace(address='0x'+'1'*40, sign_transaction=lambda tx: RAW)
     r = EvmRail(chain='base', signer=signer)
@@ -32,10 +41,10 @@ def rail(monkeypatch, response=None):
 @pytest.mark.parametrize('response', [None, '0xwrong', HASH])
 def test_broadcast_keeps_local_hash_and_persists_before_rpc(monkeypatch, response):
     r = rail(monkeypatch, response)
-    assert r.sign_and_send({'chainId': 8453, 'nonce': 1}) == HASH
+    assert r.sign_and_send({'chainId': 8453, 'nonce': 1, 'gas': 21000, 'maxFeePerGas': 10 ** 9, 'type': 2}) == HASH
     assert J.unresolved()[0]['nonce'] == '1'
     with pytest.raises(ValueError, match='unaccounted'):
-        r.sign_and_send({'chainId': 8453, 'nonce': 2})
+        r.sign_and_send({'chainId': 8453, 'nonce': 2, 'gas': 21000, 'maxFeePerGas': 10 ** 9, 'type': 2})
     # A newly constructed gate cannot spend through an unresolved submission.
     assert not PolicyGate(max_per_tx_usd=10).check(venue='x402', amount_usd=1, idempotency_key='next').allowed
 
@@ -44,7 +53,7 @@ def test_failed_journal_prevents_network_send(monkeypatch):
     r = rail(monkeypatch)
     monkeypatch.setattr(J, 'prepare', lambda *a, **kw: (_ for _ in ()).throw(OSError('disk full')))
     with pytest.raises(OSError, match='disk full'):
-        r.sign_and_send({'chainId': 8453, 'nonce': 1})
+        r.sign_and_send({'chainId': 8453, 'nonce': 1, 'gas': 21000, 'maxFeePerGas': 10 ** 9, 'type': 2})
 
 
 def test_only_durable_charge_releases_interlock(tmp_path):

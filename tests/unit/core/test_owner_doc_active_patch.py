@@ -156,7 +156,7 @@ def test_over_cap_doc_loads_truncated_with_a_warning_not_blocked(tmp_path):
 
 
 def test_identity_scan_still_blocks_an_over_cap_doc(tmp_path, monkeypatch):
-	import modules.memory.task.threat_scan as ts
+	import core.security.threat_scan as ts
 	monkeypatch.setattr(ts, "is_identity_suspicious", lambda _t: True)
 	_seed(tmp_path, "x\n" * (OWNER_DOC_MAX_CHARS))
 	assert "[BLOCKED" in load_owner_doc(tmp_path, "u1", "polyrob")

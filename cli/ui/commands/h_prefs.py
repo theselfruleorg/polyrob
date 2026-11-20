@@ -3,7 +3,7 @@
 Read-only resolved-preferences summary via the display SSOT
 (``core.prefs.display_effective``) — never the raw file, always the effective
 (pref/env/merged) value plus its source. Thin over the SAME
-``surfaces.telegram.harness._prefs_reply`` the phone renders, so the two seats
+``core.prefs_reply.prefs_reply`` the phone renders, so the two seats
 agree on what is set and where it came from.
 
 Bare ``/prefs`` shows only what is actually SET; ``/prefs all`` (like
@@ -18,11 +18,11 @@ from cli.ui.commands.h_owner import _admin_data_dir, _tenant
 def h_prefs(ctx) -> None:
     """Read-only effective-preferences summary (value + source)."""
     from core.instance import resolve_instance_id
-    from surfaces.telegram.harness import _prefs_reply
+    from core.prefs_reply import prefs_reply
     args = list(ctx.args or [])
     full = bool(args) and args[0].lower() in ("all", "full")
     ctx.emit(
-        _prefs_reply(_tenant(ctx), _admin_data_dir(write=False),
+        prefs_reply(_tenant(ctx), _admin_data_dir(write=False),
                      resolve_instance_id(), full=full),
         title="prefs",
     )

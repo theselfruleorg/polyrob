@@ -7,7 +7,7 @@ A card is a stored decision with an opaque id. Its buttons are one-token command
 (``/card_<id>_ok``), so the payload never carries an amount or an address. What a
 tap DOES comes from the stored row, never from the button.
 
-Four kinds:
+The kinds:
 
 * ``quote``    — a money verb's quote, built by the SEAT from the verb's own
                  dry run. The row stores the exact confirm line the quote
@@ -23,6 +23,9 @@ Four kinds:
 * ``builder``  — a bare ``/send`` or ``/swap``: chain, token, recipient (or the
                  token to buy) and amount, one row of buttons per step
                  (``surfaces/card_builder.py``); the last tap runs the QUOTE.
+* ``call``     — 126: the exact typed call(s) and their dry run
+                 (``core.surfaces.call_cards``); Confirm runs them once as the
+                 owner seat (``tools/controller/call_card_run.py``).
 
 ⚠️ Invariants (each pinned by ``tests/unit/core/surfaces/test_cards.py``):
 
@@ -64,6 +67,9 @@ KIND_JOB = "job"
 KIND_SETTING = "setting"
 #: The kinds whose Confirm runs the stored seat line itself (no `go`).
 LINE_KINDS = frozenset({KIND_JOB, KIND_SETTING})
+#: 126: the exact typed call(s) and their dry run (``core.surfaces.call_cards``);
+#: Confirm hands the card to the runner, never a line.
+KIND_CALL = "call"
 
 ORIGIN_SYSTEM = "system"
 ORIGIN_AGENT = "agent"
@@ -132,13 +138,9 @@ def parse_act(word: str) -> Optional[str]:
 #: backtick or angle bracket (a usage placeholder like ``<max_usd>`` is not an
 #: argument), bounded.
 _ARG_RE = re.compile(r"^[^\s`<>\x00-\x1f]{1,256}$")
-#: The ONE set of words that turn a quoting money verb into an executing one.
-GO_WORDS = ("go", "execute", "confirm")
-
-
-def is_go_word(word: str) -> bool:
-    """True when *word* is one of :data:`GO_WORDS` (any case)."""
-    return str(word or "").lower() in GO_WORDS
+#: The ONE set of words that turn a quoting money verb into an executing one
+#: (``core.surfaces.go_words``, a leaf; re-exported here).
+from core.surfaces.go_words import GO_WORDS, is_go_word  # noqa: E402,F401
 
 
 #: Verbs with subcommands: the only ones a PROPOSAL may name. ``/wallet
@@ -164,8 +166,6 @@ JOB_CARD_SUBCOMMANDS = {
     "/trade": frozenset({"start", "release", "stop"}),
     # 099: an offer's setup budget, its go-live (pinned by the manifest hash), a dispute.
     "/offer": frozenset({"setup", "live", "resolve"}),
-    # 117: a v4 pool seed declaration, only as ``/lp seed confirm <ref>``.
-    "/lp": frozenset({"seed"}),
 }
 #: The most words one job card line holds (a task is prose).
 MAX_JOB_WORDS = 400
@@ -176,6 +176,23 @@ def executes(args: List[str]) -> bool:
     ANYWHERE (``/pay`` strips ``id=`` first; ``/writeoff`` reads `go` as its
     third word, before a free-text reason)."""
     return any(is_go_word(a) for a in (args or []))
+
+
+def runs_in_background(cmd: str, text: str) -> bool:
+    """An owner verb that may wait minutes, on every seat that runs owner verbs
+    (the chat harness and the console chat box): an EXECUTING money verb (a
+    ``core.verbs`` row with a ``background`` word — it waits for a receipt, or on
+    the owner's tap). Only with a `go` word: the bare form is a quote and answers
+    inline. A card confirm re-enters with the line the card carries, so it follows
+    the same rule. Also `/avatar set`, which fetches an image (or an NFT's
+    metadata) off the box, and `/avatar push`, which calls each platform."""
+    words = (text or "").split()
+    if cmd == "/avatar":  # `/avatar set <url|nft:…>` fetches over the network
+        return len(words) > 1 and words[1].lower() in ("set", "push")
+    from core.verbs import background_word
+    if not background_word(cmd):
+        return False
+    return executes(words[1:])
 
 
 def card_token(card_id: str, act: str) -> str:
@@ -255,7 +272,7 @@ def card_actions(card: Card) -> list:
     if card.state != S_OPEN:
         return []
     cid = card.card_id
-    if card.kind == KIND_QUOTE:
+    if card.kind in (KIND_QUOTE, KIND_CALL):
         return [Action("Confirm", card_token(cid, "ok"), "primary"),
                 Action("Refresh", card_token(cid, "re")),
                 Action("Cancel", card_token(cid, "no"), "danger")]
@@ -708,7 +725,7 @@ def _new(user_id: str, kind: str, origin: str, title: str, *, body: str = "",
          verb: str = "", args: Optional[List[str]] = None,
          options: Optional[List[str]] = None, session_id: Optional[str] = None,
          typed: Optional[List[str]] = None, group_id: Optional[str] = None,
-         ttl: float, st: Optional[CardStore] = None) -> Card:
+         ttl: float, st: Optional[CardStore] = None, draft: Optional[dict] = None) -> Card:
     now = time.time()
     parent = _PARENT.get()
     parent_id = None
@@ -723,7 +740,8 @@ def _new(user_id: str, kind: str, origin: str, title: str, *, body: str = "",
                 body=_kept_body(body or ""),
                 verb=verb, args=list(args or []), options=list(options or []),
                 session_id=session_id, typed=list(typed or []), group_id=group_id,
-                parent_id=parent_id, created_at=now, expires_at=now + ttl, updated_at=now)
+                parent_id=parent_id, created_at=now, expires_at=now + ttl, updated_at=now,
+                draft=dict(draft or {}))
     return (st or store()).insert(card)
 
 
@@ -1054,10 +1072,7 @@ def job_card(user_id: str, words: List[str], *, title: str, body: str = "",
     shape = JOB_CARD_SUBCOMMANDS.get(verb)
     if shape is None or len(words) < 3 or words[1].lower() not in shape:
         raise ValueError("a job card carries only /goal new|grant, /job new|edit, "
-                         "/trade start|release|stop, /offer setup|live|resolve or "
-                         "/lp seed confirm")
-    if verb == "/lp" and (len(words) != 4 or words[2].lower() != "confirm"):
-        raise ValueError("a job card carries /lp only as /lp seed confirm <ref>")
+                         "/trade start|release|stop or /offer setup|live|resolve")
     if verb == "/job" and words[1].lower() == "edit" and (
             len(words) < 5 or words[3].lower() != "grant"):
         raise ValueError("a job card edits a job only as /job edit <id> grant …")
@@ -1131,6 +1146,9 @@ class Press:
     #: A builder pick (1-based): the SEAT advances the card (it reads balances
     #: and addresses, which core does not).
     pick: Optional[int] = None
+    #: 126: a call card's act (``ok`` run the steps, ``re`` a fresh dry run): the
+    #: seat hands the card to ``tools.controller.call_card_run``.
+    call: Optional[str] = None
 
 
 #: 093 D1: the seat lines a SETTING card may carry (the structural guard; the
@@ -1183,7 +1201,7 @@ def press(card_id: str, act: str, user_id: str, *,
     if card.state != S_OPEN:
         return Press(reply=f"That card is already decided — "
                            f"{_STATE_WORDS.get(card.state, card.state)}", card=card)
-    if card.expired() and act == "re" and card.kind in (KIND_QUOTE, KIND_PROPOSAL):
+    if card.expired() and act == "re" and card.kind in (KIND_QUOTE, KIND_PROPOSAL, KIND_CALL):
         # 084 R14: the Refresh button is still drawn on an expired quote — it
         # runs a fresh quote (the old card is REPLACED by it, so its group
         # waits for the new quote instead of settling on "expired").
@@ -1191,6 +1209,8 @@ def press(card_id: str, act: str, user_id: str, *,
         if not done:
             return Press(reply="That card was decided a moment ago.", card=st.get(card_id))
         _notify(done)
+        if done.kind == KIND_CALL:
+            return Press(call="re", card=done)
         return Press(run=done.refresh_line, card=done)
     if card.expired():
         done = st.transition(card_id, frozenset({S_OPEN}), S_EXPIRED)
@@ -1204,20 +1224,24 @@ def press(card_id: str, act: str, user_id: str, *,
             _notify(done)
             return Press(reply=_STATE_WORDS[S_CANCELLED], card=done)
         return Press(reply="That card was decided a moment ago.", card=st.get(card_id))
-    if (card.kind == KIND_QUOTE or card.kind in LINE_KINDS) and act == "ok":
+    if (card.kind in (KIND_QUOTE, KIND_CALL) or card.kind in LINE_KINDS) and act == "ok":
         done = st.transition(card_id, frozenset({S_OPEN}), S_CONFIRMED)
         if not done:
             return Press(reply="That card was decided a moment ago — nothing was "
                                "run twice.", card=st.get(card_id))
         _notify(done)
+        if done.kind == KIND_CALL:
+            return Press(call="ok", card=done)
         # A job card's line is the seat's own write verb: no `go` exists for it.
         return Press(run=done.line if done.kind in LINE_KINDS else done.confirm_line,
                      card=done)
-    if card.kind in (KIND_QUOTE, KIND_PROPOSAL) and act == "re":
+    if card.kind in (KIND_QUOTE, KIND_PROPOSAL, KIND_CALL) and act == "re":
         done = st.transition(card_id, frozenset({S_OPEN}), S_REPLACED)
         if not done:
             return Press(reply="That card was decided a moment ago.", card=st.get(card_id))
         _notify(done)
+        if done.kind == KIND_CALL:
+            return Press(call="re", card=done)
         return Press(run=done.refresh_line, card=done)
     if card.kind == KIND_BUILDER and act.isdigit():
         i = int(act)
@@ -1257,6 +1281,8 @@ def tap_line(text: str, user_id: str, *, st: Optional[CardStore] = None) -> str:
             return card.confirm_line
         if act == "ok" and card.kind in LINE_KINDS:
             return card.line
+        if act in ("ok", "re") and card.kind == KIND_CALL:
+            return f"({'confirmed' if act == 'ok' else 'refreshed'} card {card.card_id}: {card.title})"
         if act == "re" and card.kind in (KIND_QUOTE, KIND_PROPOSAL):
             return card.refresh_line
         if act == "no":   # memory F9: the id and the whole line, never the title alone

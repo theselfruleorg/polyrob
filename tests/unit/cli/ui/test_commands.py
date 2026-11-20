@@ -388,7 +388,7 @@ class _FakePM:
 def test_todos_reads_session_file_via_pm(monkeypatch, tmp_path):
     # /todos must read the agent's session todo file (pm), NOT ./todo.md in CWD.
     (tmp_path / "todo.md").write_text("- [ ] alpha\n- [x] beta\n")
-    monkeypatch.setattr("agents.task.path.pm", lambda: _FakePM(tmp_path))
+    monkeypatch.setattr("core.session_paths.pm", lambda: _FakePM(tmp_path))
     from cli.ui.commands.handlers import _h_todos
     ctx, buf = _plain_ctx(session_id="s1", user_id="u1")
     _h_todos(ctx)
@@ -400,7 +400,7 @@ def test_todos_reads_session_file_via_pm(monkeypatch, tmp_path):
 
 def test_todos_empty_uses_candy_grammar(monkeypatch, tmp_path):
     # No todo.md at all -> the shared empty-state grammar, not the old bespoke line.
-    monkeypatch.setattr("agents.task.path.pm", lambda: _FakePM(tmp_path))
+    monkeypatch.setattr("core.session_paths.pm", lambda: _FakePM(tmp_path))
     from cli.ui.commands.handlers import _h_todos
     ctx, buf = _plain_ctx(session_id="s1", user_id="u1")
     _h_todos(ctx)
@@ -413,7 +413,7 @@ def test_logs_finds_dir_via_pm(monkeypatch, tmp_path):
     logs = tmp_path / "logs"
     logs.mkdir()
     (logs / "run.log").write_text("hello\n")
-    monkeypatch.setattr("agents.task.path.pm", lambda: _FakePM(tmp_path))
+    monkeypatch.setattr("core.session_paths.pm", lambda: _FakePM(tmp_path))
     from cli.ui.commands.handlers import _h_logs
     ctx, buf = _plain_ctx(session_id="s1", user_id="u1")
     _h_logs(ctx)
@@ -425,7 +425,7 @@ def test_logs_finds_dir_via_pm(monkeypatch, tmp_path):
 def test_export_includes_conversation_turns(monkeypatch, tmp_path):
     import json as _json
     from types import SimpleNamespace
-    monkeypatch.setattr("agents.task.path.pm", lambda: _FakePM(tmp_path))
+    monkeypatch.setattr("core.session_paths.pm", lambda: _FakePM(tmp_path))
     monkeypatch.chdir(tmp_path)
     convo = SimpleNamespace(
         turns=[SimpleNamespace(user="hi", assistant="hello there")],
@@ -844,9 +844,9 @@ async def test_usage_keeps_this_chats_breakdown_when_the_admin_home_cannot_be_re
 async def test_replay_replays_feed_dir(tmp_path, monkeypatch):
     # Build a small feed dir mirroring the real captured shape, under the pm()
     # session tree (W8: the cwd/.polyrob/sessions fallback is gone).
-    from agents.task.path import get_path_manager
+    from core.session_paths import get_path_manager
     _pmgr = get_path_manager(data_root=str(tmp_path / "sessions"))
-    monkeypatch.setattr("agents.task.path.pm", lambda: _pmgr)
+    monkeypatch.setattr("core.session_paths.pm", lambda: _pmgr)
     feed = (Path(_pmgr.data_root) / _pmgr.clean_user_id("local")
             / _pmgr.clean_session_id("mysession") / "feed")
     feed.mkdir(parents=True)
@@ -923,7 +923,7 @@ async def test_cwd(monkeypatch):
         def get_workspace_dir(self, sid, uid):
             return Path("/tmp/ws") / sid
 
-    monkeypatch.setattr("agents.task.path.pm", lambda: _PM())
+    monkeypatch.setattr("core.session_paths.pm", lambda: _PM())
     reg = default_registry()
     ctx, buf = _plain_ctx(session_id="abc")
     await reg.dispatch("/cwd", ctx)
@@ -988,7 +988,7 @@ def test_goals_not_initialized_uses_candy_grammar(monkeypatch, tmp_path):
 
 
 def test_goals_empty_board_uses_candy_grammar(monkeypatch, tmp_path):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from cli.ui.commands.handlers import _h_goals
 
     GoalBoard(str(tmp_path / "goals.db"))  # creates the db/table, no rows
@@ -1002,7 +1002,7 @@ def test_goals_empty_board_uses_candy_grammar(monkeypatch, tmp_path):
 
 
 def test_goals_lists_rows_with_title(monkeypatch, tmp_path):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from cli.ui.commands.handlers import _h_goals
 
     board = GoalBoard(str(tmp_path / "goals.db"))

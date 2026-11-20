@@ -179,6 +179,10 @@ class ProfileManager:
 		}
 		if tool_ids is not None:
 			ctx['tool_ids'] = tool_ids
+		# A worker that writes public text speaks in the session's voice: the
+		# profile-built prompt carries the same persona the default prompt does.
+		if agent_config.get('persona_block'):
+			ctx['persona_block'] = agent_config['persona_block']
 		if isinstance(max_failures, int) and max_failures > 0:
 			ctx['max_failures'] = max_failures
 		return ctx

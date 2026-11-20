@@ -39,7 +39,7 @@ def session_taint_recorded(session_id: Optional[str], user_id: Optional[str]) ->
     if not session_id:
         return False
     try:
-        from agents.task.path import pm
+        from core.session_paths import pm
         root = pm().get_session_root(str(session_id), user_id)
         return (root / "data" / _TAINT_FILE).exists()
     except Exception:
@@ -91,7 +91,7 @@ class HITLIngressMixin:
         sid = getattr(self, "session_id", None)
         if not sid or not isinstance(sid, str):
             return None
-        from agents.task.path import pm
+        from core.session_paths import pm
         return pm().get_data_dir(sid, getattr(self, "user_id", None)) / _TAINT_FILE
 
     def _write_taint_sidecar(self, sources) -> None:
@@ -179,7 +179,7 @@ class HITLIngressMixin:
                     from agents.task.agent.messages.context_references import (
                         preprocess_context_references,
                     )
-                    from agents.task.path import pm
+                    from core.session_paths import pm
                     _root = str(pm().get_workspace_dir(self.session_id, self.user_id))
                     text = preprocess_context_references(
                         text, root=_root, confine_to_root=True, allow_filesystem=True

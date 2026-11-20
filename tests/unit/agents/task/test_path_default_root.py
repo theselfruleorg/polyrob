@@ -13,14 +13,14 @@ from pathlib import Path
 def test_bare_pathmanager_honors_polyrob_data_dir(monkeypatch, tmp_path):
     monkeypatch.delenv("DATA_ROOT", raising=False)
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    from agents.task.path import PathManager
+    from core.session_paths import PathManager
     assert Path(PathManager().data_root).resolve() == (tmp_path / "sessions").resolve()
 
 
 def test_bare_pathmanager_data_root_env_still_wins(monkeypatch, tmp_path):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path / "explicit"))
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
-    from agents.task.path import PathManager
+    from core.session_paths import PathManager
     assert Path(PathManager().data_root).resolve() == (tmp_path / "explicit").resolve()
 
 
@@ -34,5 +34,5 @@ def test_bare_pathmanager_legacy_default_unchanged(monkeypatch, tmp_path):
     assert '_LEGACY_SESSIONS_DEFAULT = "./data/task"' in Path(rp.__file__).read_text()
     monkeypatch.setattr(rp, "_LEGACY_SESSIONS_DEFAULT", "./data/task")
     monkeypatch.chdir(tmp_path)
-    from agents.task.path import PathManager
+    from core.session_paths import PathManager
     assert Path(PathManager().data_root).resolve() == Path("./data/task").resolve()

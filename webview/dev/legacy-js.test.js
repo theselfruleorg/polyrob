@@ -1,4 +1,4 @@
-// FE14 / FE15 / FE16 (2026-10-03 audit) — the legacy `static/js` pages.
+// FE14 / FE16 (FE15 went with the error page's Repair button) (2026-10-03 audit) — the legacy `static/js` pages.
 //
 // The console CSP drops `'unsafe-inline'`, so an inline `onclick=` is dead
 // markup: the toast × and the "Reload" button did nothing, and the critical
@@ -6,7 +6,6 @@
 // as HTML.
 import { describe, it, expect, beforeEach } from "vitest";
 import { ErrorHandler } from "../static/js/error-handler.js";
-import { setAction } from "../static/js/error-page.js";
 
 describe("FE14 — the error toast and overlay need no inline handler", () => {
   beforeEach(() => { document.body.replaceChildren(); });
@@ -27,16 +26,6 @@ describe("FE14 — the error toast and overlay need no inline handler", () => {
     expect(document.querySelectorAll(".error-critical-overlay").length).toBe(1);
     const reload = document.querySelector(".btn-reload");
     expect(reload.getAttribute("onclick")).toBeNull();
-  });
-});
-
-describe("FE15 — the repair answer is text, never HTML", () => {
-  it("setAction writes server text as a text node", () => {
-    const btn = document.createElement("button");
-    setAction(btn, 'Error: <img src=x onerror="alert(1)">');
-    expect(btn.querySelector("img")).toBeNull();
-    expect(btn.textContent).toBe('> Error: <img src=x onerror="alert(1)">');
-    expect(btn.querySelector(".action-prefix").textContent).toBe(">");
   });
 });
 

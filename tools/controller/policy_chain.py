@@ -493,3 +493,11 @@ async def run_seat_action(*, tool_id, action, params, execution_context, call):
 
 __all__ = ["ORDER", "SEAT_STAGES", "install_controller_policy", "seat_pipeline",
            "run_seat_action", "SeatRefused"]
+
+
+def _register_seat_runner() -> None:
+    from core.seat_runner import register_seat_runner
+    register_seat_runner(run_seat_action, SeatRefused)
+
+
+_register_seat_runner()

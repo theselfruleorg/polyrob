@@ -8,6 +8,7 @@ deterministic backoff convoy under contention.
 """
 from __future__ import annotations
 
+import contextlib
 import random
 import os
 import stat
@@ -195,3 +196,46 @@ def execute_retry(db_path: str, sql: str, params: tuple = (), *, fetch: Optional
                 continue
             raise
     raise last_err  # type: ignore[misc]
+
+
+@contextlib.contextmanager
+def write_txn(db_path: str, deadline_sec: Optional[float] = None):
+    """One write transaction: ``BEGIN IMMEDIATE`` (with the :func:`execute_retry`
+    jitter on a held lock), then commit on success or rollback on an error.
+
+    Yields the connection; every statement of the transaction runs on it.
+    ``deadline_sec`` bounds the wait for the write lock.
+    """
+    end = None if deadline_sec is None else time.monotonic() + deadline_sec
+    last_err: Optional[Exception] = None
+    conn: Optional[sqlite3.Connection] = None
+    for _ in range(_MAX_RETRIES):
+        timeout = _BUSY_TIMEOUT_S
+        if end is not None:
+            left = end - time.monotonic()
+            if left <= 0 and last_err is not None:
+                break
+            timeout = max(0.05, min(_BUSY_TIMEOUT_S, left))
+        candidate = wal_connect(db_path, timeout=timeout)
+        try:
+            candidate.execute("BEGIN IMMEDIATE")
+        except sqlite3.OperationalError as e:
+            candidate.close()
+            if "locked" in str(e).lower() or "busy" in str(e).lower():
+                last_err = e
+                time.sleep(random.uniform(0.02, 0.15))
+                continue
+            raise
+        conn = candidate
+        break
+    if conn is None:
+        raise last_err  # type: ignore[misc]
+    try:
+        yield conn
+    except BaseException:
+        conn.rollback()
+        raise
+    else:
+        conn.commit()
+    finally:
+        conn.close()

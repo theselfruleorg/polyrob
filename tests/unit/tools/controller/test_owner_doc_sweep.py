@@ -108,4 +108,4 @@ async def test_each_tool_path_refuses_job_state_and_names_the_verb(tmp_path):
 
 def test_the_description_says_rules_only(tmp_path):
 	a = _controller(tmp_path)
-	assert "never here" in a.description and "cronjob_" in a.description
+	assert "never here" in a.description.lower() and "cronjob_" in a.description

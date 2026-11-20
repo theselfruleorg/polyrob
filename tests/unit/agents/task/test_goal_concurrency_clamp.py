@@ -12,14 +12,14 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _reset_pm():
-    from agents.task.path import reset_path_manager
+    from core.session_paths import reset_path_manager
     reset_path_manager()
     yield
     reset_path_manager()
 
 
 def _install_pm(tmp_path, project_root):
-    from agents.task.path import get_path_manager, set_path_manager
+    from core.session_paths import get_path_manager, set_path_manager
     pm = get_path_manager(
         data_root=str(tmp_path / "d"),
         workspace_is_project_root=project_root is not None,

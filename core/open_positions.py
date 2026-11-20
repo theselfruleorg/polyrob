@@ -903,9 +903,11 @@ def held_count_text(open_rows, quarantined) -> str:
 
 def realized_for(user_id: str, *, chain: Optional[str] = None,
                  account: str = TREASURY_ACCOUNT,
-                 db_path: Optional[str] = None) -> List[RealizedEntry]:
-    """071 W3: the realized P&L rows of one holder. STRICT like
-    :func:`positions_for`; a store older than the realized table has none."""
+                 db_path: Optional[str] = None,
+                 all_accounts: bool = False) -> List[RealizedEntry]:
+    """071 W3: the realized P&L rows of one holder (``all_accounts``: of the treasury and
+    every NFT account, 122 W4). STRICT like :func:`positions_for`; a store older than the
+    realized table has none."""
     uid = str(user_id or "").strip()
     if not uid:
         return []
@@ -926,8 +928,8 @@ def realized_for(user_id: str, *, chain: Optional[str] = None,
     reason = "close_reason" if "close_reason" in cols else "'' AS close_reason"
     sql = ("SELECT chain, account, address, symbol, realized_usd, known_legs, "
            f"unknown_legs, sold_qty, updated_ts, {reason} FROM position_realized "
-           "WHERE user_id=? AND account=?")
-    args: tuple = (uid, _account_key(account))
+           "WHERE user_id=?" + ("" if all_accounts else " AND account=?"))
+    args: tuple = (uid,) if all_accounts else (uid, _account_key(account))
     if chain:
         sql += " AND lower(chain)=?"
         args += (str(chain).strip().lower(),)

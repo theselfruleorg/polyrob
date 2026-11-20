@@ -18,9 +18,9 @@ from tests.support.repo_index import repo_index
 REPO = Path(__file__).resolve().parent.parent
 TREES = ("agents", "tools", "cli", "surfaces", "core", "polyrob", "cron", "api", "webview",
          "modules", "scripts")
-BOARD_FILE = "agents/task/goals/board.py"
+BOARD_FILE = "modules/goals/board.py"
 # The GoalBoard store mixins (W9 split) are the board too: their ``self.create(`` counts.
-BOARD_FILES = (BOARD_FILE, "agents/task/goals/board_asks.py", "agents/task/goals/board_deps.py")
+BOARD_FILES = (BOARD_FILE, "modules/goals/board_asks.py", "modules/goals/board_deps.py")
 
 
 def _tracked():
@@ -72,5 +72,5 @@ def test_known_writers_are_covered():
     # 086 W5: surfaces/telegram/owner_ops.py left the list — its one-goal /trade
     # became the trading mandate (no goal is written).
     for rel in ("tools/goal_tools.py", "cli/commands/goals.py", "core/owner_create.py",
-                "agents/task/goals/board_asks.py"):
+                "modules/goals/board_asks.py"):
         assert rel in files, rel

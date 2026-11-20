@@ -9,7 +9,12 @@ import re
 from email.header import decode_header
 from email.message import Message
 from email.utils import getaddresses, parseaddr
-from typing import Optional
+from typing import FrozenSet, Optional
+
+# The ONE sender-proof reader (RFC 8601); re-exported for every caller.
+from tools.email_providers.auth_results import (  # noqa: F401
+    KNOWN_AUTHSERV, authserv_ids_for_host, sender_authenticated, topmost_header,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -232,63 +237,12 @@ def sender_address(raw_from: str) -> str:
     return found[0].strip().lower()
 
 
-def _aligned(domain: str, from_domain: str) -> bool:
-    """Relaxed DMARC-style alignment: equal, or one is a subdomain of the other
-    (the shorter side must still be a registrable-looking name, not a bare TLD)."""
-    a = (domain or "").strip().strip(".").lower()
-    b = (from_domain or "").strip().strip(".").lower()
-    if not a or not b:
-        return False
-    if a == b:
-        return True
-    short, long_ = (a, b) if len(a) < len(b) else (b, a)
-    return "." in short and long_.endswith("." + short)
+def normalize_email_message(em: Message, *,
+                            authserv_ids: FrozenSet[str] = frozenset()) -> dict:
+    """Map a parsed email to the normalized dict ``process_email`` consumes. Pure.
 
-
-_AR_RESULT_RE = re.compile(r"^\s*([a-z0-9_-]+)\s*=\s*([a-z]+)\b(.*)$", re.I | re.S)
-_AR_PROP_RE = re.compile(
-    r"\b(header\.from|header\.d|header\.i|smtp\.mailfrom)\s*=\s*\"?([^\s;\"]+)", re.I)
-
-
-def sender_authenticated(auth_results: Optional[str], from_addr: str) -> bool:
-    """True only when ``auth_results`` (the TOPMOST ``Authentication-Results``
-    header — the one the receiving MX added) proves ``from_addr``'s domain:
-    ``dmarc=pass`` for that From domain, or an ALIGNED ``dkim=pass`` /
-    ``spf=pass``. Anything else — absent, unparseable, ``fail``, ``none``,
-    an unaligned pass — is False. Fail-closed by construction (CHAT-6).
-    """
-    domain = (from_addr or "").rpartition("@")[2].strip().lower()
-    if not auth_results or not domain:
-        return False
-    try:
-        text = re.sub(r"\([^()]*\)", " ", str(auth_results))
-        parts = text.split(";")
-        # [0] is the authserv-id (+ version) — except on Microsoft 365, which
-        # writes no authserv-id and opens with a result ("spf=pass ...").
-        for part in (parts if _AR_RESULT_RE.match(parts[0]) else parts[1:]):
-            m = _AR_RESULT_RE.match(part)
-            if not m or m.group(2).lower() != "pass":
-                continue
-            method = m.group(1).lower()
-            props = {k.lower(): v.strip().lower() for k, v in _AR_PROP_RE.findall(m.group(3))}
-            if method == "dmarc":
-                hf = props.get("header.from")
-                if hf is None or _aligned(hf.rpartition("@")[2], domain):
-                    return True
-            elif method == "dkim":
-                d = props.get("header.d") or props.get("header.i", "").rpartition("@")[2]
-                if _aligned(d, domain):
-                    return True
-            elif method == "spf":
-                if _aligned(props.get("smtp.mailfrom", "").rpartition("@")[2], domain):
-                    return True
-    except Exception as e:  # a malformed header proves nothing
-        logger.debug("Authentication-Results parse failed: %s", e)
-    return False
-
-
-def normalize_email_message(em: Message) -> dict:
-    """Map a parsed email to the normalized dict ``process_email`` consumes. Pure."""
+    ``authserv_ids``: the receiving MX's accepted ids (``authserv_ids_for_host``);
+    the default empty set authenticates no sender (125 S35, fail closed)."""
     froms = _raw_headers(em, "From")
     # Parse sender identity before any encoded display-name decoding. Two From
     # headers name no single sender: the mail carries no usable identity.
@@ -300,7 +254,8 @@ def normalize_email_message(em: Message) -> dict:
         # CHAT-6: the sender counts as authenticated only on the receiving MX's
         # (topmost) Authentication-Results; a forged From: is never a contact.
         "sender_authenticated": sender_authenticated(
-            auth[0] if auth else None, sender_address(raw_from)),
+            auth[0] if auth else None, sender_address(raw_from),
+            authserv_ids=authserv_ids),
         "subject": _decode(em.get("Subject")),
         "body": _plain_body(em),
         "in_reply_to": (em.get("In-Reply-To") or "").strip(),

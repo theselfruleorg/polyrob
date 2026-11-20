@@ -7,7 +7,8 @@ is ONE durable row here:
 
 * ``proposed``  — the agent (``lp_add`` with a PoolKey named in full) or the
   owner (``/lp seed …``) wrote it. It grants nothing; it carries a card.
-* ``confirmed`` — ONLY the owner seat's ``/lp seed confirm <ref>`` (the card's
+* ``confirmed`` — ONLY the owner seat's ``/lp seed confirm <ref>`` or a call card's
+  ``lp_seed_confirm`` step (the owner's tap, proposal 126; formerly the card's
   Confirm) moves it here. ``lp_add(protocol='v4', seed=<ref>)`` reads key,
   range, amounts and price from the row and nothing from the caller.
 * ``sending``   — claimed for ONE broadcast (a row is one use).
@@ -377,30 +378,8 @@ def move_lines(f: Dict[str, Any]) -> list:
     ]
 
 
-def card_body(f: Dict[str, Any], *, notes: Tuple[str, ...] = ()) -> str:
-    lines = summary_lines(f) + [n for n in notes if n]
-    lines += ["",
-              "Confirm declares this pool, range, price and both amounts for ONE use within "
-              "one hour. It sends nothing and it raises no limit: the wallet's own caps and "
-              "LP_ETH_CAP still judge the transaction."]
-    return "\n".join(lines)
-
-
-def seed_card(user_id: str, ref: str, f: Dict[str, Any], *, origin: str,
-              session_id: Optional[str] = None, notes: Tuple[str, ...] = (), st: Any = None):
-    """The ONE owner card of a proposed declaration; Confirm runs
-    ``/lp seed confirm <ref>`` on the owner's seat."""
-    from core.surfaces import cards
-    return cards.job_card(user_id, ["/lp", "seed", "confirm", ref],
-                          title=("Move a pool position — confirm the declaration"
-                                 if "from_token_id" in f else
-                                 "Create a pool position — confirm the declaration"),
-                          body=card_body(f, notes=notes), session_id=session_id, st=st,
-                          origin=cards.ORIGIN_AGENT if origin == "agent" else cards.ORIGIN_SYSTEM)
-
-
 __all__ = ["CONFIRMED", "CONFIRMED_TTL_S", "DB_NAME", "EXPIRED", "FAILED", "FIELDS",
            "GAP_DEFAULT_BPS", "GAP_MAX_BPS", "MACHINE", "MOVE_FIELDS", "PROPOSED", "PROPOSED_TTL_S", "SEEDED",
-           "SENDING", "SeedError", "SeedUnreadable", "card_body", "claim", "confirm", "db_path",
+           "SENDING", "SeedError", "SeedUnreadable", "claim", "confirm", "db_path",
            "finish", "get", "init_schema", "key_of", "move_lines", "price_of", "propose", "release",
-           "seed_card", "summary_lines", "validate"]
+           "summary_lines", "validate"]

@@ -1,12 +1,11 @@
 """The owner money verbs, contributed to ``core.verbs`` (067 P5a).
 
 Moved out of ``core.verbs._CORE_TABLE`` unchanged (same words, same order) and
-registered through :func:`core.verbs.register_verbs` — the call the wallet pack
-makes after 067 P5b. No per-seat handler reference yet: every seat still runs
-these verbs from its own built-in branch (Telegram ``harness._handle_owner_admin``
-+ ``surfaces/telegram/*_ops.py``, the REPL ``cli/ui/commands/h_*.py``
-registrations, the dispatcher's ``_COMMANDS`` literal). P5b moves those
-branches into the pack and passes them here as ``handlers_by_seat``.
+registered through :func:`core.verbs.register_verbs`. This module names NO seat
+module (proposal 125 S14: core may not reference a seat): the rows that run from a
+per-seat handler (``/send``, ``/swap``, ``/check``, ``/writeoff``, ``/unquarantine``)
+get it from the seat itself through :func:`core.verbs.register_seat_handlers`
+(``surfaces/telegram/seat_handlers.py``, ``cli/ui/commands/seat_handlers.py``).
 
 Imports nothing but ``core.verbs``.
 """
@@ -41,9 +40,10 @@ MONEY_VERBS: tuple = (
          background="Launch", agent="launchpad_launch"),
     Verb("/deploy", "money", "Deploy a fixed-supply token",
          background="Deploy", agent="defi_trade_deploy_token"),
-    Verb("/lp", "money", "Liquidity positions: inspect, quote, add, remove, collect fees, declare a new pool, or move a position",
+    Verb("/lp", "money", "Liquidity positions: inspect, quote, add, remove, collect fees, declare a new pool, move a position, or see and grant token launches",
          background="Liquidity move", agent="defi_trade",
          agent_partial="add, remove and collect; inspect and quote are defi_data lp reads; "
+                       "launch_token is the agent's launch, a launch mandate is the owner's; "
                        "gap: /lp seed and /lp move"),
     Verb("/claim", "money", "Collect the creator fees a launchpad already owes me",
          background="Claim", agent="launchpad_claim"),
@@ -68,10 +68,10 @@ ROOM_VERBS = ("/paid", "/book")
 
 register_verbs(MONEY_VERBS, source="core.money_verbs", room_verbs=ROOM_VERBS)
 
-#: W1 (token management): a holding's lifecycle, owner seats only. The first
-#: rows contributed WITH per-seat handlers (the 067 P5a convention): Telegram
-#: runs them after its owner gate and refuses them in a room; the REPL
-#: registers them through ``h_contributed``. Both call ``core.wallet.token_trust``.
+#: W1 (token management): a holding's lifecycle, owner seats only. Run from a
+#: per-seat handler (each seat registers its own): Telegram runs them after its
+#: owner gate and refuses them in a room; the REPL registers them through
+#: ``h_contributed``. Both call ``core.wallet.token_trust``.
 HOLDINGS_VERBS: tuple = (
     Verb("/writeoff", "money",
          "Write a holding off: the loss is its recorded cost, and nothing is sold",
@@ -101,39 +101,20 @@ SWAP_VERBS: tuple = (
          background="Swap", agent="defi_trade_swap"),
 )
 
-register_verbs(
-    SWAP_VERBS,
-    {"telegram": {"/swap": "surfaces.telegram.swap_ops:swap_verb"},
-     "repl": {"/swap": "cli.ui.commands.h_swap:h_swap"}},
-    source="core.money_verbs.swap")
+register_verbs(SWAP_VERBS, source="core.money_verbs.swap")
 
-register_verbs(
-    SEND_VERBS,
-    {"telegram": {"/send": "surfaces.telegram.send_ops:send_verb"},
-     "repl": {"/send": "cli.ui.commands.h_send:h_send"}},
-    source="core.money_verbs.send")
+register_verbs(SEND_VERBS, source="core.money_verbs.send")
 
-register_verbs(
-    HOLDINGS_VERBS,
-    {"telegram": {"/writeoff": "surfaces.telegram.holdings_ops:writeoff_verb",
-                  "/unquarantine": "surfaces.telegram.holdings_ops:unquarantine_verb"},
-     "repl": {"/writeoff": "cli.ui.commands.h_holdings:h_writeoff",
-              "/unquarantine": "cli.ui.commands.h_holdings:h_unquarantine"}},
-    source="core.money_verbs.holdings")
+register_verbs(HOLDINGS_VERBS, source="core.money_verbs.holdings")
 
 #: 071: "check this address" had no owner verb and no agent tool. Read-only:
 #: a wallet's holdings or a token's report (any chain), or a ticker's
-#: candidates. Owner seats only — in a room the agent answers through
-#: ``defi_data.wallet_holdings`` itself.
+#: candidates. 125 S12: the read IS the agent's ``defi_data.address_report``.
 CHECK_VERBS: tuple = (
     Verb("/check", "money",
          "Look at any address or ticker: a wallet's holdings or a token's report",
-         agent="defi_data_wallet_holdings",
-         agent_partial="a token's report is defi_data_token_info, a ticker defi_data_token_resolve"),
+         agent="defi_data_address_report",
+         agent_partial="a ticker is defi_data_token_resolve"),
 )
 
-register_verbs(
-    CHECK_VERBS,
-    {"telegram": {"/check": "surfaces.telegram.check_ops:check_verb"},
-     "repl": {"/check": "cli.ui.commands.h_check:h_check"}},
-    source="core.money_verbs.check")
+register_verbs(CHECK_VERBS, source="core.money_verbs.check")

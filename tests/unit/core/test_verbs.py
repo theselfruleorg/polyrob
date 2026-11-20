@@ -149,3 +149,38 @@ def test_memory_and_self_are_owner_reads_on_every_seat():
         row = verb_for(name)
         assert row is not None and row.seats == () and row.room_refused
         assert row in seat_verbs("repl") and row in seat_verbs("telegram")
+
+
+# ---------------------------------------------------------------------------
+# proposal 125 S11: one verb table drives the owner gate
+# ---------------------------------------------------------------------------
+
+#: The verbs ANY principal may run (a person's own chats, help, the welcome).
+_ANY_PRINCIPAL = frozenset({"/start", "/new", "/chats", "/chat", "/rename", "/close",
+                            "/cancel", "/help"})
+
+
+def test_owner_gate_is_derived():
+    """The routed set and the owner-gated set are DERIVED from the verb table, so a
+    new row is routed AND owner-gated by default (fail closed)."""
+    from core.verbs import owner_gated_names, routed_core_names
+    from surfaces.telegram.harness import _OWNER_ADMIN_COMMANDS
+
+    assert set(_COMMANDS) == set(routed_core_names()) | {"/task"}
+    assert set(_OWNER_ADMIN_COMMANDS) == set(owner_gated_names())
+    assert set(routed_core_names()) - set(owner_gated_names()) == _ANY_PRINCIPAL
+    assert {v.name for v in VERB_TABLE if v.any_principal} == _ANY_PRINCIPAL
+
+
+def test_a_pack_row_never_enters_the_derived_core_sets():
+    """A pack verb is routed and gated through ``routed_names()`` at call time; the
+    import-time derivation must not depend on whether a pack loaded first."""
+    from core.verbs import (owner_gated_names, register_verbs, routed_core_names,
+                            unregister_verbs)
+    row = Verb("/zzpacktest", "work", "A test verb", owner_only="test")
+    register_verbs([row], source="pack:zztest")
+    try:
+        assert "/zzpacktest" not in routed_core_names()
+        assert "/zzpacktest" not in owner_gated_names()
+    finally:
+        unregister_verbs("pack:zztest")

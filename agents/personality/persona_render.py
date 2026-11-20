@@ -14,17 +14,22 @@ from typing import Any, Mapping, Optional
 logger = logging.getLogger(__name__)
 
 # --- the rendered/stored-only split (F5) -----------------------------------
-# An operator writes `postExamples` and `messageExamples` — the two fields that
-# most obviously teach a voice — and gets NOTHING: they are parsed, stored on
-# Character and populated by every shipped preset, but no path consumes them.
-# The silent no-op on an authored field is the defect. These two tuples are the
-# SSOT for the split (pinned by tests/unit/agents/personality/test_persona_render.py),
-# they drive the one-time warning below, and they are the table in
-# docs/guide/instances.md. Folding the stored-only fields INTO the block is a
-# product call, deliberately not taken here.
-RENDERED_FIELDS = ("name", "adjectives", "bio", "lore", "topics", "style")
-RENDERED_STYLE_BUCKETS = ("all", "chat", "speaking")
-STORED_ONLY_FIELDS = ("knowledge", "messageExamples", "postExamples", "style.writing")
+# An operator who fills a field expects it to shape the voice. A field the block
+# drops is a silent no-op, so the split is explicit: these tuples are the SSOT
+# (pinned by tests/unit/agents/personality/test_persona_render.py), they drive
+# the one-time warning and `polyrob doctor`, and they are the table in
+# docs/guide/instances.md. `postExamples` / `messageExamples` are the strongest
+# voice signal a character carries, so a SMALL bounded sample renders (at most
+# MAX_VOICE_SAMPLES lines per field, each cut at MAX_VOICE_SAMPLE_CHARS) — never
+# the whole list, which would grow the system prompt without a bound.
+# `knowledge` stays stored-only: facts belong to the pinned self-context, not
+# to the voice layer.
+RENDERED_FIELDS = ("name", "adjectives", "bio", "lore", "topics", "style",
+                   "postExamples", "messageExamples")
+RENDERED_STYLE_BUCKETS = ("all", "chat", "speaking", "writing")
+STORED_ONLY_FIELDS = ("knowledge",)
+MAX_VOICE_SAMPLES = 3
+MAX_VOICE_SAMPLE_CHARS = 240
 
 # (character name, dropped fields) already warned about — the renderer runs per
 # session, and this must never become per-turn noise.
@@ -67,6 +72,72 @@ def _warn_ignored_fields(character: Mapping[str, Any]) -> None:
     )
 
 
+def stored_only_note(character: Optional[Mapping[str, Any]]) -> str:
+    """One owner-facing line naming the filled fields the model never sees, or
+    ``""``. `polyrob doctor` and `polyrob persona show` print it, so the drop is
+    visible where the owner looks, not only in the log."""
+    dropped = ignored_populated_fields(character)
+    if not dropped:
+        return ""
+    return (f"NOT rendered (stored only): {', '.join(dropped)} — the model never "
+            "sees these; put the voice in bio/lore/style/postExamples.")
+
+
+def _clip(text: str) -> str:
+    text = " ".join(str(text).split())
+    if len(text) <= MAX_VOICE_SAMPLE_CHARS:
+        return text
+    return text[: MAX_VOICE_SAMPLE_CHARS - 1].rstrip() + "…"
+
+
+def _message_example_lines(value: Any, name: str) -> list:
+    """The character's OWN lines from ``messageExamples``.
+
+    Two shapes are in use: a flat list of strings, and the conversation shape
+    (a list of turns, each ``{"user": ..., "content": {"text": ...}}``). In the
+    conversation shape only the character's turns are voice samples — a
+    ``{{user1}}`` turn is the other party.
+    """
+    out: list = []
+    if not isinstance(value, (list, tuple)):
+        return _as_lines(value)
+    for item in value:
+        if isinstance(item, str):
+            out.append(item)
+            continue
+        turns = item if isinstance(item, (list, tuple)) else [item]
+        for turn in turns:
+            if isinstance(turn, str):
+                out.append(turn)
+                continue
+            if not isinstance(turn, Mapping):
+                continue
+            speaker = str(turn.get("user") or turn.get("name") or "").strip()
+            if speaker.startswith("{{user") or (name and speaker and speaker != name
+                                                 and not speaker.startswith("{{")):
+                continue
+            content = turn.get("content")
+            text = content.get("text") if isinstance(content, Mapping) else content
+            if text:
+                out.append(str(text))
+    return out
+
+
+def _voice_samples(character: Mapping[str, Any], name: str) -> list:
+    """At most MAX_VOICE_SAMPLES per field, posts first, each clipped."""
+    samples: list = []
+    for lines in (_as_lines(character.get("postExamples")),
+                  _message_example_lines(character.get("messageExamples"), name)):
+        picked = [_clip(l) for l in lines if str(l).strip()][:MAX_VOICE_SAMPLES]
+        samples.extend(p for p in picked if p and p not in samples)
+    return samples
+
+
+def _sentence(text: str) -> str:
+    text = str(text).strip()
+    return text if text[-1:] in ".!?…" else text + "."
+
+
 def _as_lines(value: Any) -> list:
     if not value:
         return []
@@ -105,9 +176,11 @@ def render_persona_block(character: Optional[Mapping[str, Any]]) -> str:
             style_lines.extend(_as_lines(style.get(key)))
     else:
         style_lines.extend(_as_lines(style))
-    style_lines = [s.strip() for s in style_lines if s and s.strip()]
+    # Each style line is its own sentence: joined bare, "explains after Keeps
+    # replies short" reads as one garbled clause.
+    style_lines = [_sentence(s) for s in style_lines if s and s.strip()]
 
-    lore = [l.strip() for l in _as_lines(character.get("lore")) if l.strip()]
+    lore = [_sentence(l) for l in _as_lines(character.get("lore")) if l.strip()]
 
     parts: list = []
     if name:
@@ -126,6 +199,10 @@ def render_persona_block(character: Optional[Mapping[str, Any]]) -> str:
         parts.append("You focus on: " + ", ".join(topics) + ".")
     if style_lines:
         parts.append("Style: " + " ".join(style_lines))
+    samples = _voice_samples(character, name)
+    if samples:
+        parts.append("Voice samples (the tone only; never repeat them, and they "
+                     "state no facts):\n" + "\n".join(f"- {x}" for x in samples))
 
     return "\n".join(parts).strip()
 

@@ -224,7 +224,7 @@ async def _run_hitl_submit(tmp_path, *, kind, text):
         )
     )}
 
-    with patch("agents.task.path.pm", return_value=mock_pm):
+    with patch("core.session_paths.pm", return_value=mock_pm):
         await orch.submit_user_message(agent_id=None, text=text, kind=kind)
 
     return captured.get("text")
@@ -374,7 +374,7 @@ async def test_chat_once_existing_session_roots_at_its_workspace(tmp_path, monke
     fake_pm = MagicMock()
     fake_pm.get_workspace_dir.return_value = workspace
     with patch("os.getcwd", return_value=str(cwd)), \
-            patch("agents.task.path.pm", return_value=fake_pm):
+            patch("core.session_paths.pm", return_value=fake_pm):
         try:
             await agent._chat_once_locked("user-1", "@file:doc.txt", "key-1")
         except Exception:

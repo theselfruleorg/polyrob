@@ -68,10 +68,11 @@ def _workspace_lock_path() -> Optional[str]:
         # ticks and the deploy waiter could not see an owner turn at all. Derive
         # <data_dir>/locks when the data dir is known; a box with neither is a
         # bare dev checkout and stays lock-free as before.
-        data = os.environ.get("POLYROB_DATA_DIR")
-        if not data:
+        from core.runtime_paths import pinned_data_home
+        data = pinned_data_home()
+        if data is None:
             return None
-        root = os.path.join(data, "locks")
+        root = os.path.join(str(data), "locks")
         try:
             os.makedirs(root, exist_ok=True)
         except OSError:
@@ -111,9 +112,10 @@ def turn_marker_path() -> Optional[str]:
     process with neither a data dir nor a lock dir (a bare checkout, a unit test)
     still writes no marker.
     """
-    data = os.environ.get("POLYROB_DATA_DIR")
-    if data:
-        root = os.path.join(data, "locks")
+    from core.runtime_paths import pinned_data_home
+    data = pinned_data_home()
+    if data is not None:
+        root = os.path.join(str(data), "locks")
     else:
         if _workspace_lock_path() is None:
             return None

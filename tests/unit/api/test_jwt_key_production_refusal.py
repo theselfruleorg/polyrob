@@ -6,7 +6,7 @@ a short JWT secret only warned, and a template placeholder passed silently.
 import pytest
 
 from api.app import create_app, jwt_secret_weakness
-from core.env import is_production_env
+from core.env import is_development_env, is_production_env
 
 _ENV_NAMES = ("ENVIRONMENT", "POLYROB_ENV", "CONFIG_ENV", "ENV", "PRODUCTION")
 STRONG = "q8N2vR7xLp4Tz9Kc1Wm6Hs3Yd5Bf0Jg2"
@@ -28,6 +28,17 @@ def test_every_production_name_counts(monkeypatch, name, value):
 
 def test_development_is_not_production():
     assert not is_production_env("development")
+
+
+def test_a_production_name_beats_a_development_name(monkeypatch):
+    """Proposal 125 S34: a relaxation needs an uncontradicted development name."""
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("POLYROB_ENV", "development")
+    assert is_production_env() and not is_development_env()
+
+
+def test_no_name_relaxes_nothing():
+    assert not is_production_env() and not is_development_env()
 
 
 @pytest.mark.parametrize("secret", [

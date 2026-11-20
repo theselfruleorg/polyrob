@@ -16,7 +16,7 @@ from typing import Any, List, Optional
 from agents.task.constants import MemoryConfig
 from agents.task.agent.views import AgentOutput, ActionResult, AgentHistory
 from agents.task.loop_types.browser_views import BrowserState, BrowserStateHistory
-from agents.task.path import pm
+from core.session_paths import pm
 
 
 #: Steps of EARLIER turns a resident agent keeps in memory (about 9 KB each). The full
@@ -257,7 +257,7 @@ class HistoryIOMixin:
 
         try:
             # Import here to avoid circular imports
-            from agents.task.path import pm
+            from core.session_paths import pm
 
             # Session ID already clean from orchestrator
             clean_id = session_id

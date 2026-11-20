@@ -8,8 +8,8 @@ below.
 
 **Where the rules live now.** The owner's rules and facts are ONE document,
 `owner.md` (the owner RULES doc), injected into your identity context under an
-`## Owner facts` heading (the heading may carry an age, e.g.
-`## Owner facts (last write <date>; …)`). `owner_doc_manage` is its one
+`## Owner rules` heading (the heading may carry an age, e.g.
+`## Owner rules (last write <date>; …)`). `owner_doc_manage` is its one
 writer. No new
 `contract.md` is ever created; an older one may still show as
 `## Operating contract`.
@@ -20,7 +20,7 @@ Offer this — don't force it — when ALL of these hold:
 
 1. You're on the local CLI / REPL (the trusted single-operator surface), not
    a network chat surface talking to an unverified sender.
-2. Neither an `## Owner facts` section nor an `## Operating contract` section
+2. Neither an `## Owner rules` section nor an `## Operating contract` section
    appears in your identity context this session. That absence IS the signal
    that the owner has no rules doc yet — you don't need a separate check.
 3. The owner is actively engaging with you conversationally (not, say,
@@ -65,9 +65,11 @@ propose writing them as plain files — always go through:
   action2>")` (union-merge — this only ADDS, never removes an existing
   gate). If it's more general prose ("always ask before anything
   irreversible"), it is an operating rule instead: `owner_doc_manage`.
-- **Anything narrative/prose** that doesn't fit a typed preference (general
-  operating philosophy, house rules, "always do X before Y") ->
-  `owner_doc_manage` (`action="patch"` adds one line; `"update"` is the FULL
+- **A standing decision in prose** that doesn't fit a typed preference (general
+  operating philosophy, "always do X before Y" in all your work) ->
+  `owner_doc_manage`, in the owner's words. The rules of ONE task or job (its
+  steps, lists, criteria) go in that task's skill (`skill_manage`), never here
+  (`action="patch"` adds one line; `"update"` is the FULL
   body — a line you leave out is retired under `## Superseded`). A job's state
   (on/off, schedule, id, progress) never goes here: it lives in the job.
 
@@ -75,9 +77,9 @@ propose writing them as plain files — always go through:
 
 Tell the owner plainly what changed, using what each write returned:
 
-- An `owner_doc_manage` write is always queued as a
-  draft, on every turn — the result says so. Say it waits for the owner in
-  `/pending`, where the owner activates it (or through the owner CLI).
+- An `owner_doc_manage` write in a clean owner turn is in effect at once;
+  otherwise it is a draft that waits in `/pending`. The result says which:
+  report what it says.
 - A SAFE `set` (style) applies immediately. A GUARDED `set` (approvals,
   budget ceilings) is ALWAYS queued for `/pending`, on every turn.
 
@@ -119,9 +121,8 @@ a capability might work — an absent extra is a fact you can see.
 
 ## Self-retirement
 
-This interview is one-time. Once an `## Owner facts` section (or a legacy
+This interview is one-time. Once an `## Owner rules` section (or a legacy
 `## Operating contract` section) appears in your identity context, do not
 re-offer the interview in later sessions — the existence of the owner's rules
-doc IS "done". The section appears from the next session after the owner
-activates the draft in `/pending`. You can still help the owner refine
+doc IS "done". You can still help the owner refine
 it on request, just not via this scripted opener again.

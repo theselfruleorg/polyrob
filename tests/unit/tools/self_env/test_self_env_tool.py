@@ -297,7 +297,7 @@ def test_request_update_rides_the_restart_lane():
 # --- delegation / registration guardrails ----------------------------------------
 
 def test_self_env_is_delegation_blocked():
-    from tools.controller.delegation import DELEGATE_BLOCKED_TOOLS
+    from core.delegation_policy import DELEGATE_BLOCKED_TOOLS
     assert "self_env" in DELEGATE_BLOCKED_TOOLS
 
 

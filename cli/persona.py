@@ -14,68 +14,19 @@ logger = logging.getLogger(__name__)
 def resolve_cli_persona(user_id: Optional[str] = None, home_dir=None) -> str:
     """Persona text for the CLI agent's <identity>, or "" when the gate is off.
 
-    T1-07: delegates to the surface-shared ``agents.personality.persona_resolver``
-    so CLI and chat render the SAME voice: explicit POLYROB_PERSONA (template key
-    or literal free-form text) > the default character > "".
+    T1-07: the surface-shared ``agents.personality.persona_resolver`` renders it,
+    so the CLI and every chat seat speak with the SAME voice: the owner's persona
+    setting (``agents/personality/persona_setting.py``, the ``session.persona``
+    preference ``/persona <name>`` writes on every seat; threat-scanned on read)
+    > the operator's POLYROB_PERSONA > the default character > "".
 
-    owner-UX P1 T5: when ``user_id`` is given, a ``session.persona`` preference
-    (override merge — pref > env > default) may replace the default persona
-    SOURCE for a new session, resolved through the SAME template-key-or-literal
-    precedence the resolver applies to ``POLYROB_PERSONA``. The resolver itself
-    stays pure/unaware of prefs; this wiring lives entirely here, at the call
-    site. No ``user_id`` or no pref file => byte-identical to
-    ``resolve_persona_sync()``.
+    ``user_id``/``home_dir`` name the setting's scope (a profile, a test); the
+    default is the owner's, the scope every chat session reads.
     """
     from agents.personality.persona_resolver import resolve_persona_sync
-    if not user_id:
-        return resolve_persona_sync()
-    try:
-        from core.config_policy import task_personality_block_enabled
-        if not task_personality_block_enabled():
-            return ""
-        import os
-        from core.prefs import resolve_with_source
-        env_persona = (os.environ.get("POLYROB_PERSONA") or "").strip() or None
-        pref_persona, source = resolve_with_source(
-            "session.persona", user_id, data_dir_or_home(home_dir),
-            env_value=env_persona, default=None,
-        )
-        if source == "pref" and pref_persona:
-            # owner-UX P1 final review (item 2b): load-side backstop scan. The
-            # write path (core.prefs.write_preference) already threat-scans a
-            # NEW session.persona pref, but a hand-edited preferences.toml (or
-            # a pref written before that scan existed) bypasses it — never
-            # inject unscanned free text as the session's <identity> source.
-            # Fail-CLOSED: a hit OR a scanner error both fall back to the
-            # pre-pref persona resolution (pref ignored, never crash).
-            try:
-                from modules.memory.task.threat_scan import is_identity_suspicious
-                flagged = is_identity_suspicious(pref_persona)
-            except Exception as e:
-                logger.warning(
-                    "session.persona pref scan error (%s) — ignoring pref, "
-                    "falling back to default persona resolution", e
-                )
-                return resolve_persona_sync()
-            if flagged:
-                logger.warning(
-                    "session.persona pref failed identity scan — ignoring pref, "
-                    "falling back to default persona resolution"
-                )
-                return resolve_persona_sync()
-            # THE shared selector order (F1): template key > character slug >
-            # literal text. The scan above already ran on the RAW pref value, so
-            # the literal branch is unchanged and the character branch only
-            # reaches the same operator-authored file tier
-            # PERSONALITY_DEFAULT_CHARACTER selects.
-            from agents.personality.persona_resolver import resolve_persona_selector
-            resolved = resolve_persona_selector(pref_persona)
-            if resolved:
-                return resolved
-            return pref_persona
-    except Exception:
-        pass  # fail-open to the legacy resolver
-    return resolve_persona_sync()
+    # The resolver fails open: an unreadable setting falls back to the operator's persona.
+    return resolve_persona_sync(
+        user_id=user_id, home_dir=data_dir_or_home(home_dir) if home_dir else None)
 
 
 def cli_gate_on(env=None) -> bool:
@@ -153,19 +104,14 @@ def describe_active_persona(user_id: Optional[str] = None, home_dir=None,
     info["gate"] = True
 
     selector, source = "", ""
-    if user_id:
-        try:
-            import os
-            from core.prefs import resolve_with_source
-            env_persona = (os.environ.get("POLYROB_PERSONA") or "").strip() or None
-            pref_persona, src = resolve_with_source(
-                "session.persona", user_id, data_dir_or_home(home_dir),
-                env_value=env_persona, default=None,
-            )
-            if src == "pref" and pref_persona:
-                selector, source = pref_persona, "pref"
-        except Exception:
-            pass
+    try:
+        from agents.personality.persona_setting import owner_selector
+        pref_persona, _problem = owner_selector(
+            user_id, data_dir_or_home(home_dir) if home_dir else None)
+        if pref_persona:
+            selector, source = pref_persona, "pref"
+    except Exception:
+        pass
     if not selector:
         import os
         env_persona = (os.environ.get("POLYROB_PERSONA") or "").strip()
@@ -208,7 +154,14 @@ def active_persona_line(user_id: Optional[str] = None, home_dir=None,
         where = info["path"] or "NOT FOUND — falling back to the packaged neutral character"
         via = {"pref": "session.persona pref", "env": "POLYROB_PERSONA",
                "default": "PERSONALITY_DEFAULT_CHARACTER"}.get(source, source)
-        return f"persona: character '{name}' via {via} ({where})"
+        line = f"persona: character '{name}' via {via} ({where})"
+        try:
+            from agents.personality.persona_render import stored_only_note
+            from agents.personality.persona_resolver import load_character_dict
+            note = stored_only_note(load_character_dict(name)) if info["path"] else ""
+        except Exception:
+            note = ""
+        return f"{line}\n  {note}" if note else line
     if kind == "template":
         return f"persona: template '{name}' via {source or 'env'}"
     if kind == "literal":
@@ -259,22 +212,20 @@ def build_persona_listing(user_id: Optional[str] = None, home_dir=None,
     names: list = list(character_names) if character_names is not None else _all_character_names()
 
     guidance = [
-        "Selector order for /persona <value> and POLYROB_PERSONA: "
-        "template key > character slug > literal text.",
-        "Characters: set one persistently with "
-        "PERSONALITY_DEFAULT_CHARACTER=<name> (or /persona <name>).",
-        "Templates: set one with POLYROB_PERSONA=<template> "
-        "(or /persona <template>).",
-        "Either way the change applies to the NEXT session. "
+        "/persona <name> sets the persona of every new chat, on every seat: a template "
+        "key, else a character name, else your own text.",
+        "/persona reset goes back to the default. The change applies to the NEXT session. "
         "`polyrob persona show` prints the rendered block.",
     ]
     if active["gate"]:
         where = f" ({active['path']})" if active.get("path") else ""
+        via = {"pref": "your /persona setting", "env": "the operator's setting",
+               "default": "the default"}.get(active["source"], active["source"])
         guidance.insert(0, f"active: {active['kind']} {active['name']!r}"
-                           f" via {active['source']}{where}")
+                           f" via {via}{where}")
     else:
-        guidance.insert(0, "active: none — TASK_PERSONALITY_BLOCK is off, so no "
-                           "persona block is injected")
+        guidance.insert(0, "active: none — the operator's setting turns the persona "
+                           "block off, so no persona reaches the model")
 
     return {
         "templates": [[f"{k}{mark('template', k)}", "built-in operating template"]

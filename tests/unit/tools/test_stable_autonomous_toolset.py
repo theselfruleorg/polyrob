@@ -7,7 +7,7 @@ frozen and the rejection is told in the catalog instead.
 """
 import pytest
 
-from agents.task.constants import effective_autonomous_tools
+from core.config_policy.autonomous_tools import effective_autonomous_tools
 
 
 @pytest.fixture
@@ -22,7 +22,7 @@ def smtp_rejected(monkeypatch):
 
 def test_legacy_drop_only_when_explicitly_off(monkeypatch, smtp_rejected):
     monkeypatch.setenv("STABLE_AUTONOMOUS_TOOLSET", "false")
-    import agents.task.constants as c
+    import core.config_policy.autonomous_tools as c
     monkeypatch.setattr(c, "autonomous_mode_tools", lambda: ("filesystem", "email", "task"))
     assert "email" not in effective_autonomous_tools()
 
@@ -30,14 +30,14 @@ def test_legacy_drop_only_when_explicitly_off(monkeypatch, smtp_rejected):
 def test_default_keeps_the_toolset_frozen(monkeypatch, smtp_rejected):
     """2026-09-22 harness/cache review F2: the default is the frozen set."""
     monkeypatch.delenv("STABLE_AUTONOMOUS_TOOLSET", raising=False)
-    import agents.task.constants as c
+    import core.config_policy.autonomous_tools as c
     monkeypatch.setattr(c, "autonomous_mode_tools", lambda: ("filesystem", "email", "task"))
     assert effective_autonomous_tools() == ("filesystem", "email", "task")
 
 
 def test_stable_toolset_keeps_the_bytes_frozen(monkeypatch, smtp_rejected):
     monkeypatch.setenv("STABLE_AUTONOMOUS_TOOLSET", "true")
-    import agents.task.constants as c
+    import core.config_policy.autonomous_tools as c
     monkeypatch.setattr(c, "autonomous_mode_tools", lambda: ("filesystem", "email", "task"))
     assert effective_autonomous_tools() == ("filesystem", "email", "task")
 

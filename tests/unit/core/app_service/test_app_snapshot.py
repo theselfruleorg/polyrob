@@ -189,3 +189,24 @@ def test_snapshot_ships_a_world_readable_hard_linked_file(tmp_path):
     finally:
         os.close(fd)
     assert (dst / "index.js").read_text() == "module"
+
+
+def test_a_group_writable_setgid_dir_is_tightened_without_re_setting_setgid(tmp_path, monkeypatch):
+    """polyrob-apps.service runs with RestrictSUIDSGID=true and the data home is
+    setgid: an fchmod that carries the setgid bit is refused (EPERM)."""
+    import errno
+    import stat
+    from core.app_service.snapshot import open_owned_dir
+    d = tmp_path / "apps"
+    d.mkdir()
+    os.chmod(d, 0o2775)
+    real = os.fchmod
+
+    def fchmod(fd, mode):
+        if mode & (stat.S_ISUID | stat.S_ISGID):
+            raise PermissionError(errno.EPERM, "Operation not permitted")
+        return real(fd, mode)
+    monkeypatch.setattr(os, "fchmod", fchmod)
+    fd = open_owned_dir(str(tmp_path), ["apps"])
+    os.close(fd)
+    assert not os.stat(d).st_mode & 0o022

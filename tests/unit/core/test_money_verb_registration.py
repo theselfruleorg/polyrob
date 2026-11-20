@@ -76,7 +76,7 @@ def test_every_spend_verb_is_blocked_while_correspondent_tainted():
     "order") and would also miss a verb that is in the set but which the
     predicate somehow does not honour. The predicate is what runs.
     """
-    from agents.task.agent.core.correspondent_gate import is_high_impact
+    from core.security.high_impact import is_high_impact
     missing = {v for v in _spend_verbs() if not is_high_impact(v)}
     assert not missing, (
         f"money verbs reachable from a correspondent-tainted session: "
@@ -88,8 +88,7 @@ def test_the_solana_swap_verb_is_registered_everywhere():
     refactor cannot quietly drop it."""
     from core.config_policy.payment_tools import PAYMENT_APPROVAL_TOOLS
     from core.config_policy.spend_lane import DEFI_SPEND_VERBS
-    from agents.task.agent.core.correspondent_gate import (_HIGH_IMPACT_NAMES,
-                                                           is_high_impact)
+    from core.security.high_impact import _HIGH_IMPACT_NAMES, is_high_impact
     name = "defi_trade_solana_swap"
     assert name in PAYMENT_APPROVAL_TOOLS
     assert name in DEFI_SPEND_VERBS

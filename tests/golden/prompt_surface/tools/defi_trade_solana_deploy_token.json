@@ -39,6 +39,12 @@
           "default": "",
           "description": "Optional https:// or ipfs:// URI of a JSON metadata file ({name, symbol, description, image}). This is where a LOGO comes from — without it the token shows with no picture anywhere. Host it yourself; any public HTTPS URL works.",
           "type": "string"
+        },
+        "why": {
+          "default": null,
+          "description": "Why this act, now (one line). Required on an autonomous run; the owner reads it.",
+          "nullable": true,
+          "type": "string"
         }
       },
       "required": [

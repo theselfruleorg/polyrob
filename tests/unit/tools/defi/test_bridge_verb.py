@@ -348,7 +348,7 @@ def test_the_policy_gate_is_checked_inside_the_reserve_on_both_origins():
     src = inspect.getsource(bridge_verb.perform_bridge)
     reserve_at = src.index("async with gate.reserve():")
     check_at = src.index("gate.check(", reserve_at)
-    assert check_at < src.index("to_thread(EvmOriginLeg.send, prepared)", reserve_at)
+    assert check_at < src.index("EvmOriginLeg.send, prepared", reserve_at)
     assert check_at < src.index("to_thread(tool._solana_send, raw_tx, signer)", reserve_at)
     assert src.index("gate.record(", reserve_at) > check_at
     assert "idempotency_key=idem" in src[check_at:check_at + 200]

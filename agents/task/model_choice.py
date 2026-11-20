@@ -57,21 +57,88 @@ def is_listed(user_id: Optional[str], provider: Optional[str], model: str,
     return not mine or _canon(provider) in mine
 
 
+def detected_provider(model: str) -> str:
+    """The provider the model registry names for *model* (``detect_llm_provider``, what
+    a build with no provider uses), ``""`` when it cannot be read."""
+    try:
+        from modules.llm.usage_extract import detect_llm_provider
+        return detect_llm_provider(model) or ""
+    except Exception:
+        return ""
+
+
+async def _serves(provider: str, model: str, own_model: Optional[str]) -> bool:
+    """True when *provider* serves *model*: the parent's own model, a model its spec
+    declares, its exact catalog row, or (OpenRouter) a row of its live list."""
+    if not provider or not model:
+        return False
+    if model == own_model:
+        return True
+    canon = _canon(provider)
+    if canon == "openrouter":
+        from agents.task.model_switch_service import _model_facts
+        facts = await _model_facts(canon, model)
+        return bool(facts[5])
+    try:
+        from modules.llm.provider_spec import get_spec
+        spec = get_spec(canon)
+        if spec and (model in spec.models or model == spec.default_model):
+            return True
+        from modules.llm.model_registry import canonical_provider_name, get_model_config_exact
+        cfg = get_model_config_exact(model)
+        return bool(cfg) and canonical_provider_name(cfg.provider, "").lower() == canon
+    except Exception:
+        return False
+
+
+async def child_provider(parent_agent: Any, model: str, provider: Optional[str] = None) -> str:
+    """The ONE provider of a sub-agent on *model*, for the check AND the build (audit
+    2026-11-21 L-13): a named *provider*; else the parent's provider when it serves *model*;
+    else the provider the registry names for it. Never the parent's provider for the check
+    and another for the build."""
+    if provider:
+        return provider
+    own_provider = (getattr(parent_agent, "llm_provider", None)
+                    or getattr(parent_agent, "provider_name", "") or "")
+    if await _serves(own_provider, model, getattr(parent_agent, "model_name", None)):
+        return own_provider
+    return detected_provider(model) or own_provider
+
+
+def price_ceiling(provider: Optional[str]) -> Optional[Tuple[float, float]]:
+    """``(input, output)`` USD per million tokens the meter charges a model of *provider*
+    with no known price (the provider's highest known price), None = no ceiling."""
+    try:
+        from modules.llm.model_registry import provider_price_ceiling
+        ceiling = provider_price_ceiling(_canon(provider))
+    except Exception:
+        return None
+    return (ceiling.input_price, ceiling.output_price) if ceiling else None
+
+
 async def child_model_check(parent_agent: Any, model: str, provider: Optional[str],
-                            route: Any = None) -> str:
+                            route: Any = None, *, detected: Optional[bool] = None) -> str:
     """Why ``delegate_task`` may not run a sub-agent on *model* (``""`` = it may). On
     success the model and its price are added to *route*'s notes, so the result names what
-    the sub-agent really ran on."""
+    the sub-agent really ran on. ``detected`` says the caller did not name the provider (it
+    was read from the model id by :func:`child_provider`); a refusal then says how to name
+    one. Default: no *provider* given means detected here."""
     from agents.task.model_switch_service import _keyed_providers, _model_facts
     own = getattr(parent_agent, "model_name", None)
     owner = getattr(parent_agent, "user_id", None)
     own_provider = (getattr(parent_agent, "llm_provider", None)
                     or getattr(parent_agent, "provider_name", "") or "")
+    if detected is None:
+        detected = not provider
+    if not provider:
+        provider = await child_provider(parent_agent, model)
     target_provider = _canon(provider) or _canon(own_provider)
     keyed = {_canon(p) for p in _keyed_providers()}
     if provider and keyed and target_provider not in keyed:
-        return (f"refused: no key for provider '{provider}'. Providers with a key: "
-                f"{', '.join(sorted(keyed))}.")
+        return (f"refused: no key for provider '{provider}'"
+                + (" (read from the model id; name provider= to run it on another)"
+                   if detected else "")
+                + f". Providers with a key: {', '.join(sorted(keyed))}.")
     listed = is_listed(owner, target_provider if provider else "", model,
                        own=(own_provider, own))
     facts = await _model_facts(target_provider, model)
@@ -80,7 +147,8 @@ async def child_model_check(parent_agent: Any, model: str, provider: Optional[st
         return f"refused: '{model}' is not a model of {target_provider or 'the provider'}."
     if not listed and theirs and len(facts) > 3 and facts[3] is False:
         return f"refused: '{model}' cannot call tools, and a sub-agent works through tools."
-    verdict, why = mc.decide(listed=listed, mode=mc.choice_mode(owner), new_price=theirs)
+    verdict, why = mc.decide(listed=listed, mode=mc.choice_mode(owner), new_price=theirs,
+                             ceiling=None if theirs else price_ceiling(target_provider))
     if verdict != mc.ALLOW:
         return (f"refused: '{model}' — {why}. agent_status view='models' lists the models you "
                 f"can use and their prices.")

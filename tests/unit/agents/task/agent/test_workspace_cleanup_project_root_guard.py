@@ -18,7 +18,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _reset_pm():
-    from agents.task.path import reset_path_manager
+    from core.session_paths import reset_path_manager
     reset_path_manager()
     yield
     reset_path_manager()
@@ -36,7 +36,7 @@ def _manager(tmp_path):
 
 
 def test_cleanup_never_deletes_the_shared_project_root(tmp_path):
-    from agents.task.path import get_path_manager, set_path_manager
+    from core.session_paths import get_path_manager, set_path_manager
 
     project = tmp_path / "project"
     project.mkdir()
@@ -60,14 +60,14 @@ def test_cleanup_never_deletes_the_shared_project_root(tmp_path):
 
 def test_cleanup_still_removes_a_per_session_workspace(tmp_path):
     """The control: legacy per-session mode keeps collecting its own scratch."""
-    from agents.task.path import get_path_manager, set_path_manager
+    from core.session_paths import get_path_manager, set_path_manager
 
     set_path_manager(get_path_manager(data_root=str(tmp_path / "sessions")))
 
     mgr = _manager(tmp_path)
     mgr._sessions = {"sess-a": _old_session("sess-a")}
 
-    from agents.task.path import pm
+    from core.session_paths import pm
     ws = pm().get_workspace_dir("sess-a", "alice")
     (ws / "scratch.txt").write_text("throwaway")
 

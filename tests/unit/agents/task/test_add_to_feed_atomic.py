@@ -23,10 +23,16 @@ class _Capture(logging.Handler):
 
 def test_no_partial_file_is_visible(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    from agents.task.path import reset_path_manager
+    from core.session_paths import reset_path_manager
     reset_path_manager()
 
     sm = SessionManager(base_dir=str(tmp_path))
+    # Another test file on the same xdist worker can disable this logger or switch
+    # logging off (a logging config call); the warning assert must not depend on it.
+    log = getattr(sm.logger, "logger", sm.logger)
+    monkeypatch.setattr(log, "disabled", False)
+    monkeypatch.setattr(logging.root.manager, "disable", logging.NOTSET)
+    log.manager._clear_cache()
     cap = _Capture()
     sm.logger.addHandler(cap)
 
@@ -53,7 +59,7 @@ def test_add_to_feed_file_is_group_readable(tmp_path, monkeypatch):
     import stat
 
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    from agents.task.path import reset_path_manager
+    from core.session_paths import reset_path_manager
     reset_path_manager()
     sm = SessionManager(base_dir=str(tmp_path))
     old = os.umask(0o002)
@@ -76,7 +82,7 @@ def test_status_event_uses_a_unique_hidden_temp(tmp_path, monkeypatch):
     import tempfile as _tf
 
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    from agents.task.path import reset_path_manager
+    from core.session_paths import reset_path_manager
     reset_path_manager()
     sm = SessionManager(base_dir=str(tmp_path))
     seen = []
@@ -106,7 +112,7 @@ def test_same_millisecond_events_do_not_overwrite(tmp_path, monkeypatch):
     import time as _time
 
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    from agents.task.path import reset_path_manager
+    from core.session_paths import reset_path_manager
     reset_path_manager()
     sm = SessionManager(base_dir=str(tmp_path))
     monkeypatch.setattr(_time, "time", lambda: 1700000000.125)

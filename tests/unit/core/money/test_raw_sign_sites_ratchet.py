@@ -8,13 +8,14 @@ Solana) or add a row here with the gate you verified. Shrink-only: a row whose
 site is gone must be deleted.
 
 Sinks (AST, attribute reference or call, so ``to_thread(rail.sign_and_send, tx)``
-counts): ``sign_transaction``, ``sign_transaction_with``, ``send_raw_transaction``,
+counts): ``account_for`` (a venue account handed out), ``sign_transaction``, ``sign_transaction_with``, ``send_raw_transaction``,
 ``send_raw``, ``sign_and_send``, ``sign_message``, ``sign_typed_data``,
 ``unsafe_sign_hash``, ``sign_hash``, the SVM wrapper ``_solana_send``; a call
 whose first argument is the RPC method ``sendTransaction`` /
 ``eth_sendRawTransaction``; a call to an SDK signing entry point
 (``SDK_SIGNING_CALLS``: ``EthAccountSigner(...)``, the Polymarket
-``ClobClient(...)`` that receives the key, Hyperliquid ``sign_l1_action(...)``);
+``ClobClient(...)`` that receives the key, Hyperliquid ``sign_l1_action(...)`` and
+``Exchange(...)``);
 ``Account.from_key(...)`` / ``w3.eth.account.from_key(...)``.
 
 Blind spot: a third-party SDK that receives an account (x402, Hyperliquid,
@@ -27,15 +28,18 @@ from tests.support.repo_index import repo_index
 
 REPO = pathlib.Path(__file__).resolve().parents[4]
 ROOTS = ("core", "modules", "agents", "tools", "api", "cli", "surfaces",
-         "webview", "cron", "packs")
+         "webview", "cron", "packs", "polyrob", "utils", "migrations", "devtools")
 SKIP_PARTS = {"tests", "__pycache__", "node_modules", ".venv", "venv", "build", "dist"}
 SINK_ATTRS = {"sign_transaction", "sign_transaction_with", "send_raw_transaction",
               "send_raw", "sign_and_send", "sign_message", "sign_typed_data",
-              "unsafe_sign_hash", "sign_hash", "_solana_send"}
+              "unsafe_sign_hash", "sign_hash", "_solana_send",
+              # 125 S9 (B-M3): a venue account (a key) handed to a signing SDK. No bare
+              # `.account` sink: that name is an ADDRESS read in ~70 places.
+              "account_for"}
 RPC_METHODS = {"sendTransaction", "eth_sendRawTransaction"}
 #: Calls that hand a key/account to an SDK or sign inside one (090 §1.4: the
 #: Hyperliquid signer op and the Polymarket client were not pinned).
-SDK_SIGNING_CALLS = {"EthAccountSigner", "ClobClient", "sign_l1_action"}
+SDK_SIGNING_CALLS = {"EthAccountSigner", "ClobClient", "sign_l1_action", "Exchange"}
 
 _SIGNER = "the signer implementation itself (the seam every gated caller reaches)"
 _SIGNER_SVC = "polyrob-signer op: re-runs tx_guard / its own hard caps and ledger (core/signer/caps.py)"
@@ -43,6 +47,11 @@ _TX_GUARD = "after tx_guard.authorize allowed it, inside gate.reserve()"
 
 #: (path, enclosing qualname, sink) -> why it is gated. Shrink-only.
 ALLOWED = {
+    # -- 122 W4/W5: the owner-signed records' integrity tag (mandate, income rule) --
+    ("core/wallet/owner_signed.py", "sign", "sign_message"): (
+        "a fixed per-store prefix ('polyrob owner mandate v1:' / 'polyrob owner income rule "
+        "v1:') + a sha256 of the record; made only after an owner-seat write or a reserved "
+        "or given-back mandate use — a tag, not a payment"),
     # -- the signer process (066 P2) --------------------------------------
     ("core/signer/server.py", "SignerService._op_evm_send", "sign_and_send"): _SIGNER_SVC,
     ("core/signer/server.py", "SignerService._op_deposit_sweep", "sign_and_send"): (
@@ -79,7 +88,8 @@ ALLOWED = {
     ("core/wallet/solana_x402.py", "SolanaX402Signer.sign_transaction", "sign_transaction"): (
         "delegates to SolanaSigner, which refuses a foreign fee payer"),
     ("core/wallet/broadcast/evm.py", "EvmRail.sign_and_send", "sign_transaction"): (
-        "the EVM rail: every caller below is gated; journals before broadcast"),
+        "the EVM rail: refuses a transaction with no tx_guard attestation in every signer "
+        "mode (core.signer.attest, 125 S3); journals before broadcast"),
     ("core/wallet/broadcast/evm.py", "EvmRail.sign_and_send", "eth_sendRawTransaction"): (
         "the EVM rail broadcast"),
     ("core/wallet/solana_rail.py", "SolanaRail.send_raw", "sendTransaction"): (
@@ -136,7 +146,8 @@ ALLOWED = {
     ("tools/defi/solana_swap_verb.py", "_broadcast", "_solana_send"): (
         "after _solana_turn_gate, simulation deltas and gate.check"),
     ("tools/defi/solana_send_verb.py", "perform_solana_transfer", "_solana_send"): (
-        "after _solana_turn_refusal (the _solana_turn_gate mirror), simulation and gate.check"),
+        "after _solana_turn_refusal (_solana_turn_gate: the turn bar EVM step 2 asks, "
+        "turn_origin_verdict), simulation and gate.check"),
     ("tools/defi/bridge_verb.py", "perform_bridge", "_solana_send"): (
         "after _solana_turn_refusal, simulation, owner queue above the ceiling, gate.check"),
     ("tools/defi/spl_deploy_verb.py", "perform_solana_deploy_token", "sign_transaction_with"): (
@@ -153,6 +164,17 @@ ALLOWED = {
         "trade_turn_refusal + evaluate_live_trade; the SDK signs ClobAuth + orders inside"),
     ("packs/markets/polyrob_markets/hyperliquid/service.py", "HyperliquidTool._get_exchange_client", "from_key"): (
         "Hyperliquid SDK account; every order verb runs trade_turn_refusal + evaluate_live_trade"),
+    ("packs/markets/polyrob_markets/hyperliquid/service.py", "HyperliquidTool._get_exchange_client", "account_for"): (
+        "the polyrob-wallet venue account for the Hyperliquid SDK; refuses to arm live trading "
+        "on that path; every order verb runs trade_turn_refusal + evaluate_live_trade"),
+    ("packs/markets/polyrob_markets/hyperliquid/service.py", "HyperliquidTool._get_exchange_client", "Exchange"): (
+        "the Hyperliquid SDK client that signs orders; same gate as the account above"),
+    ("packs/markets/polyrob_markets/hyperliquid/service.py", "HyperliquidTool.agent_status", "account_for"): (
+        "address read only: reports the master address, signs nothing"),
+    ("packs/markets/polyrob_markets/hyperliquid/service.py", "HyperliquidTool.approve_agent", "Exchange"): (
+        "master-key agent approval after trade_turn_refusal (same row as its from_key)"),
+    ("packs/markets/polyrob_markets/hyperliquid/service.py", "HyperliquidTool.revoke_agent", "Exchange"): (
+        "owner turn, master-address match (same row as its from_key)"),
     ("packs/markets/polyrob_markets/hyperliquid/service.py", "HyperliquidTool.approve_agent", "from_key"): (
         "master-key agent approval after trade_turn_refusal"),
     ("packs/markets/polyrob_markets/hyperliquid/service.py", "HyperliquidTool.revoke_agent", "from_key"): (
@@ -219,3 +241,18 @@ def test_the_allowlist_only_shrinks():
 
 def test_every_row_names_its_gate():
     assert all(isinstance(v, str) and v.strip() for v in ALLOWED.values())
+
+
+def test_the_scan_reaches_every_shipped_root(tmp_path, monkeypatch):
+    """125 S9 (B-M3): a sink in ``polyrob/`` (and ``utils``, ``migrations``, ``devtools``)
+    is found, and so are a venue account handed out (``account_for``) and the Hyperliquid
+    SDK client (``Exchange``)."""
+    import sys
+    (tmp_path / "polyrob").mkdir()
+    (tmp_path / "polyrob" / "x.py").write_text(
+        "def send(rail, tx, wallet):\n"
+        "    rail.sign_and_send(tx)\n"
+        "    Exchange(wallet.account_for('hyperliquid'))\n", encoding="utf-8")
+    monkeypatch.setattr(sys.modules[__name__], "REPO", tmp_path)
+    assert {("polyrob/x.py", "send", "sign_and_send"), ("polyrob/x.py", "send", "Exchange"),
+            ("polyrob/x.py", "send", "account_for")} <= _found()

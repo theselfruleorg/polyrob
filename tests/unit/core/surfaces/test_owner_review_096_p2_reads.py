@@ -141,7 +141,7 @@ def test_inbox_cut_is_a_more_tap_and_inbox_all_lists_everything(monkeypatch):
 
 
 def test_goal_show_marks_the_cut_body():
-    from surfaces.telegram.owner_ops import _goal_show
+    from cron.owner_goals import _goal_show
     goal = types.SimpleNamespace(id="g" * 12, status="ready", title="t",
                                  body="b" * 2000, priority=1, consecutive_failures=0,
                                  max_retries=3, result="", payload={}, session_id=None)
@@ -208,7 +208,7 @@ def test_card_reopen_shows_the_whole_body(tmp_path):
 
 
 def test_skills_list_carries_read_taps_and_an_id_opens_the_body(monkeypatch):
-    from surfaces.telegram import skills_ops
+    from agents.task import skills_owner as skills_ops
     monkeypatch.setattr(skills_ops, "catalog",
                         lambda uid, q="", desc_chars=80: [("promo-6551p", "posts")]
                         if (not q or q in "promo-6551p") else [])
@@ -221,7 +221,7 @@ def test_skills_list_carries_read_taps_and_an_id_opens_the_body(monkeypatch):
 
 def test_rules_numbers_owner_rules_and_contract(tmp_path):
     from core.instance import self_tier_root
-    from surfaces.telegram.owner_ops import rules_reply
+    from core.surfaces.owner_reads import rules_reply
     root = self_tier_root(tmp_path, "u1", "agent1")
     root.mkdir(parents=True)
     (root / "owner.md").write_text("# Posting\n- never post at night\n- ask first\n"
@@ -253,7 +253,7 @@ def test_read_it_is_a_button_and_only_three_items_get_buttons():
 #: that is NOT owner text (a log line) or that a count follows says so with a
 #: ``# cut: <reason>`` comment on its line.
 _SWEPT = ("surfaces/telegram/owner_ops.py", "surfaces/telegram/approval_ops.py",
-          "surfaces/telegram/card_ops.py", "surfaces/telegram/skills_ops.py",
+          "surfaces/telegram/card_ops.py", "agents/task/skills_owner.py",
           "core/surfaces/inbox_render.py", "core/status_work.py",
           "core/surfaces/more_store.py")
 #: Slices that are NOT owner prose: ids, hashes, internal bounds, or a cut

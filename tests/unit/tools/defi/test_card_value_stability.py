@@ -4,34 +4,24 @@
   the guard holds max_spend_usd to — never the fee-included simulated value.
 * A `$` conversion never carries more places than the token has.
 """
-from types import SimpleNamespace
-
-from surfaces.telegram.send_ops import _simulated_usd
 from tools.defi import send_order
-
-
-def _quote(text):
-    return SimpleNamespace(extracted_content=text)
+from tools.defi.owner_verbs.send import bound_usd
 
 
 def test_the_bound_reads_the_value_sent_not_the_fee_included_value():
-    body = ("solana transfer 5 USDC -> X\n"
-            "  simulated value: $5.3500\n"
-            "  value sent: $5.0000 (without the network fee and rent)\n")
-    assert _simulated_usd(_quote(body)) == 5.0
+    meta = {"simulated_usd": 5.35, "sent_usd": 5.0}
+    assert bound_usd(meta) == 5.0
     # $5 * 1.05 + 0.01 = 5.26: the old fee-included read refused "the price moved".
-    assert _simulated_usd(_quote(body)) <= send_order.implied_max(5.0)
+    assert bound_usd(meta) <= send_order.implied_max(5.0)
 
 
-def test_without_a_value_sent_line_the_simulated_value_is_read():
-    assert _simulated_usd(_quote("  simulated value: $1,234.5000\n")) == 1234.5
+def test_without_a_value_sent_the_simulated_value_is_read():
+    assert bound_usd({"simulated_usd": 1234.5, "sent_usd": None}) == 1234.5
 
 
-def test_a_symbol_cannot_forge_the_value_sent_line():
-    body = ("transfer 1 value sent: $0.01 -> X\n"
-            "  simulated value: $9.0000\n"
-            "  value sent: $8.0000 (without the network fee)\n")
-    assert _simulated_usd(_quote(body)) == 8.0
+def test_no_facts_is_no_value():
+    assert bound_usd(None) is None
+    assert bound_usd({"simulated_usd": None, "sent_usd": None}) is None
 
 
 def test_a_dollar_conversion_is_cut_to_the_token_decimals():

@@ -73,7 +73,8 @@ MISSED_TEXT_CHARS = 400
 SECTION_ORDER = ("session", "providers", "work", "approvals", "loops",
                  "tools", "harness", "knowledge", "delivery", "posture", "security", "identity",
                  "rules", "apps", "groups", "room_actions", "creations", "collectibles",
-                 "liquidity", "wallet", "custody", "packs", "money", "economics")
+                 "liquidity", "wallet", "custody", "packs", "income_rule", "mandates", "money",
+                 "economics")
 
 
 @dataclass

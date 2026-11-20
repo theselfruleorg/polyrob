@@ -122,7 +122,8 @@ def test_the_telegram_room_and_background_sets_are_the_verb_rows():
         "/check", "/restart", "/update", "/model", "/skills",
         "/more", "/rules",  # 096 W5: owner reads (a kept tail; the owner rules)
         "/chats", "/chat", "/rename", "/close",  # 113: a person's own chats, not a room's
-        "/self", "/memory"}  # 113 W6 G-6: owner reads (identity docs, recall)
+        "/self", "/memory",  # 113 W6 G-6: owner reads (identity docs, recall)
+        "/persona"}  # the voice the agent runs with, read only on Telegram
     assert {v.name: v.background for v in V.VERB_TABLE if v.background} == {
         "/bridge": "Bridge", "/send": "Send", "/swap": "Swap", "/lp": "Liquidity move",
         "/claim": "Claim", "/nft": "NFT transaction", "/launch": "Launch",

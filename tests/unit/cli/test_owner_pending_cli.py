@@ -72,7 +72,7 @@ def test_promote_unknown_kind_exits_nonzero(tmp_path, monkeypatch):
 # --- Task 9 / G-2: `owner pending`/`promote`/`reject tool_approval` -------------------
 
 def _seed_tool_approval(tmp_path, uid="alice", tool_name="x402_request"):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     board = GoalBoard(str(tmp_path / "goals.db"))
     ask = board.create_ask(
         user_id=uid, what=f"Approve {tool_name}? [c0ffee01]",
@@ -94,7 +94,7 @@ def test_pending_lists_tool_approval_ask(tmp_path, monkeypatch):
 
 
 def test_promote_tool_approval_approves_request(tmp_path, monkeypatch):
-    from agents.task.goals.board import ASK_FULFILLED
+    from modules.goals.board import ASK_FULFILLED
     _env(tmp_path, monkeypatch)
     board, ask = _seed_tool_approval(tmp_path)
     res = CliRunner().invoke(owner, ["promote", "tool_approval", f"tap-{ask.id}"])
@@ -104,7 +104,7 @@ def test_promote_tool_approval_approves_request(tmp_path, monkeypatch):
 
 
 def test_reject_tool_approval_declines_request(tmp_path, monkeypatch):
-    from agents.task.goals.board import ASK_REJECTED
+    from modules.goals.board import ASK_REJECTED
     _env(tmp_path, monkeypatch)
     board, ask = _seed_tool_approval(tmp_path)
     res = CliRunner().invoke(owner, ["reject", "tool_approval", f"tap-{ask.id}"])
@@ -150,7 +150,7 @@ def test_pending_labels_contract_and_pref_change_correctly(tmp_path, monkeypatch
 def test_promote_tool_approval_accepts_bare_id_without_prefix(tmp_path, monkeypatch):
     """kind='tool_approval' already disambiguates, so a bare (non-tap-) id also
     resolves — the prefix is a display/dispatch aid, not a requirement."""
-    from agents.task.goals.board import ASK_FULFILLED
+    from modules.goals.board import ASK_FULFILLED
     _env(tmp_path, monkeypatch)
     board, ask = _seed_tool_approval(tmp_path)
     res = CliRunner().invoke(owner, ["promote", "tool_approval", ask.id])

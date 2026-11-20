@@ -8,7 +8,7 @@ had already answered themselves. That queue is what the owner has to read.
 """
 import pytest
 
-from agents.task.goals.board import (
+from modules.goals.board import (
     ASK_OBSOLETE, ASK_OPEN, GoalBoard, STATUS_BLOCKED,
 )
 

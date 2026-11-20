@@ -411,32 +411,42 @@ describe("the 409 remote-session state", () => {
   });
 });
 
-// Action cards (core/surfaces/cards.py): a money quote answered by the console
-// carries its card's tap tokens; they become buttons that SEND the token as if
-// typed — never for an answer to any other verb.
-import { cardTaps, cardLabel } from "../static/app/transcript.js";
+// Reply buttons: the SERVER picks them (`command_actions`, from
+// core.surfaces.command_reply.reply_buttons — the rule every seat shares); the
+// console draws them and never infers a button from the text.
+import { replyButtons, buttonLabel } from "../static/app/transcript.js";
 
-describe("action card buttons", () => {
+const CARD_ACTIONS = [
+  { label: "Confirm", command: "/card_0123456789_ok", style: "primary" },
+  { label: "Refresh", command: "/card_0123456789_re", style: "default" },
+  { label: "Cancel", command: "/card_0123456789_no", style: "danger" },
+];
+
+describe("reply buttons", () => {
   const QUOTE = "Confirm: /card_0123456789_ok   Refresh: /card_0123456789_re   Cancel: /card_0123456789_no";
 
-  it("reads the taps only from an answer to a card verb", () => {
-    expect(cardTaps("/send 1 native to 0xabc on base", QUOTE).map((t) => t.act))
+  it("come only from the server's list, never from the text", () => {
+    expect(replyButtons({ command_reply: QUOTE })).toEqual([]);
+    expect(replyButtons({ command_reply: QUOTE, command_actions: CARD_ACTIONS }).map((t) => t.act))
       .toEqual(["ok", "re", "no"]);
-    expect(cardTaps("/card_0123456789_re", QUOTE).length).toBe(3);
-    expect(cardTaps("/thread", QUOTE)).toEqual([]);   // quoted words are never buttons
-    expect(cardTaps("hello", QUOTE)).toEqual([]);
-    const step = [1, 2, 3, 4, 5, 6].map((n) => `/card_0123456789_${n}`).join(" ")
-      + " Cancel: /card_0123456789_no";
-    expect(cardTaps("/card_0123456789_1", step).map((t) => t.act).pop()).toBe("no");
+    const nav = replyButtons({ command_actions: [{ label: "Status", command: "/nav_0123456789ab" }] });
+    expect(nav).toEqual([{ token: "/nav_0123456789ab", label: "Status", act: "", style: "default" }]);
   });
 
-  it("labels come from the copy node", () => {
-    const copy = { card_ok: "Confirm", card_pick: "Pick {n}" };
-    expect(cardLabel("ok", copy)).toBe("Confirm");
-    expect(cardLabel("2", copy)).toBe("Pick 2");
+  it("drop a command the owner could not type as one token", () => {
+    const bad = [{ label: "x", command: "rm -rf /" }, { label: "y", command: "/a b" },
+                 { label: "z", command: "/ok" }, { label: "z2", command: "/ok" }];
+    expect(replyButtons({ command_actions: bad }).map((t) => t.token)).toEqual(["/ok"]);
   });
 
-  it("a button posts the tap token and the row goes after one tap", async () => {
+  it("card words come from the copy node, others keep the server label", () => {
+    const copy = { card_ok: "Bestätigen" };
+    expect(buttonLabel({ act: "ok", label: "Confirm" }, copy)).toBe("Bestätigen");
+    expect(buttonLabel({ act: "2", label: "Base" }, copy)).toBe("Base");
+    expect(buttonLabel({ act: "", label: "Status" }, copy)).toBe("Status");
+  });
+
+  it("a button posts its command and the row goes after one tap", async () => {
     const thread = document.createElement("div");
     const calls = [];
     const fetcher = async (url, init) => {
@@ -446,11 +456,12 @@ describe("action card buttons", () => {
     };
     const tx = new Transcript(thread, { ...COPY, card_ok: "Confirm", card_re: "Refresh",
                                         card_no: "Cancel" }, { sessionId: "s1", fetcher });
-    const note = tx._commandNote({ command_reply: QUOTE });
-    const row = tx._cardButtons(note, "/send 1 native to 0xabc on base",
-                                { command_reply: QUOTE });
+    const body = { command_reply: QUOTE, command_actions: CARD_ACTIONS };
+    const note = tx._commandNote(body);
+    const row = tx._cardButtons(note, "/lp add 1 eth", body);
     const buttons = row.querySelectorAll("button");
     expect([...buttons].map((b) => b.textContent)).toEqual(["Confirm", "Refresh", "Cancel"]);
+    expect(buttons[0].classList.contains("btn-primary")).toBe(true);
     buttons[0].click();
     await new Promise((r) => setTimeout(r, 0));
     await new Promise((r) => setTimeout(r, 0));

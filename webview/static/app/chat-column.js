@@ -14,6 +14,7 @@
  * load" line, never an empty column.
  */
 import { copyFrom, statusClass, statusOf } from "./chats.js";
+import { getJson } from "./http.js";
 import { onLiveChange } from "./live.js";
 
 export const WIDE = "(min-width: 1024px)";
@@ -71,16 +72,16 @@ export function renderColumn(list, state, sessions, copy, currentId) {
   return "rows";
 }
 
-export async function loadColumn(root, { fetcher = fetch, doc = document } = {}) {
+export async function loadColumn(root, { fetcher, doc = document } = {}) {
   const list = root.querySelector("#chat-column-list");
   const state = root.querySelector("#chat-column-state");
   const copy = copyFrom(doc.getElementById("chats-copy"));
   const current = doc.body?.dataset?.sessionId || "";
   try {
-    const resp = await fetcher("/api/webgate/chats?offset=0&limit=50", { credentials: "include" });
-    if (!resp.ok) throw new Error(String(resp.status));
-    const data = await resp.json();
-    if (!Array.isArray(data.sessions)) throw new Error("Invalid chat catalog");
+    const res = await getJson("/api/webgate/chats?offset=0&limit=50", { fetcher });
+    if (!res.ok) throw new Error(String(res.status));
+    const data = res.body;
+    if (!data || !Array.isArray(data.sessions)) throw new Error("Invalid chat catalog");
     return renderColumn(list, state, data.sessions, copy, current);
   } catch (err) {
     console.error("[chat-column] could not read your chats", err);

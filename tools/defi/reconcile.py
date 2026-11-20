@@ -191,9 +191,10 @@ def diff(rail: List[RailPosition],
                 f"{label} {rp.address} — book says {rp.qty:,.6f} OPEN, chain "
                 f"balance is ZERO. The tokens left the wallet outside a recorded "
                 f"swap (a transfer?), or an exit was not booked. "
-                + (f"If it is gone for good, the owner closes the row with "
-                   f"/writeoff {chain} {rp.address} (the loss is its recorded "
-                   f"cost; nothing is sold)." if chain else ""))
+                + (f"If it is gone for good, propose_action('/writeoff {chain} "
+                   f"{rp.address}') puts the close of the row to the owner as one "
+                   f"card (the loss is its recorded cost; nothing is sold)."
+                   if chain else ""))
             continue
         rel = abs(chain_qty - rp.qty) / rp.qty if rp.qty else 1.0
         if rel > qty_rel_tolerance:

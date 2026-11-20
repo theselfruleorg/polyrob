@@ -14,7 +14,7 @@ import agents.task.constants as c
 from tools.shell.tool import ShellTool, ShellRunParams
 from tools.shell.process_registry import ProcessRegistry
 from tools.shell.backend_pool import get_shell_backend, teardown_session
-from tools.shell.loopback_allow import clear_loopback_ports
+from core.security.loopback_allow import clear_loopback_ports
 from agents.task.loop_types.execution_context import ActionExecutionContext
 
 from tests.docker_rig import needs_docker as _needs_docker  # the one skip rule
@@ -87,7 +87,7 @@ async def test_agent_http_tests_its_own_sandbox_server(tmp_path):
         host_port = ports[8000]
 
         # fetch the server over real HTTP via the narrow loopback allowlist
-        from tools.web_fetch.fetcher import safe_fetch
+        from core.security.safe_fetch import safe_fetch
         body = None
         for _ in range(10):
             await asyncio.sleep(0.5)

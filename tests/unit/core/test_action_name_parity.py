@@ -294,7 +294,7 @@ def test_money_and_exec_verbs_are_blocked_by_the_name_layer_alone(runtime_action
     below must survive that fallback. The bare-vs-namespaced bug broke this silently
     for most of them while the module's comments claimed the opposite.
     """
-    from agents.task.agent.core.correspondent_gate import is_high_impact
+    from core.security.high_impact import is_high_impact
 
     missing_from_runtime = [v for v in _NAME_PARITY_VERBS if v not in runtime_action_names]
     assert not missing_from_runtime, (
@@ -315,7 +315,7 @@ def test_directly_registered_high_impact_actions_have_no_layer_2_to_fall_back_on
 
     This is the hole that let `owner_doc_manage` and `contact_history` through.
     """
-    from agents.task.agent.core.correspondent_gate import is_high_impact_call
+    from core.security.high_impact import is_high_impact_call
 
     for name in ("owner_doc_manage", "contact_history", "session_search",
                  "recent_activity", "load_tool", "agent_status",
@@ -338,9 +338,7 @@ _OWN_ACCOUNT_READS = ("_get_all_positions", "_get_balance", "_get_open_orders",
 def test_name_layer_blocks_every_trade_verb_under_its_venue_namespace(runtime_action_names):
     """Trading venues are readable-while-tainted by design, but their TRADE verbs
     must still be blocked under the venue-namespaced runtime name."""
-    from agents.task.agent.core.correspondent_gate import (
-        _HIGH_IMPACT_VERB_SUBSTRINGS, is_high_impact,
-    )
+    from core.security.high_impact import _HIGH_IMPACT_VERB_SUBSTRINGS, is_high_impact
 
     checked = 0
     for venue in ("hyperliquid", "polymarket"):
@@ -365,9 +363,7 @@ def test_high_impact_names_has_no_unreachable_entries(runtime_action_names):
     An entry that can match nothing is not harmless — it reads as coverage in review
     and in the module's own comments while defending nothing.
     """
-    from agents.task.agent.core.correspondent_gate import (
-        _HIGH_IMPACT_NAMES, _HIGH_IMPACT_VERB_SUBSTRINGS,
-    )
+    from core.security.high_impact import _HIGH_IMPACT_NAMES, _HIGH_IMPACT_VERB_SUBSTRINGS
     from core.tool_capabilities import TOOL_CAPABILITIES
 
     tool_id_tokens = set(TOOL_CAPABILITIES) | ASPIRATIONAL_VERBS
@@ -437,7 +433,7 @@ def test_every_emitted_money_write_is_blocked_by_its_row_alone(runtime_action_na
     the verb's own ``correspondent_blocked`` row — not by tool-id resolution (a
     resolver fault degrades it) and not by the substring layer (which predates
     the namespaced rows and over-blocks reads)."""
-    from agents.task.agent.core.correspondent_gate import _HIGH_IMPACT_NAMES
+    from core.security.high_impact import _HIGH_IMPACT_NAMES
     from core.tool_capabilities import TOOL_CAPABILITIES, ids_with
     from core.verb_policy import VERB_POLICY
 
@@ -461,8 +457,7 @@ def test_every_emitted_money_write_is_blocked_by_its_row_alone(runtime_action_na
 def test_the_substring_layer_is_redundant_for_every_emitted_verb(runtime_action_names):
     """Every emitted name the verb-substring layer matches is blocked by its row.
     (The layer stays as defense-in-depth for names not in this tree.)"""
-    from agents.task.agent.core.correspondent_gate import (
-        _HIGH_IMPACT_NAMES, _HIGH_IMPACT_VERB_SUBSTRINGS)
+    from core.security.high_impact import _HIGH_IMPACT_NAMES, _HIGH_IMPACT_VERB_SUBSTRINGS
 
     matched = [n for n in sorted(runtime_action_names)
                if any(sub in n for sub in _HIGH_IMPACT_VERB_SUBSTRINGS)]

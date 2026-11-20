@@ -10,8 +10,8 @@ import types
 import pytest
 
 import agents.task.agent.messages.context_references as cr
-import tools.web_fetch.fetcher as fetcher
-from tools.web_fetch.fetcher import WebFetchError
+import core.security.safe_fetch as fetcher
+from core.security.safe_fetch import WebFetchError
 
 
 def test_load_url_routes_through_safe_fetch(monkeypatch):

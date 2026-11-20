@@ -64,7 +64,7 @@ def test_a_sub_agent_never_auto_saves_the_session_agent_state(tmp_path, monkeypa
     from agents.task.agent.core import step as step_mod
 
     state_file = tmp_path / "agent_state.json"
-    monkeypatch.setattr("agents.task.path.pm", lambda: SimpleNamespace(
+    monkeypatch.setattr("core.session_paths.pm", lambda: SimpleNamespace(
         create_file_path=lambda **kw: state_file))
     saved = []
     sub = SimpleNamespace(

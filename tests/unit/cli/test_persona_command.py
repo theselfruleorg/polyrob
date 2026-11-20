@@ -134,7 +134,7 @@ def test_persona_no_arg_lists_available(tmp_path):
     _make_char_file(tmp_path, "researcher", "Rigorous research assistant")
     _make_char_file(tmp_path, "coder", "Pragmatic software engineer")
 
-    ctx = _make_ctx(args=[])
+    ctx = _make_ctx(args=["list"])
 
     with mock.patch(
         "cli.ui.commands.handlers._list_persona_names",
@@ -167,7 +167,7 @@ def test_persona_no_arg_shows_guidance(tmp_path):
 
     _make_char_file(tmp_path, "ops")
 
-    ctx = _make_ctx(args=[])
+    ctx = _make_ctx(args=["list"])
 
     with mock.patch(
         "cli.ui.commands.handlers._list_persona_names",
@@ -180,8 +180,10 @@ def test_persona_no_arg_shows_guidance(tmp_path):
     # the guidance used to name only POLYROB_PERSONA under a table of CHARACTER
     # names, and never mentioned the flag that actually selects one).
     assert "next session" in combined.lower() or "not supported" in combined.lower()
-    assert "POLYROB_PERSONA" in combined  # the template lever
-    assert "PERSONALITY_DEFAULT_CHARACTER" in combined  # the character lever
+    # Owner copy names the verb, never an env flag.
+    assert "/persona <name>" in combined and "/persona reset" in combined
+    assert "POLYROB_PERSONA" not in combined
+    assert "PERSONALITY_DEFAULT_CHARACTER" not in combined
 
 
 # ---------------------------------------------------------------------------

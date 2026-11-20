@@ -12,7 +12,7 @@ verbs so the next verb cannot ship unlisted.
 """
 import pytest
 
-from agents.task.agent.core.correspondent_gate import is_high_impact
+from core.security.high_impact import is_high_impact
 from core.config_policy import PAYMENT_APPROVAL_TOOLS, PAYMENT_RECEIVE_APPROVAL_TOOLS
 from core.tool_capabilities import TOOL_CAPABILITIES, ids_with, is_classified
 
@@ -59,6 +59,7 @@ MONEY_VERBS = (
     # 042: deployment (the pinned token template and caller-supplied bytecode)
     # and the generic contract call.
     "defi_trade_deploy_token",
+    "defi_trade_launch_token",
     "defi_trade_deploy_contract",
     "defi_trade_call",
     "defi_trade_lp_add", "defi_trade_lp_remove", "defi_trade_lp_collect",
@@ -97,7 +98,7 @@ def test_defi_trade_is_classified_as_money():
 
 
 def test_a_delegated_leaf_cannot_reach_it():
-    from tools.controller.delegation import get_blocked_child_tools
+    from core.delegation_policy import get_blocked_child_tools
     assert "defi_trade" in get_blocked_child_tools()
     assert "defi_trade" in ids_with("delegate_blocked")
 

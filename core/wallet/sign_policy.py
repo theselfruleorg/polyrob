@@ -505,6 +505,11 @@ def _classify(req: SignRequest, ctx: SignContext) -> SignVerdict:
         return _d("no signing address", scheme)
     text = req.payload
     data = text.encode("utf-8")
+    if text.lstrip().lower().startswith(("polyrob owner mandate", "polyrob ")):
+        # 122 W5 review: the wallet key tags the owner's mandates with this prefix; a text
+        # that carries it is never signed here, so no site can mint a mandate's tag.
+        return _d("the text carries POLYROB's own signing prefix — never signed for a site",
+                  scheme)
     blind = _blind_text_reason(text, data)
     if blind:
         return _d(blind, scheme)

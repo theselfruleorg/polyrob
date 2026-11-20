@@ -57,7 +57,7 @@ def _parse_filters(pairs: tuple[str, ...]) -> dict:
 @click.option("--limit", type=int, default=None, help="Max sessions to export.")
 def datagen_export(output, fmt, filters, user_id, include_correspondent, limit):
     """Export a label-filtered trajectory corpus from local sessions."""
-    from agents.task.path import pm
+    from core.session_paths import pm
     from datagen.bulk_export import bulk_export
 
     try:
@@ -137,7 +137,7 @@ async def _datagen_run_async(tasks_path, run_name, distribution, concurrency,
     container = await build_cli_container(log_level="ERROR")
     _logging.disable(_logging.NOTSET)
 
-    from agents.task.path import pm
+    from core.session_paths import pm
     from cli.commands.session import task_agent_or_none
     from datagen.batch_runner import load_tasks, run_batch
 

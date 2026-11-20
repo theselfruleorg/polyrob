@@ -100,6 +100,12 @@ FOUNDATION_LAYERS: Tuple[FoundationLayer, ...] = (
 	FoundationLayer("self_context_soul", "_self_context_soul",
 	                "_self_context_soul_tokens", MessageOrigin.SELF_CONTEXT, STANDING,
 	                group="self_context", optional=True, delta_on_reload=True),
+	# The operator's public knowledge (identity/public.md): NOT in the self_context
+	# group, so a public room and a correspondent session see it too — it is the
+	# one instance text written for every audience. Frozen at session start.
+	FoundationLayer("public_knowledge", "_public_knowledge_message",
+	                "_public_knowledge_tokens", MessageOrigin.PUBLIC_KNOWLEDGE, STANDING,
+	                optional=True),
 	FoundationLayer("skill_catalog", "_skill_message", "_skill_message_tokens",
 	                MessageOrigin.SKILL, STANDING, delta_on_reload=True),
 	# 041 phase 2: the approved named workers (WORKERS_ENABLED). Frozen at
@@ -143,6 +149,7 @@ ORIGIN_TIERS = {
 	MessageOrigin.TOOL_CATALOG: FROZEN,
 	MessageOrigin.SELF_CONTEXT: STANDING,
 	MessageOrigin.PROJECT_CONTEXT: STANDING,
+	MessageOrigin.PUBLIC_KNOWLEDGE: STANDING,
 	MessageOrigin.SKILL: STANDING,
 	MessageOrigin.WORKER_CATALOG: STANDING,
 	MessageOrigin.USER: SCOPED,
@@ -193,16 +200,53 @@ def owner_documents_visible(manager: Any) -> bool:
 		return False
 
 
+#: Rows outside the self_context group that also leave the moment owner documents
+#: may not be shown (a room, a correspondent, an owner chat a correspondent's reply
+#: taints): the project context, and the <environment> block (host, workspace path,
+#: host executables). The identity row is SWAPPED, not dropped (layer_messages).
+OWNER_ONLY_KEYS = frozenset({"project_context", "environment"})
+
+
+#: Rows hidden only while a correspondent's reply taints the OWNER's own chat: the
+#: workspace row (its absolute path; the file ability is refused there too). A
+#: correspondent's own session and a room keep theirs (owner_chat_tainted).
+TAINTED_OWNER_CHAT_KEYS = frozenset({"workspace"})
+
+
+def owner_chat_tainted(manager: Any) -> bool:
+	"""A correspondent's reply taints the owner's OWN chat right now (the probe
+	construction sets; None = never). Fail-CLOSED on a probe error."""
+	probe = getattr(manager, "_owner_chat_tainted", None)
+	if probe is None:
+		return False
+	try:
+		return bool(probe())
+	except Exception:
+		return True
+
+
 def layer_visible(manager: Any, layer: FoundationLayer) -> bool:
-	if layer.group != "self_context" and layer.key != "project_context":
+	if layer.key in TAINTED_OWNER_CHAT_KEYS:
+		return not owner_chat_tainted(manager)
+	if layer.group != "self_context" and layer.key not in OWNER_ONLY_KEYS:
 		return True
 	return owner_documents_visible(manager)
+
+
+def identity_hidden(manager: Any) -> bool:
+	"""The model and provider are not named: a session built public, or owner
+	documents not visible right now (a correspondent's reply tainted the chat)."""
+	return (getattr(manager, "_runtime_identity_public", False) is True
+	        or not owner_documents_visible(manager))
 
 
 def layer_messages(manager: Any, layer: FoundationLayer) -> List[Any]:
 	"""The message(s) one layer contributes right now (empty when unset)."""
 	if not layer_visible(manager, layer):
 		return []
+	if layer.key == "runtime_identity" and identity_hidden(manager):
+		alt = getattr(manager, "_runtime_identity_public_message", None)
+		return [alt] if alt is not None else []
 	value = getattr(manager, layer.attr, None)
 	if value is None:
 		return []

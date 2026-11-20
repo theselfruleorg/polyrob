@@ -4,7 +4,7 @@ import asyncio
 from types import SimpleNamespace
 
 import agents.task.agent.service  # noqa: F401 — avoid controller<->orchestrator import cycle
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from core.goal_vocab import ASK_KIND_CONFIG_CHANGE, ASK_OBSOLETE, ASK_OPEN
 from core.setting_proposals import CONFIG_ASK_TTL_DAYS, setting_in_effect
 

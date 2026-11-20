@@ -50,7 +50,7 @@
     },
     {
       "name": "defi_data_contract_read",
-      "sha": "e5d51fbf4bd5"
+      "sha": "19e3ea5a6c3d"
     },
     {
       "name": "defi_data_lp_pool_info",
@@ -63,6 +63,10 @@
     {
       "name": "defi_data_new_pools",
       "sha": "89b46dbacec3"
+    },
+    {
+      "name": "defi_data_nft_account",
+      "sha": "5c8686e59efc"
     },
     {
       "name": "defi_data_nft_info",

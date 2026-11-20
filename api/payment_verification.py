@@ -84,19 +84,18 @@ async def verify_payment_for_request(
     if user_id and user_id not in ['api_user', 'authenticated_api_user']:
         # Every compute surface reaches this gate, including A2A, /v1 and chat.
         # A welcome credit grant alone must not bypass the instance's access tier.
-        import os
-        if os.environ.get("ENVIRONMENT", "production") != "development":
-            from api.auth_constants import has_full_access
-            from api.dependencies import require_service
-            _tiers_down = "Account tier verification unavailable"
-            tier_manager = require_service("tier_manager", missing=_tiers_down,
-                                           unavailable=_tiers_down)
-            try:
-                tier = await tier_manager.get_user_tier(user_id)
-            except Exception as exc:
-                raise HTTPException(status_code=503, detail="Account tier verification unavailable") from exc
-            if not has_full_access(tier):
-                raise HTTPException(status_code=403, detail="Compute access requires an eligible account tier")
+        # The check runs on every box: no environment name skips it (proposal 125 S34).
+        from api.auth_constants import has_full_access
+        from api.dependencies import require_service
+        _tiers_down = "Account tier verification unavailable"
+        tier_manager = require_service("tier_manager", missing=_tiers_down,
+                                       unavailable=_tiers_down)
+        try:
+            tier = await tier_manager.get_user_tier(user_id)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Account tier verification unavailable") from exc
+        if not has_full_access(tier):
+            raise HTTPException(status_code=403, detail="Compute access requires an eligible account tier")
         # User authenticated → use credit system.
         # Admission does not charge a flat request fee. Each model call reserves
         # before inference; the usage tracker settles its actual cost once.

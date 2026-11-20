@@ -416,9 +416,8 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
                 money_target=request.get('money_target'), recall_seed=request.get('recall_seed'), mandate=request.get('mandate'), money_class=bool(request.get('money_class')),  # 112 F2
             )
 
-        from agents.task.billed_request import credit_billing_required, validate_billed_request
-        credit_billed = await credit_billing_required(self.container, user_id)
-        validate_billed_request(session_request, required=credit_billed, session_id=session_id)
+        from agents.task.billed_request import bind_request_limits  # 125 S33: billed + tenant clamp
+        credit_billed = await bind_request_limits(self.container, session_request, user_id, session_id)
 
         # A caller-supplied ID must not replace another tenant's session.
         self._assert_session_owner(session_id, user_id)

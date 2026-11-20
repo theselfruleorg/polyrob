@@ -98,7 +98,7 @@ def session_workspace_root(execution_context: Any, *, override: Optional[str] = 
     try:
         sid = getattr(execution_context, "session_id", None)
         if sid or not fallback_cwd:
-            from agents.task.path import pm
+            from core.session_paths import pm
             return str(pm().get_workspace_dir(
                 sid or "", getattr(execution_context, "user_id", None)))
     except Exception:

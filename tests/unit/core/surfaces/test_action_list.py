@@ -207,7 +207,7 @@ async def test_a_non_owner_press_is_refused_exactly_like_the_typed_form(monkeypa
     class _B:
         answered = []
 
-        async def answer_callback_query(self, cid):
+        async def answer_callback_query(self, cid, **kw):
             self.answered.append(cid)
 
     h = hz.TelegramHarness.__new__(hz.TelegramHarness)

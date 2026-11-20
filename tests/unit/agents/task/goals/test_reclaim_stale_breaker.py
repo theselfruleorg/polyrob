@@ -4,7 +4,7 @@ breaker) never runs when the goal KILLS its worker process (OOM/segfault/SIGKILL
 poison-pill goal crash-loops forever, never reaching 'blocked'. reclaim_stale must count
 the crash as a failure and trip the breaker at max_retries.
 """
-from agents.task.goals.board import GoalBoard, STATUS_READY, STATUS_RUNNING, STATUS_BLOCKED
+from modules.goals.board import GoalBoard, STATUS_READY, STATUS_RUNNING, STATUS_BLOCKED
 
 
 class _Clock:

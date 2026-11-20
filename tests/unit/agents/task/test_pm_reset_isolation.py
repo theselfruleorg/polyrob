@@ -5,8 +5,8 @@ an in-process build_cli_container leaks a project-scoped pm() into every later
 pm() caller. reset_path_manager() restores lazy-default behavior; an autouse
 conftest fixture uses it for test isolation.
 """
-import agents.task.path as path_module
-from agents.task.path import (
+import core.session_paths as path_module
+from core.session_paths import (
     PathManager,
     pm,
     set_path_manager,

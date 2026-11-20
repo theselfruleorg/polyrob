@@ -157,38 +157,44 @@ async def test_cancel_all_orders_succeeds_while_halted(monkeypatch):
 # any other trading verb while halted.
 
 @pytest.mark.asyncio
-async def test_cancel_order_refused_while_halted_for_a_genuine_agent_turn(monkeypatch):
-    """R16: a genuine, non-forged main-agent turn (role='orchestrator') gets ZERO
-    relaxation from the kill-switch — only a literal owner-direct call (no
-    execution_context) does. Without this, an LLM-driven agent turn could keep
-    mutating live orders after the owner pulled the kill-switch."""
+async def test_cancel_order_passes_the_pause_while_paused_for_a_genuine_owner_turn(monkeypatch):
+    """125 S7 (D2): a genuine owner turn (role='orchestrator', not forged) is the owner
+    acting — the autonomy pause bounds the agent's own work, not the owner, so the
+    risk-reducing cancel passes the pause. A forged turn stays refused
+    (test_trade_gate_kernel.py)."""
     _clear_trading_env(monkeypatch)
     monkeypatch.setenv("CRYPTO_TRADE_LIVE_ENABLED", "true")
     monkeypatch.setenv("HYPERLIQUID_TRADING_ENABLED", "true")
     _halt(monkeypatch)
     tool, ex = _make_tool(monkeypatch)
-    ctx = ActionExecutionContext(role="orchestrator")
+    reached = []
+    from polyrob_markets.trade_gate import TradeGateDecision
+    monkeypatch.setattr("polyrob_markets.trade_gate.evaluate_live_mutation",
+                        lambda *a, **k: reached.append(True) or TradeGateDecision(False, "stop here"))
+    ctx = ActionExecutionContext(user_id="local", role="orchestrator")
     res = await tool.cancel_order(
         CancelOrderParams(coin="ETH", order_id=1), execution_context=ctx)
-    assert res["success"] is False
-    assert ex.cancel_calls == []
-    assert "autonomy pause" in res["error"].lower()
+    assert reached == [True], res          # past trade_turn_refusal, at the M10 gate
 
 
 @pytest.mark.asyncio
-async def test_cancel_all_orders_refused_while_halted_for_a_genuine_agent_turn(monkeypatch):
-    """R16: same as above for cancel_all_orders — this is the exact verb the review
-    proved the regression against."""
+async def test_cancel_all_orders_passes_the_pause_while_paused_for_a_genuine_owner_turn(monkeypatch):
+    """125 S7 (D2): a genuine owner turn (role='orchestrator', not forged) is the owner
+    acting — the autonomy pause bounds the agent's own work, not the owner, so the
+    risk-reducing cancel passes the pause. A forged turn stays refused
+    (test_trade_gate_kernel.py)."""
     _clear_trading_env(monkeypatch)
     monkeypatch.setenv("CRYPTO_TRADE_LIVE_ENABLED", "true")
     monkeypatch.setenv("HYPERLIQUID_TRADING_ENABLED", "true")
     _halt(monkeypatch)
     tool, ex = _make_tool(monkeypatch)
-    ctx = ActionExecutionContext(role="orchestrator")
+    reached = []
+    from polyrob_markets.trade_gate import TradeGateDecision
+    monkeypatch.setattr("polyrob_markets.trade_gate.evaluate_live_mutation",
+                        lambda *a, **k: reached.append(True) or TradeGateDecision(False, "stop here"))
+    ctx = ActionExecutionContext(user_id="local", role="orchestrator")
     res = await tool.cancel_all_orders(CancelAllOrdersParams(), execution_context=ctx)
-    assert res["success"] is False
-    assert ex.cancel_all_calls == []
-    assert "autonomy pause" in res["error"].lower()
+    assert reached == [True], res          # past trade_turn_refusal, at the M10 gate
 
 
 # ---- update_leverage: NOT a position-management action -> blocked while halted ----
@@ -196,16 +202,9 @@ async def test_cancel_all_orders_refused_while_halted_for_a_genuine_agent_turn(m
 @pytest.mark.asyncio
 async def test_update_leverage_blocked_by_h11_kill_switch_while_halted(monkeypatch):
     """A leverage change is a risk-POSTURE mutation, not a position-management one —
-    it is blocked by the pre-existing H11 trade_turn_refusal kill-switch bar exactly
-    like an order, for owner and agent turns alike. NOTE (Minor 3): trade_turn_refusal
-    (called with the default risk_reducing=False for this verb) always refuses first
-    when halted, so evaluate_live_mutation's own halt branch is never reached from
-    THIS call site — asserted here on H11's distinct wording ("the order was not
-    submitted", never produced by evaluate_live_mutation) so this test cannot pass by
-    accident against the wrong gate. evaluate_live_mutation's halt branch for
-    risk_reducing=False is covered directly (isolated from H11) by
-    test_update_leverage_m10_gate_blocks_when_isolated_from_h11 below, and by
-    tests/packs/markets/test_crypto_trade_gate.py's pure-gate tests."""
+    a direct call (no context: never the owner) is held by trade_turn_refusal's pause
+    bar (the money kernel, 125 S7) exactly like an order. evaluate_live_mutation no
+    longer probes the pause at all."""
     _clear_trading_env(monkeypatch)
     monkeypatch.setenv("CRYPTO_TRADE_LIVE_ENABLED", "true")
     monkeypatch.setenv("HYPERLIQUID_TRADING_ENABLED", "true")
@@ -214,24 +213,17 @@ async def test_update_leverage_blocked_by_h11_kill_switch_while_halted(monkeypat
     res = await tool.update_leverage(UpdateLeverageParams(coin="ETH", leverage=5))
     assert res["success"] is False
     assert ex.leverage_calls == []
-    assert "the order was not submitted" in res["error"].lower()  # H11's exact wording
+    assert "autonomy pause" in res["error"].lower()  # the money kernel's pause (125 S7)
 
 
 @pytest.mark.asyncio
 async def test_update_leverage_m10_gate_blocks_when_isolated_from_h11(monkeypatch):
-    """Minor 3: proves the M10 defence-in-depth branch in update_leverage (
-    evaluate_live_mutation(risk_reducing=False)) genuinely blocks on its own, by
-    bypassing the upstream H11 trade_turn_refusal check so the call actually reaches
-    it. Without this, that branch has no verb-level coverage at all (it's provably
-    unreachable via the ordinary call path — see the test above)."""
+    """Minor 3: the M10 branch in update_leverage (evaluate_live_mutation(
+    risk_reducing=False)) blocks on its own when the venue switch is off, with the
+    upstream trade_turn_refusal bypassed. The pause is not its bar (125 S7)."""
     _clear_trading_env(monkeypatch)
     monkeypatch.setenv("CRYPTO_TRADE_LIVE_ENABLED", "true")
-    monkeypatch.setenv("HYPERLIQUID_TRADING_ENABLED", "true")
-    _halt(monkeypatch)
-    # update_leverage does `from polyrob_markets.trade_gate import trade_turn_refusal`
-    # fresh on every call, so patching the source module's attribute is what's needed
-    # to intercept it (patching a name inside polyrob_markets.hyperliquid.service would not —
-    # there is no such module-level name there to patch).
+    monkeypatch.setenv("HYPERLIQUID_TRADING_ENABLED", "false")
     monkeypatch.setattr("polyrob_markets.trade_gate.trade_turn_refusal", lambda *a, **k: None)
     tool, ex = _make_tool(monkeypatch)
     res = await tool.update_leverage(UpdateLeverageParams(coin="ETH", leverage=5))

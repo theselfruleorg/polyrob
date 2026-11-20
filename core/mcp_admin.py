@@ -182,8 +182,7 @@ async def perform_mcp_add(service: Any, user_id: str, server_id: str, url: str,
     tail = f", {tools} tools" if tools else ""
     head = f"Added MCP server '{server_id}' ({kind}{tail}) — {url}\n"
     # The saved row is not the lever: the `mcp` tool registers only when its
-    # gate is on (tools.mcp.config.mcp_gate_on, looked up by id — core may not
-    # import tools). No gate registered = the tool tier is absent = off.
+    # gate is on (core.mcp_config.mcp_gate_on, registered when core.config loads).
     from core.tool_gates import gate_on, remedy_text
     if gate_on("mcp"):
         return MCPAdminResult(True, head + "The agent can use it from the next turn (load_tool mcp).")

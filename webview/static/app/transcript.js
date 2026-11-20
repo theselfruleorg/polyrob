@@ -67,43 +67,41 @@ export function isControllerVerb(data) {
  *  result on the live socket). Drawn exactly like the inline `command_reply`. */
 const COMMAND_REPLY_TYPES = new Set(['command_reply']);
 
-/** Action cards (core/surfaces/cards.py). A card's tap token. */
-const CARD_TOKEN = /\/card_[0-9a-f]{10}_(?:ok|no|re|[1-6])(?![\w])/g;
-/** The verbs whose console answer may be a card: the confirmable money verbs
- *  and `/cards`. Buttons are EXPLICIT, never inferred from arbitrary text — an
- *  answer to any other verb (`/thread` quotes the agent's own words) gets none,
- *  exactly the Telegram rule in core/surfaces/actions.py. */
-const CARD_VERBS = new Set(['/send', '/swap', '/bridge', '/pay', '/claim', '/launch',
-  '/deploy', '/nft', '/identity', '/writeoff', '/unquarantine', '/wallet']);
-// ⚠️ `/cards` is deliberately absent: its answer lists each card's title, and a
-// choice card's title is the MODEL's question. The Inbox draws those buttons
-// from the store instead.
+/** A card tap token: `/card_<10 hex>_<act>` (core/surfaces/cards.py). */
+const CARD_TAP = /^\/card_[0-9a-f]{10}_(ok|no|re|[1-6])$/;
 
 /**
- * The card taps a console answer offers, in order: `[{token, act}]` (at most 8:
- * a builder step shows up to 6 options plus Cancel).
- * Only for an answer to a card verb, or to a card tap itself.
+ * The buttons a chat-box answer carries, in order: `[{token, label, act, style}]`.
+ * The SERVER decides them (`command_actions`, from
+ * core.surfaces.command_reply.reply_buttons — the one rule Telegram, Slack and
+ * Discord draw too): a card's buttons, a reply's next-step buttons, or a
+ * decision list's. Never inferred from the text here, so quoted words are never
+ * buttons. A token is only ever something the owner could type.
  */
-export function cardTaps(sentText, reply) {
-  const verb = String(sentText || '').trim().split(/\s+/)[0].toLowerCase();
-  if (!(CARD_VERBS.has(verb) || /^\/card_[0-9a-f]{10}_/.test(verb))) return [];
+export function replyButtons(body) {
+  const list = Array.isArray(body && body.command_actions) ? body.command_actions : [];
   const out = [];
   const seen = new Set();
-  for (const m of String(reply || '').matchAll(CARD_TOKEN)) {
-    if (seen.has(m[0])) continue;
-    seen.add(m[0]);
-    out.push({ token: m[0], act: m[0].split('_').pop() });
+  for (const a of list) {
+    const token = String((a && a.command) || '').trim();
+    if (!token.startsWith('/') || /\s/.test(token) || seen.has(token)) continue;
+    seen.add(token);
+    const m = token.match(CARD_TAP);
+    out.push({ token, label: String((a && a.label) || token), act: m ? m[1] : '',
+               style: String((a && a.style) || 'default') });
     if (out.length >= 8) break;   // 6 options + Cancel on a builder step
   }
   return out;
 }
 
-/** The button words for one act — from the server's copy node, never here. */
-export function cardLabel(act, copy) {
-  if (act === 'ok') return copy.card_ok || act;
-  if (act === 're') return copy.card_re || act;
-  if (act === 'no') return copy.card_no || act;
-  return String(copy.card_pick || '{n}').replace('{n}', act);
+/** The button words: a card's Confirm/Refresh/Cancel from the page's copy node
+ *  (localised), every other button keeps the server's label. */
+export function buttonLabel(btn, copy) {
+  const c = copy || {};
+  if (btn.act === 'ok') return c.card_ok || btn.label;
+  if (btn.act === 're') return c.card_re || btn.label;
+  if (btn.act === 'no') return c.card_no || btn.label;
+  return btn.label;
 }
 
 /** Session statuses, split by the receipt state they mean (070 W0.7).
@@ -353,7 +351,7 @@ export class Transcript {
       }
       const line = String(data.line || '').trim();
       const note = this._commandNote({ command_reply: text }, line);
-      if (line) this._cardButtons(note, line, { command_reply: text });
+      this._cardButtons(note, line, { command_reply: text, command_actions: data.actions });
       return note;
     }
     // Everything else (step, planner, evaluation, …) is not drawn in the
@@ -370,12 +368,19 @@ export class Transcript {
   olderControl(hasMore, load) {
     if (!this.thread) return null;
     if (!hasMore) { this.olderNode?.remove(); this.olderNode = null; return null; }
+    this.olderLoad = load;
     if (!this.olderNode) {
       const row = el('div', 'entry-actions');
       row.dataset.loadOlder = '1';
       const b = el('button', 'btn btn-quiet', this.copy.load_older || '');
       b.type = 'button';
-      b.addEventListener('click', () => load());
+      // One page at a time: a second click while a page loads would read the
+      // same `skip` twice and then skip a whole page.
+      b.addEventListener('click', async () => {
+        if (b.disabled) return;
+        b.disabled = true;
+        try { await this.olderLoad(); } finally { b.disabled = false; }
+      });
       row.appendChild(b);
       const seed = this.thread.querySelector(':scope > .turn-person');
       const first = seed && this.thread.firstElementChild === seed ? seed.nextSibling : this.thread.firstChild;
@@ -862,38 +867,36 @@ export class Transcript {
     if (!this.thread || !body) return null;
     const reply = typeof body.command_reply === 'string' ? body.command_reply.trim() : '';
     if (!reply) return null;
-    const note = el('p', 'note');
+    // A verb's answer has lines, bold and `code` (the /help list, /status):
+    // drawn with them (rich-text.js builds nodes, never HTML), not one block.
+    const note = el('div', 'note command-note');
     note.dataset.commandReply = '1';
     note.setAttribute('role', 'status');
     // A kept answer (from the feed) names the line it answers; an inline one
     // sits right under the line the person just typed.
-    if (line) {
-      note.appendChild(el('span', 'why', line));
-      note.appendChild(document.createTextNode(' '));
-      note.appendChild(document.createTextNode(reply));
-    } else {
-      note.textContent = reply;
-      this.inlinePending.add(reply);
-    }
+    if (line) note.appendChild(el('span', 'why', line));
+    else this.inlinePending.add(reply);
+    appendRichText(note, reply);
     this.thread.appendChild(note);
     return note;
   }
 
   /**
-   * Action cards: the taps a money quote (or `/cards`) answer offers, drawn as
-   * buttons under its note. A button SENDS the tap token as if typed — the
-   * console's verb plane runs it with every gate — and the buttons go away
-   * once one is used, so a card is never tapped twice from here.
+   * The buttons of a chat-box answer (a card's Confirm/Cancel, the next-step
+   * buttons of `/help`, `/model`, `/jobs`…, a decision list's), drawn under its
+   * note. A button SENDS its command as if typed — the console's verb plane
+   * runs it with every gate — and the row goes away once one is used.
+   * `sentText` is kept for the callers' shape; the server picked the buttons.
    */
   _cardButtons(note, sentText, body) {
     if (!note || !body) return null;
-    const taps = cardTaps(sentText, body.command_reply);
+    const taps = replyButtons(body);
     if (!taps.length) return null;
     const row = el('div', 'entry-actions');
     row.dataset.cardTaps = '1';
     for (const tap of taps) {
-      const b = el('button', `btn${tap.act === 'ok' ? ' btn-primary' : ''}`,
-        cardLabel(tap.act, this.copy));
+      const b = el('button', `btn${tap.style === 'primary' ? ' btn-primary' : ''}`,
+        buttonLabel(tap, this.copy));
       b.type = 'button';
       b.dataset.token = tap.token;
       b.addEventListener('click', async () => {

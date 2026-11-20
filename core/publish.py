@@ -492,7 +492,7 @@ def _copy_vetted(src: str, dest: str, ident: Tuple[int, int], budget: int) -> in
             raise ValueError(f"refusing to publish secret-shaped content: {os.path.basename(src)}")
         with open(dest, "wb") as out:
             out.write(content)
-        os.chmod(dest, stat.S_IMODE(st.st_mode) | 0o444)
+        os.chmod(dest, (stat.S_IMODE(st.st_mode) & 0o777) | 0o444)  # never setuid/setgid
         return written
     finally:
         os.close(fd)

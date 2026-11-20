@@ -335,6 +335,27 @@ def chats_reply(registry: Any, *, base_key: str, user_id: str,
     return "\n".join(lines)
 
 
+#: Chat buttons per `/chats` reply (2026-11-20 Telegram UX review, M12).
+MAX_CHAT_BUTTONS = 6
+
+
+def chat_buttons(registry: Any, *, base_key: str, user_id: str) -> list:
+    """The `/chats` and `/chat` buttons for a seat that shows them: one per chat of
+    this seat that is not open now, then "New chat". Each is the typed line
+    (``core.surfaces.nav.NavButton``). An unreadable store gives no buttons — the
+    reply already says why."""
+    from core.surfaces.nav import NavButton
+    listing = list_chats(registry, user_id=user_id) if registry is not None else {"error": "-"}
+    if listing.get("error"):
+        return []
+    mine = [c for c in listing["chats"] if c["base_key"] == base_key]
+    out = [NavButton(_name(c), f"/chat {c['slug'] or MAIN_SLUG}") for c in mine if not c["focused"]]
+    if not any(c["slug"] == MAIN_SLUG for c in mine) and any(c["focused"] for c in mine):
+        # main has no row before its first line; it is open unless another chat is
+        out.insert(0, NavButton(_name({"slug": MAIN_SLUG, "label": ""}), f"/chat {MAIN_SLUG}"))
+    return out[:MAX_CHAT_BUTTONS] + [NavButton("+ New chat", "/new")]
+
+
 #: The tail for a seat whose run cannot move to another chat (the terminal).
 NEXT_START = ("This run stays in the chat it started in. Leave and start me again "
               "to continue in {name}.")

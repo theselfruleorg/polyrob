@@ -6,7 +6,7 @@ existing service** — it never reimplements a second source of truth:
 
 - Memory   → the active ``MemoryProvider.search()`` (``modules/memory/*``).
 - Autonomy → ``GoalBoard.list_recent()`` + ``status_counts()`` + ``asks()``
-             (``agents/task/goals/board.py`` — never ``list()``, the
+             (``modules/goals/board.py`` — never ``list()``, the
              dispatcher's priority-ordered claim queue, forbidden as a view) +
              ``CronService.list_jobs()`` (``cron/service.py``).
 - Identity → ``core/instance.py`` SOUL/SELF (``load_self_context`` /
@@ -37,11 +37,10 @@ from fastapi.templating import Jinja2Templates
 
 from webview import webgate
 from webview.audit import console_write
-from webview.decision_rev import rev_from_body
 from webview.copy import t
 from core.event_kinds import (
     CONSOLE_CONFIG_WRITE, CONSOLE_GOAL_VERB,
-    CONSOLE_INVOICE_SETTLE, CONSOLE_PENDING_DECIDE,
+    CONSOLE_INVOICE_SETTLE,
     CONSOLE_PREF_WRITE,
 )
 from core.runtime_paths import correspondents_db_path, cron_db_path, goals_db_path
@@ -49,7 +48,7 @@ from core.runtime_paths import correspondents_db_path, cron_db_path, goals_db_pa
 # Reused services / config — imported at module level so tests can monkeypatch
 # them at the ``webview.pages`` seam (the proof of reuse).
 from core.config_policy import AutonomyConfig
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from cli.commands.doctor import doctor_report, local_flag_on, resolve_memory_backend
 from core.instance import (
     is_unreadable_note,
@@ -63,7 +62,8 @@ from core.prefs import (
     SENSITIVITY_GUARDED,
     write_preference,
 )
-from webview.prefs_view import display_effective  # an empty list is [] (113 W6)
+from webview.prefs_view import (  # an empty list is [] (113 W6)
+    control_value, display_effective, source_words)
 from core.surfaces import owner_admin
 from cron.jobs import CronJobStore
 from cron.service import CronService, last_outcome as job_last_outcome, next_note as job_next_note
@@ -74,10 +74,9 @@ from modules.credits.unified_ledger import build_ledger, ledger_availability_not
 # monkeypatch it at this seam, same pattern as every other reused service
 # above.
 from tools.defi.book import read_book
-# Owner goal-verb SSOT (030 C3): the SAME transition table + prefix resolver the
-# Telegram `/goal` and `/settle` verbs use (surfaces/telegram/owner_ops.py) —
-# never a second rulebook. The module is import-light (logging/os/typing only).
-from surfaces.telegram import owner_ops
+# The ONE short-id resolver every owner seat uses (`/goal`, `/settle`, `/job`;
+# proposal 125 S14) — never a second rulebook.
+from core.short_id import resolve_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -291,9 +290,19 @@ def _goal_dict(g) -> dict:
     }
 
 
+def _cron_job_name(j) -> str:
+    """The job's name as every seat says it (``cron.scheduler._job_name``)."""
+    try:
+        from cron.scheduler import _job_name
+        return _job_name(j)
+    except Exception:
+        return ""
+
+
 def _cron_dict(j) -> dict:
     return {
         "id": j.id,
+        "name": _cron_job_name(j),
         "task": j.task,
         "schedule_spec": j.schedule_spec,
         "next_run_at": j.next_run_at.isoformat() if j.next_run_at else None,
@@ -312,17 +321,18 @@ def _version() -> str:
     return os.environ.get("WEBVIEW_VERSION") or get_version()
 
 
-def _provider_model():
+def _provider_model(user_id=None):
+    """The model a new chat of *user_id* starts on: the ONE resolver `/model`
+    and Agent › Settings read (``core.model_pins.chat_runtime_for``: the owner's
+    default > the operator pin > the first keyed provider). Not the CLI's own
+    resolver: that one ignored the owner's default. A pin that did not start is
+    a health line of the status snapshot, drawn beside this row."""
     try:
-        from cli.config_store import resolve_provider_model
-        from modules.llm.profiles import PROFILES, providers_with_credentials
-        # 024 L1.5: the credential oracle, not the key-only one — otherwise the
-        # console reports "no provider" for a box running on a connected
-        # account or a providers.yaml row.
-        present = set(providers_with_credentials(dict(os.environ)))
-        keys = {p.env_key for p in PROFILES.values() if p.name in present and p.env_key}
-        return resolve_provider_model(None, None, available_keys=keys)
+        from core.model_pins import chat_runtime_for
+        provider, model = chat_runtime_for(user_id)[:2]
+        return (provider, model)
     except Exception:
+        logger.debug("console: the chat runtime could not be resolved", exc_info=True)
         return (None, None)
 
 
@@ -493,7 +503,13 @@ async def api_identity(request: Request):
     self_doc, self_error = _identity_read(
         lambda: load_self_doc(home, owner, instance_id),
         _self_doc_paths(home, owner, instance_id))
+    # The character the model really speaks as: the ONE `/persona` body every
+    # chat seat renders (agents/personality/persona_report.py). It is not the
+    # rules document above, which the owner writes.
+    from agents.personality.persona_report import persona_report
+    character = await asyncio.to_thread(persona_report)
     return JSONResponse({
+        "character": character,
         "soul": soul,
         "self": self_doc,
         "soul_error": soul_error,
@@ -552,19 +568,14 @@ def _identity_read(load, paths) -> tuple:
 
 
 def _avatar_data_dir() -> str:
-    """Data home to read the avatar from.
+    """Data home to read the avatar from: the ONE console home (:func:`_data_dir`).
 
-    The avatar is usually SET from the CLI, whose data home defaults to
-    ``<polyrob_home>/data`` when ``POLYROB_DATA_DIR`` is unset (``polyrob.app.bootstrap.
-    _resolve_cli_data_home``). Mirror that so set↔serve agree in local dev; in
-    prod (``POLYROB_DATA_DIR`` set) this is identical to :func:`_data_dir`.
+    A-16: this read used its own rule (the CLI's local home when it existed), so a
+    server-shaped console with the env unset served the avatar from one home and
+    every other page from another. A local console is in local mode, where the
+    console home IS the CLI home.
     """
-    env = os.environ.get("POLYROB_DATA_DIR")
-    if env:
-        return env
-    from core.runtime_paths import resolve_data_home
-    local = resolve_data_home()
-    return str(local) if local.exists() else _data_dir()
+    return _data_dir()
 
 
 @router.get("/avatar.json")
@@ -770,76 +781,6 @@ async def api_ledger(request: Request, days: int = 7):
     return JSONResponse(ledger)
 
 
-@money_router.get("/api/webgate/positions")
-async def api_positions(request: Request, chain: str = "base"):
-    """The agent's on-chain BOOK — portfolio + book⟷chain reconcile (2026-08-27).
-
-    The console showed money totals but never the positions behind them — the
-    UI counterpart of the position-recall incident. Read-only: ``portfolio``
-    and ``reconcile`` are read verbs (no signer, nothing broadcast). Honors
-    ``DEFI_DATA_ENABLED``; every failure degrades to a LABELED unavailability,
-    never a fabricated empty book. The positions are the rail-written book
-    (``core/open_positions.py``) of the effective tenant."""
-    user_id = _wallet_owner_id(request)  # 403 in multitenant if no tenant identity
-    out = {"chain": chain, "enabled": None, "addresses": {}, "portfolio": None,
-           "reconcile": None, "error": None,
-           "verdict": None, "rows": None}
-    try:
-        from tools.defi import defi_data_enabled
-        out["enabled"] = bool(defi_data_enabled())
-    except Exception:
-        out["enabled"] = None
-    # Addresses are public information — show every identity the wallet holds,
-    # Solana included, so the operator can see WHO the book belongs to.
-    try:
-        from core.wallet.factory import get_agent_wallet
-        w = get_agent_wallet()
-        if w is not None:
-            try:
-                out["addresses"]["evm"] = w.address
-            except Exception:
-                pass
-            try:
-                out["addresses"]["solana"] = w.solana_address
-            except Exception:
-                pass
-    except Exception:
-        pass
-    if not out["enabled"]:
-        out["error"] = ("DEFI_DATA_ENABLED is off — the book cannot be read "
-                        "until an operator enables on-chain sight")
-        return JSONResponse(out)
-    try:
-        from tools.defi.data_tool import (DefiDataTool, PortfolioParams,
-                                          ReconcileParams)
-        tool = DefiDataTool()
-        pres = await tool.portfolio(PortfolioParams(chain=chain))
-        out["portfolio"] = {"text": pres.extracted_content, "error": pres.error}
-        from core.exec_identity import reset_exec_identity, set_exec_identity
-        token = set_exec_identity(user_id, None)  # reconcile reads THIS tenant's book
-        try:
-            rres = await tool.reconcile(ReconcileParams(chain=chain))
-        finally:
-            reset_exec_identity(token)
-        out["reconcile"] = {"text": rres.extracted_content, "error": rres.error}
-        from core.book import verdict_from_report
-        if rres.error:
-            # An errored read (wallet not enabled, an unreadable book — see
-            # DefiDataTool.reconcile) carries no report to derive a verdict
-            # from. Rendering CLEAN over an error the page ALSO shows is the
-            # false-all-clear this route must never produce: the honest state
-            # is "could not verify", never green.
-            out["verdict"] = "unverified"
-            out["rows"] = {}
-        else:
-            d = (getattr(rres, "metadata", None) or {}).get("report") or {}
-            out["verdict"] = verdict_from_report(d, ledger_found=True).value
-            out["rows"] = d
-    except Exception as exc:
-        out["error"] = f"positions read failed: {exc}"
-    return JSONResponse(out)
-
-
 @money_router.get("/api/webgate/liquidity")
 async def api_liquidity(request: Request, chain: Optional[str] = None, onchain: bool = False):
     """Read the shared liquidity snapshot section; chain enumeration is opt-in.
@@ -871,8 +812,7 @@ async def api_liquidity(request: Request, chain: Optional[str] = None, onchain: 
 @money_router.get("/api/webgate/book")
 async def api_book(request: Request):
     """One reader over EVERY money chain (043 A34) — worst-chain-wins, not a
-    single chain at a time. ``/api/webgate/positions`` above answers "how does
-    THIS chain look"; this answers "is the book clean, anywhere". Delegates
+    single chain at a time: "is the book clean, anywhere". Delegates
     the whole loop to ``tools.defi.book.read_book`` — the SAME function a
     later REPL ``/book`` verb calls, so the two surfaces can never diverge.
     Read-only, tenant-scoped (``_effective_user_id`` 403s in multitenant
@@ -1006,7 +946,9 @@ async def api_preferences(request: Request):
             "min": spec.min_value,
             "max": spec.max_value,
             "value": value,
-            "source": source,
+            # What the control starts with: never the display words of a default.
+            "control_value": control_value(key, value, source),
+            "source": source_words(source),
         })
     return JSONResponse({"user_id": user_id, "preferences": items})
 
@@ -1063,6 +1005,7 @@ async def api_preferences_patch(request: Request):
             status_code=409)
     if spec.sensitivity == SENSITIVITY_GUARDED and spec.type == "list":
         from core.prefs import load_preferences, propose_pref_change, validate_pref
+        from core.prefs_lists import add_list_entries
 
         ok_new, new_items, verr = validate_pref(key, body.get("value"))
         if not ok_new:
@@ -1082,8 +1025,7 @@ async def api_preferences_patch(request: Request):
             applied_additions: list = []
             add_error = None
             if added:
-                updated = sorted(set(current) | set(added))
-                ok_add, add_err = write_preference(_data_dir(), user_id, key, updated)
+                ok_add, add_err, _ = add_list_entries(_data_dir(), user_id, key, added)
                 if ok_add:
                     applied_additions = added
                 else:
@@ -1099,16 +1041,18 @@ async def api_preferences_patch(request: Request):
                 "ok": add_error is None, "key": key, "queued": queued,
                 "applied_additions": applied_additions,
                 "error": add_error,
-                "value": value, "source": source,
+                "value": value, "source": source_words(source),
             }, status_code=202 if add_error is None else 400)
-        # Pure addition (or no-op) — falls through to the normal direct-apply.
-    ok, err = write_preference(_data_dir(), user_id, key, body.get("value"))
+        # Pure addition (or no-op): only the new entries, under the file lock (125 S20).
+        ok, err, _ = add_list_entries(_data_dir(), user_id, key, added) if added else (True, "", [])
+    else:
+        ok, err = write_preference(_data_dir(), user_id, key, body.get("value"))
     if not ok:
         return JSONResponse({"ok": False, "error": err}, status_code=400)
     console_write(CONSOLE_PREF_WRITE, user_id=user_id, attrs={"key": key})
     value, source = display_effective(key, user_id, _data_dir())
     return JSONResponse({"ok": True, "key": key, "applies": spec.applies,
-                         "value": value, "source": source})
+                         "value": value, "source": source_words(source)})
 
 
 def _pending_kwargs(request: Request) -> dict:
@@ -1248,42 +1192,9 @@ def _decide_pending(kind: str, item_id: str, kw: dict, *, approved: bool, rev=No
     return fn(kind, item_id, rev=rev, **kw)
 
 
-def _decide_pending_safely(kind: str, item_id: str, kw: dict, *, approved: bool, rev=None) -> tuple:
-    """``(ok, message, error)`` — a decider whose store refuses (a locked
-    ``goals.db``) is "nothing was decided" in words, never a 500 (audit WR9)."""
-    try:
-        ok, msg = _decide_pending(kind, item_id, kw, approved=approved, rev=rev)
-        return ok, msg, None
-    except Exception as exc:
-        logger.warning("pending decide %s/%s failed", kind, item_id, exc_info=True)
-        return False, t("inbox.unreachable"), _safe_reason(exc)
-
-
-@router.post("/api/webgate/pending/{kind}/{item_id}/promote", dependencies=webgate.MUTATION_DEPS)
-async def api_pending_promote(request: Request, kind: str, item_id: str):
-    """Owner decision: promote a pending proposal to active. 403 in read-only;
-    tenant-scoped (a tenant can only act on its OWN queue). A miss/failure is
-    ``{ok:false, message}``, never a 500 — the aggregator is the authority."""
-    kw = _pending_kwargs(request)
-    rev = await rev_from_body(request)  # 098 CO-19
-    ok, msg, error = _decide_pending_safely(kind, item_id, kw, approved=True, rev=rev)
-    console_write(CONSOLE_PENDING_DECIDE, user_id=kw["user_id"],
-                  attrs={"kind": kind, "item_id": item_id,
-                         "approved": True, "ok": bool(ok)})
-    return JSONResponse({"ok": ok, "message": msg, "error": error})
-
-
-@router.post("/api/webgate/pending/{kind}/{item_id}/reject", dependencies=webgate.MUTATION_DEPS)
-async def api_pending_reject(request: Request, kind: str, item_id: str):
-    """Owner decision: reject (archive) a pending proposal. Same gating as
-    promote."""
-    kw = _pending_kwargs(request)
-    ok, msg, error = _decide_pending_safely(kind, item_id, kw, approved=False,
-                                            rev=await rev_from_body(request))
-    console_write(CONSOLE_PENDING_DECIDE, user_id=kw["user_id"],
-                  attrs={"kind": kind, "item_id": item_id,
-                         "approved": False, "ok": bool(ok)})
-    return JSONResponse({"ok": ok, "message": msg, "error": error})
+# The Inbox decides a pending item (`inbox.py`, `/api/webgate/inbox/{kind}/{id}/…`)
+# through `_decide_pending` above; the `/pending/{kind}/{id}/{promote,reject}` pair
+# with no console caller was deleted 2026-11-20.
 
 
 # --------------------------------------------------------------------------- #
@@ -1486,7 +1397,7 @@ async def api_goal_verb(request: Request, goal_id: str, verb: str):
                         f"(one of {', '.join(_WEBGATE_GOAL_VERBS)})"},
             status_code=400)
     user_id = _effective_user_id(request)
-    from agents.task.goals.board import KIND_GOAL
+    from modules.goals.board import KIND_GOAL
     from core import goal_owner_verbs as V
     from core.goal_suppressions import stop_goal
     board = _webgate_goal_board()
@@ -1635,7 +1546,7 @@ async def api_invoice_settle(request: Request, request_id: str):
     """Attest an invoice as PAID (pending → completed) — owner attestation, not a payment.
     Same primitive as `polyrob owner settle <id> [--tx-hash]` and the REPL `/settle`
     (``settle_payment_request``), with Telegram `/settle`'s tenant scoping: the id is
-    resolved among the CALLER's OWN pending invoices first (via ``owner_ops.resolve_prefix``,
+    resolved among the CALLER's OWN pending invoices first (via ``core.short_id.resolve_prefix``,
     so the short ids listings show are accepted), so one tenant can never attest another
     tenant's row. Optional JSON body: ``{"tx_hash": "0x…"}`` (an order's invoice needs it)."""
     user_id = _effective_user_id(request)
@@ -1652,7 +1563,7 @@ async def api_invoice_settle(request: Request, request_id: str):
         # counts, not the first 200 — an older invoice must stay settleable.
         rows = await list_payment_requests(user_id=user_id, status="pending",
                                            limit=_OUTSTANDING_SCAN_LIMIT, db=db)
-        resolved, err = owner_ops.resolve_prefix(
+        resolved, err = resolve_prefix(
             request_id, [str(r["request_id"]) for r in rows])
         if err:
             return {"ok": False, "status_code": 404,
@@ -1708,7 +1619,6 @@ async def api_doctor(request: Request):
         checks = None
         checks_error = _safe_reason(e)
         logger.warning("api_doctor: doctor_report failed — %s", checks_error, exc_info=True)
-    provider, model = _provider_model()
     local_mode = local_flag_on(env, absent_means_on=False)
     # 2026-08-28 status SSOT: the same snapshot Telegram /status renders — for
     # the CALLER's tenant (W13). It used to build it for webgate.local_owner_id()
@@ -1736,6 +1646,7 @@ async def api_doctor(request: Request):
         if exc.status_code != 403 or webgate.is_multitenant():
             raise
         unbound_reason = str(exc.detail)
+    provider, model = await asyncio.to_thread(_provider_model, owner)
     health: dict
     status_lines: list = []
     if owner is None:

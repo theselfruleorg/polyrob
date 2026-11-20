@@ -164,16 +164,19 @@ async def api_feed_events(request: Request, session_id: str,
                           after_seq: Optional[int] = None,
                           skip: Optional[int] = None):
     """The session's feed events, newest ``limit`` (default
-    ``WEBVIEW_FEED_DEFAULT_LIMIT``, at most ``WEBVIEW_FEED_MAX_LIMIT``),
+    ``WEBVIEW_FEED_DEFAULT_LIMIT``, clamped to ``WEBVIEW_FEED_MAX_LIMIT``),
     returned in time order. ``after_seq`` keeps only events with a higher
     ``_seq`` (delta sync)."""
-    from agents.task.path import pm
+    from core.session_paths import pm
     from utils.auth_utils import get_authenticated_user_id
     from webview.server import FEED_DEFAULT_LIMIT, FEED_MAX_LIMIT
 
     limit = FEED_DEFAULT_LIMIT if limit is None else limit
-    if limit < 1 or limit > FEED_MAX_LIMIT:
+    if limit < 1:
         raise HTTPException(400, {"error": "invalid_limit", "min": 1, "max": FEED_MAX_LIMIT})
+    # A limit above the operator's max is CLAMPED, not refused: transcript.js asks
+    # a fixed page size, and a lower WEBVIEW_FEED_MAX_LIMIT must not 400 every load.
+    limit = min(limit, FEED_MAX_LIMIT)
     if event_type and event_type not in VALID_EVENT_TYPES:
         raise HTTPException(400, {"error": "invalid_event_type",
                                   "allowed": list(VALID_EVENT_TYPES)})

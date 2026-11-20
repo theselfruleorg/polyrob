@@ -8,7 +8,7 @@ agent's own listing said it had no trading goals while ten clean cycles had run.
 import asyncio
 from types import SimpleNamespace
 
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from tools.goal_tools import GoalListAction, GoalTool
 
 

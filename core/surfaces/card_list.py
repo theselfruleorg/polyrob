@@ -140,6 +140,9 @@ def agent_view(user_id: str, *, hours: float = 24.0,
     import time as _time
     try:
         st = st or cards.store()
+        # 126: move an overdue card to expired and a stuck one to failed FIRST, so an
+        # overdue card is not hidden from both lists and a stuck one is not "running".
+        cards.sweep(st=st)
         open_ = st.open_cards(str(user_id), limit=50)
         changed = st.changed_since(str(user_id), _time.time() - hours * 3600)
     except Exception:
@@ -152,7 +155,8 @@ def agent_view(user_id: str, *, hours: float = 24.0,
     if not open_:
         out.append("- none")
     decided = [c for c in changed if c.state != cards.S_OPEN]
-    out.append(f"DECIDED in the last {hours:g} h ({len(decided)}), newest first:")
+    out.append(f"DECIDED in the last {hours:g} h ({len(decided)}), newest first — these have NO "
+               f"buttons; never ask the owner to tap one (a 'confirmed' card is running now):")
     for c in decided:
         when = _time.strftime("%H:%MZ", _time.gmtime(c.updated_at))
         what = c.outcome or c.state
@@ -162,11 +166,31 @@ def agent_view(user_id: str, *, hours: float = 24.0,
                    + (f" | {facts}" if facts else ""))
     if not decided:
         out.append("- none")
-    out.append("A replaced card is NOT open and NOT paid; a quote 'done (sent)' paid once. "
+    out.append("Only an OPEN card above can be tapped; a card not listed there is used, "
+               "expired, cancelled or replaced. "
+               "A replaced card is NOT open and NOT paid; a quote 'done (sent)' paid once. "
                "Quote these ids and counts, never your notes. Copy a tx hash from "
                "this list only; a card with no tx here has none you can name.")
     return "\n".join(out)
 
 
-__all__ = ["agent_view", "cancel_reply", "card_reason", "card_summary", "list_reply",
+def call_cards_lines(user_id: str, *, st: Optional["cards.CardStore"] = None) -> List[str]:
+    """126 wave 5: the open CALL cards in ``/pending`` — a money call that waits on the
+    owner is one of these now, not a queue row. One line each with its Confirm tap."""
+    try:
+        open_ = [c for c in (st or cards.store()).open_cards(str(user_id), limit=50)
+                 if c.kind == cards.KIND_CALL]
+    except Exception:
+        logger.warning("/pending: card store unreadable", exc_info=True)
+        return ["⚠️ I could not read the card store: a money call may wait in /cards."]
+    if not open_:
+        return []
+    out = [f"{len(open_)} money call(s) wait for your Confirm:"]
+    for c in open_:
+        out.append(f"• {c.title} — {cards.card_token(c.card_id, 'ok')} · "
+                   f"{cards.card_token(c.card_id, 'no')} · read it: {cards.read_token(c.card_id)}")
+    return out
+
+
+__all__ = ["agent_view", "call_cards_lines", "cancel_reply", "card_reason", "card_summary", "list_reply",
            "receipt_facts"]

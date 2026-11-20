@@ -76,6 +76,19 @@ The agent's own evolving **SELF** docs (`self.md`, plus `owner.md` owner-facts a
 stored per-user under `identity/{instance_id}/user_{uid}/`. Author the SOUL; let the
 agent earn the SELF.
 
+### Public knowledge
+
+The SOUL never reaches a group or a stranger's chat. What any stranger may know goes
+in a third operator file, `<data_home>/identity/public.md` (at most 6000 chars): what
+the agent and its organization are, the public links, where questions go, and what it
+never shares. Every chat gets it, a group and a person who is not the owner included.
+Put product facts here, never in the character (the character is the voice). Name the
+official page for each fact, and list the plain-text pages the agent may fetch for a
+detail the file does not hold.
+
+The agent cannot write `identity.md`, `operating.md` or `public.md` in
+`<data_home>/identity/` with its file abilities: only you write them.
+
 ### Giving your instance a character
 
 Below the SOUL sits the **character** — the voice. It is a JSON file named
@@ -91,13 +104,14 @@ polyrob doctor                                    # which character is live, and
 `polyrob init` offers this as a step (`--character <slug>` non-interactively),
 so a fresh install never has to assemble it by hand.
 
-The three layers, highest authority first:
+The layers, highest authority first:
 
 | Layer | Where | Selected by | Who writes it |
 |---|---|---|---|
 | SOUL | `<data_home>/identity/identity.md` + `operating.md` | the files existing | operator only |
+| Public knowledge | `<data_home>/identity/public.md` (every chat, groups too) | the file existing | operator only |
 | Character | `<characters_dir>/<slug>.character.json` | `PERSONALITY_DEFAULT_CHARACTER` | operator |
-| Persona override | — | `POLYROB_PERSONA`, or the `session.persona` pref (`/persona`) | operator |
+| Persona override | — | the owner's `/persona <name>` (the `session.persona` pref), else `POLYROB_PERSONA` | owner, else operator |
 
 Character directories are searched highest-first:
 
@@ -112,16 +126,20 @@ Character directories are searched highest-first:
 researcher` selects the `researcher` character, `/persona coding` selects the
 built-in `coding` template, and anything else is used verbatim as persona text.
 Every one of them applies to the **next** session — the `<identity>` block is
-assembled once, at agent creation.
+assembled once, at agent creation. `/persona <name>` works in each chat app and the
+terminal, applies to every new chat, and wins over `POLYROB_PERSONA`;
+`/persona reset` removes it.
 
 `polyrob doctor` prints which character is live and the file it resolved to;
-`/persona` lists both namespaces and marks the active row.
+`/persona` shows the active persona in each chat app, and `/persona list` in the terminal
+lists both namespaces and marks the active row.
 
 #### Which character fields reach the model
 
-The persona block renders a deliberate subset. The other fields parse and store
-fine but are consumed by nothing on this path — an authored value there is a
-silent no-op:
+The persona block reaches every place where the agent speaks: each chat app,
+the REPL and `polyrob run`, a scheduled job, a goal, a helper the agent starts,
+an agent-to-agent request and the `/v1` API. It renders a deliberate subset of
+the character:
 
 | Field | Rendered into the persona block? |
 |---|---|
@@ -130,17 +148,16 @@ silent no-op:
 | `bio` | yes |
 | `lore` | yes — `Background: …` |
 | `topics` | yes — `You focus on: …` |
-| `style.all`, `style.chat`, `style.speaking` | yes — `Style: …` |
-| `knowledge` | **no** — stored only |
-| `messageExamples` | **no** — stored only |
-| `postExamples` | **no** — stored only |
-| `style.writing` | **no** — stored only |
+| `style.all`, `style.chat`, `style.speaking`, `style.writing` | yes — `Style: …` |
+| `postExamples`, `messageExamples` | yes, a small sample — the first 3 of each, each cut at 240 characters, as `Voice samples` (tone only). In the dialogue shape only the character's own lines count |
+| `knowledge` | **no** — stored only (facts belong to the identity docs) |
 | `modelProvider`, `clients`, `settings` | no — not persona text |
 
 The SSOT for this split is `RENDERED_FIELDS` / `STORED_ONLY_FIELDS` in
-`agents/personality/persona_render.py`, and a character that populates a
-stored-only field logs a one-time warning naming it. Put the voice you want the
-model to have in `bio`, `lore` and `style`.
+`agents/personality/persona_render.py`. A character that fills a stored-only
+field logs a one-time warning, and `polyrob doctor --full` and `polyrob persona
+show` name the field. Write examples that show the voice, not facts: the model
+reads them as tone.
 
 ---
 

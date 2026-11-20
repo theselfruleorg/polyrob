@@ -125,8 +125,9 @@ def _create2_target_is_free(tool, chain: str, address: str):
     return None
 
 
-async def perform_deploy_token(tool, params, execution_context=None):
-    """Deploy the pinned fixed-supply ERC-20 and report the address."""
+async def perform_deploy_token(tool, params, execution_context=None, *, launch=(), out=None):
+    """Deploy the pinned fixed-supply ERC-20 and report the address. ``launch`` marks the
+    deploy of a launch for the guard (122 W3); ``out`` receives ``address`` on success."""
     from core.wallet import token_template
 
     if not deploy_enabled():
@@ -168,7 +169,7 @@ async def perform_deploy_token(tool, params, execution_context=None):
         describe=describe, create2=None,
         expected_runtime=token_template.RUNTIME,
         immutable_slots=token_template.IMMUTABLE_SLOTS,
-        expected_holder_mint_raw=supply_raw,
+        expected_holder_mint_raw=supply_raw, launch=tuple(launch), out=out,
         success_note=(
             "  The whole supply is now held by the wallet. The token has no "
             "mint function, so this is the supply forever.\n"))
@@ -255,7 +256,8 @@ async def _perform_deploy(tool, *, execution_context, verb: str, chain: str,
                           immutable_slots: Sequence[Tuple[int, int]],
                           success_note: str = "",
                           create2: Optional[dict] = None,
-                          expected_holder_mint_raw: Optional[int] = None):
+                          expected_holder_mint_raw: Optional[int] = None,
+                          launch: Tuple[str, ...] = (), out: Optional[dict] = None):
     """The shared body. Mirrors ``wrap``: reserve -> authorize -> size -> send."""
     from core.wallet import deploy_guard, tx_guard, tx_notify
     from core.wallet.broadcast.evm import EvmRail
@@ -318,7 +320,7 @@ async def _perform_deploy(tool, *, execution_context, verb: str, chain: str,
         expected_holder_mint_raw=expected_holder_mint_raw,
         # 085 W2: an endowed constructor can forward the value anywhere, so it is
         # the owner's call in every lane (and deploy_guard proves it stayed).
-        payout_shape=value_wei > 0)
+        payout_shape=value_wei > 0, launch=tuple(launch))
 
     authorize = tool._guard_fn or tx_guard.authorize
     async with gate.reserve():
@@ -332,7 +334,7 @@ async def _perform_deploy(tool, *, execution_context, verb: str, chain: str,
             execution_context=execution_context, tool_self=tool,
             price_fn=tool._price,
             forged_fn=_is_forged_or_autonomous_turn,
-            autonomous_ok_fn=_is_autonomous_goal_turn)
+            autonomous_ok_fn=_is_autonomous_goal_turn, dry_run=bool(dry_run))
 
         facts = decision.deploy
         header = describe
@@ -378,9 +380,10 @@ async def _perform_deploy(tool, *, execution_context, verb: str, chain: str,
                 "deployment would out-of-gas revert and burn the fee."))
 
         if dry_run:
-            return tool._ar(content=header + (
+            from tools.base_tool import dry_run_result
+            return dry_run_result(tool, header + (
                 "  RESULT: DRY RUN — the guard would allow this, but nothing was "
-                "broadcast. Re-run with dry_run=false to deploy."))
+                "broadcast. Re-run with dry_run=false to deploy."), decision.amount_usd)
 
         try:
             tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
@@ -502,6 +505,8 @@ async def _perform_deploy(tool, *, execution_context, verb: str, chain: str,
                         f"between building and broadcasting. USE THE LANDED "
                         f"ADDRESS.\n")
         await _record_spend(landed)
+        if out is not None and landed:
+            out["address"] = landed
         return tool._ar(content=header + mismatch + success_note + (
             f"  RESULT: DEPLOYED AND CONFIRMED\n"
             f"  address: {landed or (facts.predicted_address if facts else 'unknown')}\n"

@@ -119,7 +119,9 @@ def test_the_old_nft_op_shape_still_refuses_the_payment():
                                max_spend_usd=600.0, idempotency_key="k", is_nft_op=True,
                                expected_nft_in=tuple((COLLECTION, "erc721", i, 1) for i in IDS))
     d = _authorize(intent, _deltas(), tx=_tx(to=COLLECTION))
-    assert d.allowed is False and "NFT transfer moved" in d.reason
+    # 124 5.4: the generic shape of a known sale call goes to the typed verb first
+    assert d.allowed is False and ("NFT transfer moved" in d.reason
+                                   or "agent_nft_collection_mint" in d.reason), d.reason
 
 
 def test_the_entry_pause_and_the_full_pause_hold_a_mint():
@@ -146,43 +148,48 @@ def test_an_unpriceable_native_asset_refuses():
     assert d.allowed is False and "mint price" in d.reason
 
 
-# --- the destination is pinned ------------------------------------------------
+# --- the destination: a pinned sale, or a sale the chain proves (124 section 7) ------------
 
-def test_no_pinned_collection_refuses(monkeypatch):
+_NOT_A_SALE = "is not the sale of an ERC-721 collection I can read"
+
+
+def test_no_pin_reads_the_sale_from_the_chain_and_refuses_what_it_cannot_prove(monkeypatch):
+    """No pin is no longer a refusal by itself: the guard reads COLLECTION() / SALE(); a fake RPC
+    that answers neither proves no sale, so the mint refuses (fail closed)."""
     pin(monkeypatch)
     d = _authorize(_intent(), _deltas())
-    assert d.allowed is False and "no collection with the mint capability is pinned" in d.reason
+    assert d.allowed is False and _NOT_A_SALE in d.reason, d.reason
 
 
-def test_a_collection_pinned_on_another_chain_refuses(monkeypatch):
+def test_a_collection_pinned_on_another_chain_is_no_pin_here(monkeypatch):
     pin(monkeypatch, profile(COLLECTION, chain_id=46630))
     d = _authorize(_intent(), _deltas())
-    assert d.allowed is False and "pinned" in d.reason
+    assert d.allowed is False and _NOT_A_SALE in d.reason
 
 
-def test_a_collection_pinned_without_the_mint_capability_refuses(monkeypatch):
+def test_a_collection_pinned_without_the_mint_capability_is_read_like_any_other(monkeypatch):
     pin(monkeypatch, profile(COLLECTION, capabilities=("reveal",)))
     d = _authorize(_intent(), _deltas())
-    assert d.allowed is False and "mint capability" in d.reason
+    assert d.allowed is False and _NOT_A_SALE in d.reason
 
 
-def test_an_untrusted_registry_refuses(monkeypatch):
+def test_an_unreadable_registry_is_no_pin(monkeypatch):
     def boom():
         raise collection_registry.CollectionRegistryError("the file is writable")
     monkeypatch.setattr(collection_registry, "profiles", boom)
     d = _authorize(_intent(), _deltas())
-    assert d.allowed is False and "cannot be trusted" in d.reason
+    assert d.allowed is False and _NOT_A_SALE in d.reason
 
 
 def test_the_ids_are_held_to_the_profiles_max_supply(monkeypatch):
     pin(monkeypatch, profile(COLLECTION, max_supply=6))
     d = _authorize(_intent(), _deltas())
-    assert d.allowed is False and "outside 1..6" in d.reason
+    assert d.allowed is False and "outside 0..6" in d.reason
 
 
-def test_an_intent_to_an_unpinned_contract_refuses():
+def test_an_intent_to_a_contract_that_is_no_sale_refuses():
     d = _authorize(_intent(to=OTHER), _deltas(), tx=_tx(to=OTHER))
-    assert d.allowed is False and "not the pinned sale" in d.reason
+    assert d.allowed is False and _NOT_A_SALE in d.reason
 
 
 def test_a_mint_addressed_to_the_collection_itself_refuses():
@@ -220,14 +227,16 @@ def test_calldata_qty_other_than_the_declared_ids_refuses():
 
 
 @pytest.mark.parametrize("qty", [0, 11])
-def test_qty_outside_1_to_10_in_calldata_refuses(qty):
+def test_calldata_qty_other_than_the_declared_ids_refuses_at_any_size(qty):
+    """124 section 7: the per-call cap is the sale's (it reverts BadQty); the guard holds the
+    calldata to the declared ids."""
     ids = tuple(range(1, 11)) if qty == 11 else IDS
     intent = _intent(mint_ids=ids, amount_raw=len(ids) * PRICE)
-    d = _authorize(intent, _deltas(ids=ids), tx=_tx(qty=qty, value=qty * PRICE))
-    assert d.allowed is False and "BadQty" in d.reason
+    d = _authorize(intent, _deltas(ids=ids), tx=_tx(qty=qty, value=max(qty, 1) * PRICE))
+    assert d.allowed is False
 
 
-@pytest.mark.parametrize("ids", [(), tuple(range(1, 12)), (5, 7), (7, 6), (5, 5), (0, 1),
+@pytest.mark.parametrize("ids", [(), tuple(range(1, 102)), (5, 7), (7, 6), (5, 5),
                                  (SUPPLY, SUPPLY + 1)])
 def test_bad_id_declarations_refuse(ids):
     n = max(len(ids), 1)
@@ -236,10 +245,12 @@ def test_bad_id_declarations_refuse(ids):
     assert d.allowed is False
 
 
-@pytest.mark.parametrize("value", [3 * PRICE - 1, 1, PRICE, 3 * MAX_PRICE_WEI + 1])
-def test_a_public_value_outside_base_and_the_pinned_cap_refuses(value):
+@pytest.mark.parametrize("value", [3 * MAX_PRICE_WEI + 1, 10 * MAX_PRICE_WEI])
+def test_a_public_value_above_the_pinned_cap_refuses(value):
+    """124 section 7: no base floor in core — the sale's price is the sale's, the simulation
+    proves the sale takes it; a pin still caps one token."""
     d = _authorize(_intent(amount_raw=value), _deltas(), tx=_tx(value=value))
-    assert d.allowed is False and "at least" in d.reason and "max_price_wei" in d.reason
+    assert d.allowed is False and "max_price_wei" in d.reason
 
 
 @pytest.mark.parametrize("value", [3 * PRICE, 3 * PRICE + 1, 3 * 66 * 10 ** 15, 3 * MAX_PRICE_WEI])
@@ -373,7 +384,8 @@ def test_the_codec_round_trips_and_pins_the_selector_and_price():
     assert M.MINT_WL_SELECTOR == "0x1e29517f"
     to, qty, min_out = M.decode_mint(M.encode_mint(HOLDER, 3, 7))
     assert to.lower() == HOLDER and (qty, min_out) == (3, 7)
-    assert M.BASE_WEI == PRICE and M.MAX_MINT_QTY == 10 and M.MAX_PROOF_WORDS == 32
+    assert M.MAX_MINT_IDS == 100 and M.MAX_PROOF_WORDS == 32
+    assert not hasattr(M, "BASE_WEI") and not hasattr(M, "MAX_MINT_QTY")   # 124 section 7
 
 
 def test_a_changed_collection_runtime_refuses():
@@ -504,10 +516,10 @@ def test_a_whitelist_mint_at_exactly_qty_times_base_is_authorized():
     assert d.allowed is True, d.reason
 
 
-@pytest.mark.parametrize("value", [3 * PRICE - 1, 3 * PRICE + 1, 3 * MAX_PRICE_WEI])
-def test_a_whitelist_value_other_than_qty_times_base_refuses(value):
+def test_a_whitelist_value_above_the_pinned_cap_refuses():
+    value = 3 * MAX_PRICE_WEI + 1
     d = _authorize(_intent(amount_raw=value), _deltas(native_delta=-value), tx=_wl_tx(value=value))
-    assert d.allowed is False and "whitelist mint of 3 is exactly" in d.reason
+    assert d.allowed is False and "max_price_wei" in d.reason
 
 
 def test_a_whitelist_mint_above_its_allowance_refuses():
@@ -566,3 +578,48 @@ def test_a_zero_value_call_to_the_sale_is_not_a_payment():
     paying = tx_guard.TxIntent(chain="robinhood", token=USDC, to=SALE, amount_raw=5,
                                max_spend_usd=1.0, idempotency_key="k")
     assert "pinned sale" in M.sale_payment_refusal(paying, {"to": USDC, "value": 0})
+
+
+# --- 124 section 7: a mint through a sale nobody pinned -------------------------------------
+
+def _sale_rpc(*, back=COLLECTION, erc721=True):
+    """COLLECTION() of the sale and SALE() of the collection name each other; ERC-165 answers."""
+    from core.wallet import collection_sale as S
+
+    def inner(method, params):
+        if method != "eth_call":
+            return NotImplemented
+        to, data = params[0]["to"].lower(), params[0]["data"]
+        word = lambda a: "0x" + "0" * 24 + a[2:].lower()  # noqa: E731
+        if to == SALE.lower() and data.startswith(S.COLLECTION_SELECTOR):
+            return word(back)
+        if to == COLLECTION.lower() and data.startswith(S.SALE_OF_SELECTOR):
+            return word(SALE)
+        if data.startswith("0x01ffc9a7"):
+            return "0x" + f"{int(erc721):064x}"
+        raise RuntimeError("execution reverted")
+    return code_rpc(inner)
+
+
+def test_an_unpinned_sale_the_chain_proves_is_the_owners_card(monkeypatch):
+    """The chain proves the sale; the guard itself still holds it to the owner's card (the
+    2026-11-20 review: a sale nobody pinned answers its own views)."""
+    pin(monkeypatch)
+    d = _authorize(_intent(), _deltas(), rpc=_sale_rpc(), price=100.0)
+    assert d.allowed is False and d.lane == "owner_queue" and "UNPINNED" in d.reason, d.reason
+    monkeypatch.setattr(tx_guard, "owner_authority", lambda *a, **k: (False, True))
+    d = _authorize(_intent(), _deltas(), rpc=_sale_rpc(), price=100.0)
+    assert d.allowed is True, d.reason
+
+
+def test_an_unpinned_sale_that_names_another_collection_refuses(monkeypatch):
+    pin(monkeypatch)
+    d = _authorize(_intent(), _deltas(), rpc=_sale_rpc(back=OTHER))
+    assert d.allowed is False and _NOT_A_SALE in d.reason, d.reason
+
+
+def test_an_unpinned_mint_still_checks_the_receipt(monkeypatch):
+    """The ids must arrive from the collection the sale names, nothing else moves."""
+    pin(monkeypatch)
+    d = _authorize(_intent(), _deltas(holder_nft_in=()), rpc=_sale_rpc(), price=100.0)
+    assert d.allowed is False and "must deliver exactly" in d.reason, d.reason

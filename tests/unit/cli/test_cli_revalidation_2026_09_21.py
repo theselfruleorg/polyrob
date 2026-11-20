@@ -124,7 +124,7 @@ def test_repl_apps_records_the_repl_as_the_seat(monkeypatch, tmp_path):
         return "ok"
 
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    import surfaces.telegram.apps_ops as apps_ops
+    import core.app_service.owner_ops as apps_ops
     monkeypatch.setattr(apps_ops, "apps_reply", _fake_apps_reply)
 
     buf = io.StringIO()
@@ -147,7 +147,7 @@ def test_repl_apps_declares_a_write_for_a_deciding_subcommand(monkeypatch, tmp_p
 
     writes = []
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    import surfaces.telegram.apps_ops as apps_ops
+    import core.app_service.owner_ops as apps_ops
     monkeypatch.setattr(apps_ops, "apps_reply",
                         lambda *a, **k: "ok")
     import cli._admin_home as admin_home

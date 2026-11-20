@@ -37,6 +37,35 @@ from core.wallet import abi
 REVEAL_SIGNATURE = "reveal(uint256[])"
 REVEAL_SELECTOR = "0xb93f208a"  # abi.selector(REVEAL_SIGNATURE), a literal for a bare install
 
+#: The reveal verb and its fee cap. The cap is the OPERATOR's (``AGENT_NFT_REVEAL_MAX_GAS_USD``),
+#: not a figure the agent declares: the verb's ``max_spend_usd`` is optional and only lowers it.
+REVEAL_ACTION = "agent_nft_collection_reveal"
+MAX_GAS_FLAG = "AGENT_NFT_REVEAL_MAX_GAS_USD"
+DEFAULT_MAX_GAS_USD = 1.0
+
+
+def max_gas_usd() -> float:
+    """``AGENT_NFT_REVEAL_MAX_GAS_USD`` — the most USD of FEE one reveal transaction may cost
+    (default 1.00). A non-finite or non-positive value disables the verb (0)."""
+    import math
+    from core.env import float_env
+    v = float_env(MAX_GAS_FLAG, DEFAULT_MAX_GAS_USD)
+    return v if (math.isfinite(v) and v > 0) else 0.0
+
+
+def declared_usd(action: str, params) -> Optional[float]:
+    """The USD bound an act declares: its ``max_spend_usd``. A reveal that names none is
+    bounded by the operator's fee cap (the verb spends at most that), so the owner's tap and a
+    mandate cover it; any other act with no number declares nothing (None)."""
+    v = (params or {}).get("max_spend_usd")
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return float(v)
+    if v is None and action == REVEAL_ACTION:
+        cap = max_gas_usd()
+        return cap if cap > 0 else None
+    return None
+
+
 #: Hard ceiling on ids in ONE reveal transaction. The verb's own default is 10
 #: (``reveal(10)`` measured 369,566 gas on a 4663 fork, ≈35k per id).
 MAX_REVEAL_IDS = 64
@@ -80,15 +109,16 @@ def decode_reveal(data: str) -> List[int]:
 
 
 def pinned_collections(chain: str, capability: str = "reveal") -> Tuple[str, ...]:
-    """The pinned collection(s) on *chain* declaring *capability* (lowercase). Empty = none
-    pinned. Raises ``collection_registry.CollectionRegistryError`` when the registry cannot be
-    trusted (callers refuse)."""
+    """The pinned collection(s) on *chain* (lowercase; ``"mint"`` = those with a sale). 124 W5:
+    a capability grants nothing — every reveal is the owner's card or a mandate's. Raises
+    ``collection_registry.CollectionRegistryError`` when the registry cannot be read."""
     from core.wallet import collection_registry as registry
     return tuple(p.address for p in registry.profiles_on(registry.chain_id_of(chain), capability))
 
 
 def max_supply_of(chain: str, collection: str) -> int:
-    """The pinned profile's ``max_supply`` for *collection* on *chain* (raises when not pinned)."""
+    """The pinned profile's ``max_supply`` for *collection* on *chain* (raises when not pinned;
+    124 W4: an unpinned collection's ids are the collection's own business)."""
     from core.wallet import collection_registry as registry
     prof = registry.profile_for(registry.chain_id_of(chain), collection)
     if prof is None:
@@ -136,21 +166,16 @@ def structural(intent, tx: dict) -> Optional[str]:
     if declared or intent.amount_raw != 0:
         what = ", ".join(declared + (["amount_raw"] if intent.amount_raw != 0 else []))
         return (f"a collection reveal sends and receives nothing, but this intent declares {what}")
-    try:
-        collections = pinned_collections(intent.chain)
-    except Exception as exc:  # noqa: BLE001 — an untrusted registry pins nothing
-        return f"the collection registry cannot be trusted ({exc}); refusing"
-    if not collections:
-        return (f"no collection with the reveal capability is pinned on {intent.chain} (the "
-                f"owner's collection registry is empty by default) — a reveal may only call a "
-                f"pinned collection")
+    # 124 W4: a pinned collection with the reveal capability keeps its pin's id range; any other
+    # collection is checked from the chain before the simulation (an ERC-721) and its reveal is
+    # the owner's card (tx_guard_steps/shape.py).
     to_intent = str(intent.to or "").lower()
     to_tx = str((tx or {}).get("to") or "").lower()
-    if to_intent not in collections:
-        return f"the intent is addressed to {intent.to!r}, not a pinned collection"
+    if not to_intent:
+        return "the reveal names no collection (`to`)"
     if to_tx != to_intent:
         return (f"the TRANSACTION is addressed to {(tx or {}).get('to')!r} but the intent names "
-                f"{intent.to} — the signed destination must be the pinned collection")
+                f"{intent.to} — the signed destination must be the collection")
     try:
         value = int((tx or {}).get("value") or 0)
     except (TypeError, ValueError):
@@ -159,8 +184,8 @@ def structural(intent, tx: dict) -> Optional[str]:
         return f"a reveal carries no value; this transaction sends {value} wei"
     try:
         cap = max_supply_of(intent.chain, to_intent)
-    except Exception as exc:  # noqa: BLE001
-        return f"the pinned profile of {intent.to} cannot be read ({exc}); refusing"
+    except Exception:  # noqa: BLE001 — not pinned (or no pin store): the ids are the collection's
+        cap = 2 ** 63 - 1
     why = check_ids(intent.reveal_ids, cap)
     if why:
         return why

@@ -60,7 +60,6 @@ BASELINE = {
     # row DROPPED (W8) — the KB opens the agent's <data_home>/memory.db.
     # core/config.py: row DROPPED 2026-10-13 (080 WS-1) — data_dir/db_path
     # default to the data home; no relative "data/" Field default is left.
-    "core/credit_sentinel.py": 1,     # T3-fixed; "data" only in the last-resort except
     "core/runtime_paths.py": 1,       # _LEGACY_SESSIONS_DEFAULT (deliberate terminal fallback)
     "webview/repair_sessions.py": 1,
     "webview/server.py": 1,           # false positive: '"data" not in entry'

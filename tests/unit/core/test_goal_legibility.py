@@ -43,7 +43,7 @@ def test_the_status_collapse_is_a_projection():
 
 def test_owner_seat_creates_are_stamped(tmp_path):
     """§7 stamp gap: owner-seat creates carried no provenance -> LEGACY."""
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from core.owner_create import create_goal
     b = GoalBoard(str(tmp_path / "goals.db"))
     g = create_goal(b, user_id="alice", title="From the console")
@@ -52,7 +52,7 @@ def test_owner_seat_creates_are_stamped(tmp_path):
 
 def test_cli_goals_create_is_stamped(tmp_path, monkeypatch):
     from click.testing import CliRunner
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     import cli.commands.goals as goals_cmd
     b = GoalBoard(str(tmp_path / "goals.db"))
     monkeypatch.setattr(goals_cmd, "_get_board", lambda: b)

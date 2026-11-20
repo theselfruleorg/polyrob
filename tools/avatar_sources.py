@@ -60,7 +60,7 @@ async def fetch_bytes(url: str, *, max_bytes: int = MAX_BYTES, what: str = "the 
     url = _gateway(url)
     if not url.startswith(("https://", "http://")):
         raise AvatarError("only https, http, ipfs and data URLs can be read")
-    from tools.web_fetch.fetcher import WebFetchError, safe_fetch
+    from core.security.safe_fetch import WebFetchError, safe_fetch
     try:
         res = await safe_fetch(url, max_bytes=max_bytes, timeout_sec=20.0)
     except WebFetchError as e:

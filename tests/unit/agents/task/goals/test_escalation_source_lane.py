@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from agents.task.goals import escalation as _escalation
-from agents.task.goals.board import Goal
+from modules.goals.board import Goal
 
 
 def test_push_owner_message_accepts_a_source(monkeypatch):

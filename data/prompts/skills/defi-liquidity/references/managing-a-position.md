@@ -75,6 +75,37 @@ everything leaves the holders the market that the other positions make. A staged
 withdrawal (a part now, a rule for the rest) is usually better than all or nothing.
 A withdrawal is the owner's decision when the position gives the token its market.
 
+## 4b. Keeping the position in shape — your job, not the owner's
+
+You maintain the position. On every wake, decide what it needs and put ONE plan to the
+owner; the owner only confirms. Do not ask the owner to choose a range: choose it.
+
+1. **Collect** the fees when they are not small against a leg (`propose_action` with
+   `/lp collect v4 <id>`).
+2. **Re-range (rebalance)** — the default tool. Move the position to a band around the
+   price NOW with `lp_add(protocol='v4', move_from=<id>, move_pct=100, range='<low>,<high>')`
+   (prices in currency1 per currency0; the tool aligns the ticks). It sends nothing and
+   puts one card to the owner. Choose the band:
+   - calm or sideways: `low = price / 2`, `high = price × 2` (about 3.4× the depth of a
+     full range, the most fee);
+   - the token falling fast: `low = price / 3`, `high = price × 3` (about 2.4× the depth;
+     the native leg lasts through a further 3× fall);
+   - a symmetric band (`low = price / k`, `high = price × k`) takes both legs as they are,
+     so nothing is left in the wallet. Prefer it.
+   Re-range when the price is outside the band, or in the outer quarter of the band
+   (log scale), or the position is still full range. Do not re-range again within 6 hours
+   unless the price left the band.
+3. **Withdraw** a part (`/lp remove v4 <id> pct <n>`) only when the owner's rule says so,
+   or when the pool has no volume left and the flow stays one way.
+
+Say the trade-off in one line on the card: a band earns more fee and gives holders more
+depth, and in a continued fall it pays its native out faster than a full range; above the
+band it holds only the token and earns nothing until the next re-range.
+
+After the owner confirms the move card: make the approvals the dry run names, then
+`lp_add(protocol='v4', seed=<ref>, dry_run=false)`. A move needs `LP_ETH_CAP` above the
+native it mints: a refusal names the cap, so tell the owner the value it needs.
+
 ## 5. Choosing a range
 
 - **Full range**: never out of range, the least fee per unit, the simplest loss profile.
@@ -118,18 +149,36 @@ A v3 move has no single verb: `lp_remove`, then `lp_add` with the new range.
 
 ## 7. Watching a position
 
-A position you manage needs a watch that costs nothing per tick. Schedule a read job
-(`standing-work` §4): `read_verb={verb: "defi_data.lp_positions", params: {chain,
-protocol: "v4", token_id}, alert: [...]}`. The alert compares the read's typed fields:
+A position you manage needs a watch that WAKES YOU, not only the owner. Use a job with a
+`precheck` (`standing-work` §4), never a `read_verb` job: a read job only sends the owner a
+line, and you never decide.
 
-- `in_range` — `{field: "in_range", equals: "no"}` for a concentrated range;
-- `currency0` — the native leg left, `{field: "currency0", below: <floor>}`;
-- `value0` — both legs and the fees owed, in currency0;
-- `price`, `pool_share_pct`, `currency1`.
+```
+cronjob_schedule(schedule="*/15 * * * *", skills=["defi-liquidity"], task="<the rule>",
+  precheck={verb: "defi_data.lp_positions",
+            params: {chain, protocol: "v4", token_id},
+            move_pct: 5, field: "price", max_quiet_hours: 24,
+            alert: [{field: "currency0", below: <floor>}]})
+```
 
-Only an alert or a failed read reaches the owner. Set the floor with the owner when the
-position is made; an alert is the moment to propose a withdrawal (`propose_action` with
-`/lp remove …`) or a move, with the numbers of §2 and §3. It is not a trigger to act alone.
+- A quiet tick costs $0, so tick every 15 minutes: a thin pool can lose half its native
+  leg between two 6-hour ticks.
+- `move_pct` on `price` wakes you on every 5% move in either direction, measured from the
+  last tick that woke you. `price` is currency1 per currency0: when the token falls
+  against native, `price` RISES.
+- An `alert` bound that stays crossed wakes you on EVERY tick. Use it for a floor you act
+  on once, and move or clear it in the same run (`cronjob_edit`).
+- A full-range position never leaves its range: an `in_range` alert never fires on it.
+- `max_quiet_hours: 24` gives one check-in a day.
+- The job carries `defi_data` and `defi_trade` (`tools=[…]`), so that a woken run can
+  declare a move (§4b); a declaration sends nothing.
+- The task text is the rule a woken run follows (§4b). A condition only in the task text
+  is never checked by code: put every number you watch in the `precheck`.
+- A read job already on the position: `cronjob_edit(job_id, precheck={…})` turns it into
+  this kind. Do not keep both.
+
+When a run wakes: read the `<precheck>` block, apply §4b, declare or propose, and send the
+owner one line with the numbers of §2 and §3. Nothing to do: send nothing.
 
 ## 8. What to say
 

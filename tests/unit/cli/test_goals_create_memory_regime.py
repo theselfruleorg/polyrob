@@ -6,7 +6,7 @@ from click.testing import CliRunner
 
 def _invoke(tmp_path, monkeypatch, enabled):
     from cli.commands import goals as G
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     monkeypatch.setenv("MEMORY_SCOPES_ENABLED", "true" if enabled else "false")
     monkeypatch.setattr(G, "_owner_tenant", lambda user=None: "u1")
     board = GoalBoard(str(tmp_path / "goals.db"))

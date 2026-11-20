@@ -11,8 +11,13 @@ import pytest
 
 from surfaces.email.inbound import build_inbound_message, parse_from_address
 from tools.email_providers.mime import (
-    normalize_email_message, sender_address, sender_authenticated,
+    KNOWN_AUTHSERV, authserv_ids_for_host, normalize_email_message, sender_address,
+    sender_authenticated,
 )
+
+#: The test MX id (proposal 125 S35: the authserv-id is pinned per transport).
+_TEST_MX = frozenset({"mx.example.org"})
+_GOOGLE = frozenset({"mx.google.com"})
 
 
 class _UD:
@@ -38,7 +43,7 @@ def _mail(headers: str) -> email.message.Message:
     (None, "j@acme.com", False),
 ])
 def test_sender_authenticated(ar, from_addr, ok):
-    assert sender_authenticated(ar, from_addr) is ok
+    assert sender_authenticated(ar, from_addr, authserv_ids=_TEST_MX) is ok
 
 
 def test_encoded_word_cannot_smuggle_a_second_address():
@@ -61,13 +66,13 @@ def test_only_the_topmost_authentication_results_counts():
     em = _mail("Authentication-Results: mx.example.org; dmarc=fail header.from=acme.com\n"
                "Authentication-Results: forged; dmarc=pass header.from=acme.com\n"
                "From: John <j@acme.com>\nMessage-ID: <2@x>\n")
-    assert normalize_email_message(em)["sender_authenticated"] is False
+    assert normalize_email_message(em, authserv_ids=_TEST_MX)["sender_authenticated"] is False
 
 
 def test_authenticated_mail_reaches_the_identity():
     em = _mail("Authentication-Results: mx.example.org; dmarc=pass header.from=acme.com\n"
                "From: John <j@acme.com>\nMessage-ID: <3@x>\n")
-    msg = normalize_email_message(em)
+    msg = normalize_email_message(em, authserv_ids=_TEST_MX)
     assert msg["sender_authenticated"] is True
     inbound = build_inbound_message(msg, _UD())
     assert inbound.identity.sender_authenticated is True
@@ -99,7 +104,8 @@ _GMAIL_OWNER = (
 
 
 def test_real_gmail_owner_mail_is_authenticated():
-    assert normalize_email_message(_mail(_GMAIL_OWNER))["sender_authenticated"] is True
+    assert normalize_email_message(_mail(_GMAIL_OWNER),
+                                   authserv_ids=_GOOGLE)["sender_authenticated"] is True
 
 
 def test_gmail_shape_with_failed_dmarc_stays_unauthenticated():
@@ -109,7 +115,8 @@ def test_gmail_shape_with_failed_dmarc_stays_unauthenticated():
            "       spf=permerror (google.com: permanent error) smtp.mailfrom=a@acme.com;\n"
            "       dmarc=fail (p=NONE) header.from=acme.com\n"
            "From: a@acme.com\nMessage-ID: <g2@x>\n")
-    assert normalize_email_message(_mail(hdr))["sender_authenticated"] is False
+    assert normalize_email_message(_mail(hdr),
+                                   authserv_ids=_GOOGLE)["sender_authenticated"] is False
 
 
 @pytest.mark.parametrize("ar,ok", [
@@ -122,4 +129,63 @@ def test_gmail_shape_with_failed_dmarc_stays_unauthenticated():
     ("spf=pass smtp.mailfrom=evil.com; dmarc=none header.from=acme.com", False),
 ])
 def test_microsoft_shape_without_authserv_id(ar, ok):
-    assert sender_authenticated(ar, "j@acme.com") is ok
+    assert sender_authenticated(ar, "j@acme.com", authserv_ids=frozenset({""})) is ok
+
+
+# --- proposal 125 S35 (D10): the authserv-id is pinned per transport -----------
+
+
+def test_attacker_authserv_id_with_dmarc_pass_is_refused():
+    # A self-hosted or relaying MX adds no header: the topmost one is the attacker's.
+    ar = "attacker.example; dmarc=pass header.from=acme.com"
+    assert sender_authenticated(ar, "j@acme.com", authserv_ids=_GOOGLE) is False
+
+
+def test_attacker_header_above_gmail_shape_is_refused():
+    em = _mail("Authentication-Results: attacker.example; dmarc=pass header.from=gmail.com\n"
+               "From: The Owner <owner@gmail.com>\nMessage-ID: <g3@x>\n")
+    assert normalize_email_message(em, authserv_ids=_GOOGLE)["sender_authenticated"] is False
+
+
+def test_versioned_authserv_id_matches():
+    ar = "mx.google.com 1; dmarc=pass header.from=acme.com"
+    assert sender_authenticated(ar, "j@acme.com", authserv_ids=_GOOGLE) is True
+
+
+def test_no_ids_is_refused():
+    ar = "mx.google.com; dmarc=pass header.from=acme.com"
+    assert sender_authenticated(ar, "j@acme.com", authserv_ids=frozenset()) is False
+    em = _mail("Authentication-Results: " + ar + "\nFrom: j@acme.com\nMessage-ID: <5@x>\n")
+    assert normalize_email_message(em)["sender_authenticated"] is False  # default: no pin
+
+
+def test_empty_id_pin_refuses_a_named_id():
+    ar = "mx.google.com; dmarc=pass header.from=acme.com"
+    assert sender_authenticated(ar, "j@acme.com", authserv_ids=frozenset({""})) is False
+
+
+@pytest.mark.parametrize("host,ids", [
+    ("imap.gmail.com", {"mx.google.com"}),
+    ("imap.googlemail.com", {"mx.google.com"}),
+    ("IMAP.Gmail.com.", {"mx.google.com"}),
+    ("outlook.office365.com", {""}),
+    ("imap-mail.outlook.com", {""}),
+    ("imap.hotmail.com", {""}),
+    ("mail.self-hosted.example", set()),
+    ("agentmail", set()),
+    ("", set()),
+    (None, set()),
+])
+def test_authserv_ids_for_host(host, ids):
+    assert authserv_ids_for_host(host) == frozenset(ids)
+
+
+def test_agentmail_fails_closed_until_pinned():
+    """Audit 2026-11-21 M-2: AgentMail's authserv-id waits for a real message
+    sample from a box. Until then the row is the EMPTY set: no AgentMail sender
+    is authenticated (it was ``None`` = any id, which let a forged header in).
+    Pin it when a sample exists, and this test changes with it."""
+    assert KNOWN_AUTHSERV["agentmail"] == frozenset()
+    ar = "any-id.example; dmarc=pass header.from=acme.com"
+    assert sender_authenticated(ar, "j@acme.com",
+                                authserv_ids=KNOWN_AUTHSERV["agentmail"]) is False

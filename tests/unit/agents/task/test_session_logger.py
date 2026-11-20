@@ -1,8 +1,24 @@
 """102 M-C: one logger per component, and the log line still names the session."""
 import logging
 
+import pytest
+
 from agents.task.logging_config import get_task_logger
 from cli.ui.log_squelch import _short_name
+
+
+@pytest.fixture(autouse=True)
+def _logger_live(monkeypatch):
+    # Another test file on the same xdist worker can disable this logger, raise its
+    # level or switch logging off (a logging config call); the asserts must not
+    # depend on that state.
+    log = logging.getLogger("task.sessioncomponent")
+    monkeypatch.setattr(log, "disabled", False)
+    monkeypatch.setattr(log, "level", logging.NOTSET)
+    monkeypatch.setattr(logging.root.manager, "disable", logging.NOTSET)
+    log.manager._clear_cache()
+    yield
+    log.manager._clear_cache()
 
 
 class _Capture(logging.Handler):

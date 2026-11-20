@@ -106,7 +106,7 @@ PROFILES: Dict[str, Tuple[str, ...]] = {
     # (X402_AUTONOMOUS_MAX_USD act-and-report, owner queue above) and the
     # WALLET_VENUE_DAILY_CAP_X402_USD PolicyGate venue cap.
     "grant:x402_autonomous": ("x402_pay",),
-    # ... and only when the optional agent-NFT package is installed.
+    # ... and only when AGENT_NFT_ENABLED registers the tool (123 S1).
     "grant:agent_nft": ("agent_nft",),
     # The meta ids an AMBIENT session never holds (agent-callable capabilities,
     # not a toolset): subtracted from grant:autonomous by the ambient defaults.

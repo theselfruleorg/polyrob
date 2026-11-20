@@ -41,7 +41,7 @@ def test_short_parent_id_is_unchanged():
 
 
 def test_path_manager_accepts_the_child_id():
-    from agents.task.path import pm
+    from core.session_paths import pm
     mgr = _mgr(UUID)
     vid = mgr._generate_virtual_session_id(mgr._generate_sub_agent_id("p"))
     assert pm().clean_session_id(vid) == vid

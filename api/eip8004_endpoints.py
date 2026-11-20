@@ -32,10 +32,11 @@ _validation_manager: Optional[ValidationManager] = None
 
 
 def require_eip8004_enabled() -> bool:
-    """Gate write endpoints behind EIP8004_ENABLED (404 when off).
+    """Gate the validation surface behind EIP8004_ENABLED (404 when off).
 
-    Discovery/read endpoints stay open; only the state-changing surface is hidden
-    unless an operator explicitly enables ERC-8004.
+    The writes AND the validation data reads (L-17): only discovery
+    (``registration.json``, ``/config``) and the static ``/validation`` index stay
+    open while an operator has not enabled ERC-8004.
     """
     if not bool_env("EIP8004_ENABLED", False):
         raise HTTPException(status_code=404, detail="ERC-8004 not enabled")
@@ -187,7 +188,28 @@ async def submit_validation_response(
         raise HTTPException(status_code=500, detail="Failed to submit response")
 
 
-@router.get("/validation/status/{request_hash}")
+@router.get("/validation")
+async def validation_index():
+    """The advertised ``EIP8004-validation`` URL answers a GET (it was a 404).
+
+    An index of the validation reads, stamped ``simulated: true``: the
+    validation registry here is a local, process-volatile simulation, not an
+    on-chain registry (M21). The writes stay owner-only behind EIP8004_ENABLED.
+    """
+    return {
+        "simulated": True,
+        "registry": "local in-memory simulation; not an on-chain validation registry",
+        "reads": {
+            "status": "/eip8004/validation/status/{request_hash}",
+            "summary": "/eip8004/validation/summary/{agent_id}",
+            "pending": "/eip8004/validation/pending",
+            "validators": "/eip8004/validation/validators",
+        },
+    }
+
+
+@router.get("/validation/status/{request_hash}",
+            dependencies=[Depends(require_eip8004_enabled)])
 async def get_validation_status(
     request_hash: str,
     manager: ValidationManager = Depends(get_validation_manager),
@@ -207,7 +229,8 @@ async def get_validation_status(
     return status.model_dump()
 
 
-@router.get("/validation/summary/{agent_id}", response_model=ValidationSummary)
+@router.get("/validation/summary/{agent_id}", response_model=ValidationSummary,
+            dependencies=[Depends(require_eip8004_enabled)])
 async def get_validation_summary(
     agent_id: int,
     manager: ValidationManager = Depends(get_validation_manager),
@@ -223,7 +246,8 @@ async def get_validation_summary(
     return await manager.get_validation_summary(agent_id=agent_id)
 
 
-@router.get("/validation/pending", response_model=List[Dict[str, Any]])
+@router.get("/validation/pending", response_model=List[Dict[str, Any]],
+            dependencies=[Depends(require_eip8004_enabled)])
 async def list_pending_validations(
     agent_id: Optional[int] = None,
     manager: ValidationManager = Depends(get_validation_manager),
@@ -235,15 +259,15 @@ async def list_pending_validations(
 
     Returns:
         Pending validation requests (bare list, original shape). Each item is
-        stamped `simulated: true` (M21: served even when EIP8004_ENABLED is
-        off — the validation registry is a local, process-volatile
-        simulation, not an on-chain registry).
+        stamped `simulated: true` (M21: the validation registry is a local,
+        process-volatile simulation, not an on-chain registry).
     """
     pending = await manager.list_pending_validations(agent_id=agent_id)
     return [{**item, "simulated": True} for item in pending]
 
 
-@router.get("/validation/validators", response_model=Dict[str, str])
+@router.get("/validation/validators", response_model=Dict[str, str],
+            dependencies=[Depends(require_eip8004_enabled)])
 async def list_validators(
     manager: ValidationManager = Depends(get_validation_manager),
 ):

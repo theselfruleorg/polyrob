@@ -64,7 +64,7 @@ class _Agent:
 @pytest.mark.asyncio
 async def test_a_tap_records_the_stored_option_as_the_answer(tmp_path, monkeypatch):
     import surfaces.telegram.harness as h
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
 
     monkeypatch.setattr(h, "_is_admin_owner", lambda _uid: True)
     board = GoalBoard(os.path.join(str(tmp_path), "goals.db"))

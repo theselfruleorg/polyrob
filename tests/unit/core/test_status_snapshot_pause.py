@@ -52,7 +52,7 @@ def test_violation_after_pause_is_critical(home):
 
 
 def test_running_headline_names_live_actors(home, monkeypatch):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from core.config_policy import AutonomyConfig
     # 080 WS-4: RUNNING only while a loop is on (else the headline says IDLE).
     monkeypatch.setattr(AutonomyConfig, "goals_enabled", staticmethod(lambda: True))

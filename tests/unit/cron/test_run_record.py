@@ -162,7 +162,7 @@ async def test_a_run_cut_at_its_time_cap_names_the_wall_clock_stop(monkeypatch, 
         await task
     rec = env["records"][-1]
     assert rec["outcome"] == "partial"
-    assert "cut by the wall-clock cap (0.5s) before done()" in rec["summary"]
+    assert "stopped at its time limit (0.5s) before done()" in rec["summary"]
     assert rec["meta"]["stop_reason"] == "wall_clock"
 
 
@@ -227,7 +227,7 @@ async def test_the_next_run_reads_its_own_previous_runs(monkeypatch, env):
 async def test_a_decline_survives_a_failed_run_and_is_consumed_after_a_completed_one(
         monkeypatch, env):
     """B4: answers used to be marked consumed BEFORE the run."""
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from core.runtime_paths import goals_db_path
     board = GoalBoard(goals_db_path(env["dir"]))
     ask = board.create_ask(user_id="u1", what="Post the rebuy on X?",

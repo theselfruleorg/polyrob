@@ -12,6 +12,59 @@ from __future__ import annotations
 
 
 
+def _autonomous_run(context, tool_self=None) -> bool:
+    """The turn is a goal/cron/planner run (``core.security.owner_turn``). Raises on a
+    probe fault, so the kernel's turn step refuses (fail closed)."""
+    from core.security.owner_turn import is_autonomous_session
+    return is_autonomous_session(context, tool_self)
+
+
+def _turn_line(ctx) -> str:
+    """Who asked, for the card body (audit 2026-11-21 L-1): the turn's origin and its
+    session, so the owner sees which run wants the allowance."""
+    from core.security.owner_turn import forged_kind, is_room_turn
+    kind = forged_kind(ctx)
+    origin = (f"a {kind.replace('_', '-')} re-entry" if kind
+              else "a room turn" if is_room_turn(ctx) else "an agent turn")
+    sid = str(getattr(ctx, "session_id", "") or "unknown")
+    return f"Asked by the agent on {origin} (session {sid}), not by you."
+
+
+async def _grant_card(tool, params, ctx, spender: str, token: str):
+    """126: a grant to an unpinned spender is the OWNER's act (CR-H02). When the
+    caller is the owner tenant on an agent turn that cannot make it, the exact grant
+    becomes ONE call card; its Confirm runs it as the owner seat, where CR-H02 passes
+    and every other gate runs again. Anyone else: None (the flat refusal).
+
+    Audit 2026-11-21 L-1: an AUTONOMOUS run (goal, cron, planner) gets no card — a
+    standing claim is never one tap away from an unattended run — and the card names
+    the turn's origin and session. The decision is the money kernel's
+    (``authorize_spend``: principal, leaf, and the turn step with the autonomous-run
+    probe; a probe fault refuses)."""
+    if ctx is None:
+        return None
+    try:
+        from core.money.authorize import SpendIntent, authorize_spend
+        verdict = authorize_spend(
+            SpendIntent.verb_gate("grant an allowance to an unpinned spender", turn=True),
+            ctx, forged_fn=_autonomous_run, tool_self=tool)
+        if verdict.refused:
+            return None
+        who = _turn_line(ctx)
+    except Exception:  # noqa: BLE001
+        return None
+    from tools.controller.call_card_run import need_owner
+    args = {k: v for k, v in params.model_dump().items() if v is not None}
+    args["dry_run"] = False
+    body = (f"Approve {params.amount:g} of {token} for {spender} on {params.chain}, bound "
+            f"${params.max_spend_usd:,.2f}.\n{who}\n⚠️ {spender} is not a swap router this "
+            f"chain pins: the allowance is a standing claim on the wallet until it is revoked "
+            f"(revoke_approval). Its value is charged to the daily cap.")
+    return await need_owner(tool, ctx, title="Approve a token for a spender", body=body,
+                            steps=[{"do": "defi_trade_approve_token", "args": args}],
+                            lead="An allowance to an unpinned spender is the owner's act.")
+
+
 async def perform_approve_token(tool, params, execution_context=None):
     from tools.defi.trade_tool import (  # call-time: tests patch these
         _SYMBOL_NOTE, _UNLIMITED_APPROVAL_FLOOR, _intent_idem, _shown_symbol,
@@ -79,8 +132,8 @@ async def perform_approve_token(tool, params, execution_context=None):
             f"what this allowance puts at risk — and {spender} is not a swap "
             f"router this chain pins, so the grant is not the sell leg of an "
             f"exit either. If you are closing a position, approve the router "
-            f"the swap route names. Otherwise have the owner approve this by "
-            f"hand. Use revoke_approval to clear a standing claim."))
+            f"the swap route names. No seat and no card can make this grant: "
+            f"nothing bounds it. Use revoke_approval to clear a standing claim."))
 
     # CR-H02 (2026-09-23): a grant to a spender this chain does not pin is
     # not the approve leg of a swap — it is a standing claim whose drain
@@ -91,6 +144,10 @@ async def perform_approve_token(tool, params, execution_context=None):
     if not spender_pinned:
         refusal = tool._non_route_grant_refusal(execution_context, spender)
         if refusal:
+            card = (None if "could not be proven" in refusal else
+                    await _grant_card(tool, params, execution_context, spender, token))
+            if card is not None and not card.error:
+                return card
             return tool._ar(error=refusal)
 
     signer = wallet.operational_signer()

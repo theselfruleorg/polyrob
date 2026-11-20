@@ -38,9 +38,9 @@ def path_manager(test_data_root):
     this PathManager pointing at the SAME tmpdir we install this instance as the
     global pm() for the duration of the test and restore the previous one after.
     """
-    from agents.task.path import PathManager
-    import agents.task.path as path_module
-    from agents.task.path import set_path_manager
+    from core.session_paths import PathManager
+    import core.session_paths as path_module
+    from core.session_paths import set_path_manager
 
     previous = path_module._INSTANCE
     pm_instance = PathManager(data_root=str(test_data_root))

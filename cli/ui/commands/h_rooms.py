@@ -5,12 +5,12 @@ verbs ``core.verbs`` already describes for every seat, and which the terminal �
 the seat an owner uses when the phone is not the answer — simply did not have.
 
 ⚠️ REACH, never policy. The room verbs are THIN calls into
-``surfaces.telegram.group_ops``' reply helpers, the same way ``h_money_verbs``
-calls ``owner_ops``: every role gate, the default-DENY room allowlist, the 031
-pause and the paid-rail caps stay exactly where they are and decide exactly
-what they decided before. Nothing here grants an authority.
+``cron.owner_rooms``' reply helpers (the body every seat runs, proposal 125
+S14): every role gate, the default-DENY room allowlist, the 031 pause and the
+paid-rail caps stay exactly where they are and decide exactly what they decided
+before. Nothing here grants an authority.
 
-⚠️ The helpers were written against a Telegram ROUTING RESULT, not a string —
+⚠️ The helpers were written against a chat ROUTING RESULT, not a string —
 they read the sender's identity, the room the line arrived in, and (for the
 paid rail) the message it replied to. This module builds the one honest
 stand-in a terminal can offer: :class:`_CliResult`, whose "room" is whatever
@@ -126,7 +126,7 @@ def _split_chat_flag(args: List[str]) -> Tuple[List[str], Optional[str], Optiona
 def _named_room(args: List[str]) -> Tuple[Optional[str], Optional[str]]:
     """The room an explicit ``<verb> <surface> <chat_id> …`` line names.
 
-    Mirrors ``group_ops._split_target``'s own rule (``len(rest) >= 2``) so the
+    Mirrors ``owner_rooms._split_target``'s own rule (``len(rest) >= 2``) so the
     stand-in's "here" is the SAME room the helper will resolve — otherwise the
     role stamp would be checked against one room and the write applied to
     another.
@@ -182,7 +182,7 @@ async def _room_verb(ctx, helper, *, title: str, needs_room: bool) -> None:
 
 async def h_groups(ctx) -> None:
     """Room presence admin: allow, deny, list, use, mode, set, role, tail…"""
-    from surfaces.telegram.group_ops import groups_reply
+    from cron.owner_rooms import groups_reply
     # `list` needs no room; every other verb resolves its own target and says
     # so when it has none — so this verb never pre-refuses.
     await _room_verb(ctx, groups_reply, title="groups", needs_room=False)
@@ -190,31 +190,31 @@ async def h_groups(ctx) -> None:
 
 async def h_mute(ctx) -> None:
     """Silence the agent in a room (a member mute needs the room itself)."""
-    from surfaces.telegram.group_ops import mute_reply
+    from cron.owner_rooms import mute_reply
     await _room_verb(ctx, mute_reply, title="mute", needs_room=False)
 
 
 async def h_unmute(ctx) -> None:
     """End a member's mute early — names a person, so it needs the room."""
-    from surfaces.telegram.group_ops import unmute_reply
+    from cron.owner_rooms import unmute_reply
     await _room_verb(ctx, unmute_reply, title="unmute", needs_room=False)
 
 
 async def h_ban(ctx) -> None:
     """Ban a member for a while — names a person, so it needs the room."""
-    from surfaces.telegram.group_ops import ban_reply
+    from cron.owner_rooms import ban_reply
     await _room_verb(ctx, ban_reply, title="ban", needs_room=False)
 
 
 async def h_unban(ctx) -> None:
     """Lift a member's ban — names a person, so it needs the room."""
-    from surfaces.telegram.group_ops import unban_reply
+    from cron.owner_rooms import unban_reply
     await _room_verb(ctx, unban_reply, title="unban", needs_room=False)
 
 
 async def h_paid(ctx) -> None:
     """A room's paid actions: status, prices, enable/disable, offers, cancel."""
-    from surfaces.telegram.group_ops import paid_reply
+    from cron.owner_rooms import paid_reply
     await _room_verb(ctx, paid_reply, title="paid", needs_room=True)
 
 
@@ -269,8 +269,8 @@ def h_cancel(ctx) -> None:
     except Exception as exc:
         ctx.emit(f"{candy.GUTTER}(could not cancel: {exc})", title="cancel")
         return
-    from surfaces.telegram.harness import CANCEL_REACH
-    ctx.emit(f"Task cancelled. {CANCEL_REACH}", title="cancel")
+    from core.surfaces.lifecycle_verbs import CANCEL_REACH
+    ctx.emit(f"Stopped. {CANCEL_REACH}", title="cancel")
 
 
 def h_start(ctx) -> None:

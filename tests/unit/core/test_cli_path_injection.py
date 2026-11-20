@@ -26,7 +26,7 @@ async def test_cli_container_shares_global_pm_singleton_no_env_shim(tmp_path, mo
     with patch("modules.llm.llm_manager.LLMManager._initialize", new=AsyncMock()):
         from polyrob.app.bootstrap import build_cli_container
         container = await build_cli_container()
-    from agents.task.path import pm
+    from core.session_paths import pm
     injected = container.get_service("path_manager")
     # Single source of truth: pm() returns the very same instance.
     assert pm() is injected

@@ -67,7 +67,7 @@ def test_every_money_write_has_owner_approval_and_the_correspondent_block():
     """The pack's copy of tests/unit/core/test_money_verb_registration.py: every
     spend-side venue verb is on the owner approval lane and every money verb is
     blocked while correspondent-tainted (by row AND by the predicate that runs)."""
-    from agents.task.agent.core.correspondent_gate import is_high_impact
+    from core.security.high_impact import is_high_impact
     from core.config_policy.payment_tools import PAYMENT_APPROVAL_TOOLS
     from core.money.classify import money_action
     from core.verb_policy import VERB_POLICY

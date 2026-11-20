@@ -6,7 +6,7 @@ differ, so the title-similarity dedup let both through.
 """
 import pytest
 
-from agents.task.goals.board import ASK_OBSOLETE, ASK_OPEN, GoalBoard
+from modules.goals.board import ASK_OBSOLETE, ASK_OPEN, GoalBoard
 
 
 @pytest.fixture

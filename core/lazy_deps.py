@@ -566,6 +566,15 @@ def _request_and_wait(feature: str, wait: float) -> None:
 
 def _ensure_legacy(feature: str, specs: Tuple[str, ...], *, prompt: bool) -> None:
     """Install the release's hashed wheels into this venv, outside custody only."""
+    # Inside a hardened unit the venv is on the read-only /opt (EROFS): refuse
+    # BEFORE pip, with the cause, instead of a pip traceback after the download.
+    import sysconfig
+    site = sysconfig.get_paths().get("purelib") or ""
+    if site and not os.access(site, os.W_OK):
+        raise FeatureUnavailable(
+            f"{feature}: LAZY_DEPS_MODE=legacy installs into this venv, and {site} is "
+            f"read-only here (a hardened service unit). Use LAZY_DEPS_MODE=trusted. "
+            f"Remedy: {remedy(feature)}", "venv_read_only")
     # CR-M09: pip runs sdist build backends as HOST code. Under wallet custody
     # that is the same trust-domain breach git/LSP refuse, so refuse it here too.
     from core.security.host_execution import host_execution_refusal
@@ -605,7 +614,8 @@ def _ensure_legacy(feature: str, specs: Tuple[str, ...], *, prompt: bool) -> Non
             except OSError:
                 pass
     if proc.returncode != 0:
-        tail = ((proc.stderr or "") + (proc.stdout or "")).strip()[-800:]
+        # stderr holds the cause; stdout may end on "Successfully installed".
+        tail = ((proc.stderr or "").strip() or (proc.stdout or "").strip())[-800:]
         raise FeatureUnavailable(
             f"{feature}: pip exited {proc.returncode}. Remedy: {remedy(feature)}\n{tail}", "pip_failed")
     importlib.invalidate_caches()

@@ -141,7 +141,7 @@ def exit_price_fn(tool):
     return _fn
 
 
-def prepare_add(p, rpc, holder, npm, price_fn=None):
+def prepare_add(p, rpc, holder, npm, price_fn=None, grants=None):
     chain_row = chains.get(p.chain)
     from core.wallet.tokens import normalize_address
     native_a, native_b = p.token_a.lower() == 'native', p.token_b.lower() == 'native'
@@ -195,7 +195,9 @@ def prepare_add(p, rpc, holder, npm, price_fn=None):
             continue
         if not nat:
             available = R.allowance(rpc, p.chain, t, holder, npm)
-            if available < n:
+            if available < n and grants is not None:
+                grants.append((t, n, dec))   # 126 wave 4: the live add makes it first
+            elif available < n:
                 raise ValueError(f'allowance short: {available}, need {n}. Run defi_trade.approve_token(chain={p.chain}, token={t}, spender={npm}, amount={Decimal(n) / 10**dec}) first; one exact approval per transaction.')
             balance = int(R.view(rpc, t, A.NPM_BALANCE_OF, [holder]))
         else:
@@ -422,7 +424,7 @@ async def _perform(tool, p, ctx, verb):
                 holder=signer.address, gate=gate, execution_context=ctx, tool_self=tool,
                 price_fn=tool._price, fallback_price_fn=tool._fallback_price,
                 forged_fn=_is_forged_or_autonomous_turn,
-                autonomous_ok_fn=_is_autonomous_goal_turn, liquidity_rpc=rpc, **guard_kw)
+                autonomous_ok_fn=_is_autonomous_goal_turn, dry_run=bool(p.dry_run), liquidity_rpc=rpc, **guard_kw)
             header = (f'{verb} on {p.chain} (Uniswap {p.protocol})\n'
                       + (account_mode.header_line(held) if held is not None else '')
                       + f'{plan.description}{cap_note}guard: {decision.reason}; value: {decision.amount_usd}; lane: {decision.lane}\n')
@@ -434,7 +436,9 @@ async def _perform(tool, p, ctx, verb):
             tx = rail.size_gas(tx, decision.sim_gas_used)
             if p.dry_run:
                 note = f'would mint position #{decision.position_token_id} (prediction only)\n' if plan.intent.lp_position_effect == 'mint' else ''
-                return tool._ar(content=header + note + 'RESULT: DRY RUN. Re-run with dry_run=false to send.')
+                from tools.base_tool import dry_run_result
+                return dry_run_result(tool, header + note + 'RESULT: DRY RUN. Re-run with dry_run=false to send.',
+                                      decision.amount_usd)
             # Re-check the owner's pause immediately before signing.
             if _pause_refusal(ctx, entry=verb == 'lp_add'):
                 raise ValueError('owner paused spending before broadcast')
@@ -520,11 +524,13 @@ async def _perform(tool, p, ctx, verb):
     return tool._ar(content=header + f'RESULT: {detail}\ntx: {tx_hash}' + journal)
 
 
-def _move_precheck(tool, p, row, rpc, holder, npm, gate, pos):
+def _move_precheck(tool, p, row, rpc, holder, npm, gate, pos, facts=None):
     """Why the MINT of a move would not pass once the withdrawal has landed, or
     None. A dry run of the mint cannot answer this — the wallet does not hold the
     amounts yet — so the checks run here against what the withdrawal returns at
-    least: the pool and the gap, the allowances, the LP caps, the USD limits."""
+    least: the pool and the gap, the allowances, the LP caps, the USD limits.
+    ``facts`` (a dict) gets ``mint_usd``, the mint's value at independent prices,
+    when every leg has one."""
     from tools.defi import lp_v4 as V, lp_v4_seed
     from tools.defi.lp_v4_move import withdrawn_minimum
     from tools.defi.lp_v4_verbs import caps_refusal
@@ -536,9 +542,12 @@ def _move_precheck(tool, p, row, rpc, holder, npm, gate, pos):
     credit = {c0: back[0], c1: back[1]}
     try:
         plan = lp_v4_seed.prepare_seed_v4(p.model_copy(update={"dry_run": True}), rpc, holder,
-                                          npm, row, credit=credit)
+                                          npm, row, credit=credit, grants_follow=p.dry_run)
     except Exception as exc:
         return str(exc)
+    if facts is not None:
+        facts["grant_notes"] = [ln for ln in plan.description.splitlines()
+                                if "makes the Permit2 grant" in ln]
     native_back = back[0] if c0 == V.ZERO else 0
     balance = int(rpc("eth_getBalance", [holder, "latest"]), 16) + native_back
     why = caps_refusal(gate, plan.value, balance,
@@ -558,6 +567,8 @@ def _move_precheck(tool, p, row, rpc, holder, npm, gate, pos):
         if not (math.isfinite(px) and px > 0):
             return None        # no independent price: the guard judges the mint itself
         usd += raw / 10 ** dec * px
+    if facts is not None:
+        facts["mint_usd"] = round(usd, 2)
     if usd > float(p.max_spend_usd):
         return (f"the mint moves about ${usd:,.2f} and max_spend_usd is ${p.max_spend_usd:,.2f}; "
                 f"pass a max_spend_usd that covers both legs")
@@ -632,9 +643,11 @@ async def _perform_move(tool, p, ctx):
     # stops the move before anything leaves the position.
     # The mint OPENS a position: a pause that would refuse it stops the move here,
     # not after the withdrawal (an exit, which the scoped pause lets through).
+    facts = {}
     try:
         npm = dex_registry.resolve_position_manager(p.chain, "v4")
-        why = _pause_refusal(ctx, entry=True) or _move_precheck(tool, p, row, rpc, signer.address, npm, wallet.policy, pos)
+        why = _pause_refusal(ctx, entry=True) or _move_precheck(
+            tool, p, row, rpc, signer.address, npm, wallet.policy, pos, facts)
     except Exception as exc:
         why = f"the mint could not be checked ({type(exc).__name__}: {exc})"
     if why:
@@ -643,21 +656,26 @@ async def _perform_move(tool, p, ctx):
     remove = LpRemoveParams(chain=p.chain, protocol="v4", token_id=tid,
                             liquidity_pct=int(f["from_pct"]), slippage_bps=int(f["gap_bps"]),
                             max_spend_usd=p.max_spend_usd, dry_run=p.dry_run)
+    from tools.defi.lp_v4_verbs import anchor_floor, move_floor
+    floor = anchor_floor(f)   # audit 2026-11-21 L-11: the minimums are bound to the anchor
     if p.dry_run:
-        out = await _perform(tool, remove, ctx, "lp_remove")
+        with move_floor(tid, floor):
+            out = await _perform(tool, remove, ctx, "lp_remove")
         if out.error:
             return tool._ar(error=head + "step 1 (withdraw) would not pass:\n" + _text(out)
                             + "\nRESULT: NOT SENT.")
         return tool._ar(content=head + "step 1 (withdraw):\n" + _text(out) + "\nstep 2 (mint): "
                         "the pool, the gap, the allowances, the LP caps and the USD limits pass "
                         "against what the withdrawal returns at least. The guard simulates the "
-                        "mint itself when it is sent, after the withdrawal.")
+                        "mint itself when it is sent, after the withdrawal."
+                        + "".join("\n" + n for n in facts.pop("grant_notes", [])), metadata=facts)
     if not S.claim_withdrawal(p.seed):
         return tool._ar(error=head + "refused: this move's withdrawal is already taken by "
                         "another run. It is not sent twice. RESULT: NOT SENT.")
     # An exception here is an unknown outcome: the mark stays, so nothing sends
     # a second withdrawal.
-    out = await _perform(tool, remove, ctx, "lp_remove")
+    with move_floor(tid, floor):
+        out = await _perform(tool, remove, ctx, "lp_remove")
     text = _text(out)
     sent = re.search(r"tx: (0x[0-9a-fA-F]{64})", text)
     report = head + "step 1 (withdraw):\n" + text + "\n"
@@ -684,10 +702,92 @@ async def _perform_move(tool, p, ctx):
     return await mint(report)
 
 
+async def _v3_grants(tool, p, ctx):
+    """126 wave 4: the exact approvals a LIVE v3 deposit lacks, made here to the PINNED
+    position manager (each judged by the guard). ``(why not, [(token, report)])``."""
+    from core.wallet import tx_guard
+    from core.wallet.broadcast.evm import EvmRail
+    from tools.defi.approve_verb import perform_approve_token
+    from tools.defi.trade_params import ApproveParams
+    try:
+        wallet = tool._get_wallet()
+        signer = wallet.operational_signer()
+        rpc = getattr(tool, '_lp_rpc', None) or (tool._rail_factory or EvmRail)(
+            chain=p.chain, signer=signer)._rpc
+        npm = dex_registry.resolve_position_manager(p.chain, 'v3')
+        grants = []
+        prepare_add(p, rpc, signer.address, npm, price_fn=tool._price, grants=grants)
+    except Exception:  # noqa: BLE001 — the send path reports it
+        return None, []
+    if not grants or npm.lower() not in tx_guard.pinned_route_spenders(p.chain):
+        return None, []
+    made = []
+    for t, n, dec in grants:
+        res = await perform_approve_token(tool, ApproveParams(
+            chain=p.chain, token=t, spender=npm,
+            amount=float(Decimal(n) * Decimal('1.000001') / Decimal(10) ** dec),
+            max_spend_usd=p.max_spend_usd, dry_run=False), ctx)
+        text = str(res.error or res.extracted_content or '')
+        if res.error or 'NOT SENT' in text:
+            return f'the exact approval of {t} to {npm} was not made: {text}', made
+        made.append((t, text))
+    return None, made
+
+
+async def _revoke_all(tool, p, ctx, spender, made) -> str:
+    from tools.defi.approve_verb import perform_revoke_approval
+    from tools.defi.trade_params import RevokeParams
+    out = []
+    for t, _ in made:
+        try:
+            rev = await perform_revoke_approval(tool, RevokeParams(
+                chain=p.chain, token=t, spender=spender, dry_run=False), ctx)
+            text = str(rev.error or rev.extracted_content or 'no report')
+        except Exception as exc:  # noqa: BLE001
+            text = f'raised {exc}'
+        out.append(f'revoke leg {t}:\n{text}')
+    return '\n'.join(out)
+
+
 async def perform_lp_add(tool, params, execution_context=None):
+    if (getattr(params, 'seed', None) is None and params.protocol == 'v3'
+            and not params.dry_run):
+        # 126 wave 4: a v3 deposit is ONE call — exact approvals, the mint, the revokes.
+        why, made = await _v3_grants(tool, params, execution_context)
+        if why:
+            # A grant made before the one that failed is revoked here, and the report says
+            # so: an exact approval with no deposit behind it is a standing claim.
+            undo = ('' if not made else '\n' + await _revoke_all(
+                tool, params, execution_context,
+                dex_registry.resolve_position_manager(params.chain, 'v3'), made))
+            return tool._ar(error=f'refused: {why}\nNothing was deposited. RESULT: NOT SENT.'
+                                  + undo)
+        res = await _perform(tool, params, execution_context, 'lp_add')
+        if not made:
+            return res
+        legs = ('\n'.join(f'approve leg {t}:\n{x}' for t, x in made) + '\n'
+                + await _revoke_all(tool, params, execution_context,
+                                    dex_registry.resolve_position_manager(params.chain, 'v3'),
+                                    made))
+        if res.error:
+            return tool._ar(error=str(res.error) + '\n' + legs)
+        return tool._ar(content=str(res.extracted_content or '') + '\n' + legs,
+                        metadata=getattr(res, 'metadata', None) or {})
     if getattr(params, 'seed', None) is not None:
         # 118 W7: a declaration that MOVES a position is two guarded transactions.
         from tools.defi import lp_v4_seed
+        if not params.dry_run:
+            # The Permit2 legs of a confirmed declaration are made here, never asked for.
+            why, made = await lp_v4_seed.make_grants(tool, params, execution_context)
+            if why:
+                # The grants made before the one that failed stay for a retry of this
+                # declaration (each is sized to its mint; a Permit2 grant expires), and the
+                # report names them: the ERC-20 allowance to Permit2 has no expiry.
+                kept = ("" if not made else "\nThese grants were made and STAY until this "
+                        "declaration is retried or revoke_approval removes them:\n"
+                        + "\n".join(made))
+                return tool._ar(error=f"refused: {why}\nNothing was withdrawn or minted. "
+                                      "RESULT: NOT SENT." + kept)
         if lp_v4_seed.is_move(params, execution_context):
             return await _perform_move(tool, params, execution_context)
     return await _perform(tool, params, execution_context, 'lp_add')

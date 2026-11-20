@@ -1,6 +1,6 @@
 """P0 Task 9 — gate membership + documented approval default."""
-from agents.task.agent.core.correspondent_gate import HIGH_IMPACT_TOOLS, is_high_impact
-from tools.controller.delegation import DELEGATE_BLOCKED_TOOLS
+from core.security.high_impact import HIGH_IMPACT_TOOLS, is_high_impact
+from core.delegation_policy import DELEGATE_BLOCKED_TOOLS
 from tools.controller.approval import default_approval_required_tools
 
 

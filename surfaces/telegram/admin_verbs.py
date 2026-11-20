@@ -15,12 +15,13 @@ harness keeps the ORDER that matters and nothing else:
 
 Every handler takes ONE :class:`AdminCall` and returns the reply text (or a
 ``core.surfaces.command_reply`` envelope). The ``*_ops`` modules are imported
-LAZILY inside each handler, exactly as the chain did, so a test that patches
-``surfaces.telegram.job_ops.jobs_reply`` (and friends) still reaches the run.
+LAZILY inside each handler, each from the module that owns its body, so a test that
+patches that module's reply (``tools.defi.owner_verbs.wallet.wallet_reply``) reaches
+the run.
 
 ⚠️ This is a SEAT table, not a second verb table: the words, groups and seats
 of every verb stay in ``core.verbs`` (``tests/unit/core/test_verbs.py``), and
-the owner-gated set stays ``harness._OWNER_ADMIN_COMMANDS``. A core row cannot
+the owner-gated set stays ``core.surfaces.command_catalog.OWNER_ADMIN_COMMANDS``. A core row cannot
 carry a seat handler in ``core.verbs`` (``register_verbs`` refuses a core name,
 and the money rows deliberately carry none until 067 P5b), so the built-in
 handlers live here, beside the seat that runs them.
@@ -81,7 +82,7 @@ async def pre_gate_reply(task_agent: Any, result: Any, cmd: str) -> Optional[str
         # catalog row has no `moderation` is told where the verb runs.
         from core.verbs import verb_for
         from surfaces.telegram.status_ops import _seat_via
-        from surfaces.telegram.unknown_verb import elsewhere_text
+        from core.surfaces.command_catalog import elsewhere_text
         refusal = elsewhere_text(verb_for(cmd), _seat_via(result))
         if refusal:
             return refusal
@@ -113,7 +114,8 @@ async def _status(c: AdminCall) -> str:
 async def _mode(c: AdminCall) -> str:
     # The four answers, health first. The console runs this table too.
     from core.permission_levels import LEVELS, level_reply
-    from surfaces.telegram.status_ops import _health_header, _mode_reply, _seat_via
+    from core.surfaces.owner_reads import health_header, mode_reply
+    from surfaces.telegram.status_ops import _seat_via
     seat = _seat_via(c.result)   # F-10: the seat the line arrived on, never a literal
     if c.args and c.args[0] in LEVELS:
         # 044 I10: an owner write is never run from inside a group a member can talk in.
@@ -121,13 +123,13 @@ async def _mode(c: AdminCall) -> str:
         if is_group_session_key(getattr(c.result.decision, "session_key", "")):
             return "Change the level in your private chat with me, not in a group."
         return level_reply(c.args[0], surface=seat, user_id=c.user_id)
-    header = await _health_header(c.user_id, c.data_dir, c.task_agent)
-    return "\n".join(header) + "\n" + _mode_reply(seat, full="all" in (c.args or ()))
+    header = await health_header(c.user_id, c.data_dir, c.task_agent)
+    return "\n".join(header) + "\n" + mode_reply(seat, full="all" in (c.args or ()))
 
 
 async def _recap(c: AdminCall) -> str:
     # one recap vocabulary across surfaces (/recap = /journey)
-    from surfaces.telegram.status_ops import journey_reply
+    from core.surfaces.owner_reads import journey_reply
     return await journey_reply(c.user_id, c.data_dir, c.task_agent, c.args)
 
 
@@ -137,7 +139,7 @@ async def _avatar(c: AdminCall) -> Any:
     # reachable the text still answers rather than failing the verb.
     # `/avatar set` and `/avatar push` use the network, so they run off the poll loop
     # (`harness._runs_in_background`).
-    from surfaces.telegram import owner_ops as _owner_ops
+    from tools import avatar_owner as _owner_ops
     if c.args and c.args[0].lower() in ("set", "clear", "push"):
         text, img = await _owner_ops.avatar_change(c.data_dir, c.args)
     else:
@@ -153,39 +155,47 @@ async def _avatar(c: AdminCall) -> Any:
 
 
 async def _missed(c: AdminCall) -> str:
-    from surfaces.telegram.status_ops import _missed_reply
-    return _missed_reply(c.user_id, c.data_dir, c.args)
+    from core.surfaces.owner_reads import missed_reply
+    return missed_reply(c.user_id, c.data_dir, c.args)
 
 
 async def _run(c: AdminCall) -> str:
     # 070: one background run — the core.run_control SSOT
-    from agents.task.path import pm
+    from core.session_paths import pm
     from core.run_control import run_reply
     return await run_reply(c.user_id, c.data_dir, str(pm().data_root), c.args,
                            exclude=(c.result.decision.session_id,))
 
 
+def _with_buttons(c: "AdminCall", text: Any, buttons: list) -> Any:
+    """A verb reply plus its next-step buttons — ``core.surfaces.command_reply.with_actions``."""
+    from core.surfaces.command_reply import with_actions
+    return with_actions(c.user_id, text, buttons)
+
+
 async def _goals(c: AdminCall) -> str:
+    from cron.owner_goals import goal_buttons   # below the seat, beside /goal's body
     from surfaces.telegram.status_ops import _goals_reply, _pause_line
-    return _pause_line(c.data_dir) + "\n" + _goals_reply(c.user_id, c.data_dir,
+    text = _pause_line(c.data_dir) + "\n" + _goals_reply(c.user_id, c.data_dir,
                                                          board=c.board)
+    return _with_buttons(c, text, goal_buttons(c.user_id, c.data_dir, [], board=c.board))
 
 
 async def _apps(c: AdminCall) -> str:
-    from surfaces.telegram.apps_ops import apps_reply  # 032 durable app service
+    from core.app_service.owner_ops import apps_reply  # 032 durable app service
     from surfaces.telegram.status_ops import _pause_line
     return _pause_line(c.data_dir) + "\n" + apps_reply(c.user_id, c.data_dir, c.args)
 
 
 async def _prefs(c: AdminCall) -> str:
-    from surfaces.telegram.prefs_ops import _prefs_reply
-    return _prefs_reply(c.user_id, c.data_dir, c.instance_id,
+    from core.prefs_reply import prefs_reply
+    return prefs_reply(c.user_id, c.data_dir, c.instance_id,
                         full=bool(c.args) and c.args[0].lower() in ("all", "full"))
 
 
 async def _config(c: AdminCall) -> str:
-    from surfaces.telegram.prefs_ops import _config_reply
-    return _config_reply(c.user_id, c.data_dir, c.instance_id, c.args)
+    from core.prefs_reply import config_reply
+    return config_reply(c.user_id, c.data_dir, c.instance_id, c.args)
 
 
 async def _model(c: AdminCall) -> str:
@@ -199,36 +209,36 @@ async def _model(c: AdminCall) -> str:
 
 
 async def _usage(c: AdminCall) -> str:
-    from surfaces.telegram.usage_ops import usage_reply  # 2026-10-14 D6
+    from cron.usage_reply import usage_reply  # 2026-10-14 D6
     return usage_reply(c.user_id, c.data_dir, c.args)
 
 
 async def _skills(c: AdminCall) -> str:
-    from surfaces.telegram.skills_ops import skills_reply  # 080 D8
+    from agents.task.skills_owner import skills_reply  # 080 D8
     return skills_reply(c.user_id, c.args)
 
 
 async def _self(c: AdminCall) -> str:
     # 113 W6 G-6: the identity documents, read-only, on every seat.
     from core.runtime_paths import data_dir_or_home
-    from surfaces.telegram.self_memory_ops import self_reply
+    from modules.memory.self_memory_reply import self_reply
     return self_reply(c.user_id, data_dir_or_home(c.data_dir))
 
 
 async def _memory(c: AdminCall) -> str:
-    from surfaces.telegram.self_memory_ops import memory_reply
+    from modules.memory.self_memory_reply import memory_reply
     return await memory_reply(c.user_id, c.args)
 
 
 async def _kb(c: AdminCall) -> str:
     # CLI7: the ONE grammar (core.kb_grammar), shared with the REPL.
-    from surfaces.telegram.kb_ops import _kb_reply
-    return await _kb_reply(c.user_id, c.args)
+    from modules.memory.kb_reply import kb_reply
+    return await kb_reply(c.user_id, c.args)
 
 
 async def _files(c: AdminCall) -> str:
-    from surfaces.telegram.kb_ops import _files_reply
-    return await _files_reply(c.user_id, c.args)
+    from modules.memory.kb_reply import files_reply
+    return await files_reply(c.user_id, c.args)
 
 
 async def _pause(c: AdminCall) -> str:
@@ -247,12 +257,12 @@ async def _cwd(c: AdminCall) -> str:
 # not policy: every gate under them is untouched.
 
 async def _claim(c: AdminCall) -> str:
-    from surfaces.telegram.claim_ops import claim_reply
+    from tools.defi.owner_verbs.claim import claim_reply
     return await claim_reply(c.user_id, c.args)
 
 
 async def _pay(c: AdminCall) -> str:
-    from surfaces.telegram.pay_ops import pay_reply
+    from tools.defi.owner_verbs.pay import pay_reply
     # 068 B9: the update_id names this command — stable across a
     # re-delivery, new for every new /pay message.
     _key = getattr(c.result.inbound, "idempotency_key", None)
@@ -261,34 +271,34 @@ async def _pay(c: AdminCall) -> str:
 
 
 async def _nft(c: AdminCall) -> str:
-    from surfaces.telegram.nft_ops import nft_reply
+    from tools.defi.owner_verbs.nft import nft_reply
     return await nft_reply(c.user_id, c.args)
 
 
 async def _dapp(c: AdminCall) -> str:
-    from surfaces.telegram.dapp_ops import dapp_reply
+    from tools.defi.owner_verbs.dapp import dapp_reply
     return dapp_reply(c.user_id, c.args)
 
 
 async def _identity(c: AdminCall) -> str:
-    from surfaces.telegram.identity_ops import identity_reply
+    from tools.defi.owner_verbs.identity import identity_reply
     return await identity_reply(c.user_id, c.data_dir, c.args)
 
 
 async def _why(c: AdminCall) -> str:
-    from surfaces.telegram.why_ops import why_reply
+    from core.surfaces.owner_reads import why_reply
     return why_reply(c.user_id, c.data_dir, c.args)
 
 
 async def _contacts(c: AdminCall) -> str:
-    from surfaces.telegram.contacts_ops import contacts_reply
+    from core.surfaces.owner_reads import contacts_reply
     return contacts_reply(c.user_id, c.data_dir, c.args,
                           container=getattr(c.task_agent, "container", None))
 
 
 async def _thread(c: AdminCall) -> str:
     # 061: the ONE owner transcript (every rail, every seat).
-    from surfaces.telegram.history_ops import history_reply
+    from core.surfaces.owner_reads import history_reply
     return history_reply(c.user_id, c.data_dir, c.args,
                          container=getattr(c.task_agent, "container", None))
 
@@ -299,14 +309,14 @@ async def _thread(c: AdminCall) -> str:
 # wrong loop (the 2026-09-15 "Future attached to a different loop" bug).
 
 async def _lp(c: AdminCall) -> str:
-    from surfaces.telegram.lp_ops import lp_reply
+    from tools.defi.owner_verbs.lp import lp_reply
     return await lp_reply(c.user_id, c.args)
 
 
 async def _launch(c: AdminCall) -> str:
     # 042: token creation shipped CLI-only, which means the one person allowed
     # to run it has to SSH to the box. Same lesson as /bridge.
-    from surfaces.telegram import token_ops
+    from tools.defi.owner_verbs import token as token_ops
     return (await token_ops.launch_reply(c.user_id, c.args) if c.cmd == "/launch"
             else await token_ops.deploy_reply(c.user_id, c.args))
 
@@ -321,13 +331,13 @@ async def _mcp(c: AdminCall) -> str:
 async def _bridge(c: AdminCall) -> str:
     # 037: the bridge shipped CLI-only, so the one person allowed to run it had
     # to SSH to the box. He is usually on a phone.
-    from surfaces.telegram import owner_ops
-    return await owner_ops.bridge_reply(c.user_id, c.data_dir, c.args)
+    from tools.defi.owner_verbs.bridge import bridge_reply
+    return await bridge_reply(c.user_id, c.data_dir, c.args)
 
 
 async def _trade(c: AdminCall) -> Any:
     # 086 W5: the trading mandate — start (one card), status, pause, resume, stop, release.
-    from surfaces.telegram import trade_ops
+    from polyrob.app import trade_owner as trade_ops
     from surfaces.telegram.status_ops import _seat_via
     return await asyncio.to_thread(trade_ops.trade_reply, c.user_id, c.data_dir, c.args,
                                    via=_seat_via(c.result))
@@ -342,33 +352,34 @@ async def _offer(c: AdminCall) -> str:
 
 async def _job(c: AdminCall) -> str:
     # 080 WS-2: one handler for `/jobs` (the list) and `/job <sub> …`.
-    from surfaces.telegram import job_ops
+    from cron import owner_jobs as job_ops
     args = c.args   # bare (or its old name /jobs) = the list
     from surfaces.telegram.status_ops import _seat_via
-    return job_ops.jobs_reply(c.user_id, c.data_dir, args, via=_seat_via(c.result))
+    text = job_ops.jobs_reply(c.user_id, c.data_dir, args, via=_seat_via(c.result))
+    return _with_buttons(c, text, job_ops.job_buttons(c.user_id, c.data_dir, args))
 
 
 async def _goal(c: AdminCall) -> str:
-    from surfaces.telegram import owner_ops
-    return owner_ops.goal_reply(c.user_id, c.data_dir, c.args, board=c.board)
+    from cron.owner_goals import goal_command_reply
+    return goal_command_reply(c.user_id, c.data_dir, c.args, board=c.board)
 
 
 async def _wallet(c: AdminCall) -> str:
     # TG3: `/wallet balances` makes blocking RPC reads (urllib, up to ~20 s);
     # on the poll loop they stalled every chat and every turn.
-    from surfaces.telegram import owner_ops
-    return await asyncio.to_thread(owner_ops.wallet_reply, c.args,
+    from tools.defi.owner_verbs.wallet import wallet_reply
+    return await asyncio.to_thread(wallet_reply, c.args,
                                    user_id=c.user_id, data_dir=c.data_dir)
 
 
 async def _invoices(c: AdminCall) -> str:
-    from surfaces.telegram import owner_ops
-    return await owner_ops.invoices_reply(c.user_id, c.args)
+    from tools.defi.owner_verbs.invoices import invoices_reply
+    return await invoices_reply(c.user_id, c.args)
 
 
 async def _settle(c: AdminCall) -> str:
-    from surfaces.telegram import owner_ops
-    return await owner_ops.settle_reply(c.user_id, c.args)
+    from tools.defi.owner_verbs.invoices import settle_reply
+    return await settle_reply(c.user_id, c.args)
 
 
 async def _inbox(c: AdminCall) -> str:
@@ -388,8 +399,15 @@ async def _more(c: AdminCall) -> str:
 
 async def _rules(c: AdminCall) -> str:
     # 096 W5: the owner rules and the operating contract, numbered, read only.
-    from surfaces.telegram import owner_ops
-    return owner_ops.rules_reply(c.user_id, c.data_dir, c.instance_id)
+    from core.surfaces.owner_reads import rules_reply
+    return rules_reply(c.user_id, c.data_dir, c.instance_id)
+
+
+async def _persona(c: AdminCall) -> str:
+    # The voice the agent runs with; `/persona <name>` sets the owner's persona for
+    # every new chat, `/persona reset` clears it — the ONE body every seat calls.
+    from agents.personality.persona_setting import persona_command
+    return persona_command(c.args)
 
 
 async def _book(c: AdminCall) -> str:
@@ -472,6 +490,7 @@ ADMIN_VERBS: dict[str, Callable[[AdminCall], Awaitable[Any]]] = {
     "/inbox": _inbox,
     "/more": _more,
     "/rules": _rules,
+    "/persona": _persona,
     "/book": _book,
     "/pending": _approval("pending_verb"),
     "/approve": _approval("decide_verb"),

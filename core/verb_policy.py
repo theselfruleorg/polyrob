@@ -112,7 +112,7 @@ class VerbPolicy:
     #: ``module::function`` of the gate a ``verb``-owned approval runs.
     verb_gate: str = ""
     #: Blocked while a session is tainted by correspondent DATA, by NAME alone
-    #: (``correspondent_gate._HIGH_IMPACT_NAMES``); tool-id resolution and the
+    #: (``core.security.high_impact._HIGH_IMPACT_NAMES``); tool-id resolution and the
     #: prefix/substring layers are code in that module.
     correspondent_blocked: bool = False
     #: A room (public) turn may never call it, whoever spoke

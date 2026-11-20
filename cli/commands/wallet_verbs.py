@@ -41,6 +41,8 @@ class _Collect:
 def run_chat_verb(verb: str, words) -> str:
     """Run the terminal handler of ``verb`` (``/send`` …) on ``words``; its text."""
     ensure_env_loaded()
+    from cli.ui.commands.seat_handlers import ensure
+    ensure()                                 # 125 S14: the REPL registers its own handlers
     from core.verbs import handler_ref
     ref = handler_ref("repl", verb)
     if ref is None:

@@ -83,7 +83,8 @@ def detect_layout(*, is_root: bool, user: Optional[str] = None,
         system_present = (Path(SYSTEM_CODE_DIR, "venv").is_dir()
                           and Path(SYSTEM_ENV_FILE).is_file())
     if system_present and not user:
-        data = os.environ.get("POLYROB_DATA_DIR") or "/var/lib/polyrob"
+        from core.runtime_paths import pinned_data_home
+        data = str(pinned_data_home() or "/var/lib/polyrob")
         return Layout("system", "polyrob-agent", "polyrob-data", "", data, SYSTEM_ENV_FILE,
                       SYSTEM_CODE_DIR, f"{SYSTEM_CODE_DIR}/venv/bin/polyrob apps supervise")
 

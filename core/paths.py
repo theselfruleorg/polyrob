@@ -41,7 +41,7 @@ def env_file_candidates() -> "list[EnvFileCandidate]":
     This is the single source of truth for which files configure the process and
     who beats whom — ``polyrob.app.bootstrap.load_env`` iterates exactly this list, and
     the display/snapshot/guard sites (``/config check``, ``cli.keys``,
-    ``cli.update.context``) derive their subsets from it (R-1).
+    ``core.update_snapshot.context``) derive their subsets from it (R-1).
 
     ONE ladder for every entry point (080 WS-1 — the server ladder, where
     ``config/.env.*`` beat the process env, is deleted): process env > the

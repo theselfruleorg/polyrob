@@ -1,6 +1,6 @@
 """045 lane 3 — threat scans report to somebody.
 
-``modules.memory.task.threat_scan.is_suspicious`` runs at about a dozen sites
+``core.security.threat_scan.is_suspicious`` runs at about a dozen sites
 (authored skills, deliverables, MCP self-install, message send, controller emit)
 and returns a bool that changes ONE local decision and is then discarded. A
 scanner whose hits are never counted cannot tell you that you are under attack.

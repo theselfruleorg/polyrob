@@ -59,4 +59,4 @@ def test_a_failed_turn_never_resends_the_previous_turns_reply():
     delivered = _run(_Agent("Session failed: boom"))
     assert len(delivered) == 1
     assert STALE_REPLY not in delivered[0]
-    assert "My turn ended early" in delivered[0] and "continue" in delivered[0]
+    assert "My turn ended early" in delivered[0] and "Next: `/status`" in delivered[0]

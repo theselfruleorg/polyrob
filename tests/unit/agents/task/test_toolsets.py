@@ -140,7 +140,7 @@ def _cli_default_tools_with_env(env_value=None, monkeypatch=None):
     # behaves deterministically (as if both are disabled → returns ['filesystem','task']).
     import unittest.mock as mock
 
-    with mock.patch("tools.coding.coding_tools_enabled", return_value=False), \
+    with mock.patch("core.config_policy.capability_toggles.coding_tools_enabled", return_value=False), \
          mock.patch("core.tool_gates._GATES", _gates_with_anysite(False)), \
          mock.patch("core.cli_tool_tables.cli_unavailable_tools", return_value=[]):
 
@@ -162,7 +162,7 @@ def test_polyrob_agent_toolset_drives_cli_default_tools():
     import agents.task.tool_defaults as m
     importlib.reload(m)
 
-    with mock.patch("tools.coding.coding_tools_enabled", return_value=False), \
+    with mock.patch("core.config_policy.capability_toggles.coding_tools_enabled", return_value=False), \
          mock.patch("core.tool_gates._GATES", _gates_with_anysite(False)), \
          mock.patch("core.cli_tool_tables.cli_unavailable_tools", return_value=[]), \
          mock.patch.dict(os.environ, {"POLYROB_AGENT_TOOLSET": "research"}):
@@ -179,7 +179,7 @@ def test_polyrob_agent_toolset_unset_legacy_path():
     importlib.reload(m)
 
     env_without = {k: v for k, v in os.environ.items() if k != "POLYROB_AGENT_TOOLSET"}
-    with mock.patch("tools.coding.coding_tools_enabled", return_value=False), \
+    with mock.patch("core.config_policy.capability_toggles.coding_tools_enabled", return_value=False), \
          mock.patch("core.tool_gates._GATES", _gates_with_anysite(False)), \
          mock.patch("core.cli_tool_tables.cli_unavailable_tools", return_value=[]), \
          mock.patch.dict(os.environ, env_without, clear=True):
@@ -204,7 +204,7 @@ def test_default_toolset_is_behavior_identical_to_unset(monkeypatch):
     importlib.reload(m)
 
     env_without = {k: v for k, v in os.environ.items() if k != "POLYROB_AGENT_TOOLSET"}
-    with mock.patch("tools.coding.coding_tools_enabled", return_value=False), \
+    with mock.patch("core.config_policy.capability_toggles.coding_tools_enabled", return_value=False), \
          mock.patch("core.tool_gates._GATES", _gates_with_anysite(False)), \
          mock.patch("core.cli_tool_tables.cli_unavailable_tools", return_value=[]):
         with mock.patch.dict(os.environ, env_without, clear=True):
@@ -224,7 +224,7 @@ def test_default_toolset_gets_dynamic_additions():
     import agents.task.tool_defaults as m
     importlib.reload(m)
 
-    with mock.patch("tools.coding.coding_tools_enabled", return_value=True), \
+    with mock.patch("core.config_policy.capability_toggles.coding_tools_enabled", return_value=True), \
          mock.patch("core.tool_gates._GATES", _gates_with_anysite(True)), \
          mock.patch("core.cli_tool_tables.cli_unavailable_tools", return_value=[]), \
          mock.patch.dict(os.environ, {"POLYROB_AGENT_TOOLSET": "default"}):
@@ -250,7 +250,7 @@ def test_polyrob_agent_toolset_pruned_via_cli_unavailable():
     def fake_unavailable(tools):
         return [t for t in tools if t in {"browser", "perplexity"}]
 
-    with mock.patch("tools.coding.coding_tools_enabled", return_value=False), \
+    with mock.patch("core.config_policy.capability_toggles.coding_tools_enabled", return_value=False), \
          mock.patch("core.tool_gates._GATES", _gates_with_anysite(False)), \
          mock.patch("core.cli_tool_tables.cli_unavailable_tools", side_effect=fake_unavailable), \
          mock.patch.dict(os.environ, {"POLYROB_AGENT_TOOLSET": "research"}):

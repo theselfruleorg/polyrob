@@ -55,7 +55,7 @@ def child_checkpoint_dir(session_id: str, agent_id: str) -> Optional[str]:
 	"""A sub-agent's checkpoints live in ``history/<agent_id>/`` — never in the
 	parent's index (098 AG-05)."""
 	try:
-		from agents.task.path import pm
+		from core.session_paths import pm
 		safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(agent_id or "child"))[:120]
 		return os.path.join(str(pm().get_history_dir(session_id)), safe)
 	except Exception:
@@ -643,7 +643,7 @@ class CompactorMixin:
 		if not session_id:
 			return None
 		try:
-			from agents.task.path import pm
+			from core.session_paths import pm
 			return str(pm().get_history_dir(session_id))
 		except Exception:
 			return None

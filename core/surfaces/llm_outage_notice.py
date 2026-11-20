@@ -48,6 +48,20 @@ OUTAGE_NOTICE_TEXT = (
     "notified."
 )
 
+#: The same notice for the OWNER's own chat (2026-11-20 UX review H12): the text
+#: above speaks about the owner to a person who is not the owner, so the owner read
+#: "the owner has been notified". The reason phrase (``error_notices``) follows it.
+OWNER_OUTAGE_NOTICE_TEXT = (
+    "⚠️ I could not answer your last message: my AI provider failed. This is an "
+    "automated notice, not a reply. After you fix it, send the message again; "
+    "/model switches me to another model."
+)
+
+
+def outage_notice_text(*, owner: bool) -> str:
+    return OWNER_OUTAGE_NOTICE_TEXT if owner else OUTAGE_NOTICE_TEXT
+
+
 # key -> monotonic-ish wall-clock timestamp of the last notice sent.
 _last_notice_at: Dict[str, float] = {}
 

@@ -677,8 +677,8 @@ def normalize_action_schema(data: Union[Dict[str, Any], List, Any]) -> Union[Dic
 
 #: Keys that mark a JSON object as agent brain-state telemetry rather than an
 #: arbitrary result.  A ``current_state`` wrapper or >=2 of these ⇒ brain-state.
-#: ONE set (S7, 2026-08-29): modules.llm.brain_scrubber.BRAIN_KEYS.
-from modules.llm.brain_scrubber import BRAIN_KEYS as _BRAIN_STATE_KEYS  # noqa: E402
+#: ONE set (S7, 2026-08-29): core.brain_scrubber.BRAIN_KEYS.
+from core.brain_scrubber import BRAIN_KEYS as _BRAIN_STATE_KEYS  # noqa: E402
 
 
 def is_brain_state_content(content: Optional[str]) -> bool:

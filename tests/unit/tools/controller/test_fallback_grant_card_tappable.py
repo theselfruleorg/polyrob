@@ -5,7 +5,7 @@ import asyncio
 
 import pytest
 
-from agents.task.goals.board import ASK_OPEN, GoalBoard
+from modules.goals.board import ASK_OPEN, GoalBoard
 from core.surfaces.tappable import parse_tappable
 from tools.controller import approval_queue as aq
 from tools.controller import grant_card

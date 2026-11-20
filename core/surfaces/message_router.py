@@ -1,7 +1,7 @@
 """MessageRouter: the SINGLE outbound producer seam.
 
 Every agent->user emit funnels through publish(). Text is brain-scrubbed here
-(SSOT = modules.llm.brain_scrubber) so every surface inherits the scrub. Surfaces
+(SSOT = core.brain_scrubber) so every surface inherits the scrub. Surfaces
 subscribe by surface_id; routing resolves session_key -> surface_id via the
 SessionChatRegistry. Fail-open: an unroutable key or a raising surface never
 crashes the agent loop.
@@ -12,13 +12,13 @@ from typing import Optional
 
 from core.config_policy import dead_target_registry_enabled
 from core.surfaces.dead_targets import ROOM_DEATH_REASONS, classify_dead_error
-from core.surfaces.envelopes import OutboundMessage
+from core.surfaces.envelopes import OutboundMessage, ReplyTarget
 from core.surfaces.outbound_queue import message_key
 from core.surfaces.room_keys import is_group_session_key
 from core.surfaces.session_chat_registry import (
-    SessionChatRegistry, row_from_session_key,
+    SessionChatRegistry, direct_session_key, row_from_session_key,
 )
-from modules.llm.brain_scrubber import scrub_brain_blocks, StreamingBrainScrubber
+from core.brain_scrubber import scrub_brain_blocks, StreamingBrainScrubber
 
 # TYPE_CHECKING import avoids a circular-import risk; the store is pure.
 from typing import TYPE_CHECKING
@@ -308,7 +308,7 @@ class MessageRouter:
             msg = OutboundMessage(
                 session_key=msg.session_key, text=scrubbed, kind=msg.kind,
                 partial=msg.partial, stream_id=msg.stream_id,
-                reply_to=msg.reply_to, media=msg.media,
+                reply_to=msg.reply_to, media=msg.media, actions=msg.actions,
             )
         # 044 T15: two rules that apply only when the audience is a ROOM. Run
         # AFTER the brain scrub, so a `[SILENT]` wrapped in a brain block is
@@ -404,6 +404,7 @@ class MessageRouter:
                     dest=chat_id, payload=scrubbed,
                     kind=str(getattr(msg.kind, "value", msg.kind)),
                     media=msg.media or None,  # 030 L4: media rides the queue row
+                    reply_to=msg.reply_to, actions=msg.actions or None,  # 110 W3
                 )
             except Exception as e:  # fail-open: fall back to a direct send on a queue fault
                 logger.error("outbound enqueue failed, sending directly: %s", e)
@@ -476,7 +477,9 @@ class MessageRouter:
 
     async def send_message(self, chat_id: str, text: str, surface_id: str = "telegram",
                             media: list | None = None,
-                            subject: str | None = None) -> bool:
+                            subject: str | None = None,
+                            target: "ReplyTarget | None" = None,
+                            actions: list | None = None) -> bool:
         """Boolean shim over :meth:`send_message_ex` (the legacy contract).
 
         ``True`` covers BOTH a completed direct send and durable acceptance into
@@ -485,21 +488,27 @@ class MessageRouter:
         ``send_message_ex`` instead.
         """
         return await self.send_message_ex(
-            chat_id, text, surface_id, media=media, subject=subject) != "failed"
+            chat_id, text, surface_id, media=media, subject=subject,
+            target=target, actions=actions) != "failed"
 
     async def send_message_ex(self, chat_id: str, text: str,
                               surface_id: str = "telegram",
                               media: list | None = None,
-                              subject: str | None = None) -> str:
+                              subject: str | None = None,
+                              target: "ReplyTarget | None" = None,
+                              actions: list | None = None) -> str:
         """Status-only shim over :meth:`send_message_receipt`."""
         receipt = await self.send_message_receipt(
-            chat_id, text, surface_id, media=media, subject=subject)
+            chat_id, text, surface_id, media=media, subject=subject,
+            target=target, actions=actions)
         return receipt.status
 
     async def send_message_receipt(self, chat_id: str, text: str,
                                    surface_id: str = "telegram",
                                    media: list | None = None,
-                                   subject: str | None = None) -> SendReceipt:
+                                   subject: str | None = None,
+                                   target: "ReplyTarget | None" = None,
+                                   actions: list | None = None) -> SendReceipt:
         """Proactive send. Returns a :class:`SendReceipt` whose ``status`` is
         ``"sent"`` | ``"queued"`` | ``"failed"``.
 
@@ -542,7 +551,20 @@ class MessageRouter:
         to the caller instead of being reported as a silent success. A return value
         with no ``success`` attribute (legacy test doubles / non-SendResult returns)
         still counts as success, preserving the pre-existing contract for callers that
-        don't return a typed result."""
+        don't return a typed result.
+
+        110 W3: ``target`` (a :class:`ReplyTarget`) aims the send at a thread / forum
+        topic of ``chat_id`` and/or at a message to answer: the thread rides the
+        session key (``direct:{surface}:{chat}:thread:{id}``, where every surface
+        already reads it), ``reply_to`` rides the ``OutboundMessage``; both survive
+        the durable queue. ``actions`` are the tappable choices. ``None`` for both is
+        today's send, byte for byte."""
+        if target is not None and (target.surface_id != surface_id
+                                   or str(target.chat_id) != str(chat_id)):
+            return SendReceipt("failed", error="reply target names a different chat than the send")
+        thread_id = target.thread_id if target is not None else None
+        reply_to = target.reply_to if target is not None else None
+        skey = direct_session_key(surface_id, chat_id, thread_id)
         if subject:
             # The legacy email-subject entry (never a renderable media entry).
             media = [{"subject": str(subject)}] + list(media or [])
@@ -557,11 +579,12 @@ class MessageRouter:
             if self._queue is not None:
                 accepted = False
                 try:
-                    idem = message_key(f"direct:{surface_id}:{chat_id}", text)  # OB2
+                    idem = message_key(skey, text)  # OB2
                     accepted = self._queue_accepted(
-                        idem, session_key=f"direct:{surface_id}:{chat_id}",
+                        idem, session_key=skey,
                         surface_id=surface_id, dest=chat_id, payload=text,
                         kind="message", media=media or None,
+                        reply_to=reply_to, actions=actions or None,
                     )
                 except Exception as e:
                     logger.error("send_message: queue enqueue fallback failed: %s", e)
@@ -587,8 +610,8 @@ class MessageRouter:
             return SendReceipt("failed", error=describe_dead_target(dead))
         try:
             result = await surface.send(OutboundMessage(
-                session_key=f"direct:{surface_id}:{chat_id}", text=text,
-                media=media or [],
+                session_key=skey, text=text,
+                media=media or [], reply_to=reply_to, actions=list(actions or []),
             ))
         except Exception as e:
             logger.error("send_message shim failed: %s", e, exc_info=True)

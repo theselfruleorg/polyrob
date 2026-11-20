@@ -1,58 +1,36 @@
-"""The collection paid-mint transaction shape — a mint through the pinned SALE of a collection
-(069 v4; testnet-run 2026-09-29 finding F2; proposal 115 W8). A collection profile opts into it
-with the ``mint`` capability AND its ``sale`` key (``core/wallet/collection_registry.py``); the
-call shapes, the base price and the per-call cap are this module's.
+"""The collection paid-mint transaction shape — a mint through the SALE of an ERC-721 collection
+(069 v4; finding F2; proposal 115 W8; 124 section 7: any sale, read from the chain).
 
-Measurement helpers for ONE ``tx_guard`` shape (``TxIntent.is_collection_mint``), in the
-``agent_nft_collection_reveal`` / ``deploy_guard`` pattern: this module DECIDES nothing on its own —
-``tx_guard._authorize`` calls :func:`structural` before the simulation, :func:`runtime_refusal`
-with the RPC pins and :func:`assert_simulation` after it, and returns the refusal they name.
+Measurement helpers for ONE ``tx_guard`` shape (``TxIntent.is_collection_mint``): this module
+DECIDES nothing on its own — ``tx_guard`` calls :func:`structural` before the simulation,
+:func:`runtime_refusal` with the RPC reads and :func:`assert_simulation` after it.
 
 Why a shape of its own. A paid mint sends native value AND receives ``qty`` ERC-721s. Every
-existing branch refuses it: the NFT branch refuses any native movement (an NFT transfer is not
-payable), and the native-send branch knows nothing of the tokens that must arrive.
+other branch refuses it: the NFT branch refuses any native movement, and the native-send branch
+knows nothing of the tokens that must arrive.
 
-The contract of record (polyrob-desk ``contracts/src/drop/PolyrobSale.sol``, ``src/Polyrob.sol``,
-``src/kit/modules/AgentIdentity.sol``; SPEC §6.2, §6.7). The collection has NO public mint:
-``Polyrob.mintFromSale`` accepts only its ``SALE()``. The sale has two buyer entry points:
-
-* ``mint(address to, uint256 qty, uint256 minPnlOutPerToken)`` — the auction and, after the
-  settlement, the base-price mint. Auction: ``qty × priceNow() <= msg.value <= qty ×
-  START_PRICE`` and the sale KEEPS all of it inside the transaction (the excess above the
-  clearing price is paid back to ``to`` later, by ``settle``; the division dust is BOOKED in
-  ``owed`` by ``_owe``, never pushed). After ``settled()``: exactly ``qty × BASE``.
-* ``mintWL(address to, uint256 qty, uint256 minPnlOutPerToken, uint256 allowance,
-  bytes32[] proof)`` — the whitelist: exactly ``qty × BASE``; the contract bounds ``allowance``
-  only by ``wlMinted[to] + qty <= allowance`` (any uint256 in the Merkle leaf).
-
-So no ETH comes back to the signer inside a mint transaction, in any phase.
+The sale ABI is the ERC-6551P kit's (``mint(address to, uint256 qty, uint256 minOutPerToken)``
+and ``mintWL(…, uint256 allowance, bytes32[] proof)``); the collection has no public mint, only
+its ``SALE()`` mints. No ETH comes back to the signer inside a mint in any phase.
 
 What the shape pins:
 
-* the destination (intent and transaction) is the pinned SALE of a collection with the ``mint``
-  capability — never the collection itself (it has no public mint);
+* the destination (intent and transaction) is a sale: a PINNED sale, or — no pin — a contract
+  whose ``COLLECTION()`` is an ERC-721 whose ``SALE()`` names it back (read before the
+  simulation); never the collection itself;
 * calldata is EXACTLY the canonical ABI encoding of one of the two calls, with ``to`` = the
-  signing treasury (the guard must see every id ARRIVE in the paying wallet), ``qty`` = the
-  number of declared ids, ``1 <= qty <= MAX_MINT_QTY``; a ``mintWL`` proof is at most
-  :data:`MAX_PROOF_WORDS` words and ``qty <= allowance``;
-* the value (``== amount_raw``): ``mintWL`` exactly ``qty × BASE_WEI``; ``mint`` at least
-  ``qty × BASE_WEI`` and at most ``qty × sale.max_price_wei`` (the profile's cap — the phase and
-  the live price are the contract's, and the simulation proves it accepts the value);
-* the declared ids are consecutive (the collection mints ``nextId .. nextId+qty-1``);
+  signing treasury, ``qty`` = the number of declared ids (at most :data:`MAX_MINT_IDS`); a
+  ``mintWL`` proof is at most :data:`MAX_PROOF_WORDS` words and ``qty <= allowance``;
+* the value (``== amount_raw``) is positive and, for a pinned sale, at most ``qty ×
+  sale.max_price_wei``; the phase's price is the sale's (``core.wallet.collection_sale.read_sale``),
+  and the simulation proves the sale accepts it. Without a pin the owner's card bounds the value
+  (the verb is always owner-approved);
+* the declared ids are consecutive (the collection mints ``totalMinted+1 .. +qty``);
 * the treasury signs directly (no token-bound account) and declares no other shape;
 * the simulation: the signer's native balance falls by exactly the value (± dust); per declared
   id the COLLECTION emits ``Transfer(0x0 → collection, id)`` then ``Transfer(collection → signer,
-  id)`` (the token is minted to the collection, which registers the account's ERC-8004
-  identity, then moves it — AgentIdentity) and one ``Minted(id, signer, …)``; the ids arrive
-  from the PINNED collection address; no other movement or approval of the signer, and no log
-  naming the signer in its topics except those events from the collection. No event of the sale
-  indexes an address (they name ``to`` in their data), so none is allowlisted. A collection
-  with the identity module (it emits ``IdentityRegistered`` / ``IdentitySkipped``) must show
-  ``IdentityRegistered`` for every declared id; an ``IdentitySkipped`` for one refuses (permanent).
-
-⚠️ ``BASE_WEI`` is a PINNED CONSTANT here, not a ``BASE()`` read: it is a Solidity ``constant``
-of the sale, whose runtime sha256 is pinned, and a read is answered by the very contract the
-guard is checking. The upper bound is the profile's ``sale.max_price_wei``, never a chain read.
+  id)`` and one ``Minted(id, signer, …)``; nothing else of the signer moves and no other log
+  names it. A collection with the identity module must show ``IdentityRegistered`` for every id.
 """
 from __future__ import annotations
 
@@ -65,11 +43,9 @@ MINT_SELECTOR = "0x156e29f6"  # abi.selector(MINT_SIGNATURE), a literal for a ba
 MINT_WL_SIGNATURE = "mintWL(address,uint256,uint256,uint256,bytes32[])"
 MINT_WL_SELECTOR = "0x1e29517f"  # abi.selector(MINT_WL_SIGNATURE)
 
-#: The sale's ``uint256 public constant BASE = 0.033 ether`` (the whitelist price, the auction
-#: floor, the price after the settlement).
-BASE_WEI = 33 * 10 ** 15
-#: The sale's ``MAX_PER_TX = 10`` (``_checkPublic`` reverts ``BadQty`` above it).
-MAX_MINT_QTY = 10
+#: The most ids the guard checks in ONE mint (its receipt checks grow with each id). The sale's
+#: own per-call cap is read from the sale (``MAX_PER_TX()``, 124 section 7), never a constant.
+MAX_MINT_IDS = 100
 #: The most words a whitelist proof may carry (a tree of 2**32 leaves; the real one is ~10).
 MAX_PROOF_WORDS = 32
 
@@ -175,19 +151,18 @@ def decode_call(data: str) -> Tuple[str, str, int, int]:
                      f"({MINT_SELECTOR}) nor {MINT_WL_SIGNATURE} ({MINT_WL_SELECTOR})")
 
 
-def value_refusal(kind: str, qty: int, value: int, max_price_wei: int) -> Optional[str]:
-    """Why *value* is not a value the sale's *kind* call of *qty* accepts within the pin, or None."""
-    floor = int(qty) * BASE_WEI
-    if kind == KIND_WHITELIST:
-        if value != floor:
-            return (f"the transaction sends {value} wei; a whitelist mint of {qty} is exactly "
-                    f"{floor} wei (qty × {BASE_WEI} — the sale reverts WrongPrice otherwise)")
+def value_refusal(kind: str, qty: int, value: int, max_price_wei: Optional[int]) -> Optional[str]:
+    """Why *value* is above what the pin allows for *qty*, or None. The phase's exact price is the
+    sale's and the simulation proves it accepts the value (124 section 7); a pinned sale's
+    ``max_price_wei`` still caps one token. No pin: the owner's card bounds it."""
+    if value <= 0:
+        return f"the transaction sends {value} wei; a paid mint sends value"
+    if max_price_wei is None:
         return None
     cap = int(qty) * int(max_price_wei)
-    if not floor <= value <= cap:
-        return (f"the transaction sends {value} wei; a public mint of {qty} pays at least "
-                f"{floor} wei (qty × the base {BASE_WEI}) and at most {cap} wei (qty × the "
-                f"pinned sale.max_price_wei {max_price_wei})")
+    if value > cap:
+        return (f"the transaction sends {value} wei; a mint of {qty} pays at most {cap} wei "
+                f"(qty × the pinned sale.max_price_wei {max_price_wei})")
     return None
 
 
@@ -211,17 +186,17 @@ def profile_of_sale(chain: str, sale: Optional[str]):
                 None)
 
 
-def check_ids(ids: Sequence[int], max_supply: int) -> Optional[str]:
+def check_ids(ids: Sequence[int], max_supply: Optional[int]) -> Optional[str]:
     ids = [int(i) for i in ids]
     if not ids:
         return "a mint must declare the ids it creates (`mint_ids`)"
-    if len(ids) > MAX_MINT_QTY:
-        return f"a mint declares {len(ids)} ids; at most {MAX_MINT_QTY} per transaction (the contract reverts BadQty)"
+    if len(ids) > MAX_MINT_IDS:
+        return f"a mint declares {len(ids)} ids; the guard checks at most {MAX_MINT_IDS} per transaction"
     if ids != list(range(ids[0], ids[0] + len(ids))):
         return (f"the declared ids {ids} are not consecutive ascending — one mint creates "
                 f"nextId .. nextId+qty-1")
-    if ids[0] < 1 or ids[-1] > int(max_supply):
-        return f"the declared ids {ids[0]}..{ids[-1]} are outside 1..{max_supply}"
+    if ids[0] < 0 or (max_supply is not None and ids[-1] > int(max_supply)):
+        return f"the declared ids {ids[0]}..{ids[-1]} are outside 0..{max_supply}"
     return None
 
 
@@ -253,28 +228,25 @@ def structural(intent, tx: dict, holder: str) -> Optional[str]:
                 f"intent also declares {', '.join(declared)}")
     try:
         profiles = _mint_profiles(intent.chain)
-    except Exception as exc:  # noqa: BLE001 — an untrusted registry pins nothing
-        return f"the collection registry cannot be trusted ({exc}); refusing"
-    if not profiles:
-        return (f"no collection with the mint capability is pinned on {intent.chain} (the "
-                f"owner's collection registry is empty by default) — a mint may only pay the "
-                f"pinned sale of a pinned collection")
+    except Exception:  # noqa: BLE001 — 124 section 5.5: an unreadable pin store is no pin
+        profiles = ()
     to_intent = str(intent.to or "").lower()
     to_tx = str((tx or {}).get("to") or "").lower()
     direct = next((p for p in profiles if p.address == to_intent), None)
     if direct is not None:
         return (f"the intent is addressed to the collection {intent.to} itself — the collection "
                 f"has no public mint (mintFromSale accepts only its SALE()); a mint pays the "
-                f"pinned sale {direct.sale.address if direct.sale else '(none)'}")
+                f"sale {direct.sale.address if direct.sale else '(none)'}")
+    # 124 section 7: a pinned sale keeps its pin's bounds; any other sale is read from the
+    # chain before the simulation (runtime_refusal: COLLECTION() and SALE() name each other).
     profile = next((p for p in profiles if p.sale is not None and p.sale.address == to_intent),
                    None)
-    if profile is None:
-        return (f"the intent is addressed to {intent.to!r}, not the pinned sale of a collection "
-                f"with the mint capability")
+    if not to_intent:
+        return "the mint names no sale (`to`)"
     if to_tx != to_intent:
         return (f"the TRANSACTION is addressed to {(tx or {}).get('to')!r} but the intent names "
-                f"{intent.to} — the signed destination must be the pinned sale")
-    why = check_ids(intent.mint_ids, profile.max_supply)
+                f"{intent.to} — the signed destination must be the sale")
+    why = check_ids(intent.mint_ids, profile.max_supply if profile is not None else None)
     if why:
         return why
     try:
@@ -285,8 +257,8 @@ def structural(intent, tx: dict, holder: str) -> Optional[str]:
         return (f"the mint sends the tokens to {to}, not to the signing treasury {holder} — "
                 f"the guard verifies the tokens that ARRIVE in the paying wallet, and a mint to "
                 f"another address is a payment whose return cannot be measured")
-    if not 1 <= qty <= MAX_MINT_QTY:
-        return f"the calldata mints {qty}; a mint is 1..{MAX_MINT_QTY} (the contract reverts BadQty)"
+    if not 1 <= qty <= MAX_MINT_IDS:
+        return f"the calldata mints {qty}; the guard checks 1..{MAX_MINT_IDS} per mint"
     if qty != len(intent.mint_ids):
         return (f"the calldata mints {qty} but the intent declares {len(intent.mint_ids)} ids "
                 f"{list(intent.mint_ids)}")
@@ -294,7 +266,7 @@ def structural(intent, tx: dict, holder: str) -> Optional[str]:
         value = int((tx or {}).get("value") or 0)
     except (TypeError, ValueError):
         return "the transaction value is unreadable"
-    why = value_refusal(kind, qty, value, profile.sale.max_price_wei)
+    why = value_refusal(kind, qty, value, profile.sale.max_price_wei if profile is not None else None)
     if why:
         return why
     if int(intent.amount_raw) != value:
@@ -304,16 +276,31 @@ def structural(intent, tx: dict, holder: str) -> Optional[str]:
 
 
 def runtime_refusal(chain: str, sale: Optional[str], rpc) -> Optional[str]:
-    """069 v4 A3 for a mint: the live code of BOTH the pinned collection and its pinned sale
-    hashes to its own pin (fail closed)."""
+    """069 v4 A3 for a mint. A pinned sale: the live code of BOTH the pinned collection and its
+    pinned sale hashes to its own pin. Any other sale (124 section 7): the sale's
+    ``COLLECTION()`` and that collection's ``SALE()`` name each other and the collection is an
+    ERC-721 — read now, fail closed."""
     from core.wallet import collection_registry as registry
     try:
         profile = profile_of_sale(chain, sale)
+    except Exception:  # noqa: BLE001 — an unreadable pin store is no pin
+        profile = None
+    if profile is not None:
+        return registry.runtime_refusal(rpc, profile) or registry.sale_runtime_refusal(rpc, profile)
+    try:
+        sale_collection_of(rpc, sale)
     except Exception as exc:  # noqa: BLE001
-        return f"the owner's collection registry cannot be trusted ({exc}); failing closed"
-    if profile is None:
-        return f"{sale} is not the pinned sale of a collection with the mint capability on {chain}"
-    return registry.runtime_refusal(rpc, profile) or registry.sale_runtime_refusal(rpc, profile)
+        return f"{sale} is not the sale of an ERC-721 collection I can read ({exc}); failing closed"
+    return None
+
+
+def sale_collection_of(rpc, sale: Optional[str]) -> str:
+    """The ERC-721 collection whose ``SALE()`` is *sale* (both ways); raises otherwise."""
+    from core.wallet import collection_sale, nft_rules
+    coll = collection_sale.sale_collection(rpc, str(sale or ""))
+    if not nft_rules.is_nft_contract(rpc, coll):
+        raise ValueError(f"{coll} does not answer as an ERC-721")
+    return coll
 
 
 def sale_payment_refusal(intent, tx: dict) -> Optional[str]:
@@ -347,15 +334,22 @@ def _word(addr: str) -> str:
     return "0x" + "0" * 24 + str(addr).lower().removeprefix("0x")
 
 
-def assert_simulation(intent, deltas, holder: str) -> Optional[str]:
-    """The refusal the simulated transaction earns, or None."""
+def assert_simulation(intent, deltas, holder: str, rpc=None) -> Optional[str]:
+    """The refusal the simulated transaction earns, or None. The collection is the pinned
+    profile's, else the one the sale names (``COLLECTION()``, read with *rpc*)."""
     try:
         profile = profile_of_sale(intent.chain, intent.to)
-    except Exception as exc:  # noqa: BLE001
-        return f"the collection registry cannot be trusted ({exc}); refusing"
-    if profile is None:
-        return f"{intent.to} is not the pinned sale of a collection with the mint capability"
-    collection = profile.address
+    except Exception:  # noqa: BLE001 — an unreadable pin store is no pin
+        profile = None
+    if profile is not None:
+        collection = profile.address
+    else:
+        if rpc is None:
+            return f"{intent.to} is not a pinned sale and no RPC reads its collection; refusing"
+        try:
+            collection = sale_collection_of(rpc, intent.to).lower()
+        except Exception as exc:  # noqa: BLE001
+            return f"the collection of the sale {intent.to} could not be read ({exc}); refusing"
     ids = [int(i) for i in intent.mint_ids]
     value = int(intent.amount_raw)
     native = int(getattr(deltas, "native_delta", 0) or 0)

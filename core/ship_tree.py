@@ -20,6 +20,7 @@ read-only with egress denied by default, so vendored dependencies are the only
 way a Node app runs — they ship, therefore they must be hashed.
 """
 import os
+import stat
 from pathlib import Path
 from typing import Iterator, List, Optional, Tuple
 
@@ -32,6 +33,10 @@ SKIP_DIRS = frozenset({
 SKIP_SYMLINK = "symlink"
 SKIP_SPECIAL = "special"
 SKIP_CREDENTIAL = "credential"
+#: Readable by its owner only: the owner kept it private, so it never ships (a
+#: shipped tree is readable by the app container and the HF stage) — audit
+#: 2026-11-21 M-9.
+SKIP_PRIVATE = "private"
 
 
 def _is_credential_file(full: str) -> bool:
@@ -55,6 +60,11 @@ def file_skip_reason(full: str) -> Optional[str]:
         return SKIP_SPECIAL
     if _is_credential_file(full):
         return SKIP_CREDENTIAL
+    try:
+        if not os.stat(full).st_mode & (stat.S_IRGRP | stat.S_IROTH):
+            return SKIP_PRIVATE
+    except OSError:
+        return SKIP_SPECIAL
     return None
 
 

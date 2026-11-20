@@ -11,6 +11,7 @@ from pydantic import (BaseModel, BeforeValidator, Field, PlainSerializer,
 
 from tools.defi.account_mode import ACCOUNT_DESC_FULL as _ACCOUNT_DESC_FULL
 from tools.defi.account_mode import ACCOUNT_DESC_SHORT as _ACCOUNT_DESC, NFT_DESC as _NFT_DESC
+from tools.act_reason_param import ActReason
 from tools.defi.account_mode import NoAccountMode
 
 #: 068 B2: ONE chain-name fold at the verb boundary — stripped, lowercase, the
@@ -58,16 +59,15 @@ def _chain_field_description(verb: str, *, full: bool = False) -> str:
     from core.wallet import chains
     head = (f"Chain to {verb} on — CHOOSE IT DELIBERATELY, because the same "
             f"address is a different token on a different chain. Chains that "
-            f"can move value: {', '.join(chains.money_chains())}. Gas differs "
-            f"by orders of magnitude, so a cent-scale trade can cost more in "
-            f"gas on ethereum than it is worth, while base is a fraction of a "
-            f"cent.")
+            f"can move value: {', '.join(chains.money_chains())}.")
     if full:
-        return f"{head} Full guidance:\n{chains.chain_guidance()}"
-    return f"{head} Per-chain guidance: the `chain` parameter of defi_trade.swap."
+        return (f"{head} Gas differs by orders of magnitude, so a cent-scale trade can cost "
+                f"more in gas on ethereum than it is worth, while base is a fraction of a "
+                f"cent. Full guidance:\n{chains.chain_guidance()}")
+    return f"{head} Gas and per-chain guidance: the `chain` parameter of defi_trade.swap."
 
 
-class TransferParams(BaseModel):
+class TransferParams(ActReason):
     chain: ChainName = Field(..., description=_chain_field_description("send"))
     token: str = Field(..., description=(
         "CONTRACT ADDRESS of the token to send (0x…), or 'native' to send the "
@@ -89,7 +89,7 @@ class TransferParams(BaseModel):
     nft: Optional[str] = Field(None, description=_NFT_DESC)
 
 
-class ApproveParams(NoAccountMode):
+class ApproveParams(ActReason, NoAccountMode):
     chain: ChainName = Field(..., description=_chain_field_description("approve"))
     token: str = Field(..., description="CONTRACT ADDRESS of the token to approve (0x…)")
     spender: str = Field(..., description="Address being granted the allowance (0x…)")
@@ -106,14 +106,14 @@ class ApproveParams(NoAccountMode):
     dry_run: bool = Field(True, description="TRUE simulates only. Set false to sign.")
 
 
-class RevokeParams(NoAccountMode):
+class RevokeParams(ActReason, NoAccountMode):
     chain: ChainName = Field(..., description=_chain_field_description("revoke"))
     token: str = Field(..., description="CONTRACT ADDRESS of the token (0x…)")
     spender: str = Field(..., description="Address whose allowance is set to ZERO (0x…)")
     dry_run: bool = Field(True, description="TRUE simulates only. Set false to sign.")
 
 
-class NftTransferParams(NoAccountMode):
+class NftTransferParams(ActReason, NoAccountMode):
     chain: ChainName = Field(description=_chain_field_description("nft_transfer"))
     contract: str = Field(description="The NFT collection contract address.")
     token_id: int = Field(ge=0, description="The token id to send.")
@@ -133,7 +133,7 @@ class NftTransferParams(NoAccountMode):
     dry_run: bool = True
 
 
-class RegisterAgentParams(NoAccountMode):
+class RegisterAgentParams(ActReason, NoAccountMode):
     chain: ChainName = Field(...,
                        description="Chain whose ERC-8004 Identity Registry to "
                                    "register on. Pinned; unsupported chains refuse.")
@@ -143,14 +143,14 @@ class RegisterAgentParams(NoAccountMode):
     dry_run: bool = True
 
 
-class SetAgentUriParams(NoAccountMode):
+class SetAgentUriParams(ActReason, NoAccountMode):
     chain: ChainName = Field(..., description=_chain_field_description("update the agent URI"))
     agent_id: int = Field(..., ge=0, description="Your existing agentId (tokenId).")
     max_spend_usd: float = Field(default=10.0, gt=0)
     dry_run: bool = True
 
 
-class NftRevokeParams(NoAccountMode):
+class NftRevokeParams(ActReason, NoAccountMode):
     chain: ChainName = Field(description=_chain_field_description("nft_revoke_approval"))
     contract: str = Field(description="The NFT collection contract address.")
     operator: str = Field(
@@ -160,7 +160,7 @@ class NftRevokeParams(NoAccountMode):
     dry_run: bool = True
 
 
-class WrapParams(NoAccountMode):
+class WrapParams(ActReason, NoAccountMode):
     chain: ChainName = Field(..., description=_chain_field_description("wrap native"))
     amount: float = Field(..., gt=0, description=(
         "Human amount of NATIVE to wrap (e.g. 0.0012 ETH -> 0.0012 WETH)."))
@@ -172,7 +172,7 @@ class WrapParams(NoAccountMode):
         "broadcasting. Set false to actually wrap."))
 
 
-class UnwrapParams(NoAccountMode):
+class UnwrapParams(ActReason, NoAccountMode):
     chain: ChainName = Field(..., description=_chain_field_description("unwrap"))
     amount: float = Field(..., gt=0, description=(
         "Human amount of WRAPPED native to turn back into gas "
@@ -214,7 +214,7 @@ _PLAN_DESC = ("Your entry plan {thesis, confidence, invalidation, preset}. REQUI
               "follow it. Omit on a sell.")
 
 
-class SwapParams(BaseModel):
+class SwapParams(ActReason):
     chain: ChainName = Field(..., description=_chain_field_description("swap", full=True))
     token_in: str = Field(..., description=(
         "CONTRACT ADDRESS of the token you are selling (0x…), or the literal "
@@ -243,7 +243,7 @@ class SwapParams(BaseModel):
     close_reason: CloseReason = Field(None, description=_CLOSE_REASON_DESC)
 
 
-class SolanaSwapParams(NoAccountMode):
+class SolanaSwapParams(ActReason, NoAccountMode):
     token_in: str = Field(..., description="MINT ADDRESS of the token to sell (base58)")
     token_out: str = Field(..., description="MINT ADDRESS of the token to buy (base58)")
     amount_in: float = Field(..., gt=0, description="Human amount of token_in to sell")
@@ -261,7 +261,7 @@ class SolanaSwapParams(NoAccountMode):
     close_reason: CloseReason = Field(None, description=_CLOSE_REASON_DESC)
 
 
-class DeployTokenParams(NoAccountMode):
+class DeployTokenParams(ActReason, NoAccountMode):
     chain: ChainName = Field(..., description=_chain_field_description("deploy"))
     name: str = Field(..., description=(
         "Token name, e.g. 'Demo Coin'. Max 64 characters, printable ASCII only."))
@@ -291,7 +291,32 @@ class DeployTokenParams(NoAccountMode):
         "broadcasting. Set false to actually deploy."))
 
 
-class DeployContractParams(NoAccountMode):
+# 122 W3: deploy the fixed-supply template token, then create and seed a Uniswap v4 pool
+# token/quote on the 117 seed path, in one act (no docstring: it would reach the schema).
+class LaunchTokenParams(ActReason, NoAccountMode):
+    chain: ChainName = Field(..., description=_chain_field_description("launch"))
+    name: str = Field(..., description="Token name (printable ASCII, max 64).")
+    symbol: str = Field(..., description="Ticker (printable ASCII, max 16).")
+    supply: ExactSupply = Field(..., gt=0, description="Whole units, all minted to the wallet.")
+    quote_token: str = Field(..., description=(
+        "The pool's other token (an address; the zero address = native). launch.pair, if "
+        "pinned, decides it."))
+    token_amount: float = Field(..., gt=0, allow_inf_nan=False, description=(
+        "Whole units of the new token seeded."))
+    quote_amount: float = Field(0.0, ge=0, allow_inf_nan=False, description=(
+        "Whole units of the quote token seeded; 0 = one-sided (a range above the price)."))
+    initial_price: float = Field(..., gt=0, allow_inf_nan=False, description=(
+        "The starting price: quote tokens per ONE new token."))
+    fee: int = Field(10000, description="Millionths: 100, 500, 3000 or 10000.")
+    tick_spacing: int = Field(200, ge=1, le=32767)
+    range: str = Field("full", description="full, low,high (quote per token) or ticks:lo,hi.")
+    max_spend_usd: float = Field(..., gt=0, description=(
+        "The most USD at risk: the seed at the launch price plus fees."))
+    dry_run: bool = Field(True, description=(
+        "TRUE (default) checks and simulates the deploy; false runs every step."))
+
+
+class DeployContractParams(ActReason, NoAccountMode):
     chain: ChainName = Field(..., description=_chain_field_description("deploy"))
     bytecode: str = Field(..., description=(
         "COMPILED creation bytecode (init code), 0x-prefixed hex. NOT Solidity "
@@ -319,7 +344,7 @@ class DeployContractParams(NoAccountMode):
         "TRUE (default) simulates and reports without broadcasting."))
 
 
-class SolanaDeployTokenParams(NoAccountMode):
+class SolanaDeployTokenParams(ActReason, NoAccountMode):
     name: str = Field("", description=(
         "Token name, e.g. 'Demo Coin'. Written ON-CHAIN via Token-2022 metadata, "
         "so every explorer and wallet shows it. Defaults to the symbol. Max 64 "
@@ -347,7 +372,7 @@ class SolanaDeployTokenParams(NoAccountMode):
         "without broadcasting."))
 
 
-class LpAddParams(NoAccountMode):
+class LpAddParams(ActReason, NoAccountMode):
     chain: ChainName = Field(..., description=_chain_field_description("manage the Uniswap v3 position"))
     protocol: str = Field("v3", description=(
         "'v3', or 'v4'. v4 has three forms: a new FULL-RANGE position on a Pons graduated "
@@ -415,7 +440,7 @@ class LpAddParams(NoAccountMode):
         return self
 
 
-class _LpPositionParams(NoAccountMode):
+class _LpPositionParams(ActReason, NoAccountMode):
     chain: ChainName = Field(..., description=_chain_field_description("manage the Uniswap v3 position"))
     protocol: str = Field("v3", description="'v3', or 'v4' (burn must stay false: a v4 position NFT is kept).")
     token_id: int = Field(..., ge=0, description="Your position NFT id.")
@@ -439,7 +464,7 @@ class LpRemoveParams(_LpPositionParams):
     burn: bool = Field(False, description="At 100% only: also burn the emptied position NFT.")
 
 
-class CallParams(BaseModel):
+class CallParams(ActReason):
     chain: ChainName = Field(..., description=_chain_field_description("call"))
     to: str = Field(..., description="CONTRACT ADDRESS being called (0x…)")
     calldata: str = Field("", description=(
@@ -485,7 +510,7 @@ class CallParams(BaseModel):
     nft: Optional[str] = Field(None, description=_NFT_DESC)
 
 
-class BridgeParams(NoAccountMode):
+class BridgeParams(ActReason, NoAccountMode):
     from_chain: ChainName = Field(..., description=(
         "Origin chain NAME: 'solana', or a registry name (base, robinhood, …)."))
     to_chain: ChainName = Field(..., description="Destination chain NAME.")

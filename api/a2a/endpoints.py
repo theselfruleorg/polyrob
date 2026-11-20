@@ -458,3 +458,60 @@ async def delete_push_config(
     if not success:
         raise HTTPException(status_code=404, detail="No push config found")
     return {"success": True, "taskId": task_id}
+
+
+# ---------------------------------------------------------------------------
+# A GET at the advertised JSON-RPC URL
+# ---------------------------------------------------------------------------
+
+#: The x402 ``outputSchema.input`` block that tells a payer the price is for a
+#: POST of a JSON-RPC body, not for the GET that read it.
+_RPC_INPUT_SCHEMA = {"type": "http", "method": "POST", "bodyType": "json"}
+
+
+def _rpc_paywall_challenge() -> Optional[dict]:
+    """The 402 challenge of a NEW ``message/send`` on ``POST /a2a/rpc``, or None
+    when this box does not sell A2A calls over x402 (off, no ``payTo``, or the
+    x402 package absent). Each ``accepts`` entry names ``POST`` as the method."""
+    try:
+        from modules.x402.middleware import build_x402_challenge
+        from modules.x402.x402_integration import get_x402_config
+        config = get_x402_config()
+        if not (config.get("enabled") and config.get("pay_to")):
+            return None
+        challenge = build_x402_challenge("/a2a/rpc")
+    except ImportError:
+        return None
+    for entry in challenge.get("accepts", []):
+        entry["outputSchema"] = {"input": dict(_RPC_INPUT_SCHEMA)}
+    return challenge
+
+
+@router.get("")
+@router.get("/rpc")
+async def a2a_rpc_discovery(request: Request):
+    """A GET at the advertised A2A URL answers instead of 404.
+
+    The JSON-RPC endpoint takes a POST only. A GET says how to call it: with
+    x402 on, a 402 whose challenge prices the POST (``outputSchema.input.method``
+    is ``POST``), so a read-only probe can price the POST-only paywall; else a
+    200 that names the method and the agent card. A GET is never billed or
+    settled — a GET that carries a payment is refused with 405 (pay the POST).
+    """
+    from api.base_url import base_url as resolve_base_url
+    base = resolve_base_url(request)
+    how = {
+        "protocol": "a2a",
+        "transport": "JSON-RPC 2.0",
+        "method": "POST",
+        "url": f"{base}/a2a/rpc",
+        "agent_card": f"{base}/.well-known/agent.json",
+    }
+    headers = {"Allow": "GET, POST"}
+    if request.headers.get("X-PAYMENT"):
+        return JSONResponse(status_code=405, headers=headers, content={
+            **how, "error": "A GET is never billed: send the payment with the POST."})
+    challenge = _rpc_paywall_challenge()
+    if challenge is not None:
+        return JSONResponse(status_code=402, headers=headers, content={**challenge, **how})
+    return JSONResponse(status_code=200, headers=headers, content=how)

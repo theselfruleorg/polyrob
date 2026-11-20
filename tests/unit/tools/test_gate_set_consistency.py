@@ -23,7 +23,7 @@ _ASPIRATIONAL_IDS = {"tool_manage"}
 def test_money_tools_are_delegate_blocked():
     """A leaf/delegated agent must never wield a money tool."""
     from agents.task.runtime.metering_gate import MONEY_TOOLS
-    from tools.controller.delegation import DELEGATE_BLOCKED_TOOLS
+    from core.delegation_policy import DELEGATE_BLOCKED_TOOLS
 
     leak = set(MONEY_TOOLS) - set(DELEGATE_BLOCKED_TOOLS)
     assert leak == set(), f"money tools delegable to leaf agents: {sorted(leak)}"
@@ -33,8 +33,7 @@ def test_money_tools_covered_by_correspondent_gate():
     """Every money tool must be unusable from a correspondent-tainted session:
     x402_* via HIGH_IMPACT_TOOL_IDS (their every verb is money-shaped); the
     crypto venues via their trade VERBS (tool_ids deliberately stay readable)."""
-    from agents.task.agent.core.correspondent_gate import (
-        HIGH_IMPACT_TOOL_IDS, is_high_impact)
+    from core.security.high_impact import HIGH_IMPACT_TOOL_IDS, is_high_impact
 
     assert "x402_pay" in HIGH_IMPACT_TOOL_IDS
     assert "x402_invoice" in HIGH_IMPACT_TOOL_IDS
@@ -61,9 +60,9 @@ def test_gate_sets_reference_real_tool_ids():
     optional ids (same expectation as test_valid_tool_ids_parity)."""
     import tools  # noqa: F401 — triggers register_optional_tool side effects
     from tools.descriptors import TOOL_DESCRIPTORS, get_tool_display_name
-    from agents.task.agent.core.correspondent_gate import HIGH_IMPACT_TOOL_IDS
+    from core.security.high_impact import HIGH_IMPACT_TOOL_IDS
     from agents.task.runtime.metering_gate import MONEY_TOOLS
-    from tools.controller.delegation import DELEGATE_BLOCKED_TOOLS
+    from core.delegation_policy import DELEGATE_BLOCKED_TOOLS
 
     registry_vocab = {get_tool_display_name(n) for n in TOOL_DESCRIPTORS} | {
         # Flag-gated optional tools not registered under the default test env.
@@ -82,7 +81,7 @@ def test_correspondent_trade_verbs_in_sync():
     """correspondent_gate.py carries an explicit 'keep in sync' comment between
     _HIGH_IMPACT_VERB_SUBSTRINGS and the trade verbs in _HIGH_IMPACT_NAMES —
     enforce it: every substring must anchor to an enumerated name."""
-    from agents.task.agent.core import correspondent_gate as cg
+    from core.security import high_impact as cg
 
     orphans = [s for s in cg._HIGH_IMPACT_VERB_SUBSTRINGS
                if not any(s in name for name in cg._HIGH_IMPACT_NAMES)]

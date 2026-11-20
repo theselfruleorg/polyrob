@@ -1,0 +1,20 @@
+{
+  "function": {
+    "description": "Read ANY agent NFT's token-bound account straight from the chain: owner, account address, open approvals (with coverage), lock or sale readiness, state, identity, native balance, the sale phase. Read-only; safe in a group chat.",
+    "name": "defi_data_nft_account",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "description": "Any agent NFT (ERC-6551 / ERC-6551P), as '<chain>:<collection>/<token_id>' or '<chain>:<token_id>' on the chain's one pinned collection.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

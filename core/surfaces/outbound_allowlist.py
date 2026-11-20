@@ -1,7 +1,7 @@
 """Owner-scoped outbound send-authorization. Default-DENY: a (user_id, surface,
 target) must have an ACTIVE row to be sendable. Owner targets bypass this (resolved
 upstream in outbound_target.resolve_target_tier). Tenant-scoped, WAL+jitter via
-``core/sqlite_util`` (no hand-rolled retry loop) — mirrors ``agents/task/goals/board.py``.
+``core/sqlite_util`` (no hand-rolled retry loop) — mirrors ``modules/goals/board.py``.
 """
 from __future__ import annotations
 

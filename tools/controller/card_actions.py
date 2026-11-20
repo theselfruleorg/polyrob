@@ -440,6 +440,32 @@ async def ask_choice(controller, execution_context, user_id: str, question: str,
         include_in_memory=True)
 
 
+async def _quote_now(controller, user_id: str, card):
+    """126 wave 3 (owner, 2026-11-21: one tap): run the proposal's QUOTE now, exactly
+    as the owner's "Get a quote" tap runs it on the owner's DM seat
+    (``core.surfaces.act.run_owner_line``): a quote moves nothing. The open card it
+    makes (a quote, or the seat's own extra-check card) is returned; the proposal is
+    replaced by it. A string: the quote made no card (the reply says why). None: no
+    seat executor runs in this process — the proposal card stays (two taps)."""
+    from types import SimpleNamespace
+    from core.surfaces import act, cards
+    if not act.owner_line_ready():
+        return None
+    try:
+        reply = await act.run_owner_line(
+            SimpleNamespace(container=getattr(controller, "container", None)),
+            user_id, cards.card_token(card.card_id, "re"))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("proposal %s: quote run failed", card.card_id, exc_info=True)
+        return f"the quote raised {type(exc).__name__}: {exc}"
+    new_id = getattr(reply, "card_id", None)
+    new = cards.store().get(new_id) if new_id else None
+    if new is None or new.state != cards.S_OPEN:
+        from core.surfaces.command_reply import reply_text
+        return reply_text(reply) or "no quote came back"
+    return new
+
+
 def register_card_actions(controller) -> None:
     class ProposeAction(BaseModel):
         command: str = Field(..., min_length=3, max_length=600, description=(
@@ -492,9 +518,9 @@ def register_card_actions(controller) -> None:
         return ActionResult(extracted_content=text, include_in_memory=True)
 
     @controller.registry.action(
-        "Propose a money action to the OWNER as a card. Nothing moves: the owner taps "
-        "'Get a quote', sees the real simulated price and caps, and only then can "
-        "Confirm. Use it instead of describing a command for the owner to type, and when "
+        "Propose a money action to the OWNER as a card. Nothing moves: the quote runs at "
+        "once, the owner sees the real simulated price and caps on the card, and ONE tap "
+        "on Confirm runs it. Use it instead of describing a command for the owner to type, and when "
         "the owner only ASKS about a money move (execute one only on an imperative line). Verbs: "
         "/send /swap /bridge /pay /claim /launch /deploy /nft /identity "
         "/writeoff /unquarantine /wallet (trust|untrust), /lp (remove|collect: `/lp remove v4 "
@@ -568,6 +594,28 @@ def register_card_actions(controller) -> None:
             if done is not None:
                 replaced.append(cid)
                 cards._notify(done)
+        quoted = await _quote_now(controller, user_id, card)
+        if isinstance(quoted, str):
+            return ActionResult(error=(
+                f"propose_action: the quote of {card.line} did not make a card, so nothing "
+                f"is open for the owner: {quoted[:600]}"), include_in_memory=True)
+        if quoted is not None:
+            outcome = await _deliver(controller, user_id, quoted,
+                                     _session_id(controller, execution_context))
+            where = ("on the owner's chat" if outcome == "sent"
+                     else "queued for the owner's chat (quiet hours)" if outcome == "queued"
+                     else "in the owner's /cards list (no live chat reached)")
+            return ActionResult(
+                extracted_content=(f"Card {quoted.card_id} is {where}: the QUOTE of {card.line}. "
+                                   + (f"{value_line} " if value_line else "")
+                                   + "NOTHING was sent or spent. ONE tap on its Confirm runs it "
+                                   "at the quoted bound. Do not say it is done, queued or pending "
+                                   "approval." + (" When the owner has decided every card you "
+                                                  "raised, you are woken with each card's "
+                                                  "outcome." if group_id else "")
+                                   + (f" Replaced (closed): {', '.join(replaced)}."
+                                      if replaced else "")),
+                include_in_memory=True)
         outcome = await _deliver(controller, user_id, card,
                                  _session_id(controller, execution_context))
         where = ("on the owner's chat" if outcome == "sent"

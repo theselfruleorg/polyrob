@@ -83,12 +83,12 @@ def compute_gate(tool: str) -> tuple:
 def grantable_autonomous_tools() -> list:
     """Tools a queued goal may be granted right now (planner grounding).
 
-    Single source of truth: delegates to T3's ``tools.goal_tools.allowed_self_goal_tools()``
+    Single source of truth: delegates to ``core.tool_grants.allowed_self_goal_tools()``
     (already mode-aware — expands under effective AUTONOMY_MODE=autonomous). No mode
     branch duplicated here.
     """
     try:
-        from tools.goal_tools import allowed_self_goal_tools
+        from core.tool_grants import allowed_self_goal_tools
         return sorted(allowed_self_goal_tools())
     except Exception:
         return []

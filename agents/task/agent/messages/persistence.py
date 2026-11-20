@@ -109,7 +109,7 @@ class PersistenceMixin:
 			session_id: Session identifier
 			user_id: Optional user identifier for path construction
 		"""
-		from agents.task.path import pm
+		from core.session_paths import pm
 
 		try:
 			# Create path
@@ -263,7 +263,7 @@ class PersistenceMixin:
 			UnreadableHistoryError: the file exists and could not be read. Whatever
 				the load half-restored is dropped and the file is moved aside.
 		"""
-		from agents.task.path import pm
+		from core.session_paths import pm
 
 		load_path = pm().create_file_path(
 			session_id=session_id,

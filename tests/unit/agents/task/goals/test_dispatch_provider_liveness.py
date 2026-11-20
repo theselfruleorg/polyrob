@@ -53,7 +53,7 @@ def test_a_goals_dead_provider_pin_reroutes(two_providers, monkeypatch):
 import asyncio
 
 from agents.task.goals.dispatcher import GoalDispatcher
-from agents.task.goals.board import Goal
+from modules.goals.board import Goal
 
 
 class _FakeBoard:

@@ -478,7 +478,7 @@ def _data_dir() -> str:
 def _sessions_data_root() -> Optional[str]:
     """The PathManager session root (feed dirs + telemetry_events.db)."""
     try:
-        from agents.task.path import pm
+        from core.session_paths import pm
         return str(pm().data_root)
     except Exception:
         return None

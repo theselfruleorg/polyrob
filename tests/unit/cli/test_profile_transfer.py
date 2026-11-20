@@ -152,3 +152,20 @@ def test_export_is_private_and_cannot_replace_an_existing_target(env, tmp_path):
         export_profile('alice', link)
     assert archive.read_bytes() == prior
     assert not list(tmp_path.glob('.export-*.tmp'))
+
+
+def test_export_of_the_active_profile_stages_outside_it(env, tmp_path, monkeypatch):
+    """The active profile's data home holds the scratch dir: a stage there sat
+    inside the tree it copied and copied itself until the path was too long."""
+    p = _seed_profile(env)
+    (p / "data" / "tmp" / "pip-left").mkdir(parents=True)
+    (p / "data" / "tmp" / "pip-left" / "x.whl").write_text("wheel")
+    monkeypatch.delenv("TMPDIR", raising=False)
+    monkeypatch.setenv("POLYROB_PROFILES_ROOT", str(env / "profiles"))
+    monkeypatch.setenv("POLYROB_HOME", str(p))
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(p / "data"))
+    out = tmp_path / "alice.tar.gz"
+    export_profile("alice", out)
+    names = _member_names(out)
+    assert "alice/data/notes.md" in names
+    assert not any(n.startswith("alice/data/tmp") for n in names), names

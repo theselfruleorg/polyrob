@@ -155,7 +155,13 @@ async def apply_migrations_at_boot(
                 try:
                     on_before_change()
                 except Exception as exc:
-                    logger.warning("pre-migration snapshot hook failed (continuing): %s", exc)
+                    # No backup, no schema change (2026-11-20: a torn snapshot under
+                    # the hardened unit let a migration run with nothing to roll
+                    # back to). The pending list stays visible to the status read.
+                    logger.error("pre-migration snapshot failed — migration NOT applied: %s", exc)
+                    summary["error"] = f"pre-migration snapshot failed ({exc}); migration not applied"
+                    summary["snapshot_failed"] = True
+                    return summary
 
             for path in pending:
                 module = _load_module(path)
@@ -208,7 +214,7 @@ async def run_boot_migrations(container, *, local: bool = True) -> dict:
         dir_paths: list = []
         db_paths: list = []
         try:
-            from cli.update.context import resolve_update_context
+            from core.update_snapshot.context import resolve_update_context
             uctx = resolve_update_context(local=local)
             snapshots_root, data_home = uctx.snapshots_root, uctx.data_home
             config_paths, dir_paths = uctx.config_paths, uctx.dir_paths
@@ -223,7 +229,7 @@ async def run_boot_migrations(container, *, local: bool = True) -> dict:
         def _snapshot_before():
             if snapshots_root is None:
                 return
-            from cli.update.snapshot import create_snapshot, prune_snapshots
+            from core.update_snapshot.snapshot import create_snapshot, prune_snapshots
             from core.version import get_version
             create_snapshot(
                 snapshots_root=snapshots_root, data_home=data_home,

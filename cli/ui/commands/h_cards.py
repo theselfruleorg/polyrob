@@ -91,41 +91,28 @@ class _Capture:
 
 
 async def _press(registry: Any, cid: str, act: str, ctx: Any) -> None:
-    p = cards.press(cid, act, _tenant(ctx))
-    if p.pick is not None and p.card is not None:
-        from surfaces.card_builder import advance
-        step = advance(p.card, p.pick, _tenant(ctx))
-        if not step.run:
-            ctx.emit(step.text, title="cards")
-            return
-        await registry.dispatch(step.run, ctx)      # the verb's QUOTE -> a quote card
-        return
-    if not p.run:
-        ctx.emit(p.reply, title="cards")
-        return
-    if act != "ok":
-        # 084: the quote card it makes joins this card's session + group; no
-        # new card (a refused quote) → the printed reply is this card's outcome.
-        cap = None
-        try:
-            with _Capture(ctx) as cap, cards.lineage(p.card):
-                await registry.dispatch(p.run, ctx)
-        finally:
-            # A child of THIS card, not any new card (another may land meanwhile).
-            made = any(c.parent_id == cid for c in
-                       cards.store().open_cards(_tenant(ctx), limit=50))
-            if not made:
-                cards.note_result(cid, "\n".join(cap.lines if cap else []) or "no quote")
-        return
-    with _Capture(ctx) as cap, cards.lineage(p.card):
-        try:
-            await registry.dispatch(p.run, ctx)
-        except Exception as e:   # never leave the card "running"
-            cards.finish(cid, f"Command failed: {str(e)[:200]}")
-            raise
-    out = "\n".join(cap.lines)
-    cards.finish(cid, out)
-    _record_out(ctx, out)
+    """One press through the ONE press every owner seat shares
+    (``surfaces/card_press.py``); this seat runs a card's line through THIS registry
+    and prints what it printed. The REPL waits for every result (no ``deliver``)."""
+    from surfaces.card_press import PressSeat, press
+
+    async def _run_line(line: str, _deliver) -> str:
+        with _Capture(ctx) as cap:
+            await registry.dispatch(line, ctx)
+        return _Printed("\n".join(cap.lines))
+
+    seat = PressSeat(seat="repl", user_id=_tenant(ctx),
+                     container=getattr(ctx, "container", None), run_line=_run_line,
+                     record=lambda text: _record_out(ctx, text))
+    reply = await press(seat, cid, act)
+    if reply is not None and not isinstance(reply, _Printed):
+        # A card's own answer (a cancel, a pick, a call card's report); a line the
+        # registry ran has printed its answer already.
+        ctx.emit(str(getattr(reply, "text", reply)), title="cards")
+
+
+class _Printed(str):
+    """What a dispatched line printed (already on screen)."""
 
 
 def _record_out(ctx: Any, text: str) -> None:

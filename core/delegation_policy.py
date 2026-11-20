@@ -1,0 +1,214 @@
+"""Delegation policy for the `delegate_task` tool (roadmap P1, Reference §29).
+
+Pure, side-effect-free decision logic for "may this agent delegate, and what
+role does the spawned child get?" Keeping it free of Controller/orchestrator
+state makes the role + depth gate unit-testable in isolation (same approach as
+the pre_tool_call hook seam).
+
+It lives in core (U7) so the agents tier (``sub_agent_manager``) reads it without
+an upward import. It is the one home: no other path re-exports it.
+
+Roles
+-----
+- ``leaf`` (default): the spawned sub-agent cannot delegate further.
+- ``orchestrator``: the agent may call ``delegate_task`` (subject to depth).
+
+The main (top-level) agent defaults to ``orchestrator`` so today's single-level
+delegation keeps working; sub-agents are spawned as ``leaf``. The depth limit
+(``MAX_SUB_AGENT_DEPTH``, default 1) is the independent backstop against runaway
+recursion — role and depth are checked together so the gate stays correct even
+if the depth limit is later raised.
+"""
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from typing import List, Optional
+
+Role = str  # "leaf" | "orchestrator"
+
+ORCHESTRATOR: Role = "orchestrator"
+LEAF: Role = "leaf"
+
+# --- UP-05: sub-agent least-privilege toolset --------------------------------
+#
+# A delegated child inherits the parent's full toolset today (shared Controller),
+# so a confused/injected child can run code, schedule cron jobs, or delegate
+# recursively with the parent's authority. UP-05 narrows the child's toolset.
+#
+# Two distinct levers, because POLYROB registers tools two different ways:
+#   1. DELEGATE_BLOCKED_TOOLS — *container tool_ids* stripped from the child's
+#      load list (these are loaded via load_tools_from_container).
+#   2. DELEGATION_ACTION_NAMES — the delegation *action* (delegate_task)
+#      is NOT a tool_id; it is registered
+#      unconditionally in Controller._register_default_actions when sub-agents
+#      are enabled. It is suppressed on a leaf child via the Registry's
+#      exclude_actions seam (see delegation_exclusions_for_child).
+# NOTE: "task" is the TODO tool (task_todo_*), NOT delegation — do not block it.
+# WS-2 (2026-07-16): derived from the ONE per-tool capability table
+# (core/tool_capabilities.py, `delegate_blocked`) — classify a new tool there, not
+# here; per-entry rationale lives with the table rows. Parity-pinned by
+# tests/unit/core/test_tool_capabilities.py; the DELEGATE_BLOCKED_TOOLS env override
+# below (get_blocked_child_tools) is unchanged.
+from core.tool_capabilities import ids_with as _ids_with
+
+DELEGATE_BLOCKED_TOOLS: frozenset = _ids_with("delegate_blocked")
+
+# Delegation action names (registered by Controller._register_subtask_action).
+# `preferences` (owner-UX P2 T2) rides the SAME exclusion set even though it is
+# not a delegation verb: a leaf/sub-agent must never change tenant config or
+# propose operating-contract rules, and this is the one seam that keeps the
+# tool out of the child's registry/ActionModel entirely (defence-in-depth on
+# top of the `_is_forged_or_autonomous_turn` runtime refusal inside the action).
+DELEGATION_ACTION_NAMES: frozenset = frozenset({
+    "delegate_task",
+    "preferences",
+    "autonomy_control",  # 031: a leaf never touches the owner pause record
+    # 2026-09-29 review F13: owner-facing moves. A leaf reports to its parent,
+    # never to the owner — each refuses a leaf at call time; excluding them here
+    # keeps the schemas (and the temptation) out of the child's tool list.
+    "owner_ask", "propose_action", "cards_read",
+    "trade_mandate_propose",  # 086 W5: the mandate's intake card is the owner's
+    "propose_setting",  # 093 D1: a setting card is the owner's
+    "offer_manage", "order_deliver",  # 099: the owner's offers; the order's own run
+})
+
+_BLOCKED_TOOLS_ENV = "DELEGATE_BLOCKED_TOOLS"
+
+
+def get_blocked_child_tools() -> frozenset:
+    """Resolve the child tool_id blocklist: the default UNION the env additions.
+
+    ``DELEGATE_BLOCKED_TOOLS`` (comma list) can only ever **ADD** to the default.
+    Whitespace/empty entries are ignored; unset or empty keeps the default.
+
+    M5 (wallet-security evaluation, 2026-09-14): this used to **replace** the
+    default. So ``DELEGATE_BLOCKED_TOOLS=some_new_tool`` — a plausible thing for
+    an operator to write, meaning "also block this one" — silently unblocked
+    every money tool (`defi_trade`, `x402_pay`, `wallet`, …) for delegated leaf
+    sub-agents, in one env line, with no warning. The default set is DERIVED
+    from the capability table (`core/tool_capabilities.py::ids_with
+    ("delegate_blocked")`) and `tests/unit/tools/test_gate_set_consistency.py`
+    asserts ``MONEY_TOOLS <= DELEGATE_BLOCKED_TOOLS``; a replacing env override
+    was the one way to break that invariant at runtime while the test stayed
+    green. Widening a capability now needs a code change to the capability
+    table, where it is reviewed.
+    """
+    raw = os.getenv(_BLOCKED_TOOLS_ENV)
+    if raw is None:
+        return DELEGATE_BLOCKED_TOOLS
+    entries = frozenset(t.strip() for t in raw.split(",") if t.strip())
+    return DELEGATE_BLOCKED_TOOLS | entries
+
+
+def narrow_child_tools(
+    *,
+    parent_tools: List[str],
+    requested_tools: Optional[List[str]],
+    child_role: Role,
+    blocked: Optional[frozenset] = None,
+) -> List[str]:
+    """Least-privilege child tool_ids = (parent ∩ requested) − blocked.
+
+    ``requested_tools=None`` => inherit the parent's set. A child can never gain a
+    tool the parent did not have (intersection). The blocklist always wins over an
+    explicit request. ``child_role`` is accepted for symmetry with
+    ``delegation_exclusions_for_child`` (delegation is an *action*, not a tool_id,
+    so role does not re-add a tool_id here).
+    """
+    blocked = get_blocked_child_tools() if blocked is None else blocked
+    # Distinguish "inherit all" (None) from "explicitly request none" ([]). Using
+    # `not requested_tools` conflated the two, so requesting zero tools wrongly
+    # inherited the full parent set — a least-privilege escalation.
+    if requested_tools is None:
+        base = list(parent_tools)
+    else:
+        base = [t for t in requested_tools if t in parent_tools]
+    return [t for t in base if t not in blocked]
+
+
+def delegation_exclusions_for_child(child_role: Role) -> frozenset:
+    """Action names to exclude from a child Controller's registry.
+
+    A ``leaf`` child cannot delegate, so the delegation actions are excluded at
+    registration (defence-in-depth on top of the call-time ``evaluate_delegation``
+    gate, and it removes the schema leakage). An ``orchestrator`` child (only
+    reachable if depth > 1 and construction grants the role) keeps them.
+    """
+    return frozenset() if child_role == ORCHESTRATOR else DELEGATION_ACTION_NAMES
+
+_DISABLED_REASON = (
+    "Sub-agent system is disabled. Complete this work directly without "
+    "delegation (set SUB_AGENTS_ENABLED=true to enable)."
+)
+
+
+@dataclass(frozen=True)
+class DelegationDecision:
+    """Outcome of a delegation request.
+
+    allowed     — whether the caller may spawn the sub-agent(s).
+    reason      — human/LLM-facing denial reason when ``not allowed`` (else None).
+    child_role  — effective role for the spawned child, clamped so a child that
+                  sits at the maximum depth can never itself be an orchestrator.
+    """
+
+    allowed: bool
+    reason: Optional[str]
+    child_role: Role
+
+
+def evaluate_delegation(
+    *,
+    enabled: bool,
+    caller_is_sub_agent: bool,
+    caller_role: Role,
+    requested_child_role: Role,
+    max_depth: int,
+    current_depth: Optional[int] = None,
+) -> DelegationDecision:
+    """Decide whether ``delegate_task`` may proceed and what role the child gets.
+
+    Args:
+        enabled: result of ``TimeoutConfig.get_sub_agents_enabled()``.
+        caller_is_sub_agent: ``execution_context.is_sub_agent`` of the caller.
+        caller_role: the caller agent's role ("leaf"/"orchestrator").
+        requested_child_role: role requested for the spawned child.
+        max_depth: ``MAX_SUB_AGENT_DEPTH`` (depth of the deepest allowed agent;
+            1 means the main agent may spawn one level of leaves).
+        current_depth: caller's depth (main = 0). Derived from
+            ``caller_is_sub_agent`` when not supplied.
+    """
+    if not enabled:
+        return DelegationDecision(False, _DISABLED_REASON, LEAF)
+
+    if current_depth is None:
+        current_depth = 1 if caller_is_sub_agent else 0
+
+    # A leaf agent may never delegate.
+    if caller_role != ORCHESTRATOR:
+        return DelegationDecision(
+            False,
+            "This agent has role 'leaf' and cannot delegate. Complete the work "
+            "directly.",
+            LEAF,
+        )
+
+    # Depth backstop: the caller must have room for at least one more level.
+    if current_depth >= max_depth:
+        return DelegationDecision(
+            False,
+            f"Maximum delegation depth ({max_depth}) reached. Complete these "
+            "tasks directly without spawning more sub-agents.",
+            LEAF,
+        )
+
+    # Clamp the child's role: it can only be an orchestrator if it would still
+    # have room to delegate (i.e. it does not sit at the maximum depth).
+    child_depth = current_depth + 1
+    if requested_child_role == ORCHESTRATOR and child_depth < max_depth:
+        child_role = ORCHESTRATOR
+    else:
+        child_role = LEAF
+
+    return DelegationDecision(True, None, child_role)

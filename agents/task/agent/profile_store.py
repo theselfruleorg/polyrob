@@ -178,7 +178,7 @@ class ProfileStore:
         clean.
         """
         try:
-            from modules.memory.task.threat_scan import (
+            from core.security.threat_scan import (
                 is_skill_content_suspicious as is_suspicious,
             )
         except Exception:

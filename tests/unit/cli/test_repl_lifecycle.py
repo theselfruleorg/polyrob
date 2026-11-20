@@ -187,7 +187,7 @@ async def test_f2_session_status_cancelled_on_disk(monkeypatch, tmp_path):
     unconditional status flip, without needing a live LLM/container.
     """
     from agents.task.agent.session import SessionManager
-    from agents.task.path import pm
+    from core.session_paths import pm
 
     # Point pm() at a throwaway data root so we don't touch real sessions.
     monkeypatch.setenv("POLYROB_DATA_ROOT", str(tmp_path / "data"))

@@ -11,9 +11,9 @@ annotations`` (it imports nothing on the registry-closure path).
 """
 
 import logging
-import shutil
 from pathlib import Path
 
+from core import fs_copy
 from core.paths import polyrob_home
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ def migrate_rob_home_once() -> None:
             return  # nothing to migrate — first-ever run
 
         try:
-            shutil.copytree(str(legacy_home), str(new_home))
+            fs_copy.copy_tree(str(legacy_home), str(new_home))
         except Exception as exc:
             logger.warning(
                 "polyrob home migration copy failed (%s); proceeding with a fresh %s",
@@ -96,7 +96,7 @@ def migrate_identity_instance_once(data_home=None) -> None:
             return  # nothing to migrate
 
         try:
-            shutil.copytree(str(legacy_tree), str(new_tree))
+            fs_copy.copy_tree(str(legacy_tree), str(new_tree))
         except Exception as exc:
             logger.warning(
                 "identity instance migration copy failed (%s); the legacy %s tree "

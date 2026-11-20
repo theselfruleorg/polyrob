@@ -2,7 +2,7 @@
 
 H1: a turn that ended by the R1 conversational exit already answered with
 send_message — it gets no "My turn ended early" notice.
-L1: "Last tool error" quotes an ACTION result only, never a step-level
+L1: "Last error" quotes an ACTION result only, never a step-level
 LLM/provider error (raw provider text stays out of chat).
 """
 from types import SimpleNamespace
@@ -42,7 +42,7 @@ def test_loop_stop_still_speaks():
     ta = _task_agent("loop", [_item("cronjob_edit: Nothing to change")])
     text = session_turn_end_notice(ta, "s1", spoke=True)
     assert text.startswith("⚠️ My turn ended early")
-    assert "Last tool error: cronjob_edit: Nothing to change" in text
+    assert "Last error: cronjob_edit: Nothing to change" in text
 
 
 def test_a_provider_step_error_is_not_quoted():
@@ -51,13 +51,13 @@ def test_a_provider_step_error_is_not_quoted():
                                   _item(provider, with_action=False)])
     text = session_turn_end_notice(ta, "s1")
     assert "Insufficient credits" not in text
-    assert "Last tool error: cronjob_edit: bad id" in text
+    assert "Last error: cronjob_edit: bad id" in text
 
 
 def test_only_a_provider_error_gives_no_error_line():
     ta = _task_agent("failures", [_item("LLM call failed: 500", with_action=False)])
     text = session_turn_end_notice(ta, "s1")
-    assert text and "Last tool error" not in text
+    assert text and "Last error" not in text
 
 
 def test_a_refusal_step_names_the_category_and_gives_no_continue_hint():

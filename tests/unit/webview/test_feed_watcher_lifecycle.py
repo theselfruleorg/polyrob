@@ -79,7 +79,7 @@ def test_the_read_only_lookup_creates_nothing_and_never_sleeps(tmp_path, monkeyp
     """WEB-9: the REAL path manager's console lookup — `get_feed_dir` made
     `_anonymous_/<id>/feed` after ~0.3 s of blocking sleeps."""
     import time
-    from agents.task.path import PathManager
+    from core.session_paths import PathManager
     mgr = PathManager(data_root=str(tmp_path / "task"))
     monkeypatch.setattr(time, "sleep", lambda s: (_ for _ in ()).throw(AssertionError("slept")))
     before = sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*"))

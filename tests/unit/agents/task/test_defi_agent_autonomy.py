@@ -30,9 +30,31 @@ def test_armed_adds_exactly_the_defi_rail(monkeypatch):
     as ``defi_trade`` and registers only when DEFI_TRADE_ENABLED arms that key.
     """
     monkeypatch.setenv("DEFI_AGENT_AUTONOMY", "true")
+    monkeypatch.delenv("AGENT_NFT_ENABLED", raising=False)
     got = set(constants.autonomous_mode_tools())
     assert got - set(constants.AUTONOMOUS_MODE_TOOLS) == {
         "defi_data", "defi_trade", "wallet_sign", "launchpad", "dapp_browser"}
+
+
+def test_agent_nft_rides_the_grant_on_its_flag_not_a_package(monkeypatch):
+    """123 S1: the reach gate is AGENT_NFT_ENABLED (the flag that registers the
+    tool), never the optional drop package — the core verbs work without it."""
+    import importlib.util
+    real = importlib.util.find_spec
+    monkeypatch.setattr(importlib.util, "find_spec",
+                        lambda name, *a, **k: None if name.split(".")[0] in
+                        ("polyrob_drop", "polyrob_desk") else real(name, *a, **k))
+    monkeypatch.setenv("DEFI_AGENT_AUTONOMY", "true")
+    monkeypatch.setenv("AGENT_NFT_ENABLED", "true")
+    assert "agent_nft" in constants.autonomous_mode_tools()
+    monkeypatch.setenv("AGENT_NFT_ENABLED", "false")
+    assert "agent_nft" not in constants.autonomous_mode_tools()
+
+
+def test_agent_nft_needs_the_armed_grant_too(monkeypatch):
+    monkeypatch.delenv("DEFI_AGENT_AUTONOMY", raising=False)
+    monkeypatch.setenv("AGENT_NFT_ENABLED", "true")
+    assert "agent_nft" not in constants.autonomous_mode_tools()
 
 
 def test_reaching_a_money_tool_is_not_arming_it(monkeypatch):
@@ -71,7 +93,7 @@ def test_it_is_resolved_at_call_time_not_frozen(monkeypatch):
 @pytest.mark.parametrize("consumer", [
     "agents/task/tool_defaults.py",   # owner_seat_tools (the owner chat seats)
     "agents/task/goals/dispatcher.py",
-    "tools/goal_tools.py",
+    "core/tool_grants.py",           # the self-goal ceiling (tools/goal_tools.py forwards to it)
 ])
 def test_every_consumer_reads_the_accessor_not_the_bare_constant(consumer):
     """A consumer still reading AUTONOMOUS_MODE_TOOLS directly silently ignores

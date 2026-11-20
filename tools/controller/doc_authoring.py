@@ -117,12 +117,26 @@ def _owner_doc_applies_now(controller, params, execution_context) -> bool:
 	text from a web page read in this turn, or an unattended run, stays a draft. An empty
 	replacement retires a rule; the old text stays under '## Superseded'."""
 	try:
-		from modules.memory.task.threat_scan import is_identity_suspicious
+		from core.security.threat_scan import is_identity_suspicious
 		text = str(getattr(params, "new_string", "") or getattr(params, "content", "") or "")
 		return (_owner_turn_is_clean(controller, execution_context)
 		        and not is_identity_suspicious(text))
 	except Exception:
 		return False
+
+
+def _drafts_note(writer, user_id: str, data_dir: str) -> str:
+	"""127 W3: a read answers "what is in force" — the active text above, and here
+	whether a draft waits (with what it changes) or what the owner decided last."""
+	try:
+		from core.instance import resolve_instance_id
+		from core.status_rules import owner_draft_state
+		pending, status = owner_draft_state(user_id, home_dir=data_dir,
+		                                    instance_id=resolve_instance_id())
+	except Exception as e:
+		return f"\n\nOwner-rule drafts: unreadable ({type(e).__name__})."
+	changes = _doc_changes(writer, user_id) if pending else ""
+	return f"\n\n{status}" + (f" The draft changes: {changes}." if changes else "")
 
 
 def _write_doc(writer, params, *, user_id: str, created_by: str, pending: bool = True):
@@ -477,8 +491,8 @@ class DocAuthoringMixin:
 		subversion + invisible-unicode), over-cap ERRORS (forces consolidation),
 		forged turns forced to .pending and barred from active docs, atomic write,
 		archive-never-delete. The SOUL tier (identity.md/operating.md) is NEVER
-		reachable here — it stays operator-only. Writes apply NEXT session (the
-		foundation snapshot is frozen at session start). Registered in this module —
+		reachable here — it stays operator-only. A write reaches a live session as a
+		state delta at its next step (state_delta.refresh_self_context). Registered in this module —
 		no `from __future__ import annotations` (registry-closure introspection)."""
 		try:
 			from core.config_policy import AutonomyConfig
@@ -553,7 +567,7 @@ class DocAuthoringMixin:
 				# the model mid-session. Fail-closed on a missing/raising scanner.
 				if body:
 					try:
-						from modules.memory.task.threat_scan import is_identity_suspicious
+						from core.security.threat_scan import is_identity_suspicious
 						if is_identity_suspicious(body):
 							body = "[BLOCKED: self-context failed the identity safety scan]"
 					except Exception:
@@ -624,8 +638,8 @@ class DocAuthoringMixin:
 		facts/preferences about the OWNER, injected each session alongside SOUL/SELF.
 		Same safety as self-context (OwnerDocWriter): tenant-confined + anon-blocked,
 		identity-scanned fail-CLOSED, over-cap ERRORS, forged turns forced .pending
-		and barred from active docs, atomic write, archive-never-delete. Writes apply
-		NEXT session. No `from __future__ import annotations` (registry-closure
+		and barred from active docs, atomic write, archive-never-delete. A change
+		reaches a live session as a state delta at its next step. No `from __future__ import annotations` (registry-closure
 		introspection)."""
 		try:
 			from core.config_policy import AutonomyConfig
@@ -656,8 +670,8 @@ class DocAuthoringMixin:
 		from core.prompt_text import owner_route
 
 		@self.registry.action(
-			"Record the OWNER's STANDING RULES: how they want you to operate, and durable "
-			"facts such as the timezone (owner.md in your identity directory, "
+			"Record the OWNER's standing rules for all your work, and durable facts such "
+			"as the timezone (owner.md in your identity directory, "
 			f"≤{OWNER_DOC_MAX_CHARS} chars). " + owner_route("owner_doc") + " "
 			"A write is refused when a new or changed line names a job id or claims a "
 			"job's on or off state. "
@@ -704,14 +718,15 @@ class DocAuthoringMixin:
 				body = writer.read(user_id)
 				if body:
 					try:
-						from modules.memory.task.threat_scan import is_identity_suspicious
+						from core.security.threat_scan import is_identity_suspicious
 						if is_identity_suspicious(body):
 							body = "[BLOCKED: owner-facts doc failed the identity safety scan]"
 					except Exception:
 						body = "[BLOCKED: identity scanner unavailable]"
 				return ActionResult(
 					extracted_content=(_identity_location(writer, user_id)
-					                   + (body or "(no owner-facts doc yet)")),
+					                   + (body or "(no owner-facts doc yet)")
+					                   + _drafts_note(writer, user_id, data_dir)),
 					include_in_memory=True,
 				)
 

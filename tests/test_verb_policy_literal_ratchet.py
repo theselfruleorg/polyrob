@@ -24,11 +24,12 @@ MIGRATED_MODULES = (
     "tools/controller/approval.py",
     "core/surfaces/room_policy.py",
     "agents/task/agent/core/correspondent_gate.py",
+    "core/security/high_impact.py",
 )
 
 #: (module, assigned name) -> why the literal is code, not a row.
 ALLOWED = {
-    ("agents/task/agent/core/correspondent_gate.py", "_HIGH_IMPACT_VERB_SUBSTRINGS"):
+    ("core/security/high_impact.py", "_HIGH_IMPACT_VERB_SUBSTRINGS"):
         "the substring layer: SUBSTRINGS matched inside any name, not action names "
         "(kept as defense-in-depth; its anchors are reserved rows)",
     ("agents/task/agent/core/correspondent_gate.py", "_REPLY_ACTIONS"):

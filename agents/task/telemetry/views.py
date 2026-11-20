@@ -3,7 +3,7 @@ from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any, Dict, List, Optional, Union
 import time
 from datetime import datetime
-from agents.task.path import pm
+from core.session_paths import pm
 
 
 def model_provider(model_name: Optional[str]) -> str:

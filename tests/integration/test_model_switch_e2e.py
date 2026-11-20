@@ -127,7 +127,7 @@ async def test_model_switch_end_to_end(monkeypatch, tmp_path):
 
     # --- /model shows the live state -------------------------------------------
     shown = await model_command(task_agent, user_id="local", words=[], session_id=sid)
-    assert "Model: anthropic/claude-haiku-5.5 (openrouter)" in shown
+    assert "**This chat:** `anthropic/claude-haiku-5.5` (openrouter)" in shown
     assert "Reasoning: low" in shown
 
     # --- reset follows the operator pin again ------------------------------------

@@ -16,6 +16,8 @@ import time
 from datetime import datetime
 from typing import Any, Optional
 
+from core.async_bridge import off_loop, run_off_loop
+
 logger = logging.getLogger(__name__)
 
 
@@ -87,7 +89,7 @@ def untold_stops(board: Any, now: float) -> list:
     """The goals that stopped and the owner has not heard of. ``completed_at`` names
     the stop, so a new block after a retry is a new stop and nothing clears the key."""
     from core.sqlite_util import execute_retry
-    from agents.task.goals.board import Goal
+    from modules.goals.board import Goal
     rows = execute_retry(
         board.db_path,
         f"""SELECT * FROM goals WHERE kind='goal' AND (status='blocked'
@@ -104,7 +106,7 @@ def _claim_stop(board: Any, goal: Any) -> bool:
     """Compare-and-set on the key, because the sweeps run before the tick lock:
     two workers must not tell the same stop."""
     from core.sqlite_util import execute_retry
-    from agents.task.goals.payload_keys import payload_expr
+    from modules.goals.payload_keys import payload_expr
     expr, params = payload_expr({_TOLD_KEY: _stop_time(goal)})
     prev = (goal.payload or {}).get(_TOLD_KEY)
     # ⚠️ Never `IS ?` on the float: SQLite's JSON parse and Python's can differ by one
@@ -120,7 +122,7 @@ def _claim_stop(board: Any, goal: Any) -> bool:
 
 
 def _release_stop(board: Any, goal: Any) -> None:
-    from agents.task.goals.payload_keys import patch
+    from modules.goals.payload_keys import patch
     patch(board.db_path, goal.id, remove=(_TOLD_KEY,))
 
 
@@ -128,8 +130,8 @@ def mark_stop_told(board: Any, goal_id: str) -> None:
     """The run told the owner about this block itself, so the sweep stays quiet.
     Only a goal that is blocked now has a stop to mark: a mark on a goal that went
     back to ready names an old stop time and could silence a later block."""
-    from agents.task.goals.board import STATUS_BLOCKED
-    from agents.task.goals.payload_keys import patch
+    from modules.goals.board import STATUS_BLOCKED
+    from modules.goals.payload_keys import patch
     goal = board.get(goal_id)
     if goal is not None and goal.status == STATUS_BLOCKED:
         patch(board.db_path, goal_id, set_keys={_TOLD_KEY: _stop_time(goal)})
@@ -187,8 +189,9 @@ async def tell_stops(board: Any, task_agent: Any, *, now: Optional[float] = None
     container = getattr(task_agent, "container", None)
     if container is None or not _owner_known():
         return 0
-    stops = untold_stops(board, time.time() if now is None else now)
-    claimed = [g for g in stops if _claim_stop(board, g)]
+    # 125 S18b: the four sync store helpers run in the store pool, off the loop.
+    stops = await run_off_loop(untold_stops, board, time.time() if now is None else now)
+    claimed = await run_off_loop(lambda: [g for g in stops if _claim_stop(board, g)])
     if not claimed:
         return 0
     from core.self_evolution import _push_owner_message_outcome
@@ -201,17 +204,17 @@ async def tell_stops(board: Any, task_agent: Any, *, now: Optional[float] = None
         container, f"{build_stop_notice(claimed)}\n(stopped {at})", source="goal_blocked")
     if outcome is None:
         for goal in claimed:
-            _release_stop(board, goal)
+            await run_off_loop(_release_stop, board, goal)
         return 0
-    from agents.task.goals.board_asks import create_auto_unblock_ask
+    from modules.goals.board_asks import create_auto_unblock_ask
     for goal in claimed:
         try:
             kind = (goal.payload or {}).get("block_kind")
             if goal.status != "blocked" or kind not in (None, "dep_failed"):
                 continue  # a run stamped its kind beside its own ask, which may be answered
             # A crash or a cascade did not pass through the run's own ask.
-            board.stamp_block_kind(goal.id, "needs_input", only_if_absent=True)
-            create_auto_unblock_ask(board, goal, why=_reason(goal))
+            await off_loop(board).stamp_block_kind(goal.id, "needs_input", only_if_absent=True)
+            await run_off_loop(create_auto_unblock_ask, board, goal, why=_reason(goal))
         except Exception:
             logger.debug("stop ask skipped for %s", goal.id, exc_info=True)
     logger.info("goal stops told to the owner: %d", len(claimed))

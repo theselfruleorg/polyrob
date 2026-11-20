@@ -134,7 +134,7 @@ async def test_a_task_runs_with_its_bundle_and_refuses_the_rest(monkeypatch, tmp
         assert info["status"] not in ("failed", "suspended"), info["status"]
         assert steps == [p[0] for p in plan[:3]], f"the loop stopped early: {steps} {said}"
 
-        from agents.task.path import pm
+        from core.session_paths import pm
         written = os.path.join(str(pm().get_workspace_dir(sid, info["user_id"])), "report.md")
         assert os.path.isfile(written), "the granted bundle must run"
         assert answers["filesystem_write_file"] == ("filesystem", (True, ""))

@@ -105,7 +105,7 @@ def test_console_pending_endpoint_agrees_with_chat_pending(monkeypatch, tmp_path
     from fastapi.testclient import TestClient
 
     import webview.pages as pages
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from core.surfaces.correspondents import CorrespondentRegistry
     from tools.controller.approval_queue import all_pending
 
@@ -161,15 +161,15 @@ def card_store(tmp_path):
 
 
 def _blocked_goal(board, payload, error):
-    from agents.task.goals.board import STATUS_BLOCKED
+    from modules.goals.board import STATUS_BLOCKED
     g = board.create(user_id="u1", title="Trading Goal 2", payload=payload)
     return SimpleNamespace(id=g.id, user_id="u1", title=g.title, payload=payload,
                            last_failure_error=error, status=STATUS_BLOCKED)
 
 
 def test_auto_unblock_ask_carries_no_card(tmp_path, card_store):
-    from agents.task.goals.board import GoalBoard
-    from agents.task.goals.board_asks import create_auto_unblock_ask
+    from modules.goals.board import GoalBoard
+    from modules.goals.board_asks import create_auto_unblock_ask
     board = GoalBoard(str(tmp_path / "goals.db"))
     goal = _blocked_goal(board, {}, "provider 401")
     ask = create_auto_unblock_ask(board, goal)
@@ -181,7 +181,7 @@ def test_auto_unblock_ask_carries_no_card(tmp_path, card_store):
 
 def test_missed_offers_the_cap_only_for_a_capped_notice(monkeypatch):
     import core.surfaces.missed as missed
-    from surfaces.telegram.status_ops import _missed_reply
+    from core.surfaces.owner_reads import missed_reply as _missed_reply
     monkeypatch.setattr(missed, "missed_notices", lambda u, d, n: [
         {"ts": 1.0, "kind": "undelivered", "text": "the report"}])
     assert "daily_cap" not in _missed_reply("u1", "/x", [])

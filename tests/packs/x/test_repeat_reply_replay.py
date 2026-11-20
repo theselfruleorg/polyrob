@@ -334,7 +334,7 @@ def _late_send(monkeypatch, sender):
 
     async def _notify(*a, **k):
         return None
-    monkeypatch.setattr("agents.task.goals.board.GoalBoard", _Board)
+    monkeypatch.setattr("modules.goals.board.GoalBoard", _Board)
     monkeypatch.setattr(aq, "_outbound_write_tools", lambda: {"twitter_reply"})
     monkeypatch.setitem(aq._LATE_SENDERS, "twitter_reply", sender)
     monkeypatch.setattr(aq, "_push_owner_notification", _notify)

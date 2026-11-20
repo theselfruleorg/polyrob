@@ -166,3 +166,24 @@ async def _prestamp(db, versions):
     await vm.initialize()
     for v in versions:
         await vm.record_migration(v, f"prestamp {v}")
+
+
+def test_a_failed_snapshot_stops_the_migration(db, versions_dir):
+    """No backup, no schema change (runtime-sandbox review 2026-11-20: a torn
+    snapshot under the hardened unit let a migration run with nothing to roll back to)."""
+    asyncio.run(db.execute("CREATE TABLE widgets (id INTEGER)"))
+    _write_migration(versions_dir, "v1_0_0_x.py", "1.0.0", "    pass")
+    _write_migration(versions_dir, "v1_5_0_add_color.py", "1.5.0",
+                     '    await db.execute("ALTER TABLE widgets ADD COLUMN color TEXT")')
+    asyncio.run(_prestamp(db, ["1.0.0"]))
+
+    def torn():
+        raise PermissionError(1, "Operation not permitted")
+
+    summary = asyncio.run(apply_migrations_at_boot(db, versions_dir=versions_dir,
+                                                   on_before_change=torn))
+    assert summary["applied"] == []
+    assert summary["snapshot_failed"] is True
+    assert "migration not applied" in summary["error"]
+    assert summary["pending"]
+    assert "color" not in db.columns("widgets")

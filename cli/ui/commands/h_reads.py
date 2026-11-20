@@ -2,7 +2,7 @@
 
 The twins of the Telegram read verbs: the same helpers
 (``core.surfaces.more_store.more_reply``,
-``surfaces.telegram.owner_ops.rules_reply``), so the terminal and the phone
+``core.surfaces.owner_reads.rules_reply``), so the terminal and the phone
 answer one verb with one text. Both are READS — neither decides anything.
 
 ``/more`` reads the continuation store of THIS process: a ``/more_<token>``
@@ -23,7 +23,7 @@ def h_rules(ctx) -> None:
     """The owner rules and the operating contract, numbered, read only."""
     from cli.ui.commands.h_owner import _admin_data_dir, _tenant
     from core.instance import resolve_instance_id
-    from surfaces.telegram.owner_ops import rules_reply
+    from core.surfaces.owner_reads import rules_reply
     ctx.emit(rules_reply(_tenant(ctx), _admin_data_dir(write=False),
                          resolve_instance_id()), title="rules")
 

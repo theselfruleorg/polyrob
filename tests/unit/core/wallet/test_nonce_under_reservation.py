@@ -93,6 +93,8 @@ def _tool(gate):
     def _guard(intent, tx, **kw):
         # The one step this file is about, run where the real guard runs it.
         shape.step_4b_nonce_under_reservation(SimpleNamespace(outer_tx=tx))
+        from core.signer import attest
+        attest.record(intent, tx)            # as the real guard records it (125 S3)
         return Decision(True, "test", lane="autonomous", amount_usd=1.0)
 
     wallet = SimpleNamespace(policy=gate, operational_signer=lambda: _Signer())

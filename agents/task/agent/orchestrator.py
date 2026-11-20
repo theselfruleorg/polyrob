@@ -16,7 +16,7 @@ StreamChunkCallback = Callable[[str, str, str, int], Awaitable[None]]
 
 # Import centralized path manager
 from agents.task.logging_config import get_task_logger
-from agents.task.path import pm
+from core.session_paths import pm
 
 # Import LLM error types for fallback handling
 from core.exceptions import (
@@ -161,7 +161,7 @@ class SessionOrchestrator(WorkspaceMixin, FeedMixin, BrowserPoolMixin, HITLIngre
         # Optional streaming sink (no transport coupling in core).
         self._on_stream_chunk: Optional[StreamChunkCallback] = on_stream_chunk
         # Get session manager instance
-        from agents.task.path import get_safe_singleton
+        from core.session_paths import get_safe_singleton
         self.session_manager = get_safe_singleton(SessionManager)()
 
         # Clean the session ID
@@ -820,50 +820,7 @@ class SessionOrchestrator(WorkspaceMixin, FeedMixin, BrowserPoolMixin, HITLIngre
     # in the SessionOrchestrator class (active_sessions, task_available, container, etc.)
     # This functionality should be implemented in the AutoV2Agent class instead.
 
-    async def create_agent_from_profile(
-        self,
-        profile_id: str,
-        task: str,
-        llm: Any = None,
-        overrides: Optional[Dict[str, Any]] = None,
-        share_controller: bool = True,
-        **kwargs
-    ) -> Agent:
-        """Create an agent from a profile configuration.
-        
-        Args:
-            profile_id: Profile identifier to load
-            task: Task description
-            llm: Optional LLM override
-            overrides: Optional profile overrides
-            share_controller: Whether to use the shared controller (default: True)
-            **kwargs: Additional agent parameters
-            
-        Returns:
-            Configured Agent instance
-        """
-        self.logger.info(f"Creating agent from profile '{profile_id}' (share_controller={share_controller})")
-        
-        # Pass profile_id and share_controller to create_agent
-        return await self.create_agent(
-            task=task,
-            llm=llm,
-            profile_id=profile_id,
-            profile_overrides=overrides,
-            share_controller=share_controller,
-            **kwargs
-        )
-
     # --- SessionContext Protocol adapter methods ---
-
-    def get_agents(self) -> dict:
-        return self.agents
-
-    def get_tool_call_tracker(self):
-        if self.agents:
-            agent = next(iter(self.agents.values()))
-            return getattr(agent, 'tool_call_tracker', None)
-        return None
 
     def get_sub_agent_manager(self):
         return getattr(self, 'sub_agent_manager', None)
@@ -923,7 +880,7 @@ class SessionOrchestrator(WorkspaceMixin, FeedMixin, BrowserPoolMixin, HITLIngre
                 )
                 return
         except Exception:
-            self.logger.debug(
+            self.logger.warning(
                 "re-entry budget guard errored — skipping wake kick (fail-closed)",
                 exc_info=True,
             )
@@ -936,5 +893,3 @@ class SessionOrchestrator(WorkspaceMixin, FeedMixin, BrowserPoolMixin, HITLIngre
         except Exception:
             self.logger.debug("async-delegation wake kick failed (fail-open)", exc_info=True)
 
-    def get_telemetry_manager(self):
-        return getattr(self, 'telemetry_manager', None)

@@ -73,6 +73,8 @@ Restart=always
 RestartSec=3
 MemoryMax=1500M
 TasksMax=512
+# Audit 2026-11-21 L-25: no core file (a renderer's memory holds page secrets).
+LimitCORE=0
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
@@ -133,6 +135,8 @@ Restart=always
 RestartSec=3
 MemoryMax=2G
 TasksMax=1024
+# Audit 2026-11-21 L-25: no core file (a renderer's memory holds page secrets).
+LimitCORE=0
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
@@ -320,7 +324,9 @@ def agent_data_home(envfile: Path = AGENT_ENVFILE) -> Path:
     (symlinks followed); a
     path that is not a plain systemd value is refused, never mis-rendered."""
     import re
-    value = os.environ.get("POLYROB_DATA_DIR", "")
+    from core.runtime_paths import pinned_data_home
+    pinned = pinned_data_home()
+    value = str(pinned) if pinned is not None else ""
     if not value:
         try:
             for line in envfile.read_text(encoding="utf-8").splitlines():

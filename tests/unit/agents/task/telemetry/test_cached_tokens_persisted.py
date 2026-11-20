@@ -12,7 +12,7 @@ import json
 
 
 def test_capture_llm_usage_persists_cached_tokens(tmp_path, monkeypatch):
-    from agents.task.path import PathManager
+    from core.session_paths import PathManager
     import agents.task.telemetry.service as svc
 
     test_pm = PathManager(data_root=str(tmp_path))

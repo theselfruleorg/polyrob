@@ -95,7 +95,7 @@ class PreferencesActionMixin:
 		  (095 W10 deleted the second one, `contract_propose`).
 		- A leaf/sub-agent additionally never sees this tool at all — it is
 		  excluded from the child's registry via
-		  `tools.controller.delegation.delegation_exclusions_for_child`
+		  `core.delegation_policy.delegation_exclusions_for_child`
 		  (defence-in-depth on top of the runtime check above).
 		- A correspondent-tainted session is denied the WHOLE action (including
 		  `list`/`get`) by the pre-tool-call correspondent gate

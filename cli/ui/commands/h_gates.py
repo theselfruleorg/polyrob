@@ -43,19 +43,19 @@ def _decide(ctx, target: str) -> str:
 
     pending_set = all_pending(user_id=uid, home_dir=home_dir,
                               instance_id=instance_id)
-    # 098 CO-19: a typed ``<id>@<rev>`` decides the draft revision it names.
-    from core.self_evolution import split_id_rev
-    target, typed_rev = split_id_rev(target)
-    match = next((it for it in pending_set.items if str(it["id"]) == target), None)
-    if match is None:  # a tapped `/approve_p_<hex>` names the item by its short alias
-        from core.self_evolution import resolve_pending_alias
-        match = resolve_pending_alias(target, list(pending_set.items))
+    # proposal 125 S10: the ONE resolver every seat uses — alias, id, `kind:id`,
+    # `<id>@<rev>`, a named ambiguity, and the gone-tap fallback.
+    from tools.controller.approval_target import resolve_decision_target
+    hit = resolve_decision_target(target, pending_set)
+    if hit.refusal:
+        return hit.refusal
+    match = hit.item
     if match is None:
         degraded = pending_set.degraded_line()
         tail = f"\n{degraded}" if degraded else ""
         return f"No pending item '{target}' — see /pending.{tail}"
     ok, msg = decide_pending(match["kind"], match["id"], approve=True,
-                             rev=typed_rev or match.get("seat_rev"),
+                             rev=match.get("seat_rev"),
                              user_id=uid, home_dir=home_dir,
                              instance_id=instance_id)
     return msg if ok else f"Failed: {msg}"
@@ -83,10 +83,12 @@ def _list_pending(ctx) -> str:
     pending_set = all_pending(user_id=uid, home_dir=_owner_home(ctx),
                               instance_id=admin_instance())
     items = pending_set.items
+    from core.surfaces.card_list import call_cards_lines
+    calls = "\n".join(call_cards_lines(uid))       # 126 wave 5: money calls are cards
     if not items:
-        return (pending_set.degraded_line()
+        return (calls or pending_set.degraded_line()
                 or candy.empty("items waiting on you", yet=False))
-    lines = [f"{len(items)} waiting on you:"]
+    lines = ([calls] if calls else []) + [f"{len(items)} waiting on you:"]
     for it in items:
         lines.append(candy.status_line(
             "pending", f"{it['id']}  [{it['kind']}]  {it.get('preview', '')}"))
@@ -108,10 +110,32 @@ def h_approve(ctx) -> None:
     if args[0].lower() == "all":
         ctx.emit(_decide_all(ctx), title="approve")
         return
+    tapped = _call_card_press(ctx, f"/approve {args[0]}")
+    if tapped is not None:
+        return tapped
     try:
         ctx.emit(_decide(ctx, args[0]), title="approve")
     except Exception as exc:  # fail-open: never tear down the REPL dispatcher
         ctx.emit(f"approve failed: {exc}", title="approve")
+
+
+def _call_card_press(ctx, line: str):
+    """126: `/approve|/reject <call card id>` IS that card's Confirm or Cancel — the
+    same press as typing its tap (``surfaces/card_press.py``). A coroutine to await,
+    or None when the id is not one of this owner's call cards."""
+    from cli._admin_home import admin_owner_tenant
+    from surfaces.card_press import call_card_tap
+    tap = call_card_tap(str(admin_owner_tenant(getattr(ctx, "user_id", None)) or ""), line)
+    if tap is None:
+        return None
+    from core.surfaces.cards import parse_card_token
+    from cli.ui.commands.h_cards import _press
+    registry = getattr(ctx, "registry", None)
+    if registry is None:
+        from cli.ui.commands.handlers import build_default_registry
+        registry = build_default_registry()
+    cid, act = parse_card_token(tap)
+    return _press(registry, cid, act, ctx)
 
 
 def _gates_body(ctx, args: List[str]) -> str:

@@ -111,7 +111,7 @@ def test_a_members_help_prices_this_room_and_hides_the_owner_catalog(env, priced
 
 def test_the_owners_help_is_byte_identical(env, priced):
     from surfaces.telegram.harness import _help_text
-    out = _cmd(_Agent(str(env)), _result("/help", chat_role="owner"))
+    out = _cmd(_Agent(str(env)), _result("/help all", chat_role="owner"))
     assert reply_to_room(out) is False
     assert out == _help_text()
 
@@ -129,7 +129,7 @@ def test_a_room_admins_help_names_only_what_the_admin_can_do(env, priced):
 def test_the_owners_dm_help_is_byte_identical(env, priced):
     from surfaces.telegram.harness import _help_text
     out = _cmd(_Agent(str(env)),
-               _result("/help", chat_role=None, chat_type="dm", chat_id="55",
+               _result("/help all", chat_role=None, chat_type="dm", chat_id="55",
                        user_id="alice"))
     assert out == _help_text()
 

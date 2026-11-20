@@ -14,6 +14,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from core import fs_copy
 from core.skills import scopes
 
 logger = logging.getLogger(__name__)
@@ -104,7 +105,7 @@ def _migrate_one_skill(source_dir: Path, dest_dir: Path) -> bool:
     cross_volume = False
     try:
         tmp_skill_dir = tmp_root / dest_dir.name
-        shutil.copytree(source_dir, tmp_skill_dir)
+        fs_copy.copy_tree(source_dir, tmp_skill_dir)
 
         tmp_skill_md = tmp_skill_dir / "SKILL.md"
         if not tmp_skill_md.is_file() or _sha256_file(tmp_skill_md) != source_hash:
@@ -125,7 +126,7 @@ def _migrate_one_skill(source_dir: Path, dest_dir: Path) -> bool:
             # Cross-device: fall back to a plain copy INTO the destination.
             if dest_dir.exists():
                 return False
-            shutil.copytree(tmp_skill_dir, dest_dir)
+            fs_copy.copy_tree(tmp_skill_dir, dest_dir)
             cross_volume = True
             # Re-verify the PLACED destination (not the tmp): a cross-volume
             # copy is exactly the case where a partial/corrupt write is most

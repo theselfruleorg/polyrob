@@ -126,6 +126,10 @@ async def _tg(*, user_id, data_dir, args):
 
 
 def test_the_holdings_verbs_carry_seat_handlers_and_are_refused_in_a_room():
+    import cli.ui.commands.seat_handlers as R
+    import surfaces.telegram.seat_handlers as T
+    R.ensure()
+    T.ensure()                               # 125 S14: each seat registers its own
     assert tuple(v.name for v in V.registered_verbs("core.money_verbs.holdings")) == HOLDINGS
     for name in HOLDINGS:
         assert V.verb_for(name).group == "money"
@@ -140,3 +144,30 @@ def test_the_repl_runs_the_holdings_verbs():
     for name in ("writeoff", "unquarantine"):
         cmd = reg.lookup(name)
         assert cmd is not None and cmd.group == "money", name
+
+
+def test_core_money_rows_name_no_seat_and_each_seat_registers_its_own(scratch):
+    """125 S14: core.money_verbs carries no seat reference; the seats attach theirs."""
+    import pathlib
+    text = pathlib.Path(V.__file__).with_name("money_verbs.py").read_text()
+    assert "surfaces.telegram." not in text and "cli.ui.commands." not in text
+    import cli.ui.commands.seat_handlers as R
+    import surfaces.telegram.seat_handlers as T
+    R.ensure()
+    T.ensure()
+    for name in ("/send", "/swap", "/check", "/writeoff", "/unquarantine"):
+        assert V.handler_ref("telegram", name) == T.TELEGRAM_HANDLERS[name]
+        assert V.handler_ref("repl", name) == R.REPL_HANDLERS[name]
+
+
+@pytest.mark.parametrize("seat, table, err", [
+    ("nowhere", {"/send": "m:a"}, "unknown seat"),
+    ("repl", {"/status": "m:a"}, "no contributed row"),
+    ("repl", {"/send": "nocolon"}, "module:attr"),
+    ("repl", {"/send": "other.mod:x"}, "already"),
+])
+def test_bad_seat_handlers_are_refused(scratch, seat, table, err):
+    import cli.ui.commands.seat_handlers as R
+    R.ensure()
+    with pytest.raises(ValueError, match=err):
+        V.register_seat_handlers(seat, table, source="test")

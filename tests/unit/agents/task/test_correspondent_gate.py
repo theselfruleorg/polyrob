@@ -5,13 +5,8 @@ Correspondent isolation is prompt-level (a user-role HumanMessage with framing);
 hook is the STRUCTURAL backstop so a successful injection can't drive money/send/
 code-exec/delegation tools.
 """
-from agents.task.agent.core.correspondent_gate import (
-    HIGH_IMPACT_TOOLS,
-    build_tool_resolver,
-    is_high_impact,
-    is_high_impact_call,
-    make_correspondent_gate_hook,
-)
+from agents.task.agent.core.correspondent_gate import build_tool_resolver, make_correspondent_gate_hook
+from core.security.high_impact import HIGH_IMPACT_TOOLS, is_high_impact, is_high_impact_call
 
 
 def test_high_impact_set_covers_the_dangerous_tools():
@@ -456,6 +451,21 @@ def test_build_reply_allowed_rounds_budget(monkeypatch, tmp_path):
     assert allowed("email", "john@acme.com") is True
     store.record_outbound("t1", "email", "john@acme.com", "r2")
     assert allowed("email", "john@acme.com") is False, "rounds budget exhausted"
+
+
+def test_build_reply_allowed_no_store_denies(monkeypatch):
+    """125 S30 (D9): flag ON but no conversation store — the rounds budget cannot
+    be checked, so the reply stays blocked (fail closed)."""
+    from agents.task.agent.core.correspondent_gate import build_reply_allowed
+    monkeypatch.setenv("CORRESPONDENT_REPLY_ENABLED", "true")
+
+    class _C:
+        def get_service(self, name):
+            return None
+
+    allowed = build_reply_allowed(lambda: _C(), lambda: "t1")
+    assert allowed("email", "john@acme.com") is False
+    assert build_reply_allowed(lambda: None, lambda: "t1")("email", "john@acme.com") is False
 
 
 def test_x402_pay_x402_fetch_is_still_high_impact_after_pay_prefix_narrowing():

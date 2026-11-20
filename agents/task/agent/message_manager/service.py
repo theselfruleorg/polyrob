@@ -163,9 +163,14 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		'_standing_state_parts',  # <state-delta> parts offered on every call of update_state_delta
 		'_owner_context_allowed',  # live disclosure guard, including resumed sessions
 		'_project_context_message', # Auto-loaded CLAUDE.md/AGENTS.md frozen foundation message
+		'_public_knowledge_message',  # identity/public.md: shown in EVERY session, rooms included
+		'_public_knowledge_tokens',   # its token cost
 		'_project_context_tokens',  # Token cost of the pinned project-context message
 		'_runtime_identity_message', # model/provider the agent actually runs (swap-refreshable)
 		'_runtime_identity_tokens',  # Token cost of the pinned runtime-identity message
+		'_runtime_identity_public',  # a room/correspondent session: the model is not named
+		'_runtime_identity_public_message',  # that render, also shown live while tainted
+		'_owner_chat_tainted',  # probe: a correspondent's reply taints the OWNER chat now
 		'_history_lock',  # Lock to protect deque operations from race conditions
 		'aux_llm',  # Optional cheap auxiliary model used only for llm_compact_history
 		'_compaction_savings',  # Last-2 compaction savings ratios for anti-thrash
@@ -444,6 +449,10 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		# self_context but project-scoped rather than identity-scoped). Empty => inert.
 		self._project_context_message: Optional[BaseMessage] = None
 		self._project_context_tokens: int = 0
+		# The operator's public knowledge (identity/public.md): the one instance text
+		# that a public room and a correspondent session also get. Empty => inert.
+		self._public_knowledge_message: Optional[BaseMessage] = None
+		self._public_knowledge_tokens: int = 0
 
 		# Model-identity SSOT: the model/provider the agent is ACTUALLY running on,
 		# pinned as a frozen foundation message so the agent can state it truthfully
@@ -451,6 +460,9 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		# start from the built LLM and refreshed on a live /model swap. Empty => inert.
 		self._runtime_identity_message: Optional[BaseMessage] = None
 		self._runtime_identity_tokens: int = 0
+		self._runtime_identity_public: bool = False
+		self._runtime_identity_public_message: Optional[BaseMessage] = None
+		self._owner_chat_tainted = None
 
 		# Initialize checkpoint attributes for message history persistence
 		self._history_checkpoint: List[ManagedMessage] = []
@@ -1102,6 +1114,20 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		else:
 			self._standing_state_parts.pop("doc_age", None)
 
+	def set_public_knowledge(self, content: Optional[str]) -> None:
+		"""Pin the operator's public knowledge (``core.instance.load_public_doc``).
+
+		Unlike the self-context tier, this row is visible in EVERY session — a public
+		room and a correspondent's session included — because the operator wrote it
+		for any audience. Falsy content clears it (the inert default).
+		"""
+		if content and content.strip():
+			self._public_knowledge_message = make_control_message(content, MessageOrigin.PUBLIC_KNOWLEDGE)
+			self._public_knowledge_tokens = self._count_message_tokens(self._public_knowledge_message)
+		else:
+			self._public_knowledge_message = None
+			self._public_knowledge_tokens = 0
+
 	def set_project_context_message(self, content: Optional[str]) -> None:
 		"""Pin the auto-loaded project context (CLAUDE.md/AGENTS.md/.cursorrules) as a
 		frozen foundation message (CLI-only, default-OFF on server).
@@ -1191,7 +1217,8 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 
 	def set_runtime_identity(self, model: Optional[str], provider: Optional[str],
 	                         switched_from: Optional[str] = None, cause: Optional[str] = None,
-	                         reason: Optional[str] = None, at: Optional[float] = None) -> None:
+	                         reason: Optional[str] = None, at: Optional[float] = None,
+	                         public: Optional[bool] = None) -> None:
 		"""Pin the model/provider the agent is ACTUALLY running on as a foundation message.
 
 		So the agent can answer "what model are you" truthfully instead of reading
@@ -1203,8 +1230,24 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		``cause`` says WHO changed the model — only ``owner`` renders "The
 		owner switched you"; ``fallback`` names the failover and its ``reason``;
 		``api`` names the API request. ``at`` (epoch) re-renders a persisted switch.
+
+		``public`` (kept for later refreshes when None): a room or a correspondent
+		session gets the product line only; the model and provider are infra facts
+		that a third party does not get (owner decision 2026-11-20).
 		"""
-		if model and str(model).strip():
+		if public is not None:
+			self._runtime_identity_public = bool(public)
+		# The public render exists for every session: an owner chat shows it while a
+		# correspondent's reply taints it (foundation_layers.identity_hidden).
+		self._runtime_identity_public_message = make_control_message(
+			f"{_product_identity_line()}"
+			"In this chat you do not name the model or the provider you run on: if "
+			"asked, say in one line that you do not share that.",
+			MessageOrigin.RUNTIME_IDENTITY) if model and str(model).strip() else None
+		if model and str(model).strip() and self._runtime_identity_public:
+			self._runtime_identity_message = self._runtime_identity_public_message
+			self._runtime_identity_tokens = self._count_message_tokens(self._runtime_identity_message)
+		elif model and str(model).strip():
 			prov = str(provider).strip() if provider else "unknown"
 			content = (
 				f"{_product_identity_line()}"

@@ -37,7 +37,7 @@ def test_clear_failed_sets_an_unreadable_journal_aside(tmp_path):
 
 
 def _rig(monkeypatch, tmp_path):
-    from cli.update.context import UpdateContext
+    from core.update_snapshot.context import UpdateContext
     from cli.update.detect import InstallContext
     from cli.update.engine import ApplyResult
     from pathlib import Path

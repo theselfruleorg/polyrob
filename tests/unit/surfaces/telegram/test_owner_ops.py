@@ -7,7 +7,10 @@ its own rows, and that a stored-but-inert job says so.
 """
 import pytest
 
-from surfaces.telegram import owner_ops
+from core import short_id
+from cron import owner_goals
+from tools.defi.owner_verbs import invoices as invoice_verbs
+from tools.defi.owner_verbs import wallet as wallet_verbs
 
 
 @pytest.fixture
@@ -22,16 +25,16 @@ def env(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_resolve_prefix_exact_and_unique():
-    assert owner_ops.resolve_prefix("abc123", ["abc123", "zzz"]) == ("abc123", None)
-    assert owner_ops.resolve_prefix("abc", ["abc123", "zzz"]) == ("abc123", None)
+    assert short_id.resolve_prefix("abc123", ["abc123", "zzz"]) == ("abc123", None)
+    assert short_id.resolve_prefix("abc", ["abc123", "zzz"]) == ("abc123", None)
 
 
 def test_resolve_prefix_refuses_to_guess():
     """These verbs cancel goals and settle invoices — an ambiguous prefix must
     never resolve to whichever row happens to sort first."""
-    got, err = owner_ops.resolve_prefix("ab", ["abc1", "abd2"])
+    got, err = short_id.resolve_prefix("ab", ["abc1", "abd2"])
     assert got is None and "matches 2 ids" in err
-    got, err = owner_ops.resolve_prefix("zz", ["abc1"])
+    got, err = short_id.resolve_prefix("zz", ["abc1"])
     assert got is None and "no match" in err
 
 
@@ -40,7 +43,7 @@ def test_resolve_prefix_refuses_to_guess():
 # ---------------------------------------------------------------------------
 
 def _board(env):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from core.runtime_paths import goals_db_path
     return GoalBoard(goals_db_path(env))
 
@@ -51,11 +54,11 @@ def _seed_goal(env, *, user_id="u1", status="ready", title="do the thing"):
 
 def test_goal_pause_writes_paused_and_retry_lifts_it(env):
     goal_id = _seed_goal(env)
-    out = owner_ops.goal_reply("u1", env, ["pause", goal_id[:8]])
+    out = owner_goals.goal_reply("u1", env, ["pause", goal_id[:8]])
     assert "paused by you" in out
     assert _board(env).get(goal_id).status == "paused"
 
-    out = owner_ops.goal_reply("u1", env, ["retry", goal_id[:8]])
+    out = owner_goals.goal_reply("u1", env, ["retry", goal_id[:8]])
     assert "→ ready" in out
     assert _board(env).get(goal_id).status == "ready"
 
@@ -63,13 +66,13 @@ def test_goal_pause_writes_paused_and_retry_lifts_it(env):
 def test_goal_ready_and_resume_are_deleted(env):
     goal_id = _seed_goal(env, status="blocked")
     for verb in ("ready", "resume", "cancel"):
-        out = owner_ops.goal_reply("u1", env, [verb, goal_id[:8]])
+        out = owner_goals.goal_reply("u1", env, [verb, goal_id[:8]])
         assert out.startswith("Usage:")
     assert _board(env).get(goal_id).status == "blocked"
 
 
 def test_goal_new_creates_an_owner_goal(env):
-    out = owner_ops.goal_reply("u1", env, ["new", "research", "the", "top", "agents"])
+    out = owner_goals.goal_reply("u1", env, ["new", "research", "the", "top", "agents"])
     assert out.startswith("✅ Goal") and "research the top agents" in out
     [g] = [g for g in _board(env).list_recent(user_id="u1")]
     assert g.payload.get("owner_granted") is True and g.status == "ready"
@@ -82,7 +85,7 @@ def test_goal_show_prints_result_reason_cost_and_session(env):
     from core.sqlite_util import execute_retry
     execute_retry(board.db_path, "UPDATE goals SET status='done', result=?, session_id=? "
                   "WHERE id=?", ("the report is in reports/x.md", "sess-1", g.id))
-    out = owner_ops.goal_reply("u1", env, ["show", g.id[:8]])
+    out = owner_goals.goal_reply("u1", env, ["show", g.id[:8]])
     assert "Done." in out and "reports/x.md" in out
     assert "cost: $0.42" in out and "session: sess-1" in out
 
@@ -91,7 +94,7 @@ def test_goal_retry_clears_failures(env):
     goal_id = _seed_goal(env, status="blocked")
     board = _board(env)
     board.record_failure(goal_id, error="boom", claim_token=board.get(goal_id).claim_token)
-    out = owner_ops.goal_reply("u1", env, ["retry", goal_id[:8]])
+    out = owner_goals.goal_reply("u1", env, ["retry", goal_id[:8]])
     assert "failures cleared" in out
     refreshed = _board(env).get(goal_id)
     assert refreshed.status == "ready" and refreshed.consecutive_failures == 0
@@ -99,14 +102,14 @@ def test_goal_retry_clears_failures(env):
 
 def test_goal_refuses_an_illegal_transition(env):
     goal_id = _seed_goal(env, status="ready")
-    out = owner_ops.goal_reply("u1", env, ["retry", goal_id[:8]])
+    out = owner_goals.goal_reply("u1", env, ["retry", goal_id[:8]])
     assert "already queued" in out
     assert _board(env).get(goal_id).status == "ready"
 
 
 def test_goal_stop(env):
     goal_id = _seed_goal(env)
-    out = owner_ops.goal_reply("u1", env, ["stop", goal_id[:8]])
+    out = owner_goals.goal_reply("u1", env, ["stop", goal_id[:8]])
     assert "stopped" in out
     assert _board(env).get(goal_id).status == "cancelled"
 
@@ -115,20 +118,20 @@ def test_goal_cannot_touch_another_tenants_goal(env):
     """`board.get()` is not tenant-scoped, so the handler must scope it itself —
     otherwise any chat id could steer any tenant's goal by id."""
     goal_id = _seed_goal(env, user_id="someone-else")
-    out = owner_ops.goal_reply("u1", env, ["stop", goal_id[:8]])
+    out = owner_goals.goal_reply("u1", env, ["stop", goal_id[:8]])
     assert "no match" in out
     assert _board(env).get(goal_id).status == "ready"
 
 
 def test_goal_show_is_read_only(env):
     goal_id = _seed_goal(env, title="write the report")
-    out = owner_ops.goal_reply("u1", env, ["show", goal_id[:8]])
+    out = owner_goals.goal_reply("u1", env, ["show", goal_id[:8]])
     assert "write the report" in out
     assert _board(env).get(goal_id).status == "ready"
 
 
 def test_goal_unknown_verb_lists_the_verbs(env):
-    out = owner_ops.goal_reply("u1", env, ["explode", "abc"])
+    out = owner_goals.goal_reply("u1", env, ["explode", "abc"])
     assert "Usage:" in out and "stop" in out and "new" in out
 
 
@@ -145,7 +148,7 @@ def test_wallet_disabled_says_so(monkeypatch):
     He is usually on a phone, where a flag name is something he can act on only
     by opening a shell."""
     monkeypatch.delenv("AGENT_WALLET_ENABLED", raising=False)
-    out = owner_ops.wallet_reply(["balances"], user_id="u1")
+    out = wallet_verbs.wallet_reply(["balances"], user_id="u1")
     low = out.lower()
     assert ("i have no wallet" in low or "unavailable" in low
             or "not enabled" in low)
@@ -177,7 +180,7 @@ def test_wallet_renders_the_caps_the_gate_will_apply(monkeypatch):
                         lambda uid, home, env=None: 7.0)
     monkeypatch.setattr("core.wallet.config.effective_daily_cap_usd",
                         lambda uid, home, env=None: 100.0)
-    out = owner_ops.wallet_reply(["balances"], user_id="u1")
+    out = wallet_verbs.wallet_reply(["balances"], user_id="u1")
     assert "$7.00/tx" in out and "$100.00" in out      # the LIVE per-tx value
     assert "$2.00/tx" not in out                       # never the frozen one
     # D17: the cap note names a chat verb, not an SSH session.
@@ -204,7 +207,7 @@ def test_wallet_says_so_when_the_live_caps_cannot_be_read(monkeypatch):
 
     monkeypatch.setattr("core.wallet.factory.get_agent_wallet", lambda: _Wallet())
     monkeypatch.setattr("core.wallet.config.effective_max_per_tx_usd", _boom)
-    out = owner_ops.wallet_reply(["balances"], user_id="u1")
+    out = wallet_verbs.wallet_reply(["balances"], user_id="u1")
     assert "$2.00/tx" in out
     assert "could not re-read the live ones" in out
 
@@ -226,7 +229,7 @@ def test_wallet_flags_an_unlimited_daily_cap(monkeypatch):
                         lambda uid, home, env=None: 2.0)
     monkeypatch.setattr("core.wallet.config.effective_daily_cap_usd",
                         lambda uid, home, env=None: None)
-    out = owner_ops.wallet_reply(["balances"], user_id="u1")
+    out = wallet_verbs.wallet_reply(["balances"], user_id="u1")
     assert "UNLIMITED" in out and "catastrophic-loss ceiling" in out
 
 
@@ -251,9 +254,9 @@ def test_wallet_skips_network_reads_unless_asked(monkeypatch):
 
     monkeypatch.setattr("core.wallet.factory.get_agent_wallet", lambda: _Wallet())
     monkeypatch.setattr("core.wallet.onchain.balances", lambda a, c, **k: (1.0, 2.0))
-    owner_ops.wallet_reply([], user_id="u1")
+    wallet_verbs.wallet_reply([], user_id="u1")
     assert probes == []
-    owner_ops.wallet_reply(["balances"], user_id="u1")
+    wallet_verbs.wallet_reply(["balances"], user_id="u1")
     assert probes == ["treasury", "x402"]
 
 
@@ -269,7 +272,7 @@ async def test_invoices_empty_names_the_tenant_it_searched(monkeypatch):
         return []
 
     monkeypatch.setattr("modules.x402.invoicing.list_payment_requests", _none)
-    out = await owner_ops.invoices_reply("alice", [])
+    out = await invoice_verbs.invoices_reply("alice", [])
     assert "No invoices" in out and "alice" in out
 
 
@@ -283,16 +286,16 @@ async def test_invoices_lists_and_caps(monkeypatch):
         return rows
 
     monkeypatch.setattr("modules.x402.invoicing.list_payment_requests", _rows)
-    out = await owner_ops.invoices_reply("alice", [])
+    out = await invoice_verbs.invoices_reply("alice", [])
     assert "25 invoice(s)" in out
-    assert out.count("• ") == owner_ops._LIST_LIMIT
+    assert out.count("• ") == invoice_verbs._LIST_LIMIT
     assert "+15 more" in out
     assert "billed to acme@example.com" in out
 
 
 @pytest.mark.asyncio
 async def test_invoices_rejects_an_unknown_status(monkeypatch):
-    out = await owner_ops.invoices_reply("alice", ["paid"])
+    out = await invoice_verbs.invoices_reply("alice", ["paid"])
     assert "Usage:" in out
 
 
@@ -311,7 +314,7 @@ async def test_settle_resolves_a_short_id_and_settles(monkeypatch):
 
     monkeypatch.setattr("modules.x402.invoicing.list_payment_requests", _rows)
     monkeypatch.setattr("modules.x402.invoicing.settle_payment_request", _settle)
-    out = await owner_ops.settle_reply("alice", ["inv-abc", "0xdeadbeef"])
+    out = await invoice_verbs.settle_reply("alice", ["inv-abc", "0xdeadbeef"])
     assert "Settled" in out
     assert settled == {"id": "inv-abc123", "tx": "0xdeadbeef"}
 
@@ -322,7 +325,7 @@ async def test_settle_only_sees_this_tenants_pending_rows(monkeypatch):
         return []
 
     monkeypatch.setattr("modules.x402.invoicing.list_payment_requests", _rows)
-    out = await owner_ops.settle_reply("alice", ["inv-abc"])
+    out = await invoice_verbs.settle_reply("alice", ["inv-abc"])
     assert "no match" in out and "PENDING" in out
 
 
@@ -336,7 +339,7 @@ async def test_settle_reports_a_refused_transition(monkeypatch):
 
     monkeypatch.setattr("modules.x402.invoicing.list_payment_requests", _rows)
     monkeypatch.setattr("modules.x402.invoicing.settle_payment_request", _settle)
-    out = await owner_ops.settle_reply("alice", ["inv-1"])
+    out = await invoice_verbs.settle_reply("alice", ["inv-1"])
     assert "not settled" in out
 
 
@@ -358,7 +361,7 @@ async def test_invoices_refunded_closes_one_of_the_callers_refund_due_rows(monke
 
     monkeypatch.setattr("modules.x402.invoicing.list_payment_requests", _rows)
     monkeypatch.setattr("modules.x402.x402_integration.mark_payment_refunded", _mark)
-    out = await owner_ops.invoices_reply("alice", ["refunded", "abcd", "0xfeed"])
+    out = await invoice_verbs.invoices_reply("alice", ["refunded", "abcd", "0xfeed"])
     assert asked == [("alice", "refund_due")]   # tenant-scoped, refund_due only
     assert closed == [("abcd1234-0000", "0xfeed")]
     assert "Refund recorded" in out
@@ -374,7 +377,7 @@ async def test_invoices_refunded_refuses_an_id_that_is_not_owed(monkeypatch):
 
     monkeypatch.setattr("modules.x402.invoicing.list_payment_requests", _rows)
     monkeypatch.setattr("modules.x402.x402_integration.mark_payment_refunded", _mark)
-    out = await owner_ops.invoices_reply("alice", ["refunded", "zzzz"])
+    out = await invoice_verbs.invoices_reply("alice", ["refunded", "zzzz"])
     assert "refunds you owe" in out
 
 
@@ -388,7 +391,7 @@ async def test_invoices_refunded_names_a_lost_guarded_write(monkeypatch):
 
     monkeypatch.setattr("modules.x402.invoicing.list_payment_requests", _rows)
     monkeypatch.setattr("modules.x402.x402_integration.mark_payment_refunded", _mark)
-    out = await owner_ops.invoices_reply("alice", ["refunded", "abcd"])
+    out = await invoice_verbs.invoices_reply("alice", ["refunded", "abcd"])
     assert "not changed" in out and "no longer refund_due" in out
 
 
@@ -401,5 +404,5 @@ async def test_bare_invoices_refunded_still_lists_the_refunded_status(monkeypatc
         return []
 
     monkeypatch.setattr("modules.x402.invoicing.list_payment_requests", _rows)
-    out = await owner_ops.invoices_reply("alice", ["refunded"])
+    out = await invoice_verbs.invoices_reply("alice", ["refunded"])
     assert asked == ["refunded"] and "No invoices" in out

@@ -59,7 +59,6 @@ def _save_default(ctx, provider, model, reasoning=None, *, tenant=None,
 
 async def handle(ctx, *, pick_fn) -> None:
     from cli.config_store import resolve_model_alias, _provider_for_model
-    from core import model_pins
     from agents.task.model_switch_service import describe, plan_switch
     args = list(ctx.args or [])
     user_id = _tenant(ctx)
@@ -83,44 +82,10 @@ async def handle(ctx, *, pick_fn) -> None:
         from agents.task.model_settings import settings_command
         ctx.emit(await settings_command(cmd, user_id, "repl"))
         return
-    if cmd.action == "aliases":
-        table, err = model_pins.aliases_read(user_id)
-        ctx.emit("\n".join(ms.alias_lines(table, read_error=err)))
-        return
-    if cmd.action == "alias":
-        target = None if cmd.alias_target == "-" else cmd.alias_target
-        ok, err = model_pins.set_alias(user_id, cmd.name, target)
-        ctx.emit((f"Alias {cmd.name} → {target}." if target else f"Alias {cmd.name} removed.")
-                 if ok else f"Alias not saved: {err}")
+    if cmd.action in ("aliases", "alias", "reasoning", "reset", "show"):
+        await _via_service(ctx, cmd, args, user_id)
         return
     agent = ctx.agent
-    if cmd.action == "reasoning":
-        from agents.task.model_pin_state import set_session_reasoning
-        if agent is None:
-            ctx.emit("No live session.")
-            return
-        set_session_reasoning(getattr(agent, "session_id", None), cmd.reasoning)
-        saved = ""
-        if cmd.default:
-            ok, err = model_pins.set_default_reasoning(user_id, cmd.reasoning)
-            saved = (" Saved as the default." if ok
-                     else f" The default was NOT saved: {err or 'the write failed'}.")
-        ctx.emit(f"Reasoning {cmd.reasoning} for this session (sent on OpenRouter).{saved}")
-        return
-    if cmd.action == "reset":
-        from cli.config_store import get_default_model
-        if cmd.default or any(w.lower() == "default" for w in cmd.words):
-            from cli.model_default import clear_default
-            ctx.emit(clear_default(tenant=user_id).line("cleared"))
-        provider, model = get_default_model()
-        if not (provider and model):
-            from core.runtime_config import resolve_default_provider
-            from modules.llm.llm_client_registry import get_default_model as reg_default
-            provider, model = resolve_default_provider()[:2]
-            model = model or (reg_default(provider) if provider else None)
-        if provider and model and await swap_live(ctx, provider, model):
-            ctx.emit(f"Back to {model} ({provider}).")
-        return
     # set — a cli.json alias (B6) is the REPL's own short name; it wins locally.
     if not cmd.provider and "/" not in cmd.name:
         legacy = resolve_model_alias(cmd.name)
@@ -140,6 +105,34 @@ async def handle(ctx, *, pick_fn) -> None:
         saved = (_save_default(ctx, plan.provider, plan.model, plan.reasoning, tenant=user_id)
                  if plan.default else "")
         ctx.emit(f"Model swapped live: {describe(plan)}.{saved}")
+
+
+async def _via_service(ctx, cmd, args, user_id: str) -> None:
+    """aliases / alias / reasoning / reset / show: the ONE service the chat seats call
+    (``model_switch_service.model_command``). The REPL keeps only the glue: a switch the
+    service queues is applied NOW (the REPL runs between turns), and ``reset default``
+    also clears the REPL's own ``cli.json`` default."""
+    from agents.task.model_switch_service import model_command
+    words = list(args)
+    if cmd.action == "reset" and (cmd.default or any(w.lower() == "default" for w in words)):
+        from cli.model_default import clear_default
+        ctx.emit(clear_default(tenant=user_id).line("cleared"))
+        words = [w for w in words if w.lower() != "default"]
+    agent = ctx.agent
+    reply = await model_command(getattr(ctx, "task_agent", None), user_id=user_id,
+                                words=words, session_id=getattr(ctx, "session_id", "") or
+                                getattr(agent, "session_id", None), seat="repl", agent=agent)
+    ctx.emit(reply)
+    pending = getattr(agent, "pending_model_pin", None)
+    if not (callable(pending) and pending()):
+        return
+    res = await agent.apply_pending_model_pin() or {}
+    if not res.get("ok"):
+        ctx.emit(f"Live swap failed ({res.get('error')}); the session keeps its model.")
+        return
+    if ctx.state is not None:
+        ctx.state.model = res.get("model") or ctx.state.model
+        ctx.state.provider = res.get("provider") or ctx.state.provider
 
 
 def current_line(ctx) -> Optional[str]:

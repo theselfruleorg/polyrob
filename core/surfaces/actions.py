@@ -59,6 +59,16 @@ _ASK_OPTION_IN_TEXT = re.compile(r"(?<![\w/])(/fulfill_[0-9a-f]{6,24}_[a-f])(?![
 
 #: Owner verbs whose reply is a code-rendered decision list.
 DECISION_LIST_COMMANDS = frozenset({"/pending", "/inbox"})   # 113: the one list has the buttons
+#: Verbs whose BARE form (no argument) lists the open decisions to pick from
+#: (2026-11-20 Telegram UX review, H7): that list gets the same buttons.
+PICK_LIST_COMMANDS = frozenset({"/approve", "/reject"})
+
+
+def lists_decisions(command: Optional[str], typed: str) -> bool:
+    """True when this command reply is a code-rendered decision list."""
+    if command in DECISION_LIST_COMMANDS:
+        return True
+    return command in PICK_LIST_COMMANDS and len((typed or "").split()) == 1
 
 
 def is_action_command(command: str) -> bool:

@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from core.status_snapshot import SEVERITY_CRIT, SEVERITY_WARN, HealthItem, Section
 
@@ -337,4 +337,55 @@ def rules_section(user_id: str, data_dir: str, cron_db: str,
     return sec
 
 
-__all__ = ["rules_section"]
+def owner_draft_status(user_id: str, *, home_dir, instance_id: str, events=None) -> str:
+    """127 W3: one line — is an owner-rule draft waiting, and what did the owner
+    decide last (:func:`owner_draft_state`'s line)."""
+    return owner_draft_state(user_id, home_dir=home_dir, instance_id=instance_id,
+                             events=events)[1]
+
+
+def owner_draft_state(user_id: str, *, home_dir, instance_id: str,
+                      events=None) -> Tuple[Optional[bool], str]:
+    """``(pending, line)``: True when an owner-rule draft waits, False when none does,
+    None when the store cannot be read; *line* says it for the model. The owner
+    decides outside the agent's turn; without this line the agent's history still
+    says "waiting on your tap" for a decided item (2026-11-21). Never raises; an
+    unreadable store says so (not "none")."""
+    import time
+    from core import self_evolution as se
+    try:
+        od = se._owner_writer(home_dir, instance_id).list_pending(user_id)
+    except Exception as e:
+        return None, f"Owner-rule drafts: unreadable ({type(e).__name__}) — say you cannot tell."
+    if od:
+        item = {"kind": se.KIND_OWNER, "id": od.get("user_id", user_id), "rev": od.get("rev")}
+        try:
+            since = " since " + time.strftime(
+                "%m-%d %H:%MZ", time.gmtime(Path(od["path"]).stat().st_mtime))
+        except Exception as e:
+            since = f" (since: unavailable, {type(e).__name__})"
+        return True, (f"Owner-rule drafts: 1 pending{since} — NOT in effect; the owner "
+                      f"decides it with {se.pending_tap_token('approve', item)} or "
+                      f"{se.pending_tap_token('reject', item)}.")
+    if events is None:
+        try:
+            from core.event_log import get_event_log
+            events = get_event_log().query(kind="self_modification", user_id=str(user_id or ""),
+                                           since_ts=time.time() - 30 * 86400, limit=300)
+        except Exception:
+            events = []
+    for ev in events or []:  # most-recent-first
+        a = ev.get("attrs") or {}
+        if (ev.get("source") == "owner_review" and not a.get("pending")
+                and a.get("kind") == se.KIND_OWNER and a.get("action") in ("promote", "reject")):
+            word = "approved" if a["action"] == "promote" else "rejected"
+            try:
+                when = " " + time.strftime("%m-%d %H:%MZ", time.gmtime(float(ev.get("ts"))))
+            except Exception:
+                when = ""
+            return False, (f"Owner-rule drafts: none pending; the owner {word} the last "
+                           f"one{when}. Nothing waits for a tap.")
+    return False, "Owner-rule drafts: none pending. Nothing waits for a tap."
+
+
+__all__ = ["rules_section", "owner_draft_state", "owner_draft_status"]

@@ -188,7 +188,7 @@ def test_a_dead_listing_sends_nothing(armed, chain, needle):
     (_link(market="0x" + "99" * 20), "another market"),
     (_link(chainId=1), "for chain 1"),
     (_link(listing=_listing(promiseHash="0x" + "22" * 32)), "promise in the link"),
-    (_link(listing=_listing(collection="0x" + "99" * 20)), "not a pinned collection"),
+    (_link(listing=_listing(collection="0x" + "99" * 20)), "could not read the contract code"),  # 124 W4: read from the chain
     ("not a listing at all", "unreadable"),
 ])
 def test_what_is_not_a_market_listing_of_a_pinned_collection_is_refused(armed, link, needle):

@@ -1,16 +1,15 @@
-"""§3.2 — completion judge: evidence builder, verdict parsing, gated-refusal scan.
+"""§3.2/§4.3 — completion judge: verdict parsing and the shared judge call.
 
-The judge is evidence-in/judgment-out: code supplies the framework-recorded
-action ledger (names + error status), a cheap aux model judges the completion
-CLAIM against the acceptance, and everything fails OPEN (never block on
-uncertainty, never crash the dispatcher).
+The judge is evidence-in/judgment-out: code supplies the RunOutcome evidence pack,
+a cheap aux model judges the completion CLAIM, and everything fails OPEN (never
+block on uncertainty, never crash the dispatcher).
 """
 import asyncio
+from types import SimpleNamespace
 
-from agents.task.goals.board import Goal
+from modules.goals.board import Goal
 from agents.task.goals.completion_judge import (
-    build_action_evidence,
-    judge_goal_completion,
+    judge_run_outcome,
     parse_judge_response,
     parse_verdict,
 )
@@ -49,43 +48,6 @@ class _FakeOrch:
         self.agents = agents
 
 
-def _orch_with(steps, sub_steps=None):
-    agents = {"main": _FakeAgent(steps)}
-    if sub_steps is not None:
-        agents["sub"] = _FakeAgent(sub_steps, is_sub=True)
-    return _FakeOrch(agents)
-
-
-# --- evidence builder ---------------------------------------------------------
-
-def test_evidence_includes_action_names_and_error_status():
-    orch = _orch_with([
-        _Step([_Action("filesystem_write")], [_Result(content="wrote draft.md")]),
-        _Step([_Action("twitter_post")], [_Result(error="Twitter write surface disabled (set TWITTER_ENABLED=true)")]),
-    ])
-    ev = build_action_evidence(orch)
-    assert "filesystem_write" in ev and "ok" in ev
-    assert "twitter_post" in ev and "ERROR" in ev and "disabled" in ev
-
-
-def test_evidence_labels_sub_agent_actions():
-    orch = _orch_with(
-        [_Step([_Action("delegate_task")], [_Result(content="delegated")])],
-        sub_steps=[_Step([_Action("web_fetch")], [_Result(content="fetched")])],
-    )
-    ev = build_action_evidence(orch)
-    assert "sub:" in ev and "web_fetch" in ev
-
-
-def test_evidence_is_bounded():
-    steps = [_Step([_Action(f"tool_{i}")], [_Result(content="x" * 5000)]) for i in range(300)]
-    ev = build_action_evidence(_orch_with(steps), max_lines=50)
-    assert len(ev.splitlines()) <= 51  # 50 entries + possible truncation note
-    assert len(ev) < 30000
-
-
-def test_evidence_handles_none_orchestrator():
-    assert build_action_evidence(None) == "(no action ledger available)"
 
 
 # --- verdict parsing -----------------------------------------------------------
@@ -129,11 +91,17 @@ def test_parse_judge_response_garbage_is_unclear_never_raises():
         assert verdict == "unclear"
 
 
-# --- judge_goal_completion (fail-open + happy path) ------------------------------
+# --- judge_run_outcome (fail-open + happy path) ----------------------------------
 
 def _goal(acceptance="a live tweet URL"):
     return Goal(id="g1", user_id="u1", title="Post announcement",
                 payload={"acceptance": acceptance})
+
+
+def _run(claim, ledger=()):
+    return SimpleNamespace(done_text=claim, artifacts=[],
+                           evidence=SimpleNamespace(ledger=list(ledger), captured_refs=[],
+                                                    checks=[]))
 
 
 def test_judge_fails_open_when_orchestrator_lookup_raises():
@@ -142,7 +110,7 @@ def test_judge_fails_open_when_orchestrator_lookup_raises():
             raise RuntimeError("gone")
 
     verdict, reason = asyncio.run(
-        judge_goal_completion(_TA(), "s1", _goal(), "done"))
+        judge_run_outcome(_TA(), "s1", _goal(), _run("done")))
     assert verdict == "unclear"
 
 
@@ -151,7 +119,7 @@ def test_judge_fails_open_when_no_llm_available():
         def get_orchestrator(self, sid):
             return _FakeOrch(agents={})
 
-    verdict, _ = asyncio.run(judge_goal_completion(_TA(), "s1", _goal(), "done"))
+    verdict, _ = asyncio.run(judge_run_outcome(_TA(), "s1", _goal(), _run("done")))
     assert verdict == "unclear"
 
 
@@ -185,7 +153,7 @@ def test_judge_retries_once_when_model_narrates_instead_of_json():
         def get_orchestrator(self, sid):
             return orch
 
-    verdict, reason = asyncio.run(judge_goal_completion(_TA(), "s1", _goal(), "done"))
+    verdict, reason = asyncio.run(judge_run_outcome(_TA(), "s1", _goal(), _run("done")))
     assert verdict == "unmet"
     assert len(llm.calls) == 2, "exactly one corrective retry"
 
@@ -211,7 +179,7 @@ def test_judge_double_garbage_is_unclear():
         def get_orchestrator(self, sid):
             return orch
 
-    verdict, _ = asyncio.run(judge_goal_completion(_TA(), "s1", _goal(), "done"))
+    verdict, _ = asyncio.run(judge_run_outcome(_TA(), "s1", _goal(), _run("done")))
     assert verdict == "unclear"
     assert llm.n == 2, "retry once, then give up fail-open"
 
@@ -240,7 +208,9 @@ def test_judge_happy_path_unmet():
             return orch
 
     verdict, reason = asyncio.run(
-        judge_goal_completion(_TA(), "s1", _goal(), "OUTCOME: posted (draft saved)"))
+        judge_run_outcome(_TA(), "s1", _goal(), _run(
+            "OUTCOME: posted (draft saved)",
+            ["twitter_post -> ERROR: Twitter write surface disabled"])))
     assert verdict == "unmet"
     assert "draft" in reason
     # the judge saw the acceptance AND the ledger as evidence

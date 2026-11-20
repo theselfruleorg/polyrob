@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from agents.task.goals.board import Goal, GoalBoard
+from modules.goals.board import Goal, GoalBoard
 from agents.task.goals.dispatcher import GoalDispatcher
 from core.artifacts import get_artifact_ledger
 
@@ -135,7 +135,7 @@ async def test_an_owner_pause_still_holds_everything(tmp_path):
     assert held == [g.id]
     assert ptask.cancelled(), "a pause stops the planner too"
     kinds = [e["kind"] for e in board.events(g.id)]
-    assert "held" in kinds and "held_by_pause" in kinds
+    assert "held" in kinds and "held_by_pause" not in kinds   # one event per hold
     payloads = {e["kind"]: e["payload"] for e in board.events(g.id)}
     assert payloads["held"]["reason_kind"] == "pause"
 
@@ -152,7 +152,7 @@ async def test_a_rail_hold_is_labelled_rail_not_pause(tmp_path):
     ev = {e["kind"]: e["payload"] for e in board.events(g.id)}
     assert ev["held"]["reason_kind"] == "rail"
     assert "yielded" in ev
-    assert board.yield_count(g.id) == 1
+    assert sum(e["kind"] == "yielded" for e in board.events(g.id)) == 1
 
 
 @pytest.mark.asyncio

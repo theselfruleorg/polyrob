@@ -55,7 +55,7 @@ def _data_root(write: "bool | None" = False):
         raise
     except Exception:
         pass
-    from agents.task.path import pm
+    from core.session_paths import pm
     return pm().data_root
 
 
@@ -100,7 +100,7 @@ def session_history(session_id: str, dump):
     setup_project_path()
     setup_sqlite_compat()
 
-    from agents.task.path import pm
+    from core.session_paths import pm
 
     checkpoints = find_compaction_checkpoints(_data_root(), session_id)
     if not checkpoints:
@@ -216,7 +216,7 @@ async def _session_tail(session_id: str, follow: bool = False):
     setup_project_path()
     setup_sqlite_compat()
 
-    from agents.task.path import pm
+    from core.session_paths import pm
 
     directory = session_directory(_data_root(), session_id)
     feed_dir = directory / "feed" if directory else None
@@ -382,7 +382,7 @@ def session_export(session_id: str, output: Optional[str], format: str):
 
 def _render_training_format(session_id, session_info, session_dir, fmt) -> dict:
     """Assemble → label-enrich → scrub (fail-closed) → render one session (W1 T4)."""
-    from agents.task.path import pm
+    from core.session_paths import pm
     from datagen.assemble import (assemble_record, find_memory_db,
                                   load_episode_labels)
     from datagen.formats import FORMATS
@@ -529,7 +529,7 @@ def task_agent_or_none(container):
 @click.argument("session_id")
 def session_artifacts(session_id: str):
     """List artifacts (screenshots, downloads, outputs) for a session."""
-    from agents.task.path import pm
+    from core.session_paths import pm
 
     data_root = _data_root()
     session_dir = session_directory(data_root, session_id)
@@ -615,7 +615,7 @@ async def _session_costs(session_id: str, as_json: bool):
 @json_option
 def session_tools(session_id: str, as_json: bool):
     """Show tools used in a session."""
-    from agents.task.path import pm
+    from core.session_paths import pm
 
     data_root = _data_root()
     session_dir = session_directory(data_root, session_id)

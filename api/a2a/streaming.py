@@ -100,7 +100,7 @@ async def task_event_stream(
     Yields:
         SSE formatted event strings
     """
-    from agents.task.path import pm
+    from core.session_paths import pm
 
     # Send initial status
     try:

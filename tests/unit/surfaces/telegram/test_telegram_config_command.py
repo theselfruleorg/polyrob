@@ -118,7 +118,7 @@ async def test_config_no_args_lists_pref_schema(env):
 @pytest.mark.asyncio
 async def test_config_list_matches_prefs_reply_verbatim(env):
     """No second PREF_SCHEMA loop — /config (no args) renders the SAME text /prefs does."""
-    from surfaces.telegram.harness import _prefs_reply
+    from core.prefs_reply import prefs_reply as _prefs_reply
     from core.instance import resolve_instance_id
 
     # /config is the control plane: it keeps the FULL schema listing, which is
@@ -184,7 +184,7 @@ async def test_config_set_guarded_key_queues_proposal(env):
 
 @pytest.mark.asyncio
 async def test_help_mentions_config(env):
-    out = await act_on_inbound(_Agent(str(env)), _cmd("/help", "/help"))
+    out = await act_on_inbound(_Agent(str(env)), _cmd("/help", "/help all"))
     assert "/config" in out
     assert "/config" in _help_text()
 
@@ -195,12 +195,12 @@ def test_a_flag_write_names_where_it_applies(monkeypatch, tmp_path):
     .polyrob/.env the write reaches CLI runs only — set_value says so in its
     notes, and the Telegram reply dropped them."""
     from core.config_service import SetResult
-    from surfaces.telegram import harness
+    from core.prefs_reply import config_reply
     note = ("note: this serving process reads the server env ladder (config/.env.* "
             "/ systemd EnvironmentFile), not .polyrob/.env — the write applies to "
             "CLI runs only")
     monkeypatch.setattr("core.config_service.set_value", lambda *a, **k: SetResult(
         True, "written", "set CRON_ENABLED=true", store="x", applies="restart",
         notes=(note,)))
-    out = harness._config_reply("alice", str(tmp_path), "i", ["set", "CRON_ENABLED", "true"])
+    out = config_reply("alice", str(tmp_path), "i", ["set", "CRON_ENABLED", "true"])
     assert "CLI runs only" in out

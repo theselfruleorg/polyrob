@@ -513,7 +513,7 @@ async def test_p2_11_injected_summary_rejected_when_scan_on(tmp_path, monkeypatc
     from modules.memory.task.task_context_manager import TaskContextManager
 
     monkeypatch.setenv("MEMORY_THREAT_SCAN", "true")
-    monkeypatch.setattr("modules.memory.task.threat_scan.is_suspicious",
+    monkeypatch.setattr("core.security.threat_scan.is_suspicious",
                         lambda text: "INJECT" in text)
 
     class _Cfg:

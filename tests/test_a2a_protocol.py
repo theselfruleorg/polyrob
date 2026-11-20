@@ -38,11 +38,13 @@ class TestAgentCard:
 
         from core.version import get_version
 
-        assert card.name == "POLYROB"
+        from modules.eip8004.registration import agent_identity
+        assert (card.name, card.description) == agent_identity()
+        assert card.provider.organization == card.name
         assert card.protocolVersion == "1.0"
         assert card.version == get_version()
         # Instance-neutral default: no A2A_BASE_URL/request → local base URL
-        assert card.url == "http://localhost:9000/a2a"
+        assert card.url == "http://localhost:9000/a2a/rpc"
 
     def test_agent_card_has_required_skills(self):
         """Test Agent Card includes expected skills."""

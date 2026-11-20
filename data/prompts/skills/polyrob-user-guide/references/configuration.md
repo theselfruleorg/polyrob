@@ -48,7 +48,7 @@ The credit sentinel (`CREDIT_SENTINEL_ENABLED`) stops autonomous runs after a re
 - API / server / sessions (36) — `references/config/api-server-sessions.md`
 - Identity / polyrob / local profile (79) — `references/config/identity-polyrob-local-profile.md`
 - Preferences (owner UX) (1) — `references/config/preferences-owner-ux.md`
-- Billing / x402 / wallet (72) — `references/config/billing-x402-wallet.md`
+- Billing / x402 / wallet (70) — `references/config/billing-x402-wallet.md`
 - DeFi / on-chain trading (41) — `references/config/defi-on-chain-trading.md`
 - WebView / Console (deployment posture, owner login, branding) (21) — `references/config/webview-console-deployment-posture-owner-login-branding.md`
 - Misc / runtime knobs (65) — `references/config/misc-runtime-knobs.md`

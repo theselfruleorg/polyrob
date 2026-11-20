@@ -27,7 +27,7 @@ from typing import FrozenSet, Optional
 
 from fastapi import HTTPException, Request
 
-from agents.task.path import pm
+from core.session_paths import pm
 from api.session_routing import guard_remote
 
 
@@ -139,6 +139,14 @@ def get_trusted_client_ip(
         if hop not in proxies:
             return hop
     return peer
+
+
+
+def trusted_client_ip(request: Request) -> str:
+    """:func:`get_trusted_client_ip` as a plain dependency (``request`` only) that
+    always returns a ``str`` (``"unknown"`` with no client) — the pack SDK's
+    ``get_client_ip`` (L-16): an audit row never records a forged header."""
+    return get_trusted_client_ip(request) or "unknown"
 
 
 def rate_key_for_ip(ip: Optional[str]) -> Optional[str]:
@@ -298,7 +306,7 @@ async def resolve_orchestrator(session_id: str, agent) -> Optional[object]:
     Raises:
         HTTPException 409: if the session is owned by another worker (REMOTE).
     """
-    from agents.task.path import require_canonical_session_id
+    from core.session_paths import require_canonical_session_id
     try:
         cleaned_id = require_canonical_session_id(session_id, path_manager=pm())
     except ValueError as exc:

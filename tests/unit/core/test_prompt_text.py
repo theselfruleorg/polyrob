@@ -30,12 +30,14 @@ BLOCK_MAX_CHARS = {
     "input_format": 350,
     # 093 review: + the owner-seat /mcp add line (owner_add, ~20 tokens).
     "mcp_tools": 1720,
-    "message_shape": 1160,  # 096 W6: + the phone-safe formatting line
+    "message_shape": 1300,  # 096 W6: + the phone-safe formatting line; 2026-11-20: + the copy-box line
     # 2026-10-29: + the standing-programme bullet (one source of truth per
     # programme: its pinned skill), the other bullets trimmed to pay for it.
     # 095 W4: + "applies from your next step, unless 'list' says next session"
     # (the state-delta channel); W4 removed more than it added (owner seat -56).
-    "owner_instructions": 1190,
+    # 127 (2026-11-21): rewritten short — one line per place, plus the task-rules
+    # line (one task's rules -> its skill; the job names it) and the draft rule.
+    "owner_instructions": 830,
     "response_format": 1850,
     "rules": 650,
     "security": 950,

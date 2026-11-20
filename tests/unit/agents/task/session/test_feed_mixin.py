@@ -29,7 +29,7 @@ class _Orchestrator(FeedMixin):
 @pytest.mark.asyncio
 async def test_add_to_feed_lands_entry(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    from agents.task.path import reset_path_manager
+    from core.session_paths import reset_path_manager
     reset_path_manager()
 
     sm = SessionManager(base_dir=str(tmp_path))
@@ -51,7 +51,7 @@ async def test_add_to_feed_lands_entry(tmp_path, monkeypatch):
 def test_legacy_three_arg_call_still_valid(tmp_path, monkeypatch):
     """api/tools call session_manager.add_to_feed(session_id, event_type, data)."""
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    from agents.task.path import reset_path_manager
+    from core.session_paths import reset_path_manager
     reset_path_manager()
 
     sm = SessionManager(base_dir=str(tmp_path))

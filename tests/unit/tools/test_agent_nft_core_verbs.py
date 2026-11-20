@@ -2,7 +2,7 @@
 
 They run with NO agent-NFT package. The view reads everything at ONE block, lists open approvals
 first with their coverage, names an unreadable value ``unreadable`` (never 0), and appends a
-collection's own lines from the package hook ``verbs.extend_view(view, rpc)`` when it exists.
+collection's own lines (tokenURI, revealBlock) from core — there is no package hook (123 S4).
 """
 import hashlib
 import os
@@ -113,30 +113,35 @@ def test_an_unreadable_value_is_named_never_zero(armed):
     assert "isLocked reverted" in text
 
 
-def test_inspect_any_pinned_nft_and_the_package_lines(armed):
-    tool, _ = _tool(armed, ViewChain(OTHER))
-    tool._impl_override = types.SimpleNamespace(
-        extend_view=lambda view, rpc: [f"  face:      pending (#{view.token_id})"])
+def test_inspect_adds_the_collections_own_lines_from_core(armed):
+    """123 D2/S4: no package hook — core adds the ERC-721 tokenURI (and revealBlock when the
+    collection answers it); a collection without them adds no line."""
+    chain = ViewChain(OTHER)
+
+    def with_uri(method, params, *a, **k):
+        if method == "eth_call" and params[0]["data"].startswith(abi.selector("tokenURI(uint256)")):
+            return "0x" + abi.encode([{"type": "string"}], ["ipfs://example/3"]).hex().removeprefix("0x")
+        return chain(method, params, *a, **k)
+    tool, _ = _tool(armed, with_uri)
     res = _run(tool.agent_nft_inspect(InspectParams(target=f"robinhood:{PINNED}/3")))
     assert res.error is None, res.error
     assert f"owner:     {erc6551._checksum(bytes.fromhex(OTHER[2:]))}" in res.extracted_content
-    assert res.extracted_content.rstrip().endswith("face:      pending (#3)")
+    assert "tokenURI:  <untrusted_tool_result" in res.extracted_content
+    assert "ipfs://example/3" in res.extracted_content  # audit 2026-11-21 L-15: fenced
 
 
-def test_a_failing_package_hook_is_named_not_fatal(armed):
-    tool, _ = _tool(armed, ViewChain(OTHER))
-
-    def boom(view, rpc):
-        raise RuntimeError("bad face")
-    tool._impl_override = types.SimpleNamespace(extend_view=boom)
-    res = _run(tool.agent_nft_inspect(InspectParams(target="robinhood:3")))
-    assert res.error is None and "package's lines failed: bad face" in res.extracted_content
+def test_no_package_hook_exists():
+    from tools.agent_nft.tool import AgentNftTool
+    assert not hasattr(AgentNftTool, "_impl") and not hasattr(AgentNftTool, "_run")
 
 
-def test_inspect_refuses_an_unpinned_collection(armed):
+def test_inspect_reads_an_unpinned_collection_from_the_chain(armed):
+    """124 W3: a read works on any collection — no pin needed; what the chain cannot prove
+    (here: the fake answers no ERC-165) is named, never "not pinned"."""
     tool, _ = _tool(armed, ViewChain(OTHER))
     res = _run(_no_package(tool).agent_nft_inspect(InspectParams(target=f"robinhood:{OTHER}/3")))
-    assert res.error and "not a pinned collection" in res.error
+    assert res.error and "not a pinned collection" not in res.error
+    assert OTHER.lower() in res.error.lower()
 
 
 def test_bind_registers_through_the_account(armed):

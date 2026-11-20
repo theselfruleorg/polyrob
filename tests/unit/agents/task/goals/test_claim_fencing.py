@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from agents.task.goals.dispatcher import GoalDispatcher
 
 
@@ -174,3 +174,63 @@ async def test_heartbeat_does_not_cancel_its_own_completion(tmp_path, monkeypatc
     await dispatcher._run_goal(claimed)
     assert board.get(goal.id).status == "done"
     dispatcher._notify_owner_done.assert_awaited_once()
+
+
+def test_a_reclaimed_claim_records_no_failure_and_returns_none(tmp_path):
+    """125 S16 (B-H9): the stale path returns None, never the CURRENT row — a
+    caller that compared tokens on the current row could act for a newer claim."""
+    clock = [1000.0]
+    board = GoalBoard(str(tmp_path / "goals.db"), clock=lambda: clock[0])
+    goal = board.create(user_id="u", title="t", max_retries=3)
+    old = board.claim(goal.id, "w", ttl_seconds=30)
+    clock[0] = 1031.0
+    assert board.reclaim_stale() == 1
+    before = board.get(goal.id).consecutive_failures
+    assert board.record_failure(goal.id, error="late", claim_token=old.claim_token) is None
+    assert board.get(goal.id).consecutive_failures == before
+
+
+@pytest.mark.asyncio
+async def test_a_heartbeat_that_cannot_renew_cancels_the_run(tmp_path, monkeypatch):
+    """125 S31 (B-L5): a heartbeat that keeps raising lets the claim expire; another
+    worker then reclaims the goal and runs it twice. Once the claim cannot have
+    been renewed before its TTL, the run is cancelled (the "lost its claim" path)."""
+    import agents.task.goals.dispatcher as disp_mod
+    board = GoalBoard(str(tmp_path / "goals.db"))
+    d = GoalDispatcher(board, task_agent=object())
+    now = [1000.0]
+    monkeypatch.setattr(disp_mod, "_heartbeat_interval", lambda ttl: 0.01)
+    monkeypatch.setattr(disp_mod, "_hb_clock", lambda: now[0])
+
+    def _raise(*a, **k):
+        now[0] += 25.0   # each failed beat costs time on the claim
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(board, "heartbeat", _raise)
+
+    run = asyncio.create_task(asyncio.sleep(60))
+    hb = asyncio.create_task(d._heartbeat_claim("g1", "w", 60, claim_token="t", run_task=run))
+    await asyncio.wait_for(hb, 2.0)
+    await asyncio.sleep(0)
+    assert run.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_one_failed_heartbeat_does_not_cancel_the_run(tmp_path, monkeypatch):
+    import agents.task.goals.dispatcher as disp_mod
+    board = GoalBoard(str(tmp_path / "goals.db"))
+    d = GoalDispatcher(board, task_agent=object())
+    monkeypatch.setattr(disp_mod, "_heartbeat_interval", lambda ttl: 0.01)
+    monkeypatch.setattr(disp_mod, "_hb_clock", lambda: 1000.0)
+    calls = []
+
+    def _raise_once(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return True
+    monkeypatch.setattr(board, "heartbeat", _raise_once)
+    run = asyncio.create_task(asyncio.sleep(60))
+    hb = asyncio.create_task(d._heartbeat_claim("g1", "w", 60, claim_token="t", run_task=run))
+    await asyncio.sleep(0.1)
+    assert not run.done()
+    hb.cancel(); run.cancel()

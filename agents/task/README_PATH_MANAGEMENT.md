@@ -14,7 +14,7 @@ The Task path management system provides a centralized way to handle file paths 
 Always use the centralized path manager, which is accessed through the `pm()` function:
 
 ```python
-from agents.task.path import pm
+from core.session_paths import pm
 
 # Clean a session ID to remove any unsafe characters
 clean_id = pm().clean_session_id(session_id)
@@ -95,7 +95,7 @@ The PathManager singleton is configured automatically. For testing, you can crea
 Always use the PathManager singleton through `pm()`:
 
 ```python
-from agents.task.path import pm
+from core.session_paths import pm
 
 # Clean session IDs
 clean_id = pm().clean_session_id(session_id)

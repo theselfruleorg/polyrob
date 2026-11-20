@@ -25,7 +25,14 @@ logger = logging.getLogger(__name__)
 
 #: The lifecycle verbs a non-owner runs on his own DM chat, in render order.
 #: ``/task`` is left out: it is the old form of ``/new``.
-LIFECYCLE_VERBS = ("/new", "/chats", "/chat", "/rename", "/close", "/cancel", "/help")
+def _lifecycle_verbs() -> tuple:
+    """The verbs any principal may run (``core.verbs.Verb.any_principal``, the ONE
+    table the owner gate is derived from), without `/start` (the welcome)."""
+    from core.verbs import VERB_TABLE
+    return tuple(v.name for v in VERB_TABLE if v.any_principal and v.name != "/start")
+
+
+LIFECYCLE_VERBS = _lifecycle_verbs()
 
 
 def _is_owner(user_id: Any) -> bool:
@@ -37,8 +44,8 @@ def lifecycle_help(name: str) -> str:
     """The help a non-owner reads: one line per lifecycle verb, from the same rows
     as the owner's ``/help`` (the verb table and the seat's local rows)."""
     from core.verbs import verb_for
-    from surfaces.telegram import harness as h
-    local = {row[0]: row for rows in h._LOCAL_ROWS.values() for row in rows}
+    from core.surfaces import command_catalog as cc
+    local = {row[0]: row for rows in cc.LOCAL_ROWS.values() for row in rows}
     lines = []
     for verb in LIFECYCLE_VERBS:
         if verb in local:
@@ -47,8 +54,8 @@ def lifecycle_help(name: str) -> str:
             row = verb_for(verb)
             if row is None:
                 continue
-            usage, text = h._USAGE.get(verb, ""), row.help
-        lines.append(h._help_line(verb, usage, text))
+            usage, text = cc.USAGE.get(verb, ""), row.help
+        lines.append(cc.help_line(verb, usage, text))
     return (f"Commands you can use here:\n" + "\n".join(lines)
             + f"\n\nOr just send a message to talk to {name}.")
 
@@ -66,8 +73,8 @@ def scoped_help(result: Any) -> Optional[str]:
     args = (getattr(result.inbound, "text", "") or "").split()[1:]
     if args and "/" + args[0].lstrip("/").lower() in LIFECYCLE_VERBS:
         return None   # `/help close`: the one verb's detail, which he may run
-    from surfaces.telegram.harness import _agent_name
-    return lifecycle_help(_agent_name())
+    from core.surfaces.command_catalog import agent_name
+    return lifecycle_help(agent_name())
 
 
 def menu_chat_ids() -> list:

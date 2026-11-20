@@ -169,7 +169,8 @@ public, stable names a pack needs: the pack contract (`PackSpec`,
 `register_optional_tool`, `ActionResult`), the owner-turn and taint predicates
 (`is_genuine_owner_turn`, `turn_tainted`, `run_seat_action`), the flag readers
 (`bool_env`, `int_env`, `member_flag`), the cron delivery hooks, and the chat
-surface parts (`BaseHarness`, `TextSink`, `run_surface`). `dir(polyrob.sdk)`
+surface parts (`BaseHarness`, `TextSink`, `run_surface`), and the HTTP route
+helpers (`get_user_id`, `get_client_ip`, `require_service`). `dir(polyrob.sdk)`
 lists all of them.
 
 ```python
@@ -180,7 +181,7 @@ Each name resolves when you use it, so the import loads no host module. Any
 other host module, and every private (`_name`) host name, can change in any
 release without notice. `tests/test_pack_sdk_facade.py` refuses a private host
 import in a pack and holds the first-party packs' remaining direct host imports
-to a list that only gets shorter.
+to a list that only gets shorter. One pack never imports another.
 
 ## The kill list
 

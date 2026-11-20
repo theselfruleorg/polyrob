@@ -92,7 +92,7 @@ def _stores(tmp_path, monkeypatch):
     store = str(tmp_path / "wallet" / R.OWNER_PINS_NAME)
     monkeypatch.setattr(R, "owner_pins_path", lambda data_home=None: store)
     monkeypatch.setattr(R, "REGISTRY_FILE", str(tmp_path / "etc" / "agent_nft_collections.json"))
-    monkeypatch.setattr(ct, "_treasury", lambda: TREASURY)
+    monkeypatch.setattr(R, "_treasury", lambda: TREASURY)   # 124 W3: the reads live in the registry
     yield store
 
 
@@ -189,8 +189,8 @@ def test_the_chat_seat_quotes_a_card_line_then_pins_on_go(_stores, monkeypatch):
     import asyncio
 
     from core.surfaces.cards import confirm_line_in
-    from surfaces.telegram.nft_ops import nft_reply
-    monkeypatch.setattr(ct, "_rpc_for", lambda chain: fake_rpc())
+    from tools.defi.owner_verbs.nft import nft_reply
+    monkeypatch.setattr(R, "_rpc_for", lambda chain: fake_rpc())
     refused = asyncio.run(nft_reply("alice", ["trust", COLL]))
     assert "Name the network" in refused and "no default network" in refused
     args = ["trust", COLL, "on", "robinhood"]
@@ -265,7 +265,7 @@ def test_a_from_block_past_the_head_refuses(_stores):
 # ------------------------------------------------------------------ the collection's own account
 def test_a_collection_without_its_own_account_is_pinned_with_account_v3(_stores):
     from core.wallet import erc6551
-    f = ct.read_facts("robinhood", COLL, rpc=fake_rpc())
+    f = R.read_facts("robinhood", COLL, rpc=fake_rpc())
     assert f["profile"]["spec"] == R.SPEC_V2
     assert f["profile"]["accounts"][0] == {"kind": "tokenbound_v3", "registry": erc6551.REGISTRY,
                                            "implementation": erc6551.ACCOUNT_V3_IMPL, "salt": 0}
@@ -276,7 +276,7 @@ def test_an_erc6551p_collection_is_pinned_spec2_with_its_account_market_and_zone
     import hashlib
     from core.wallet import account_kinds
     sha = hashlib.sha256(bytes.fromhex(CODE[2:])).hexdigest()
-    f = ct.read_facts("robinhood", COLL, rpc=fake_rpc(polyrob=True))
+    f = R.read_facts("robinhood", COLL, rpc=fake_rpc(polyrob=True))
     prof = f["profile"]
     assert prof["spec"] == R.SPEC_V2
     assert prof["accounts"][0]["kind"] == "erc6551p"
@@ -310,11 +310,11 @@ def test_an_implementation_that_erc165_does_not_prove_refuses_to_pin(_stores, kw
 def test_a_contract_that_says_yes_to_every_interface_proves_nothing(_stores):
     def always(method, params, timeout=8.0):
         return "0x" + "00" * 31 + "01"
-    assert ct.erc165_proves(always, COLL, "0x6b7481e3") is False  # 0xffffffff answered yes
+    assert R.erc165_proves(always, COLL, "0x6b7481e3") is False  # 0xffffffff answered yes
 
 
 def test_an_erc6551p_collection_without_sale_rails_pins_without_the_standard_block(_stores):
-    f = ct.read_facts("robinhood", COLL, rpc=fake_rpc(polyrob=True, rails=False))
+    f = R.read_facts("robinhood", COLL, rpc=fake_rpc(polyrob=True, rails=False))
     assert f["profile"]["accounts"][0]["kind"] == "erc6551p" and "standard" not in f["profile"]
     assert "sale rails: none pinned" in ct.trust_quote("robinhood", COLL,
                                                        rpc=fake_rpc(polyrob=True, rails=False))
@@ -354,4 +354,4 @@ def test_a_failed_account_implementation_read_refuses_instead_of_pinning_account
     msg = ct.trust_quote("robinhood", COLL, rpc=flaky)
     assert msg.startswith("❌") and "accountImplementation()" in msg
     with pytest.raises(ValueError, match="could not read"):
-        ct.read_facts("robinhood", COLL, rpc=flaky)
+        R.read_facts("robinhood", COLL, rpc=flaky)

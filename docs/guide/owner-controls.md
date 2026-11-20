@@ -272,6 +272,27 @@ It costs nothing to run: the message is composed from the ledger, the event log
 and your open asks, with no model call. If `polyrob doctor` reports **"owner
 digest is enabled but no digest job is scheduled"**, that is this gap.
 
+### What the agent did on its own, and why
+
+Every act the agent takes on its own carries a one-line reason. A money act
+the agent takes by itself without one is refused, and the money notice shows it:
+`why: take profit at the target · on its own`. Each outward act (a post, a
+message, a payment) is also kept as an act record with its short parameters,
+its reason and who decided it (`owner`, `job <id>`, `goal <id>`,
+`income rule <id>`).
+
+Choose how much of it reaches you with the `report.acts` preference:
+
+| Value | You get |
+|---|---|
+| `money_only` (default) | each money act at once, nothing more |
+| `every_act` | each money act at once, and the other acts in one report each hour |
+| `digest` | each money act at once, and the other acts in one report each day |
+
+```bash
+/config set report.acts every_act
+```
+
 ## MCP servers (giving the agent new tools)
 
 An MCP server is how a protocol hands an agent its own tools — Aave, GitHub, a
@@ -355,6 +376,10 @@ Each item in `/pending` prints its own pair of one-tap tokens, like
 `/approve_p_1245c6`. Tap one and you are done — there is no id to copy. The
 token is an address, not a secret: it is resolved against the live queue every
 time, so a stale one decides nothing.
+
+A money call that waits on you is ONE approval holding that exact call, and
+`/pending` lists these approvals first: tap its Confirm, or type `/approve <card id>`;
+`/reject <card id>` cancels it.
 
 A plain "approve" or "reject" is a message to the agent, not a decision: only
 the slash verbs and the tap tokens decide an item.

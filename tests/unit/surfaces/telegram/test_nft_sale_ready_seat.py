@@ -5,7 +5,7 @@ import asyncio
 
 import pytest
 
-from surfaces.telegram import nft_ops
+from tools.defi.owner_verbs import nft as nft_ops
 
 
 def _fake(monkeypatch, name, seen, text="READY FOR SALE ... RESULT: DRY RUN"):

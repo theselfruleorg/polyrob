@@ -1,6 +1,6 @@
 import pytest
 
-from agents.task.goals.board import (
+from modules.goals.board import (
     DuplicateGoalError, GoalBoard, normalize_title, title_similarity,
 )
 

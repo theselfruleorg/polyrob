@@ -194,6 +194,18 @@ def test_a_failed_install_refuses_with_the_remedy_and_pip_output(monkeypatch, lo
     assert "polyrob[docs]" in msg and "No matching distribution" in msg
 
 
+def test_a_failure_after_the_success_line_names_stderr(monkeypatch, local_on, legacy, missing):
+    """pip can print "Successfully installed" on stdout and then fail (2026-11-20):
+    the refusal carries stderr, the cause, not the stdout tail."""
+    monkeypatch.setattr(ld, "_lock_path", lambda: None)
+    monkeypatch.setattr(ld, "_installed_pins", lambda: [])
+    monkeypatch.setattr(ld, "_run_installer", lambda cmd, **kw: subprocess.CompletedProcess(
+        cmd, 2, stdout="Successfully installed x " * 100, stderr="shutil.Error: [Errno 1] EPERM"))
+    with pytest.raises(FeatureUnavailable) as exc:
+        ensure("docs.pdf", prompt=False)
+    assert "shutil.Error: [Errno 1] EPERM" in str(exc.value)
+
+
 def test_an_install_that_reports_success_but_leaves_nothing_refuses(monkeypatch, local_on, legacy, missing):
     """pip exit 0 is not the proof; the distribution being importable is."""
     monkeypatch.setattr(ld, "_lock_path", lambda: None)

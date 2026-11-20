@@ -137,13 +137,17 @@ def _field(goal: Any, name: str, default: Any = None) -> Any:
     return getattr(goal, name, default)
 
 
-def status_reason(goal: Any, holding_asks: Iterable[Any] = ()) -> str:
+def status_reason(goal: Any, holding_asks: Iterable[Any] = (), *,
+                  goals_on: bool = True) -> str:
     """080 WS-2: why ``goal`` is where it is, in ONE owner sentence.
 
     Read from what the board already holds: the status, ``payload.block_kind``,
     ``consecutive_failures`` + ``last_failure_error``, and *holding_asks* — the
     open asks that name the goal (``GoalBoard.holding_asks``). A ready goal an
-    ask holds is "waiting on your answer to …", never "waiting its turn"."""
+    ask holds is "waiting on your answer to …", never "waiting its turn".
+    *goals_on* is the goal loop's gate (``AutonomyConfig.goals_enabled``): with it
+    off a ready goal waits for the agent's own work to be turned on, never "its
+    turn" — no turn comes."""
     status = str(_field(goal, "status", "") or "")
     p = _payload(goal)
     asks = [a for a in (holding_asks or ()) if a is not None]
@@ -169,6 +173,8 @@ def status_reason(goal: Any, holding_asks: Iterable[Any] = ()) -> str:
     if status == STATUS_TRIAGE:
         return "Being sorted before it is queued."
     if status == STATUS_READY:
+        if not goals_on:
+            return "Waiting for the agent's own work to be turned on."
         return "Waiting its turn."
     if status == STATUS_RUNNING:
         return "Running now."

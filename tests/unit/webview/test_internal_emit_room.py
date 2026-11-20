@@ -70,31 +70,3 @@ def test_single_startup_hook(monkeypatch):
     assert len(server._fastapi.router.on_startup) == 1, (
         "duplicate @on_event('startup') handlers must be merged into one"
     )
-
-
-def test_repair_endpoint_runs_real_repair(monkeypatch, tmp_path):
-    """/api/repair/{id} must invoke repair_session_telemetry, not fake success.
-    A POST since 043 W2 — it rewrites the session's telemetry files."""
-    from fastapi.testclient import TestClient
-    from tests.unit.webview.owner_session import owner_headers
-    server = _reload_server(monkeypatch)
-    session_dir = tmp_path / "sess-r"
-    (session_dir / "feed").mkdir(parents=True)
-    monkeypatch.setattr(type(server.pm()), "find_session_root",
-                        lambda self, sid, user_id=None: session_dir)
-    client = TestClient(server._fastapi, headers=owner_headers(monkeypatch))
-    resp = client.post("/api/repair/sess-r")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert "files_processed" in body["repair"], "real repair results expected"
-
-
-def test_repair_endpoint_refused_in_read_only(monkeypatch, tmp_path):
-    from fastapi.testclient import TestClient
-    from tests.unit.webview.owner_session import owner_headers
-    monkeypatch.setenv("WEBVIEW_READ_ONLY", "true")
-    server = _reload_server(monkeypatch)
-    client = TestClient(server._fastapi, headers=owner_headers(monkeypatch))
-    resp = client.post("/api/repair/sess-r")
-    assert resp.status_code == 403

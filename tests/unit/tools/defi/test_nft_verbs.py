@@ -68,12 +68,12 @@ def test_holdings_is_blocked_while_correspondent_tainted():
     """⚠️ NAMESPACED runtime name. 'what do you own' is the same pre-drain
     reconnaissance `defi_data_portfolio` is gated for, and a bare `nft_holdings`
     would match nothing (the live x402_request bug, audit 2026-08-07 P0-2)."""
-    from agents.task.agent.core.correspondent_gate import _HIGH_IMPACT_NAMES
+    from core.security.high_impact import _HIGH_IMPACT_NAMES
     assert "defi_data_nft_holdings" in _HIGH_IMPACT_NAMES
 
 
 def test_the_transfer_is_blocked_while_correspondent_tainted():
-    from agents.task.agent.core.correspondent_gate import is_high_impact_call
+    from core.security.high_impact import is_high_impact_call
     # The WIRED predicate, not a name list. `defi_trade` is a high_impact
     # tool_id, so every verb on it gates by tool-id resolution whether or not
     # anyone remembered to enumerate the name — which is why the transfer needs

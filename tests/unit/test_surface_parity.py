@@ -77,7 +77,7 @@ CAPABILITY_MATRIX = {
     "token-launch":       ("wallet",   "launch",    None,                       "/launch"),
     "token-deploy":       ("wallet",   "deploy",    None,                       "/deploy"),
     # the console reads every chain through /api/webgate/book (worst-chain-wins);
-    # /api/webgate/positions is the per-chain read with no screen behind it.
+    # the per-chain /api/webgate/positions had no screen behind it and is gone.
     "book-positions":     ("wallet",   "lp",        "/api/webgate/book",        "/lp"),
     # 2026-09-15: the instance's own face/voice. The identity exists on every
     # seat now -- CLI, REPL, the console's live canvas and the phone -- so a
@@ -88,7 +88,7 @@ CAPABILITY_MATRIX = {
     "cron-cancel":        ("job",      "job",       "/api/webgate/cron/{job_id}/cancel",   "/job"),
     # 080 WS-2: the job's own state — pause / resume / run now — on every seat.
     "job-state":          ("job",      "job",       "/api/webgate/cron/{job_id}/{verb}",   "/job"),
-    "pending-reject":     ("owner",    "reject",    "/api/webgate/pending/{kind}/{item_id}/reject", "/reject"),
+    "pending-reject":     ("owner",    "reject",    "/api/webgate/inbox/{kind}/{item_id}/reject", "/reject"),
     "mcp-admin":          (None,       "mcp",       None,                       "/mcp"),
     "config":             ("config",   "config",    "/api/webgate/config",      "/config"),
     "kb":                 ("kb",       "kb",        "/api/webgate/knowledge/kb", "/kb"),
@@ -206,7 +206,6 @@ def _webview_paths():
     include block, so a scan that only knew the four v1 routers would report
     the Inbox as having no web seat.
     """
-    import webview.activity as activity
     import webview.apps_routes as apps_routes
     import webview.artifacts_api as artifacts_api
     import webview.inbox as inbox
@@ -220,7 +219,7 @@ def _webview_paths():
     from webview.contributions import contributed_routers
     # 067 P5a: plus every destination's contributed data routes (Money today).
     for router in (pages.router, knowledge.router, apps_routes.router,
-                   activity.router, inbox.router, pages_new.router,
+                   inbox.router, pages_new.router,
                    pages_new.api_router, worklog_api.router, artifacts_api.router,
                    *contributed_routers()):
         for route in router.routes:

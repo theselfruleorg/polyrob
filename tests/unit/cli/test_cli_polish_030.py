@@ -194,7 +194,7 @@ def test_owner_pending_json(owner_env):
 
 
 def test_owner_asks_json(owner_env):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from cli.commands.owner import owner
     res = _run(owner, ["asks", "--json"])
     assert res.exit_code == 0, res.output

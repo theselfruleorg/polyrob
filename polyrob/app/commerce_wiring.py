@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 def _board(data_dir: Optional[str]):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from core.runtime_config import get_data_root
     from core.runtime_paths import goals_db_path
     return GoalBoard(goals_db_path(data_dir or get_data_root()))

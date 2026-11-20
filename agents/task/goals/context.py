@@ -11,8 +11,8 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from agents.task.goals.board import Goal
-from agents.task.goals.board_types import clip_keep_end
+from modules.goals.board import Goal
+from modules.goals.board_types import clip_keep_end
 # Canonical home moved to the runtime layer (§2/§5.0 — goals consume runtime
 # contracts, never the reverse). Re-exported here for existing callers.
 from agents.task.runtime.run_outcome import (  # noqa: F401
@@ -151,7 +151,7 @@ def owner_decisions_block(goal: Goal, *, skip_ask_id: str = "") -> str:
                                            or str(r.get("ask_id") or "") != skip_ask_id)]
     if not records:
         return ""
-    from agents.task.goals.rail_answers import render_decisions
+    from modules.goals.rail_answers import render_decisions
     return render_decisions(
         records, "OWNER DECISIONS on what this goal asked (they stay in force until "
                  "the owner changes them; read these before anything else):")
@@ -234,7 +234,7 @@ def build_goal_run_task(goal: Goal, *,
             ]
             owner_answer = str(unblocked.get("answer") or "").strip()
             if owner_answer:
-                from agents.task.goals.rail_answers import render_owner_answer
+                from modules.goals.rail_answers import render_owner_answer
                 lines.append("- the owner answered (quoted):")
                 lines.append(render_owner_answer(
                     owner_answer, ask_id=str(unblocked.get("ask_id") or "")[:12],

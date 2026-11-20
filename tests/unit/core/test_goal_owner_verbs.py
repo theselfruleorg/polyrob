@@ -5,7 +5,7 @@ import types
 
 import pytest
 
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from core import goal_owner_verbs as V
 from core.goal_legibility import origin, owner_bucket, status_reason
 from core.goal_suppressions import blocking, stop_goal
@@ -17,7 +17,7 @@ def board(tmp_path):
 
 
 def test_auto_unblock_key_is_the_boards():
-    from agents.task.goals.board_types import ASK_AUTO_UNBLOCK
+    from modules.goals.board_types import ASK_AUTO_UNBLOCK
     assert V._AUTO_UNBLOCK == ASK_AUTO_UNBLOCK
 
 
@@ -129,7 +129,7 @@ def test_retry_help_never_promises_a_stopped_goal(board):
     """Retry refuses a goal /goal stop cancelled; no help line may say otherwise."""
     from cli.commands import goals as cli_goals
     from cli.ui.commands.h_goal_one import HELP_GOAL
-    from surfaces.telegram.owner_ops import _GOAL_USAGE
+    from cron.owner_goals import _GOAL_USAGE
     g = board.create(user_id="u", title="stop me")
     board.cancel(g.id)
     assert not V.retry_goal(board, user_id="u", goal=board.get(g.id)).ok

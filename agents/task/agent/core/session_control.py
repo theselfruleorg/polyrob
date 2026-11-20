@@ -11,7 +11,7 @@ def controlled_run(run):
     async def wrapped(self, *args, **kwargs):
         if getattr(self, "_is_sub_agent", False) or not isinstance(getattr(self, "session_id", None), str):
             return await run(self, *args, **kwargs)
-        from agents.task.path import pm
+        from core.session_paths import pm
         store = SessionControl(pm().get_session_root(self.session_id, self.user_id))
         generation = store.start()
         self._session_control = (store, generation)

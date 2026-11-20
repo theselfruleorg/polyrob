@@ -11,7 +11,10 @@ from typing import List, Optional
 #: The python+node image the code-exec DEV container and an app container run in
 #: when no image is configured (``CODE_EXEC_DEV_IMAGE`` / ``APP_SERVICE_IMAGE``).
 #: Public and pullable on a fresh box — one constant so the two rails agree.
-DEV_IMAGE_DEFAULT = "nikolaik/python-nodejs:python3.11-nodejs20"
+#: Pinned by the multi-arch INDEX digest (audit 2026-11-21 L-28: a third-party tag can
+#: move). Re-pin: ``docker buildx imagetools inspect nikolaik/python-nodejs:python3.11-nodejs20``.
+DEV_IMAGE_DEFAULT = ("nikolaik/python-nodejs:python3.11-nodejs20"
+                     "@sha256:8f958bdc1b4a422bfafd97cab4f69836401f616ae985d4b57a53d254f5bcb038")
 
 
 def hardening_flags(

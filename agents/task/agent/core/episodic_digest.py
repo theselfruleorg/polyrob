@@ -232,8 +232,8 @@ def run_record_on(regime: str) -> bool:
 
 
 def clip_keep_end(text: Optional[str], limit: int = 600) -> str:
-    """The ONE head+tail clip (``agents.task.goals.board_types.clip_keep_end``)."""
-    from agents.task.goals.board_types import clip_keep_end as _clip
+    """The ONE head+tail clip (``modules.goals.board_types.clip_keep_end``)."""
+    from modules.goals.board_types import clip_keep_end as _clip
     return _clip(text, limit)
 
 

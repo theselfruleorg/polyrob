@@ -13,7 +13,7 @@ SESSION = "11111111-1111-4111-8111-111111111111"
 
 
 def test_a_released_todo_list_reloads_from_its_file(tmp_path, monkeypatch):
-    from agents.task.path import reset_path_manager
+    from core.session_paths import reset_path_manager
     from tools.task_tool import TaskTool, TodoItem
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
     reset_path_manager()

@@ -32,6 +32,12 @@
           "default": "native",
           "description": "DESTINATION asset: 'native' (default), or a token PINNED in the chain registry for the destination chain — 'weth' or 'usdc' where that chain has one. An arbitrary address is refused: every pinned address was verified on-chain, a supplied one was not. On Robinhood, native ETH is both gas AND the asset that routes straight into a position, so 'native' is usually the better answer than 'weth'.",
           "type": "string"
+        },
+        "why": {
+          "default": null,
+          "description": "Why this act, now (one line). Required on an autonomous run; the owner reads it.",
+          "nullable": true,
+          "type": "string"
         }
       },
       "required": [

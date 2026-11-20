@@ -90,7 +90,7 @@ async def test_it_reports_the_avatar_and_its_source(env):
 @pytest.mark.asyncio
 async def test_an_unset_slot_shows_the_default_and_names_the_set_command(env):
     from core.avatar import DEFAULT_AVATAR
-    from surfaces.telegram.owner_ops import avatar_reply
+    from tools.avatar_owner import avatar_reply
     text, img = avatar_reply(str(env), [])
     assert "default polyrob mark" in text and "/avatar set" in text
     assert img == str(DEFAULT_AVATAR)
@@ -164,7 +164,7 @@ def test_set_runs_off_the_poll_loop():
 def test_the_face_is_sent_as_a_photo_not_just_described(env):
     """The point of putting it on a chat surface is that the owner SEES it.
     The renderer must hand the PNG to the existing media_out rail."""
-    from surfaces.telegram import owner_ops
+    from tools import avatar_owner as owner_ops
     _write_pfp(env)
     text, png = owner_ops.avatar_reply(str(env), [])
     assert png and png.endswith("avatar.png"), (

@@ -1,4 +1,12 @@
+import pytest
+
 from cli.commands.chat import resolve_repl_persona
+
+
+@pytest.fixture(autouse=True)
+def _own_data_home(tmp_path, monkeypatch):
+    """The owner's persona setting is read from the data home: never a shared one."""
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
 
 
 def test_repl_persona_empty_when_gate_off(monkeypatch):

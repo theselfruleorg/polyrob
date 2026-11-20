@@ -22,11 +22,14 @@ def _client(monkeypatch, tmp_path, user_id="alice"):
     monkeypatch.setattr(pages.webgate, "data_dir", lambda: str(tmp_path))
     app = FastAPI()
     app.include_router(pages.router)
+    import webview.inbox as inbox  # the console decides through the Inbox routes
+    monkeypatch.setattr(inbox, "unbound_console", lambda: None)
+    app.include_router(inbox.router)
     return TestClient(app), pages
 
 
 def _seed_tool_approval_ask(tmp_path, user_id="alice"):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     board = GoalBoard(os.path.join(str(tmp_path), "goals.db"))
     ask = board.create_ask(
         user_id=user_id, what="Approve x402_request? [abc123]",
@@ -73,11 +76,11 @@ def test_pending_includes_pending_correspondent(monkeypatch, tmp_path):
 # --- promote / reject route through the same underlying functions -----------
 
 def test_promote_tool_approval_approves_via_decide_tool_approval(monkeypatch, tmp_path):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from tools.controller.approval_queue import tap_display_id
     ask_id = _seed_tool_approval_ask(tmp_path)
     client, _ = _client(monkeypatch, tmp_path)
-    r = client.post(f"/api/webgate/pending/tool_approval/{tap_display_id(ask_id)}/promote")
+    r = client.post(f"/api/webgate/inbox/tool_approval/{tap_display_id(ask_id)}/decide")
     assert r.status_code == 200
     assert r.json()["ok"] is True
 
@@ -87,11 +90,11 @@ def test_promote_tool_approval_approves_via_decide_tool_approval(monkeypatch, tm
 
 
 def test_reject_tool_approval_declines(monkeypatch, tmp_path):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from tools.controller.approval_queue import tap_display_id
     ask_id = _seed_tool_approval_ask(tmp_path)
     client, _ = _client(monkeypatch, tmp_path)
-    r = client.post(f"/api/webgate/pending/tool_approval/{tap_display_id(ask_id)}/reject")
+    r = client.post(f"/api/webgate/inbox/tool_approval/{tap_display_id(ask_id)}/reject")
     assert r.status_code == 200
     assert r.json()["ok"] is True
 
@@ -103,7 +106,7 @@ def test_reject_tool_approval_declines(monkeypatch, tmp_path):
 def test_promote_correspondent_approves_via_registry(monkeypatch, tmp_path):
     registry = _seed_pending_correspondent(tmp_path)
     client, _ = _client(monkeypatch, tmp_path)
-    r = client.post("/api/webgate/pending/correspondent/email:third.party@example.com/promote")
+    r = client.post("/api/webgate/inbox/correspondent/email:third.party@example.com/decide")
     assert r.status_code == 200
     assert r.json()["ok"] is True
     rows = registry.list(user_id="alice")
@@ -117,7 +120,7 @@ def test_reject_correspondent_flips_the_row_via_registry(monkeypatch, tmp_path):
     endpoint routes through the registry method, never a reimplemented deny."""
     registry = _seed_pending_correspondent(tmp_path)
     client, _ = _client(monkeypatch, tmp_path)
-    r = client.post("/api/webgate/pending/correspondent/email:third.party@example.com/reject")
+    r = client.post("/api/webgate/inbox/correspondent/email:third.party@example.com/reject")
     assert r.status_code == 200
     assert r.json()["ok"] is True
     rows = registry.list(user_id="alice")
@@ -127,14 +130,14 @@ def test_reject_correspondent_flips_the_row_via_registry(monkeypatch, tmp_path):
 def test_reject_unknown_correspondent_is_honest_not_a_500(monkeypatch, tmp_path):
     """A miss stays an honest ok:false, never a 500."""
     client, _ = _client(monkeypatch, tmp_path)
-    r = client.post("/api/webgate/pending/correspondent/email:nobody@example.com/reject")
+    r = client.post("/api/webgate/inbox/correspondent/email:nobody@example.com/reject")
     assert r.status_code == 200
     assert r.json()["ok"] is False
 
 
 def test_promote_unknown_correspondent_is_ok_false(monkeypatch, tmp_path):
     client, _ = _client(monkeypatch, tmp_path)
-    r = client.post("/api/webgate/pending/correspondent/email:nobody@example.com/promote")
+    r = client.post("/api/webgate/inbox/correspondent/email:nobody@example.com/decide")
     assert r.status_code == 200
     assert r.json()["ok"] is False
 
@@ -149,8 +152,8 @@ def test_read_only_blocks_promote_for_new_kinds(monkeypatch, tmp_path):
     monkeypatch.setenv("WEBVIEW_READ_ONLY", "true")
     assert client.get("/api/webgate/pending").status_code == 200
     assert client.post(
-        f"/api/webgate/pending/tool_approval/{tap_display_id(ask_id)}/promote"
+        f"/api/webgate/inbox/tool_approval/{tap_display_id(ask_id)}/decide"
     ).status_code == 403
     assert client.post(
-        "/api/webgate/pending/correspondent/email:third.party@example.com/promote"
+        "/api/webgate/inbox/correspondent/email:third.party@example.com/decide"
     ).status_code == 403

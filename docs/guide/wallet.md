@@ -68,7 +68,8 @@ The wallet is the agent's on-chain identity and treasury. **Off by default**
   restart.
 - **Audit** — every spend appends a `wallet_spend` event: an append-only JSONL sink
   (`<data_dir>/wallet/audit.jsonl`) plus a telemetry event. This is what the unified
-  ledger reads for the "spent" leg. A process that holds the seed seals the file: the
+  ledger reads for the "spent" leg; a spend made outside a chat turn (a scheduled job,
+  a watcher, a terminal command) counts as the owner's. A process that holds the seed seals the file: the
   rows are chain-hashed and the head is MAC'd into `audit.jsonl.seal` with a key derived
   from the master seed, so an edited or removed row fails the load and spending is
   refused until the ledger is repaired. A seedless process neither seals nor verifies;
@@ -232,8 +233,9 @@ disclosed · `+1` full routing (`asset` **and** `network` **and** `payTo`). Only
 5 means an agent could pay it today — a 402 that discloses no price or no routing
 is a paywall in name only, and is reported as such rather than as "payable".
 
-Both verbs accept GET, HEAD or OPTIONS without a body; POST-only discovery is unavailable,
-and read a challenge from the **response body** as well as the
+Both verbs accept GET, HEAD or OPTIONS without a body (they never send a POST). A seller can
+price a POST-only paywall on a GET: a challenge entry whose `outputSchema.input.method` is
+`POST` shows as `pay with : POST` (POLYROB's own `GET /a2a/rpc` does this). Both verbs read a challenge from the **response body** as well as the
 `PAYMENT-REQUIRED` header — the spec puts the requirements in the body, and
 POLYROB's own middleware emits exactly that shape. All decoding delegates to the
 one client-side parser (`RealX402Client._decode_challenge`), so the payer and the
@@ -281,9 +283,9 @@ Three origins, and only three:
   is armed and the tool exists (`X402_CLIENT_ENABLED` + `AGENT_WALLET_ENABLED`),
   `x402_pay` is in the autonomous toolset. A payment whose `max_amount_usd` is at or
   below `X402_AUTONOMOUS_MAX_USD` (default $1) runs and reports; above it the durable
-  owner queue holds it for your `/approve`. `WALLET_VENUE_DAILY_CAP_X402_USD` bounds the
+  owner gets it as ONE approval (Confirm runs it), or, from a goal run, as an ask for `/approve`. `WALLET_VENUE_DAILY_CAP_X402_USD` bounds the
   day. Once armed, a goal the agent writes for ITSELF can carry `x402_pay` too, exactly
-  as it can carry `defi_trade` (`tools/goal_tools.allowed_self_goal_tools` folds in the
+  as it can carry `defi_trade` (`core.tool_grants.allowed_self_goal_tools` folds in the
   whole autonomous grant); what bounds an injected goal is the lane and the caps above,
   not the toolset. Unarmed, a self-written goal cannot request it. A money goal or job
   that the model writes during YOUR turn is not written: it becomes a decision that
@@ -312,7 +314,11 @@ Three origins, and only three:
   second 402, a timeout, `success=false`) leaves that row unresolved, and an unresolved
   row blocks EVERY later payment and on-chain send until it is reconciled
   (`python -m core.wallet.submission_recovery` reports what is open). That is
-  deliberate: an unknown outcome is not treated as "nothing was paid".
+  deliberate: an unknown outcome is not treated as "nothing was paid". One case is
+  known at once: a seller that answers 402 to the signed payment rejected it. Its
+  authorization could still be submitted until it expires, so its signed amount is
+  booked against your caps (`pay_rejected`) and every other payment and send goes on;
+  only a retry of that same request is refused.
 
 ---
 

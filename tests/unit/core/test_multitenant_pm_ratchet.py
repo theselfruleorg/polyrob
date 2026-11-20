@@ -13,7 +13,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _reset_pm():
-    from agents.task.path import reset_path_manager
+    from core.session_paths import reset_path_manager
     reset_path_manager()
     yield
     reset_path_manager()
@@ -24,13 +24,13 @@ def test_server_path_manager_is_per_session_even_with_project_env(monkeypatch, t
     # project-root args. Setting POLYROB_PROJECT_DIR must NOT make it project-root.
     monkeypatch.setenv("POLYROB_PROJECT_DIR", str(tmp_path / "proj"))
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "data"))
-    from agents.task.path import get_path_manager
+    from core.session_paths import get_path_manager
     server_pm = get_path_manager(data_root=str(tmp_path / "data" / "task"))
     assert server_pm.is_project_root_workspace is False
 
 
 def test_two_tenants_resolve_to_different_roots(tmp_path):
-    from agents.task.path import get_path_manager
+    from core.session_paths import get_path_manager
     server_pm = get_path_manager(data_root=str(tmp_path / "task"))
     a = server_pm.get_workspace_dir("sess-aaa", user_id="tenant_a")
     b = server_pm.get_workspace_dir("sess-bbb", user_id="tenant_b")

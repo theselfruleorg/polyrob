@@ -123,7 +123,7 @@ def register_autonomy_control_action(controller) -> None:
 		                           status_hint="autonomy_control(status)", chat=False)
 		if params.cancel_goals and res.effective:
 			try:
-				from agents.task.goals.board import GoalBoard
+				from modules.goals.board import GoalBoard
 				board = GoalBoard(goals_db_path(data_dir))
 				# board.list is a LIMIT-bounded dispatch window: loop until it drains.
 				n = 0

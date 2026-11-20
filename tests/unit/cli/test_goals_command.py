@@ -55,7 +55,7 @@ def test_goals_list_renders_cancelled_goal_without_crashing(tmp_path):
     fg color name (it's a separate boolean flag). Any CANCELLED goal crashed
     `polyrob goals list` outright. Regression: a cancelled goal must render."""
     from cli.commands import goals as G
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
 
     db = tmp_path / "goals.db"
     board = GoalBoard(str(db))
@@ -76,7 +76,7 @@ def test_goals_list_renders_cancelled_goal_without_crashing(tmp_path):
 def test_goals_events_renders_without_double_decode(tmp_path):
     """`goals events` must not re-json.loads an already-parsed payload dict."""
     from cli.commands import goals as G
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
 
     db = tmp_path / "goals.db"
     board = GoalBoard(str(db))

@@ -73,8 +73,8 @@ shape). Never seed work the owner did not name.
 
 **Identity docs.** If the owner gives you durable facts or rules about how
 they want you to operate, write them through `owner_doc_manage` — never as
-loose files. The write is always queued in `/pending` as a draft for the
-owner to activate. Report what the result says.
+loose files. A write in a clean owner turn applies at once; otherwise it
+waits in `/pending` for the owner. Report what the result says.
 
 ## Step 3 — Ask the owner, once, for exactly what is missing
 

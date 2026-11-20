@@ -1111,4 +1111,5 @@ class RealX402Client:
             amount_is_estimate=amount_is_estimate,
             submission_ref=payment_info["submission_ref"],
             authorized_amount_usd=payment_info["authorized_amount"],
+            payment_sent=bool(payment_info["happened"]),
         )

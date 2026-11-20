@@ -30,8 +30,13 @@ def _clone(contract, token_id=1, chain_id=4663, impl=erc6551.ACCOUNT_V3_IMPL):
 
 
 class CodeRpc:
-    def __init__(self, code="0x", broken=False):
+    """eth_getCode per address (``codes``, else ``code``), ``ownerOf`` per (collection, id)
+    (``owners``, else an ordinary EOA), and no ``accountImplementation()`` (an empty answer)."""
+
+    def __init__(self, code="0x", broken=False, *, codes=None, owners=None):
         self.code, self.broken, self.reads = code, broken, []
+        self.codes = {k.lower(): v for k, v in (codes or {}).items()}
+        self.owners = {(c.lower(), i): o for (c, i), o in (owners or {}).items()}
 
     def __call__(self, method, params):
         # 069 v4 A3/§5: a pinned token's move also reads the collection's code (its
@@ -40,13 +45,19 @@ class CodeRpc:
             return hex(0x100)
         if method == "eth_getLogs":
             return []
+        if method == "eth_call":
+            to, data = params[0]["to"].lower(), params[0]["data"]
+            if data.startswith("0x6352211e"):
+                owner = self.owners.get((to, int(data[10:], 16)), "0x" + "77" * 20)
+                return "0x" + "0" * 24 + owner[2:].lower()
+            return "0x"
         assert method == "eth_getCode", method
         if str(params[0]).lower() in (PINNED_A.lower(), PINNED_B.lower()):
             return CODE
         self.reads.append(params[0])
         if self.broken:
             raise RuntimeError("rpc down")
-        return self.code
+        return self.codes.get(str(params[0]).lower(), self.code)
 
 
 def _run(contract, dest, rpc, *, chain="robinhood"):
@@ -76,37 +87,57 @@ def test_any_implementation_counts_not_only_account_v3():
 
 
 def test_a_token_into_an_account_of_another_collection_is_a_deposit():
-    rpc = CodeRpc(_clone(OTHER_NFT))
+    rpc = CodeRpc(codes={DEST: _clone(OTHER_NFT)})
     d = _run(NFT, DEST, rpc)
     assert d.allowed is True, d.reason
-    assert rpc.reads == [DEST.lower()]
+    assert DEST.lower() in rpc.reads
 
 
-def test_a_pinned_token_into_an_account_of_another_pinned_collection_refuses(monkeypatch):
-    pin(monkeypatch, PINNED_A, PINNED_B)
-    d = _run(PINNED_A, DEST, CodeRpc(_clone(PINNED_B)))
+def test_a_cycle_across_two_collections_refuses():
+    """124 N6: OTHER #1 is owned by NFT #42's account; NFT #42 into OTHER #1's account would
+    lock both for good — whatever the pins."""
+    acct_42 = "0x" + "a4" * 20
+    rpc = CodeRpc(codes={DEST: _clone(OTHER_NFT, token_id=1), acct_42: _clone(NFT, token_id=42)},
+                  owners={(OTHER_NFT, 1): acct_42})
+    d = _run(NFT, DEST, rpc)
+    assert d.allowed is False and "cycle" in d.reason, d.reason
+
+
+def test_a_nesting_into_an_account_the_agent_holds_is_the_owners_card():
+    """124 N4: OTHER #1 is the treasury's; its account receives NFT #42 only with the card."""
+    rpc = CodeRpc(codes={DEST: _clone(OTHER_NFT, token_id=1)}, owners={(OTHER_NFT, 1): HOLDER})
+    d = _run(NFT, DEST, rpc)
+    assert d.allowed is False and d.lane == "owner_queue", d.reason
+    assert "NESTED" in d.reason and "sweep it to the treasury" in d.reason
+
+
+def test_an_owner_chain_deeper_than_the_walk_refuses():
+    accts = ["0x" + f"{n:02x}" * 20 for n in (0xb1, 0xb2, 0xb3, 0xb4, 0xb5)]
+    codes = {DEST: _clone(OTHER_NFT, token_id=1)}
+    owners = {(OTHER_NFT, 1): accts[0]}
+    for n, a in enumerate(accts):
+        codes[a] = _clone(OTHER_NFT, token_id=10 + n)
+        owners[(OTHER_NFT, 10 + n)] = accts[n + 1] if n + 1 < len(accts) else "0x" + "77" * 20
+    d = _run(NFT, DEST, CodeRpc(codes=codes, owners=owners))
+    assert d.allowed is False and "deeper than" in d.reason, d.reason
+
+
+def test_an_unpinned_token_into_its_own_undeployed_account_refuses():
+    """124 N5: no pin needed — CREATE2 for every reviewed implementation and the moved id."""
+    own = erc6551.account_address(4663, NFT, 42, implementation=erc6551.ACCOUNT_V3_IMPL)
+    d = _run(NFT, own, CodeRpc("0x"))
+    assert d.allowed is False and "deployed or not" in d.reason, d.reason
+
+
+def test_an_unreadable_registry_removes_no_rule_and_blocks_no_move(monkeypatch):
+    """124 section 5.5: an unreadable pin store is no pin — the chain rules still run, and a
+    clean move is not blocked."""
+    def boom():
+        raise collection_registry.CollectionRegistryError("unknown capability")
+    monkeypatch.setattr(collection_registry, "profiles", boom)
+    assert _run(NFT, DEST, CodeRpc("0x")).allowed is True
+    d = _run(NFT, DEST, CodeRpc(_clone(NFT, token_id=7)))
     assert d.allowed is False and "its own collection" in d.reason
-    # an ordinary NFT into a pinned collection's account stays a deposit
-    assert _run(NFT, DEST, CodeRpc(_clone(PINNED_B))).allowed is True
-
-
-def test_an_untrusted_registry_fails_closed(monkeypatch):
-    def boom():
-        raise collection_registry.CollectionRegistryError("unknown capability")
-    monkeypatch.setattr(collection_registry, "profiles", boom)
-    d = _run(NFT, DEST, CodeRpc("0x"))
-    assert d.allowed is False and "cannot be trusted" in d.reason
-
-
-def test_an_untrusted_registry_does_not_stop_a_transaction_without_an_nft_move(monkeypatch):
-    # owner decision 2026-10-01: a broken registry refuses NFT moves and collection calls only
-    def boom():
-        raise collection_registry.CollectionRegistryError("unknown capability")
-    monkeypatch.setattr(collection_registry, "profiles", boom)
-    assert tx_guard._collection_account_destination_refusal(
-        "robinhood", {"to": DEST, "data": "0xa9059cbb" + "00" * 64}, ()) is None
-    assert "cannot be trusted" in tx_guard._collection_account_destination_refusal(
-        "robinhood", {"to": DEST, "data": "0x"}, [(NFT, "erc721", DEST, 1, 1)])
 
 
 def test_an_account_bound_to_another_chain_loses_the_token():
@@ -182,7 +213,8 @@ def test_an_ordinary_nft_into_the_account_of_an_unminted_pinned_token_refuses(mo
     """C5: whoever mints #4242 later owns what sits in its account — any asset, an ordinary NFT
     too (``ownerOf`` cannot be read here, which also refuses)."""
     _pinned(monkeypatch)
-    d = _run(NFT, erc6551.account_address(4663, PINNED_A, 4242, implementation=erc6551.ACCOUNT_V3_IMPL), CodeRpc("0x"))
+    d = _run(NFT, erc6551.account_address(4663, PINNED_A, 4242, implementation=erc6551.ACCOUNT_V3_IMPL),
+             CodeRpc("0x", owners={(PINNED_A, 4242): "0x" + "00" * 20}))
     assert d.allowed is False and "not minted yet" in d.reason, d.reason
 
 
@@ -215,6 +247,7 @@ def test_a_mint_to_a_pinned_account_address_refuses(monkeypatch):
     assert _mint_to(HOLDER).allowed is True
 
 
-def test_unpinned_nothing_is_computed(monkeypatch):
+def test_a_call_naming_no_account_computes_nothing(monkeypatch):
+    from core.wallet import nft_rules
     pin(monkeypatch)
-    assert tx_guard._collection_account_destination_refusal("robinhood", {"to": PINNED_A, "data": "0x"}, ()) is None
+    assert nft_rules.call_nesting_refusal(4663, {"to": PINNED_A, "data": "0x"}) is None

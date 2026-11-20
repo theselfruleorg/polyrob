@@ -25,7 +25,7 @@ def test_inbox_wrap_keeps_lines_and_hangs_bullets():
 
 
 def test_job_list_tail_is_a_more_tap(monkeypatch):
-    from surfaces.telegram import job_ops
+    from cron import owner_jobs as job_ops
 
     class J:
         def __init__(self, i):

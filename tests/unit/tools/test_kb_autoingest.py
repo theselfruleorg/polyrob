@@ -188,7 +188,7 @@ class _FakeLedger:
 
 @pytest.mark.asyncio
 async def test_m03_a_tainted_sessions_document_is_never_indexed(tmp_path, monkeypatch):
-    from agents.task.path import get_path_manager, set_path_manager
+    from core.session_paths import get_path_manager, set_path_manager
     set_path_manager(get_path_manager(data_root=str(tmp_path / "root")))
     calls = []
 
@@ -212,7 +212,7 @@ async def test_m03_a_tainted_sessions_document_is_never_indexed(tmp_path, monkey
 
 
 def test_m03_knowledge_verbs_are_gated_while_tainted():
-    from agents.task.agent.core.correspondent_gate import is_high_impact
+    from core.security.high_impact import is_high_impact
     for verb in ("knowledge_kb_ingest", "knowledge_kb_remove",
                  "knowledge_kb_search", "knowledge_kb_list"):
         assert is_high_impact(verb), verb

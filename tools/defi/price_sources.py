@@ -123,6 +123,28 @@ def spend_price(chain: str, address: str) -> Optional[float]:
     return _intel.spend_price(chain, address)
 
 
+def native_spend_price(chain: str, price_fn=None) -> Optional[float]:
+    """The native coin's spend price as the GUARD reads it: the chain's wrapped native,
+    through the same valueless-testnet rule and the same no-zero rule
+    (``tx_guard_steps.value._spend_price``), so a figure sized here is the figure the
+    guard checks. *price_fn* ``(chain, address)`` defaults to :func:`spend_price`.
+    None = unpriced (never $0 on a valued chain). The ONE native-price reader of the
+    tools tier (125 S8): the reveal batch, the launch ceiling, the launch worth text."""
+    try:
+        from core.wallet import chains
+        from core.wallet.tx_guard import _valueless_price_fn
+        from core.wallet.tx_guard_steps.value import _spend_price
+        row = chains.get(chain)
+        proxy = getattr(row, "wrapped_native", None) if row else None
+        if not proxy:
+            return None
+        priced = _valueless_price_fn(chain, price_fn or spend_price)
+        return _spend_price(priced(chain, proxy) if priced else None, chain)
+    except Exception:  # noqa: BLE001 — an unread price sizes nothing; the guard still decides
+        logger.debug("native spend price unread for %s", chain, exc_info=True)
+        return None
+
+
 def exit_price(chain: str, address: str) -> Optional[float]:
     _ensure()
     return _intel.exit_price(chain, address)

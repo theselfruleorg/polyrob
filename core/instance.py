@@ -96,6 +96,12 @@ _SELF_CONTEXT_SUBDIR = "identity"
 _SELF_DOC_NAME = "self.md"
 _OWNER_DOC_NAME = "owner.md"
 _CONTRACT_DOC_NAME = "contract.md"
+#: The operator's public knowledge: facts safe for ANY audience (what the agent and its
+#: organization are, the public links, what it never shares, where questions go). The
+#: one instance document a public room and a correspondent session also get.
+_PUBLIC_DOC_NAME = "public.md"
+#: Rendered in every session, rooms included, so it stays short.
+PUBLIC_DOC_MAX_CHARS = 6000
 _BLOCKED_PLACEHOLDER = "[BLOCKED: self-context failed the identity safety scan]"
 _OWNER_BLOCKED_PLACEHOLDER = "[BLOCKED: owner-facts doc failed the identity safety scan]"
 _CONTRACT_BLOCKED_PLACEHOLDER = "[BLOCKED: operating contract failed the identity safety scan]"
@@ -151,7 +157,7 @@ def self_tier_root(home_dir: Path | str, user_id: str, instance_id: str = DEFAUL
     exactly TWO tenant-directory grammars, one per path axis —
       - identity axis (this function): ``user_{uid}/`` prefixed, guarded by the
         raising :func:`is_safe_tenant_id` (reject, never rewrite);
-      - session axis (``agents/task/path.py::PathManager.get_user_root``): the BARE
+      - session axis (``core/session_paths.py::PathManager.get_user_root``): the BARE
         ``clean_user_id(uid)`` under ``{data_home}/sessions/`` (regex-sanitize +
         hash, rewrite-never-reject).
     Renaming either would orphan every existing on-disk tree; new code picks the
@@ -195,7 +201,7 @@ def load_self_doc(home_dir: Path | str, user_id: Optional[str],
     if not text:
         return ""
     try:
-        from modules.memory.task.threat_scan import is_identity_suspicious
+        from core.security.threat_scan import is_identity_suspicious
         if is_identity_suspicious(text):  # scans the FULL text, before any size check
             return _BLOCKED_PLACEHOLDER
     except Exception:
@@ -236,7 +242,7 @@ def load_owner_doc(home_dir: Path | str, user_id: Optional[str],
     if not text:
         return ""
     try:
-        from modules.memory.task.threat_scan import is_identity_suspicious
+        from core.security.threat_scan import is_identity_suspicious
         if is_identity_suspicious(text):
             return _OWNER_BLOCKED_PLACEHOLDER
     except Exception:
@@ -286,7 +292,7 @@ def load_contract_doc(home_dir: Path | str, user_id: Optional[str],
     if not text:
         return ""
     try:
-        from modules.memory.task.threat_scan import is_identity_suspicious
+        from core.security.threat_scan import is_identity_suspicious
         if is_identity_suspicious(text):
             return _CONTRACT_BLOCKED_PLACEHOLDER
     except Exception:
@@ -850,6 +856,29 @@ def load_self_context(home_dir: Path | str) -> str:
     if len(out) > SELF_CONTEXT_TOTAL_MAX_CHARS:
         out = out[:SELF_CONTEXT_TOTAL_MAX_CHARS] + "\n…[truncated]"
     return out
+
+
+def load_public_doc(home_dir: Path | str) -> str:
+    """Read the operator's ``<home>/identity/public.md``, the public knowledge.
+
+    It is written by the operator (like the SOUL docs) and is the ONE instance text
+    that a public room or a correspondent session sees: write in it only what any
+    stranger may read. ``""`` when absent or blank. Over :data:`PUBLIC_DOC_MAX_CHARS`
+    the head is kept under a TRUNCATED banner; an unreadable doc renders as the
+    UNREADABLE note. Never raises.
+    """
+    path = Path(home_dir) / _SELF_CONTEXT_SUBDIR / _PUBLIC_DOC_NAME
+    text = _read_doc(path)
+    if not text or is_unreadable_note(text):
+        return text
+    if len(text) > PUBLIC_DOC_MAX_CHARS:
+        logger.warning("public knowledge %s is %d/%d chars — TRUNCATED at load",
+                       path, len(text), PUBLIC_DOC_MAX_CHARS)
+        text = (f"[⚠ TRUNCATED: public.md is {len(text)} chars, over the "
+                f"{PUBLIC_DOC_MAX_CHARS} cap; the tail is not in context]\n"
+                + text[:PUBLIC_DOC_MAX_CHARS])
+    return ("## Public knowledge (written by your operator for any audience: you may "
+            "share it in any chat, a group or a stranger's included)\n\n" + text)
 
 
 # --- ERC-8004 identity record (046) ------------------------------------------

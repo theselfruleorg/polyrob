@@ -345,7 +345,7 @@ class CodingTool(BaseTool):
             if not sid:
                 return None
             uid = getattr(execution_context, "user_id", None)
-            from agents.task.path import pm
+            from core.session_paths import pm
             return str(pm().get_subdir(sid, "coding_snapshots", uid))
         except Exception:
             return None

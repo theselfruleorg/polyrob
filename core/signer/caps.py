@@ -238,7 +238,8 @@ def parse_signer_config(data: dict) -> SignerConfig:
         raise SignerConfigError("[server] peer_check must be one of "
                                 + ", ".join(PEER_CHECK_MODES))
     expected = {}
-    for venue in ("treasury", "x402", "polymarket", "hyperliquid", "solana"):
+    from core.wallet.onchain import FUNDABLE_VENUES, VENUE_CHAIN
+    for venue in (*VENUE_CHAIN, "solana"):
         if venue in identity:
             addr = identity[venue]
             if not isinstance(addr, str) or not addr:
@@ -269,8 +270,9 @@ def parse_signer_config(data: dict) -> SignerConfig:
         raise SignerConfigError('[policy] unverified_sends must be "approve" or "caps"')
     resource_calls = _resource_calls(policy.get("resource_calls", []))
     venue = str(identity.get("operational_venue", "treasury")).strip().lower() or "treasury"
-    if venue not in ("treasury", "x402"):
-        raise SignerConfigError("[identity] operational_venue must be treasury or x402")
+    if venue not in FUNDABLE_VENUES:
+        raise SignerConfigError("[identity] operational_venue must be one of "
+                                + " or ".join(FUNDABLE_VENUES))
     return SignerConfig(
         per_tx_usd=per_tx, daily_usd=daily, x402_per_payment_usd=x402,
         x402_daily_usd=x402_daily, approve_above_usd=approve_above, chains=tuple(chains),

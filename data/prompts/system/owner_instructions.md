@@ -1,21 +1,17 @@
 <!-- part: head -->
-When the owner tells you how to operate, RECORD IT with the tool for its kind:
+Write what the owner tells you ONCE, in its one place:
 <!-- part: prefs -->
-- A typed setting (reply length, tone, language, digest, quotas, caps):
-  `preferences` operation='set'; a SAFE key applies from your next step,
-  unless 'list' says next session.
+- A setting (reply length, tone, language, digest, quotas, caps):
+  `preferences` operation='set'.
 <!-- part: owner_doc -->
-- A standing rule in prose ("never post to X"): `owner_doc_manage`, a DRAFT
-  until the owner confirms it. A directive that changes a rule replaces it the
-  same turn (replace_rule), not a second rule. A job's state (on/off, schedule,
-  id, progress) lives in the job (`cronjob_*`), never here: "stop Z for good" is
-  `cronjob_cancel`/`goal_cancel` forever=true.
+- A rule for all your work ("never post to X"): `owner_doc_manage`, one line.
+  A changed rule replaces the old one (replace_rule). Never here: the rules of
+  one task, or a job's on/off, schedule or progress (that is the job: `cronjob_*`).
 <!-- part: programme -->
-- A programme of several jobs: its terms live ONLY in its pinned skill; a job
-  text names the skill and part. An owner change patches it (`skill_manage`
-  also drafts the retire of the owner.md line; one approval) and the job
-  texts. One goal names the job ids; close it with them.
+- How to do one task or job (its steps and lists, e.g. who to ban): its skill,
+  `skill_manage`. The job names the skill and does not copy it.
 <!-- part: self_doc -->
-- What YOU learned about your work: `self_context_manage`.
+- What you learned about your work: `self_context_manage`.
 <!-- part: tail -->
-A draft not yet in force is not done: say so; repeat the tool's approval command.
+A report is a record, not a rule. Say a draft waits only when a tool result in
+this turn says so.

@@ -192,3 +192,68 @@ async def test_imap_fetcher_falls_back_for_a_tool_without_the_seam():
     conn = _FakeImapConn({b"1": RAW})
     out = await ImapFetcher(_FakeImapTool(conn)).fetch_unread()
     assert len(out) == 1
+
+
+# --- proposal 125 S35: each fetcher pins the authserv-id of its transport -----
+
+_AUTH_RAW = (b"Authentication-Results: {id}; dmarc=pass header.from=a.b\r\n"
+             b"Message-ID: <m9@a.b>\r\nFrom: Al <al@a.b>\r\nSubject: Hi\r\n"
+             b"Content-Type: text/plain\r\n\r\nbody\r\n")
+
+
+def _imap_tool(raw, host):
+    tool = _FakeImapTool(_FakeImapConn({b"1": raw}))
+    tool.imap_server = host
+    return tool
+
+
+@pytest.mark.asyncio
+async def test_imap_fetcher_pins_gmail_authserv_id():
+    ok = _AUTH_RAW.replace(b"{id}", b"mx.google.com")
+    (_, norm), = await ImapFetcher(_imap_tool(ok, "imap.gmail.com")).fetch_unread()
+    assert norm["sender_authenticated"] is True
+    forged = _AUTH_RAW.replace(b"{id}", b"attacker.example")
+    (_, norm), = await ImapFetcher(_imap_tool(forged, "imap.gmail.com")).fetch_unread()
+    assert norm["sender_authenticated"] is False
+
+
+@pytest.mark.asyncio
+async def test_imap_fetcher_self_hosted_host_fails_closed():
+    raw = _AUTH_RAW.replace(b"{id}", b"mail.self-hosted.example")
+    (_, norm), = await ImapFetcher(_imap_tool(raw, "mail.self-hosted.example")).fetch_unread()
+    assert norm["sender_authenticated"] is False
+
+
+@pytest.mark.asyncio
+async def test_agentmail_fetcher_passes_the_agentmail_row(tmp_path, monkeypatch):
+    import tools.email_providers.mime as mime
+    ordered = [["Authentication-Results", "mx.agentmail.example; dmarc=pass header.from=a.b"],
+               ["Authentication-Results", "forged.example; dmarc=fail header.from=a.b"]]
+    # Audit 2026-11-21 M-2: not pinned yet (empty) — no sender is authenticated.
+    fetcher = AgentMailFetcher(_FakeAgentMail([_msg("m1", headers=ordered)]),
+                               MessageDedup(str(tmp_path / "d1.db")))
+    (_, norm), = await fetcher.fetch_unread()
+    assert norm["sender_authenticated"] is False
+    # Once the row is pinned, the topmost header with the pinned id counts.
+    monkeypatch.setitem(mime.KNOWN_AUTHSERV, "agentmail", frozenset({"mx.agentmail.example"}))
+    fetcher = AgentMailFetcher(_FakeAgentMail([_msg("m2", headers=ordered)]),
+                               MessageDedup(str(tmp_path / "d2.db")))
+    (_, norm), = await fetcher.fetch_unread()
+    assert norm["sender_authenticated"] is True
+    # A forged id on top is refused.
+    fetcher = AgentMailFetcher(_FakeAgentMail([_msg("m3", headers=ordered[::-1])]),
+                               MessageDedup(str(tmp_path / "d3.db")))
+    (_, norm), = await fetcher.fetch_unread()
+    assert norm["sender_authenticated"] is False
+
+
+@pytest.mark.asyncio
+async def test_agentmail_fetcher_refuses_an_unordered_header_map(tmp_path, monkeypatch):
+    """A plain mapping cannot show the topmost header (M-2): no proof, even pinned."""
+    import tools.email_providers.mime as mime
+    monkeypatch.setitem(mime.KNOWN_AUTHSERV, "agentmail", frozenset({"mx.agentmail.example"}))
+    hdrs = {"Authentication-Results": "mx.agentmail.example; dmarc=pass header.from=a.b"}
+    fetcher = AgentMailFetcher(_FakeAgentMail([_msg("m4", headers=hdrs)]),
+                               MessageDedup(str(tmp_path / "d4.db")))
+    (_, norm), = await fetcher.fetch_unread()
+    assert norm["sender_authenticated"] is False

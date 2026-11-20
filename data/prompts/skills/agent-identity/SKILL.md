@@ -1,6 +1,6 @@
 ---
 name: agent-identity
-description: 'The agent on-chain identity: ERC-8004 register_agent once per chain (permanent, public, not repeatable) and set_agent_uri to update it; the agent NFT account (ERC-6551) the wallet owns: inspect, snapshot, journal, bind, revoke_all, the owner-always acts (mint, withdraw, ready for sale, buy a pinned market listing), unready and cancel a market order, claim what the market owes, the collection reveal, and the /identity and /nft cards.'
+description: 'The agent on-chain identity: ERC-8004 register_agent once per chain (permanent, public, not repeatable) and set_agent_uri to update it; the agent NFT account (ERC-6551) the wallet owns: inspect, snapshot, journal, bind, revoke_all, the owner-always acts (mint, withdraw, ready for sale, buy a pinned market listing), unready and cancel a market order, claim what the market owes, the collection reveal, the sweep of a nested NFT, the ERC-6551 safety rules, and the /identity and /nft cards.'
 license: MIT
 metadata:
   polyrob-when: 'Registering the on-chain identity or an agent NFT'
@@ -50,7 +50,16 @@ Reads (free):
   state and the identity count. An incomplete
   approval table is never "empty".
 - `agent_nft_snapshot(chain=…, nft=…)` — the account this wallet owns: its open
-  approvals, owner, state, identity, reveal state, balance and journal head.
+  approvals, owner, state, identity (and, for an ERC-6551P NFT, its reputation and the
+  clients that gave it), the sale's phase, settled and owed, the readiness, the
+  `tokenURI` and reveal block, the native balance, any OTHER account of the token, and
+  the journal head. One NFT per call; the owner's `/nft` lists every NFT and account.
+- Three registries answer different things: the pin store (`/nft` names the owner's
+  chat pins or the admin file) says which collections the owner trusted; the ERC-6551
+  registry derives each NFT's account address; the ERC-8004 identity registry holds the
+  account's agent id (`agent_nft_snapshot` reads it — never a guess).
+- Read every fact from these verbs, never from memory: a value that cannot be read is
+  `unreadable` / UNKNOWN, never 0.
 
 Writes (fee only, a dry run first):
 
@@ -66,9 +75,9 @@ Writes (fee only, a dry run first):
 - `agent_nft_revoke_all(chain=…)` — revokes the open approvals the scan finds
   on the account. Run it before the NFT leaves. An approval the scan does not
   find is not revoked.
-- `agent_nft_collection_reveal(chain=…)` — reveals the DUE ids of a pinned
-  collection that has the reveal capability; gas only, capped by
-  `AGENT_NFT_REVEAL_MAX_GAS_USD`. Nothing due means no transaction.
+- `agent_nft_collection_reveal(chain=…, collection=…)` — reveals the DUE ids of a
+  collection; gas only, capped by `AGENT_NFT_REVEAL_MAX_GAS_USD`. Nothing due means no
+  transaction. A collection not pinned with the reveal capability waits for the owner.
 - `agent_nft_sale_settle(chain=…)` — after the sale is settled (`agent_nft_snapshot`
   shows phase and settled), settles THIS wallet's own auction records: the sale
   returns what each paid above the clearing price. Gas only. No refund means no
@@ -89,17 +98,20 @@ Writes (fee only, a dry run first):
 - You cannot make an offer of your own, list on Seaport or OpenSea, or buy a
   Seaport listing.
 
-Owner-always acts — a live call always waits for the owner:
+Owner-always acts — a live call waits for the owner, unless a mandate covers it:
 
-- `agent_nft_collection_mint(chain=…, qty=…, max_spend_usd=…)` mints to THIS
-  wallet only (any other `to` is refused), on a collection the system admin
-  pinned with the mint capability and its sale. The quote names the price now.
+- `agent_nft_collection_mint(chain=…, collection=…, qty=…, max_spend_usd=…)` mints to
+  THIS wallet only (any other `to` is refused), through the collection's own `SALE()`,
+  read from the chain: any ERC-721 whose sale names it back, no pin needed. The quote
+  names the phase and the price now.
   In the whitelist phase add `allowance=…` and `proof=[…]` from the published
   whitelist; in the auction the sale returns the excess at its settlement.
 - `agent_nft_withdraw_token(chain=…, to=…)` sends an owned agent NFT out (its
   account goes with it). It refuses while the account has an open approval:
   `agent_nft_revoke_all` first. The owner's verb: `/nft send <id> <to> on
-  <chain>`.
+  <chain>`. With `nested=<collection>#<id>` (and no `to`) it SWEEPS an NFT that the
+  account holds back to this wallet — the only way to use a nested NFT; nothing acts
+  through a second level.
 - `agent_nft_sale_ready(chain=…, nft=…)` makes an ERC-6551P agent NFT READY FOR
   SALE: its own account calls the collection's `readyToSell` (with the journal
   entry, one transaction). From the next block a plain marketplace fill may move
@@ -127,21 +139,60 @@ Owner-always acts — a live call always waits for the owner:
 - `agent_nft_sale_accept(chain=…, offer=…)` accepts a buyer's signed offer (the
   link the buyer shared): the NFT and everything its account holds leave for the
   offer's price less the royalty.
-- There is no "adopt" step. An NFT of a pinned collection that arrives on the wallet
-  is yours to act from at once; the tokens its account already holds are recorded
-  as inherited positions (no cost basis) by the holdings watch.
+- There is no "adopt" step. An NFT of ANY collection that arrives on the wallet is
+  yours to act from at once; the tokens its account already holds are recorded as
+  inherited positions (no cost basis) by the holdings watch. An NFT that arrives INSIDE
+  one of your accounts is nested: the watch reports it; sweep it out to use it.
 
 To act FROM an owned account, use `account=` or `nft=` on `defi_trade.transfer`,
 `defi_trade.swap`, `defi_trade.lp_collect` (v4) or `defi_trade.call` (`send-funds`). A
 call from an account grants no allowance and does not address the account's own
 collection, sale or sale rails. Every other money verb refuses `account=` with
-"this verb does not act from an NFT account". The owner lets the agent use a
-collection with `/nft trust <collection> on <chain>`; you never trust one yourself.
+"this verb does not act from an NFT account". No pin is needed: on a collection the
+owner did not pin, every act through its account waits for the owner's card
+(`owner approval required: UNPINNED`). The owner pins one with `/nft trust
+<collection> on <chain>`; you never trust one yourself.
+
+The wallet reads the ERC-6551 facts from the chain, never from memory, and refuses by
+name (each refusal says the next step):
+
+- an NFT into an account of its own collection (deployed or not), into an account
+  bound to another chain, or into a chain of accounts that leads back to it (a cycle
+  locks both NFTs);
+- anything sent to the account of a token not minted yet (the future minter owns it),
+  or to the address of one of your accounts on ANOTHER chain (nobody controls it there);
+- an NFT leaving while its account has an open approval (`agent_nft_revoke_all`), and
+  a deposit into your Tokenbound account while an earlier owner's approval is open;
+- a generic `defi_trade.call` that mints, buys, reveals or claims on an NFT sale or
+  market — use the `agent_nft_*` verb it names.
+
+An NFT you send into one of your own accounts waits for the owner (it becomes nested).
+A move between the wallet and its own NFT account is internal: only its fee counts
+against the caps. A signature of this wallet also speaks for a Tokenbound account it
+owns (ERC-1271); `wallet_sign` names it. An account of a kind the wallet cannot prove
+is read-only.
 
 The account kind decides what the account can do. The snapshot names the kind:
 
 - Tokenbound AccountV3: the NFT's owner drives it with CALL only (no DELEGATECALL, no admin call); it has a lock and an ERC-2771 forwarder, may hold standing approvals, and accepts the owner's signature as its own (ERC-1271).
 - ERC-6551P account: the NFT's owner drives it with CALL only (no DELEGATECALL, no admin call); it has no lock and no forwarder, signs nothing, refuses a standing approval (an ERC-20 spend approves, spends and resets in one batch), and its NFT cannot be sold while an ERC-6551 account owns it.
+
+## The mandate (the owner's standing grant)
+
+The owner can let you run some acts with no tap: `/nft trust <collection> on <chain>
+autonomous <mint,reveal,buy,account> band <min>-<max> count <n> total <usd> days <d> go`
+(the owner seat only; you never make one). Inside it, YOUR scheduled jobs and goals may run
+those acts on that collection: every asset the act names in scope, the declared
+`max_spend_usd` within the band, the count, the total and the days left. A `to` must be one
+of its recipients; an act with `args` or a spender is never covered; sale acts (ready,
+list, accept) always wait for the owner. A chat turn, a correspondent's message, a room or
+a helper never uses a mandate. The limits and `/pause` still bind, and a changed contract
+sends the act back to the owner. A pin alone grants nothing. `/nft mandate` lists them;
+the owner ends one with `/nft mandate end <id> go`.
+
+To send an NFT INTO another account you hold (it becomes nested, and waits for the owner),
+use `defi_trade.nft_transfer` with `to=<that account>`; `agent_nft_withdraw_token` sends to a
+plain wallet, or sweeps a nested NFT out (`nested=`).
 
 ## Never
 

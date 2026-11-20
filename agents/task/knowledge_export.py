@@ -12,8 +12,9 @@ catalog, identity docs, the goal board — into a per-tenant markdown vault:
     index.md                  the "what my agent knows" front page
 
 Export-only projection: the DBs stay the SSOT, the vault is never a second
-write path (no two-way sync). Every section is fail-open — a missing reader
-yields an empty section, never a crash. All non-stdlib imports are lazy so
+write path (no two-way sync). Every section is fail-open — a missing store
+yields 0, and a store that raises is ``"unreadable"`` in the manifest and the
+index (never a 0 that reads as "it holds nothing"), never a crash. All non-stdlib imports are lazy so
 this module never drags the server tier in (core/server boundary, C3 split).
 """
 from __future__ import annotations
@@ -78,10 +79,7 @@ async def _export_notes(out: Path, provider, user_id: str) -> int:
     # active notes (mirrors the pending-skills separation in /knowledge).
     for status, subdir in (("active", ""), ("pending", "pending"),
                            ("archived", "archived")):
-        try:
-            notes = await provider.note_list(user_id, status=status, limit=1000)
-        except Exception:
-            notes = []
+        notes = await provider.note_list(user_id, status=status, limit=1000)
         for n in notes:
             stem = f"{n['id']}-{slug_stem(n.get('title'))}"
             front = _frontmatter({
@@ -110,12 +108,9 @@ async def _all_episodes(provider, user_id: str, since_ts) -> List[Any]:
     out: List[Any] = []
     until_ts = None
     while len(out) < _EPISODE_MAX:
-        try:
-            page = await provider.recall_episodes(
-                user_id=user_id, since_ts=since_ts, until_ts=until_ts,
-                limit=_EPISODE_PAGE, order="newest")
-        except Exception:
-            break
+        page = await provider.recall_episodes(
+            user_id=user_id, since_ts=since_ts, until_ts=until_ts,
+            limit=_EPISODE_PAGE, order="newest")
         if not page:
             break
         out.extend(page)
@@ -151,12 +146,9 @@ async def _export_episodes(out: Path, provider, user_id: str, since_ts) -> int:
 
 
 def _export_skills(out: Path, user_id: str, data_dir: str) -> int:
-    try:
-        from agents.task.agent.skill_manager import get_skill_manager
-        sm = get_skill_manager()
-        catalog = sm.get_catalog_skills(user_id=user_id, max_skills=500)
-    except Exception:
-        return 0
+    from agents.task.agent.skill_manager import get_skill_manager
+    sm = get_skill_manager()
+    catalog = sm.get_catalog_skills(user_id=user_id, max_skills=500)  # raises: unreadable
     usage = {}
     try:
         from modules.skills.skill_usage import get_skill_usage_store
@@ -200,13 +192,12 @@ def _export_identity(out: Path, user_id: str, data_dir: str) -> int:
 
 
 def _export_goals(out: Path, user_id: str, data_dir: str) -> int:
-    try:
-        import os
-        from agents.task.goals.board import GoalBoard
-        board = GoalBoard(goals_db_path(data_dir))
-        goals = board.list(user_id=user_id)
-    except Exception:
-        return 0
+    import os
+    db = goals_db_path(data_dir)
+    if not os.path.exists(db):
+        return 0  # no board yet: nothing to export, and nothing is created
+    from modules.goals.board import GoalBoard
+    goals = GoalBoard(db).list(user_id=user_id)  # raises: unreadable
     if not goals:
         return 0
     lines = ["# Goal board", ""]
@@ -218,23 +209,35 @@ def _export_goals(out: Path, user_id: str, data_dir: str) -> int:
     return len(goals)
 
 
+UNREADABLE = "unreadable"
+
+
 async def build_vault(out_dir: str, *, user_id: str, data_dir: str,
-                      provider=None, since_ts: Optional[int] = None) -> Dict[str, int]:
-    """Write the vault; returns a manifest of per-section counts. Never raises."""
+                      provider=None, since_ts: Optional[int] = None) -> Dict[str, int | str]:
+    """Write the vault; returns a manifest of per-section counts. Never raises.
+
+    A section whose store raises is ``"unreadable"`` (125 S16), not 0.
+    """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    manifest = {"notes": 0, "episodes": 0, "skills": 0, "identity": 0, "goals": 0}
-    try:
-        manifest["notes"] = await _export_notes(out, provider, user_id)
-    except Exception:
-        logger.warning("vault: notes export failed", exc_info=True)
-    try:
-        manifest["episodes"] = await _export_episodes(out, provider, user_id, since_ts)
-    except Exception:
-        logger.warning("vault: episodes export failed", exc_info=True)
-    manifest["skills"] = _export_skills(out, user_id, data_dir)
+    manifest: Dict[str, int | str] = {
+        "notes": 0, "episodes": 0, "skills": 0, "identity": 0, "goals": 0}
+
+    async def _section(name, fn, *args):
+        try:
+            result = fn(*args)
+            if hasattr(result, "__await__"):
+                result = await result
+            manifest[name] = result
+        except Exception:
+            logger.warning("vault: the %s section is unreadable", name, exc_info=True)
+            manifest[name] = UNREADABLE
+
+    await _section("notes", _export_notes, out, provider, user_id)
+    await _section("episodes", _export_episodes, out, provider, user_id, since_ts)
+    await _section("skills", _export_skills, out, user_id, data_dir)
     manifest["identity"] = _export_identity(out, user_id, data_dir)
-    manifest["goals"] = _export_goals(out, user_id, data_dir)
+    await _section("goals", _export_goals, out, user_id, data_dir)
 
     day = time.strftime("%Y-%m-%d")
     idx = [
@@ -242,7 +245,7 @@ async def build_vault(out_dir: str, *, user_id: str, data_dir: str,
         f"Exported {day} by `polyrob knowledge export`. The live DBs remain the "
         "source of truth; re-export to refresh.", "",
         f"- notes: {manifest['notes']} (see `notes/`)",
-        f"- episodes: {manifest['episodes']} daily logs (see `episodes/`)",
+        f"- episodes: {manifest['episodes']} (see `episodes/`)",
         f"- skills: {manifest['skills']} (see `skills/`)",
         f"- identity docs: {manifest['identity']} (see `identity/`)",
         f"- goals: {manifest['goals']} (see `goals.md`)", "",

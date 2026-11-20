@@ -11,7 +11,7 @@ surfaces and the autonomy loops.
      goal dispatcher start nothing new. Intake stays ON, so the owner is never
      cut off while the drain waits.
   2. **Wait for idle** — no live human turn, no running goal, no running cron
-     job (``cli.update.agent_state.observe`` without the "due soon" signal: a
+     job (``core.agent_activity.observe`` without the "due soon" signal: a
      due job cannot start while draining and would keep the drain busy for
      ever).
   3. **Stop intake** at the first idle moment — the surfaces stop polling
@@ -60,13 +60,13 @@ _NOT_AN_ADDRESS = frozenset({"webview", "console", "repl"})
 
 def busy_description(data_home: Path) -> str:
     """What the drain is waiting on, in plain words ("idle" when nothing)."""
-    from cli.update.agent_state import observe
+    from core.agent_activity import observe
     act = observe(data_home, cron_imminent_sec=None)
     return act.describe()
 
 
 def _is_idle(data_home: Path) -> tuple[bool, str]:
-    from cli.update.agent_state import observe
+    from core.agent_activity import observe
     act = observe(data_home, cron_imminent_sec=None)
     return act.idle, act.describe()
 

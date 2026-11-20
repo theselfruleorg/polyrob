@@ -505,7 +505,7 @@ async def test_agent_status_capabilities_distinguishes_loadable_from_loaded(monk
 async def test_agent_status_capabilities_is_leaf_from_execution_context(monkeypatch, tmp_path):
     """A leaf/sub-agent session must see delegation-blocked tools reported
     gated:leaf-blocked, not silently absent — same ground-truth principle."""
-    import tools.controller.delegation as deleg
+    import core.delegation_policy as deleg
     monkeypatch.setattr(deleg, "get_blocked_child_tools", lambda: {"twitter"})
 
     c = _live_controller(monkeypatch)

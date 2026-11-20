@@ -124,8 +124,8 @@ def step_7_price(c: GuardContext) -> Optional[Decision]:
         _worst_fee_wei = _sized_gas * int(outer_tx.get("maxFeePerGas") or 0)
         _decimals = int(getattr(_row, "native_decimals", 18) or 18)
         amount_usd = ((outflow_raw + _worst_fee_wei) / (10 ** _decimals)) * unit_price
-    elif (intent.is_claim or intent.is_nft_op or intent.is_registration or intent.is_collection_reveal
-            or intent.is_journal_entry or intent.is_resource_call
+    elif (c.internal_move or intent.is_claim or intent.is_nft_op or intent.is_registration
+            or intent.is_collection_reveal or intent.is_journal_entry or intent.is_resource_call
             or (intent.is_liquidity_op and not intent.lp_outflows)):
         # The cost of a claim is its FEE. Nothing leaves, so pricing an outflow
         # would book it at $0.00 — the confident-zero class that let 114
@@ -138,6 +138,7 @@ def step_7_price(c: GuardContext) -> Optional[Decision]:
         # lie about the one asset class that is easiest to wash-trade. The fee
         # is the only figure here that is true. What actually bounds an NFT
         # move is the owner (spend_lane.ALWAYS_OWNER_APPROVED_VERBS), not a cap.
+        # 124 M1: an internal move (treasury <-> its own NFT account) is charged its fee only.
         _what = "the claim fee" if intent.is_claim else "the transaction fee"
         # A registration's whole cost is its fee: it sends nothing and receives
         # an identity that has no market price to book against a cap.
@@ -344,8 +345,8 @@ def step_7_price(c: GuardContext) -> Optional[Decision]:
 
     if amount_usd is None:
         return Decision(False, "refused: could not compute a USD value for this transaction")
-    fee_already_priced = (intent.is_collection_mint or intent.is_deploy or intent.is_claim
-                         or intent.is_nft_op or intent.is_registration
+    fee_already_priced = (c.internal_move or intent.is_collection_mint or intent.is_deploy
+                         or intent.is_claim or intent.is_nft_op or intent.is_registration
                          or intent.is_collection_reveal or intent.is_journal_entry
                          or intent.is_resource_call
                          or (intent.is_liquidity_op and not intent.lp_outflows))
@@ -424,6 +425,21 @@ def step_8_policy_gate(c: GuardContext) -> Optional[Decision]:
     return None
 
 
+def step_7a_launch_ceiling(c: GuardContext) -> Optional[Decision]:
+    """7a. A launch (122 W3): the ``launch.pair`` pin, the launches a day and the seed value
+    (``core.wallet.launch_policy``). Only a marked intent; a refusal, never an allow."""
+    if not getattr(c.intent, "launch", ()):
+        return None
+    from core import prefs as _prefs
+    from core.wallet import launch_policy
+    settings = launch_policy.read_owner_settings(
+        _prefs.owner_pref_scope, _prefs.load_preferences, _prefs.resolve)
+    why = launch_policy.guard_refusal(c.intent, c.amount_usd, c.gate, settings)
+    if why:
+        return Decision(False, why, amount_usd=c.amount_usd)
+    return None
+
+
 def step_9_approval_lane(c: GuardContext) -> Optional[Decision]:
     """9. Approval lane."""
     gate = c.gate
@@ -456,6 +472,14 @@ def step_9_approval_lane(c: GuardContext) -> Optional[Decision]:
                 lane="owner_queue", amount_usd=amount_usd, value_usd=c.value_usd,
                 sim_gas_used=deltas.gas_used, deploy=deploy_facts,
                 agent_id=registered_agent_id, position_token_id=position_token_id)
+    if c.card_reasons and not owner_direct and not owner_granted:
+        # 124 N4 / W4: a nesting, or an act through an unpinned collection's account, is the
+        # owner's call (a card), whatever its value.
+        return Decision(False, "owner approval required: " + "; ".join(
+            f"{label} — {line}" for label, line in c.card_reasons),
+                        lane="owner_queue", amount_usd=amount_usd, value_usd=c.value_usd,
+                        sim_gas_used=deltas.gas_used, deploy=deploy_facts,
+                        agent_id=registered_agent_id, position_token_id=position_token_id)
     _valued = c.unverified_within_caps and c.valuation_basis == "low_confidence"
     if c.owner_only and not owner_direct and not owner_granted and not _valued:
         # A send the owner confirmed with "send anyway" (no spend-grade price):
@@ -510,6 +534,11 @@ def allow(c: GuardContext) -> Optional[Decision]:
     valuation_basis = c.valuation_basis
     _lane = ("owner_direct" if owner_direct
              else "owner_approved" if owner_granted else "autonomous")
+    # 122 W1: an autonomous money act states its reason (an owner act may omit it).
+    from core.act_reason import autonomous_why_refusal
+    no_why = autonomous_why_refusal(_lane, c.execution_context, getattr(c.intent, "why", None))
+    if no_why:
+        return Decision(False, no_why, amount_usd=amount_usd, sim_gas_used=deltas.gas_used)
     return Decision(True, "authorized" + (" (paired-leg implied valuation)" if lp_implied else "")
                     + "".join(f" — NOTE: {n}" for n in c.notes), lane=_lane, amount_usd=amount_usd,
                     sim_gas_used=deltas.gas_used, deploy=deploy_facts,

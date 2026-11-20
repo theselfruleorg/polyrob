@@ -460,7 +460,9 @@ async def pay_invoice(request_id: str, request: Request):
     Verifies + settles the X-PAYMENT header against a per-invoice
     PaymentRequirements, then flips the row pending→completed. The payment_settled
     event and originating-session wake are emitted by the settlement watcher (the
-    single wake producer), NOT here. Gated by X402_INVOICE_ENABLED.
+    single wake producer), NOT here — except an ORDER invoice, which runs the
+    watcher's own order path at once (`_move_paid_order`, F11). Gated by
+    X402_INVOICE_ENABLED.
 
     G-20: per-IP rate-limited (``X402_PUBLIC_RATE_PER_WINDOW`` /
     ``X402_PUBLIC_RATE_WINDOW_SEC``) — this is a public settlement endpoint."""
@@ -518,7 +520,28 @@ async def pay_invoice(request_id: str, request: Request):
     ok = await settle_payment_request(request_id, transaction_hash=tx)  # settling -> completed
     if not ok:
         raise HTTPException(status_code=409, detail="already settled")
+    if (row.get("kind") or "") == "offer_order":
+        await _move_paid_order(request_id)
     return JSONResponse({"request_id": request_id, "status": "completed", "transaction": tx})
+
+
+async def _move_paid_order(request_id: str) -> None:
+    """F11: a completed order invoice pays its order NOW, not only when a
+    settlement watcher ticks — with ``API_AUTONOMY_RUNTIME`` off this process runs
+    none. The watcher's own claim-then-notify path; a later tick (here or in
+    another process) finds the wake claimed. Never raises: the money is
+    recorded, and a failure leaves the claim for the wake reaper to retry."""
+    try:
+        from core.container import DependencyContainer
+        from modules.x402.settlement_watcher import SettlementWatcher
+        try:
+            task_agent = DependencyContainer.get_instance().get_agent("task_agent")
+        except Exception:
+            task_agent = None
+        await SettlementWatcher(task_agent).settle_order_now(request_id)
+    except Exception:
+        logger.warning("pay: order of invoice %s not moved now; the settlement "
+                       "watcher retries it", request_id, exc_info=True)
 
 
 async def _verify_and_settle_invoice(request_id, row, payment_header):

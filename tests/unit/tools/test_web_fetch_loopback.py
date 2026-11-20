@@ -6,8 +6,8 @@ validation and pins to 127.0.0.1. An unpublished loopback port still raises.
 """
 import pytest
 
-from tools.web_fetch.fetcher import safe_fetch as fetch, WebFetchError
-from tools.shell.loopback_allow import allow_loopback_ports, clear_loopback_ports
+from core.security.safe_fetch import safe_fetch as fetch, WebFetchError
+from core.security.loopback_allow import allow_loopback_ports, clear_loopback_ports
 
 
 class _FakeResp:

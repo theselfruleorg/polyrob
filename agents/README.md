@@ -145,7 +145,8 @@ agents/
 ### BaseAgent (`base_agent.py`)
 
 Abstract base class (`class BaseAgent(BaseComponent)`) providing standardized agent lifecycle and
-common LLM/character plumbing. `TaskAgent` subclasses it.
+common LLM plumbing. `TaskAgent` subclasses it. Proposal 125 deleted its unused
+character and LLM-settings methods (no caller).
 
 **Selected interface** (see the source for the full surface):
 ```python
@@ -153,8 +154,6 @@ class BaseAgent(BaseComponent):
     def __init__(self, *, config: BotConfig, container: DependencyContainer, name: str): ...
     async def process_input(self, input_text: str, context_id: str, **kwargs) -> str: ...
     async def start_conversation(self, user_id: str, **kwargs) -> bool: ...
-    async def set_character(self, character: "Character") -> None: ...
-    async def set_llm_client(self, client_name: str) -> bool: ...
     async def generate_response(self, messages, **kwargs) -> str: ...
 ```
 
@@ -291,9 +290,9 @@ analytics (`service.py`, `manager.py`, `formatters.py`, `sequence.py`, `views.py
 
 ### Autonomy: goals & runtime
 
-- `task/goals/board.py` — `Goal` + `GoalBoard`: a durable cross-session backlog (`data/goals.db`,
-  WAL + jitter) with atomic CAS `claim` (safe under `workers>1`), a circuit breaker, and tenant
-  scoping. `task/goals/dispatcher.py` — `GoalDispatcher` / `GoalTicker` run claimed goals via
+- The goal board (`Goal` + `GoalBoard`) lives in the modules tier, `modules/goals/board.py`: a
+  durable cross-session backlog (`data/goals.db`, WAL + jitter) with atomic CAS `claim` (safe under
+  `workers>1`), a circuit breaker, and tenant scoping. `task/goals/dispatcher.py` — `GoalDispatcher` / `GoalTicker` run claimed goals via
   `create_session` + `run_session`.
 - `task/runtime/run_as_session.py` — `run_task_as_session()`, the shared entrypoint used by the
   cron and goal executors to run a one-off task as a full session.
@@ -320,7 +319,8 @@ injected into the agent's system prompt.
 
 ### CharacterManager (`character_manager.py`)
 
-Central orchestrator for character lifecycle (load from file, role/default resolution, hot-reload).
+Loads characters from file and resolves the default (`get_default_character`,
+`active_character`).
 
 ### Character Configuration Example
 

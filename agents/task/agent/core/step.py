@@ -106,7 +106,7 @@ except ImportError:
 from agents.task.logging_config import get_task_logger
 
 # Import centralized path management
-from agents.task.path import pm
+from core.session_paths import pm
 
 
 # Generic logger for the module itself (not instances)
@@ -846,7 +846,7 @@ class StepMixin:
 		# (prod 10-19: the background reviewer's state was restored as the executor's).
 		if self.state.n_steps % 5 == 0 and not getattr(self, '_is_sub_agent', False):
 			try:
-				from agents.task.path import pm
+				from core.session_paths import pm
 
 				# Save agent state
 				state_file = pm().create_file_path(

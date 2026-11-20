@@ -24,7 +24,7 @@ import pytest
 from agents.task.agent.message_manager.service import MessageManager
 from agents.task.agent.prompts import SystemPrompt
 from agents.task.agent.views import AgentStepInfo
-from agents.task.path import get_path_manager, pm, set_path_manager
+from core.session_paths import get_path_manager, pm, set_path_manager
 from modules.llm.messages import HumanMessage
 from agents.task.loop_types.browser_views import BrowserState
 from agents.task.loop_types.dom_views import DOMElementNode

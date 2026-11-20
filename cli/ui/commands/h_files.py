@@ -2,10 +2,10 @@
 
 Recent run artifacts from the episode registry — the owner's file view over
 what background runs actually produced. Thin over the SAME
-``surfaces.telegram.harness._files_reply`` the phone renders, so "what did the
+``modules.memory.kb_reply.files_reply`` the phone renders, so "what did the
 agent make" reads identically on both seats.
 
-Async: ``_files_reply`` reads the episode registry over an awaitable and the
+Async: ``files_reply`` reads the episode registry over an awaitable and the
 registry awaits an awaitable handler (``CommandRegistry.dispatch``).
 """
 from __future__ import annotations
@@ -15,8 +15,8 @@ from cli.ui.commands.h_owner import _tenant
 
 async def h_files(ctx) -> None:
     """Recent artifacts (newest first) produced by this tenant's runs."""
-    from surfaces.telegram.harness import _files_reply
-    ctx.emit(await _files_reply(_tenant(ctx), list(ctx.args or [])), title="files")
+    from modules.memory.kb_reply import files_reply
+    ctx.emit(await files_reply(_tenant(ctx), list(ctx.args or [])), title="files")
 
 
 HELP_FILES = (

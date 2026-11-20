@@ -59,7 +59,9 @@
                  data-unreachable="{{ t('inbox.unreachable') }}" data-refused="{{ t('inbox.refused') }}"
                  data-unreadable="{{ t('money.move.unreadable') }}"
                  data-pickers_failed="{{ t('money.move.pickers_failed') }}"
-                 data-native="{{ t('money.move.native') }}">
+                 data-native="{{ t('money.move.native') }}"
+                 data-no_wallet="{{ t('money.book.empty_title') }}"
+                 data-no_wallet_how="{{ t('money.book.empty_how') }}">
           <div class="section-head">
             <h2 class="section-title">{{ t('money.move.title') }}</h2>
             <span class="section-aside">{{ t('money.move.aside') }}</span>
@@ -116,6 +118,10 @@
       <div data-pane="limits" hidden>
         <div id="money-limits"></div>
         <p class="state-body" id="money-limits-state" hidden></p>
+        {# The owner's standing money rules — the status snapshot's income_rule
+           and mandates sections, drawn by money-standing.js from
+           /api/webgate/standing. #}
+        <section class="section" id="money-standing" aria-label="{{ t('money.standing.title') }}"></section>
       </div>
 
     </div>
@@ -341,5 +347,14 @@
          data-order_expired="{{ t('money.offers.order_expired') }}"
          data-order_cancelled="{{ t('money.offers.order_cancelled') }}"></div>
     <script src="/static/app/money-offers.js" type="module"></script>
+    <div id="money-standing-copy" hidden
+         data-title="{{ t('money.standing.title') }}"
+         data-aside="{{ t('money.standing.aside') }}"
+         data-income_rule="{{ t('money.standing.income_rule') }}"
+         data-mandates="{{ t('money.standing.mandates') }}"
+         data-loading="{{ t('money.standing.loading') }}"
+         data-unreadable="{{ t('money.standing.unreadable') }}"
+         data-why="{{ t('money.standing.why') }}"></div>
+    <script src="/static/app/money-standing.js" type="module"></script>
       {% endif %}
 {% endblock %}

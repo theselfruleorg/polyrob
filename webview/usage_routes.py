@@ -2,7 +2,7 @@
 
 ``GET /api/webgate/usage?days=N`` — ``core.status_economics.spend_view`` and its
 ONE render ``spend_view_lines``, the same view and the same lines the ``/usage``
-verb prints on Telegram and in the terminal (``surfaces/telegram/usage_ops.py``),
+verb prints on Telegram and in the terminal (``cron/usage_reply.py``),
 so the seats cannot disagree. A read: tenant-scoped through
 ``pages._effective_user_id``; an unreadable ledger is ``readable: false`` with the
 reason, never a zero. Contributed to the Money destination
@@ -35,7 +35,7 @@ async def api_usage(request: Request, days: str = "7"):
     except Exception as e:  # noqa: BLE001 — an unreadable ledger is not $0
         logger.warning("usage: the AI cost records could not be read", exc_info=True)
         return JSONResponse({"readable": False, "days": n,
-                             "error": f"{type(e).__name__}: {str(e)[:160]}"})
+                             "error": type(e).__name__})  # logged, never sent
     try:
         from cron.digest import rail_names
         names = rail_names(user_id, data_dir)

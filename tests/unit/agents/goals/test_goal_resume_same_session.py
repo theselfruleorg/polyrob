@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from agents.task.goals.board import Goal
+from modules.goals.board import Goal
 from agents.task.goals.context import build_goal_run_task
 from agents.task.runtime.run_as_session import run_task_to_outcome
 

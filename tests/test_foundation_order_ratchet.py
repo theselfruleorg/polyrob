@@ -99,6 +99,7 @@ def _manager_with_every_block():
 	mm.set_environment_message("env")
 	mm.set_self_context_message("soul")
 	mm.set_project_context_message("proj")
+	mm.set_public_knowledge("public")
 	mm.set_skill_message("skills")
 	mm.set_worker_catalog_message("workers")
 	mm.set_tool_catalog_message("catalog")
@@ -144,7 +145,7 @@ def test_the_order_puts_what_is_written_later_after_what_is_not():
 	rows are last."""
 	assert [layer.key for layer in FL.FOUNDATION_LAYERS] == [
 		"system_prompt", "environment", "tool_catalog", "self_context", "self_context_soul",
-		"skill_catalog", "worker_catalog", "self_context_blocks", "project_context",
+		"public_knowledge", "skill_catalog", "worker_catalog", "self_context_blocks", "project_context",
 		"runtime_identity", "workspace", "initial_task"]
 
 

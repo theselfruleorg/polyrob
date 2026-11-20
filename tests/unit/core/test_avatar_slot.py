@@ -189,7 +189,7 @@ class _Res:
 
 @pytest.mark.asyncio
 async def test_a_refused_fetch_names_the_step_and_the_host(monkeypatch):
-    import tools.web_fetch.fetcher as fetcher
+    import core.security.safe_fetch as fetcher
 
     async def _fetch(url, **_kw):
         return _Res(403, final_url=url)
