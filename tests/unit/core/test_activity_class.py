@@ -75,9 +75,23 @@ def test_anchor_mappings():
 
 
 def test_client_classes_shape():
-    assert ac.CLIENT_CLASSES == ("goal", "cron", "money", "message", "system", "tool")
-    # exactly six, unique, all lowercase identifiers
-    assert len(ac.CLIENT_CLASSES) == len(set(ac.CLIENT_CLASSES)) == 6
+    assert ac.CLIENT_CLASSES == ("goal", "cron", "money", "message", "owner", "system",
+                                 "tool")
+    # exactly seven, unique, all lowercase identifiers
+    assert len(ac.CLIENT_CLASSES) == len(set(ac.CLIENT_CLASSES)) == 7
+
+
+@pytest.mark.parametrize("kind", sorted(k for k in ek.KNOWN_KINDS if k.startswith("console_"))
+                         + [ek.OWNER_COMMAND])
+def test_the_owners_own_acts_are_the_owners(kind):
+    """A console write or an owner verb is the OWNER's act, never "the agent itself"."""
+    assert ac.classify(kind) == "owner"
+
+
+@pytest.mark.parametrize("kind", [ek.CRON_SCHEDULED, ek.CRON_CANCELLED, ek.CRON_EDITED,
+                                  ek.CRON_PAUSED, ek.CRON_RESUMED, ek.CRON_RUN_NOW])
+def test_a_job_domain_event_is_a_scheduled_job(kind):
+    assert ac.classify(kind) == "cron"
 
 
 @pytest.mark.parametrize("kind", sorted(ek.KNOWN_KINDS))

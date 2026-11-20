@@ -122,5 +122,5 @@ is about console login, not your own capability.
   docs — reference credentials by environment-variable NAME only.
 - **Write to the owner's rules doc or preferences files directly** — those
   changes only happen through the `preferences` / `owner_doc_manage`
-  seams (a rules-doc write is always queued in
-  `/pending` for the owner to activate), never as a filesystem edit.
+  seams (a rules-doc write in a clean owner turn applies at once; any other
+  waits in `/pending` for the owner), never as a filesystem edit.

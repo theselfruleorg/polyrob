@@ -55,8 +55,6 @@ modules/
 │   ├── deferred_tools.py       # Late-tool mode (grow | deferred | bridge) + the Anthropic deferred-tool wire shape
 │   ├── usage_extract.py        # Provider usage → prompt/cached/written tokens, billed cost
 │   ├── prefix_stamp.py         # prefix_sha / tools_sha stamped on every real provider call
-│   ├── brain_scrubber.py       # Strips leaked brain-state JSON from the user-facing stream
-│   ├── think_scrubber.py       # Strips leaked <think>/<reasoning> blocks at the content seam
 │   ├── anthropic_client.py     # Anthropic Claude integration
 │   ├── openai_client.py        # OpenAI GPT integration
 │   ├── gemini_client.py        # Google Gemini integration
@@ -88,7 +86,6 @@ modules/
 │       ├── semantic_retriever.py    # Embedder-based cross-phase recall
 │       ├── lexical_retriever.py     # No-embedder (term-frequency) cross-phase recall
 │       ├── reflection_service.py    # Aux-model phase consolidation (REFLECTION_LLM_ENABLED)
-│       └── threat_scan.py           # Prompt-injection scan on memory writes (MEMORY_THREAT_SCAN)
 │
 ├── auth/                       # Authentication subsystem
 │   ├── __init__.py
@@ -104,6 +101,9 @@ modules/
 │   ├── models.py               # Data models
 │   ├── registration.py         # Agent identity registration
 │   └── validation.py           # Pluggable validation (reputation/crypto-economic/TEE)
+│
+├── goals/                      # The durable goal board (goals.db): store, asks, deps, machines
+│                              #   (the dispatcher and goal runs stay in agents/task/goals/)
 │
 ├── credits/                    # Credits and usage tracking
 │   ├── __init__.py
@@ -222,7 +222,7 @@ Specialized memory components for task agents:
   no-embedder (term-frequency) variants respectively
 - **ReflectionService**: aux-model phase consolidation (`REFLECTION_LLM_ENABLED`)
 - **PhaseManager**: Task phase tracking
-- **threat_scan**: prompt-injection scan on memory writes (`MEMORY_THREAT_SCAN`)
+- **threat_scan**: the prompt-injection scan on memory writes is `core/security/threat_scan.py`
 
 ### 4. Authentication (`auth/`)
 

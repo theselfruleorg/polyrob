@@ -81,9 +81,13 @@
                  placeholder="{{ t('inbox.answer_placeholder') }}"
                  aria-label="{{ t('inbox.answer_label') }}">
 {%- endif %}
+{%- endif %}
+{%- if item.rendered_actions %}
+          {# A read-only console decides nothing, but "Read it" is a GET: the
+             owner can still read a proposal's why, changes and diff. #}
           <div class="entry-actions">
 {%- for action in item.rendered_actions %}
-{%- if action.verb %}
+{%- if action.verb and not read_only %}
             <button class="btn {% if action.primary %}btn-primary{% endif %}"
                     data-kind="{{ item.kind }}" data-id="{{ item.id }}"
                     data-rev="{{ (item.extra or {}).get('rev') or '' }}"
@@ -155,11 +159,10 @@
 
       <p class="entry-meta" id="inbox-checked">{{ checked_note }}</p>
     </div>
-{%- if not read_only %}
-    {# The buttons above carry only data; this is what makes them decide. No
+    {# The buttons above carry only data; this is what makes them decide (and
+       read — on a read-only console only the read buttons are drawn). No
        inline script on any 043 template, so the one sentence the script may
        need that the server never rendered rides on a data attribute. #}
     <div id="inbox-copy" hidden data-unreachable="{{ t('inbox.unreachable') }}" data-refused="{{ t('inbox.refused') }}"></div>
     <script src="/static/app/inbox.js" type="module"></script>
-{%- endif %}
 {% endblock %}

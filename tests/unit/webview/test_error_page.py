@@ -19,7 +19,7 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setenv("POLYROB_POSTURE", "local")
     monkeypatch.setenv("ENV", "development")
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    import agents.task.path as pth
+    import core.session_paths as pth
     pth.reset_path_manager()
     import webview.webgate as wg
     importlib.reload(wg)

@@ -8,7 +8,7 @@ import json
 
 import pytest
 
-from agents.task.path import reset_path_manager
+from core.session_paths import reset_path_manager
 from agents.task.telemetry import get_telemetry
 from agents.task.telemetry.manager import TelemetryManager
 from agents.task.telemetry.views import ControllerRegisteredFunctionsTelemetryEvent

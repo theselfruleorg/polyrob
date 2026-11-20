@@ -287,7 +287,7 @@ def _load_project_context_impl(root: Path, *, cap_tokens: int,
 
     # A missing scanner cannot authorize a new project instruction source.
     try:
-        from modules.memory.task.threat_scan import is_suspicious
+        from core.security.threat_scan import is_suspicious
     except Exception:
         logger.warning("project context not loaded: threat scanner unavailable")
         return None

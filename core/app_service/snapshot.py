@@ -22,7 +22,7 @@ is created ``O_CREAT|O_EXCL|O_NOFOLLOW`` relative to its parent's descriptor. A
 planted symlink or pre-created file fails the copy instead of redirecting a root
 write. :func:`open_owned_dir` is the same rule for the supervisor's own tree
 (``<data>/apps/<tenant>/<slug>/…``): each component must be a real directory
-owned by this process, and group/other write is stripped from it.
+owned by this process, and group write and every 'other' bit are stripped from it.
 """
 import errno
 import os
@@ -52,14 +52,33 @@ def _check_name(name: str) -> str:
     return name
 
 
+def snapshot_file_mode(src_mode: int) -> int:
+    """A shipped file is readable by everyone and never setuid/setgid.
+
+    The app container runs as ``65534:65534``, which is not the owner and not in
+    the data group, so a shipped file must be other-readable. Only a file the
+    source already shares (group or other read) reaches here: an owner-only file
+    is refused by :func:`core.ship_tree.file_skip_reason` as ``private`` and named
+    in the result (audit 2026-11-21 M-9), so 0644 never widens a private file.
+    The tree is reachable only through the supervisor's own dirs, which are
+    closed to 'other' (:func:`open_owned_dir`); docker's bind mount needs no
+    search right on them. A setuid/setgid bit (a sandbox container
+    can set one on a workspace file) is EPERM under ``RestrictSUIDSGID`` — both
+    the supervisor's unit and the agent's (the HF stage) — and has no place in
+    a shipped tree. Executable stays executable; ``/app`` is mounted read-only."""
+    return 0o644 | (0o111 if src_mode & stat.S_IXUSR else 0)
+
+
 def _open_child_dir(parent_fd: int, name: str, *, create: bool, own: bool) -> int:
     """Open (optionally mkdir) *name* under *parent_fd* without following a
     symlink. With *own*, the directory must belong to this euid and loses
-    group/other write."""
+    group write and every 'other' bit."""
     _check_name(name)
     if create:
         try:
-            os.mkdir(name, 0o755, dir_fd=parent_fd)
+            # The supervisor's own dirs are closed to 'other' (M-9); a snapshot
+            # tree's dirs stay 0755 for the container uid.
+            os.mkdir(name, 0o750 if own else 0o755, dir_fd=parent_fd)
         except FileExistsError:
             pass
     try:
@@ -75,8 +94,12 @@ def _open_child_dir(parent_fd: int, name: str, *, create: bool, own: bool) -> in
         if own:
             if hasattr(os, "geteuid") and st.st_uid != os.geteuid():
                 raise UnsafePath(errno.EPERM, f"{name!r} is owned by uid {st.st_uid}, not us")
-            if st.st_mode & 0o022:
-                os.fchmod(fd, stat.S_IMODE(st.st_mode) & ~0o022)
+            if st.st_mode & 0o027:
+                # No group write, nothing for 'other' (audit 2026-11-21 M-9). Never
+                # re-set setuid/setgid: a data-home dir carries setgid and
+                # RestrictSUIDSGID=true (polyrob-apps.service) refuses that chmod;
+                # the unit's Group=polyrob-data keeps new files in the group.
+                os.fchmod(fd, stat.S_IMODE(st.st_mode) & ~0o027 & 0o1777)
     except BaseException:
         os.close(fd)
         raise
@@ -86,7 +109,8 @@ def _open_child_dir(parent_fd: int, name: str, *, create: bool, own: bool) -> in
 def open_owned_dir(root: str, parts: Sequence[str], *, create: bool = True) -> int:
     """A descriptor for ``root/parts…`` where *root* is trusted configuration
     (the data home) and every component under it is opened no-follow, must be
-    owned by this process and is stripped of group/other write. Caller closes."""
+    owned by this process and is stripped of group write and every 'other' bit.
+    Caller closes."""
     if create:
         os.makedirs(root, exist_ok=True)
     fd = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
@@ -101,7 +125,7 @@ def open_owned_dir(root: str, parts: Sequence[str], *, create: bool = True) -> i
     return fd
 
 
-def _remove_entry(parent_fd: int, name: str) -> None:
+def remove_entry(parent_fd: int, name: str) -> None:
     """Remove *name* under *parent_fd* whatever it is, never following a link."""
     try:
         st = os.lstat(name, dir_fd=parent_fd)
@@ -144,7 +168,7 @@ def _copy_nofollow(src: str, dst_dir_fd: int, name: str, *, budget: int, source_
                 while view:
                     n = os.write(out_fd, view)
                     view = view[n:]
-            os.fchmod(out_fd, stat.S_IMODE(st.st_mode) & ~0o022)
+            os.fchmod(out_fd, snapshot_file_mode(st.st_mode))
             os.utime(out_fd, (st.st_atime, st.st_mtime))
         finally:
             os.close(out_fd)
@@ -176,7 +200,7 @@ def snapshot_tree(src: str, dst: str, *, max_mb: int,
         name = dst
     try:
         _check_name(name)
-        _remove_entry(parent_fd, name)
+        remove_entry(parent_fd, name)
         root_fd = _open_child_dir(parent_fd, name, create=True, own=False)
         dir_fds: Dict[str, int] = {"": root_fd}
 
@@ -216,7 +240,7 @@ def snapshot_tree(src: str, dst: str, *, max_mb: int,
                 os.close(fd)
             dir_fds.clear()
             try:
-                _remove_entry(parent_fd, name)
+                remove_entry(parent_fd, name)
             except OSError:
                 pass
             raise

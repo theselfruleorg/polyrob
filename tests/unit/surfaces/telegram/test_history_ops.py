@@ -2,7 +2,7 @@
 import time
 
 from core.surfaces import owner_thread as ot
-from surfaces.telegram.history_ops import history_reply
+from core.surfaces.owner_reads import history_reply
 
 
 def test_no_store_is_named_not_empty(tmp_path):

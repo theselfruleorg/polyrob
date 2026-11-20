@@ -55,6 +55,9 @@ _MONEY_OPS = frozenset({
 #: A grant covers the approved amount plus this slack (prices move between the
 #: refusal and the retry). Above it the owner is asked again.
 _GRANT_SLACK = 1.05
+#: The attestation a deposit sweep records for the rail (125 S3): no ``TxIntent``,
+#: the op's own pins are its authority.
+DEPOSIT_SWEEP_INTENT = "signer:deposit.sweep"
 #: EIP-3009 TransferWithAuthorization, exactly (x402 exact scheme).
 _EIP3009_FIELDS = [
     {"name": "from", "type": "address"}, {"name": "to", "type": "address"},
@@ -802,10 +805,16 @@ class SignerService:
         nonce = int(tx["nonce"])
         if not self.store.reserve_nonce(chain, signer.address, nonce):
             raise _Refuse(protocol.NONCE_REUSE, f"deposit nonce {nonce} already signed")
+        from core.signer import attest
         from core.wallet.broadcast.evm import BroadcastError
+        # 125 S3: the rail signs only a recorded authorization. A sweep's authority is
+        # this op itself (the derived key, the pinned destination), so it records an
+        # explicit marker intent, not a tx_guard decision.
+        attest.record(DEPOSIT_SWEEP_INTENT, tx)
         try:
             tx_hash = rail.sign_and_send(tx)
         except BroadcastError as exc:
+            attest.take(tx)
             self.store.release_nonce(chain, signer.address, nonce)
             raise _Refuse(protocol.BROADCAST_FAILED, f"not sent: {exc}")
         except Exception as exc:

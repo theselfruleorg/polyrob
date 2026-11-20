@@ -1,7 +1,5 @@
-"""050 §7.6 — the thin core `agent_nft` tool. Its only jobs: the flag, the turn origin
-(+ pause for a live write), a clean refusal when the package is absent, and handing
-validated params to the agent-NFT package's `verbs.<verb>` (`polyrob_drop`, with the legacy
-package name as a fallback)."""
+"""050 §7.6 — the core `agent_nft` tool. Its only jobs: the flag, the turn origin (+ pause for a
+live write), and running the core verb body (123 S4: there is no package seam)."""
 import asyncio
 import types
 
@@ -22,50 +20,31 @@ def test_off_by_default(monkeypatch):
     assert "AGENT_NFT_ENABLED" in _err(res)
 
 
-def test_missing_package_is_a_refusal_with_a_remedy(monkeypatch):
+def test_the_mint_needs_no_package(monkeypatch):
+    """123 S3: the mint body is core — a missing package is never the refusal."""
     monkeypatch.setenv("AGENT_NFT_ENABLED", "true")
     import builtins
     real = builtins.__import__
 
-    from core.tool_capabilities import AGENT_NFT_PACKAGE_MODULES
-
     def fake(name, *a, **k):
-        if name.split(".")[0] in AGENT_NFT_PACKAGE_MODULES:
+        if name.split(".")[0] in ("polyrob_drop", "polyrob_desk"):
             raise ImportError(name)
         return real(name, *a, **k)
     monkeypatch.setattr(builtins, "__import__", fake)
     from tools.agent_nft.tool import MintParams
     res = _run(AgentNftTool().agent_nft_collection_mint(MintParams(chain="robinhood", max_spend_usd=1.0)))
-    assert "polyrob_drop" in _err(res)
-    assert "polyrob[drop]" not in _err(res)  # no such extra until the dist publishes
-    assert "theselfruleorg" not in _err(res)
+    assert "polyrob_drop" not in _err(res) and "package" not in _err(res)
 
 
-def test_the_package_is_found_under_its_new_name_or_the_legacy_one(monkeypatch):
-    import sys
-    from core.tool_capabilities import AGENT_NFT_PACKAGE_MODULES
-    new, legacy = AGENT_NFT_PACKAGE_MODULES
-    for present in (new, legacy):
-        for name in AGENT_NFT_PACKAGE_MODULES:
-            monkeypatch.delitem(sys.modules, name, raising=False)
-            monkeypatch.delitem(sys.modules, name + ".verbs", raising=False)
-        # Hide the OTHER name: a real package on the path must not win (None = ImportError).
-        for name in AGENT_NFT_PACKAGE_MODULES:
-            if name != present:
-                monkeypatch.setitem(sys.modules, name, None)
-                monkeypatch.setitem(sys.modules, name + ".verbs", None)
-        verbs = types.ModuleType(present + ".verbs")
-        pkg = types.ModuleType(present)
-        pkg.verbs = verbs
-        monkeypatch.setitem(sys.modules, present, pkg)
-        monkeypatch.setitem(sys.modules, present + ".verbs", verbs)
-        assert AgentNftTool()._impl() is verbs
-        monkeypatch.delitem(sys.modules, present)
-        monkeypatch.delitem(sys.modules, present + ".verbs")
+def test_core_names_no_agent_nft_package():
+    """123 S4: the import-by-name seam is gone."""
+    import core.tool_capabilities as caps
+    assert not hasattr(caps, "AGENT_NFT_PACKAGE_MODULES")
 
 
-def test_params_reach_the_package_verb(monkeypatch):
-    """mint is a package verb (C20 keeps it there)."""
+def test_params_reach_the_core_mint_body(monkeypatch):
+    """123 S3: the mint body is tools/agent_nft/mint.py."""
+    from tools.agent_nft import mint as mint_mod
     from tools.agent_nft.tool import MintParams
     monkeypatch.setenv("AGENT_NFT_ENABLED", "true")
     seen = {}
@@ -73,20 +52,21 @@ def test_params_reach_the_package_verb(monkeypatch):
     async def mint(tool, params, ctx):
         seen["params"] = params
         return tool._ar(content="ok")
-    tool = AgentNftTool(impl=types.SimpleNamespace(mint=mint))
-    res = _run(tool.agent_nft_collection_mint(MintParams(chain="robinhood", max_spend_usd=1.0)))
+    monkeypatch.setattr(mint_mod, "mint", mint)
+    res = _run(AgentNftTool().agent_nft_collection_mint(MintParams(chain="robinhood", max_spend_usd=1.0)))
     assert seen["params"].dry_run is True and not _err(res)
 
 
 def test_a_verb_exception_is_an_error_result(monkeypatch):
+    from tools.agent_nft import mint as mint_mod
     monkeypatch.setenv("AGENT_NFT_ENABLED", "true")
 
     from tools.agent_nft.tool import MintParams
 
     async def mint(tool, params, ctx):
         raise RuntimeError("rpc down")
-    res = _run(AgentNftTool(impl=types.SimpleNamespace(mint=mint)).agent_nft_collection_mint(
-        MintParams(chain="robinhood", max_spend_usd=1.0)))
+    monkeypatch.setattr(mint_mod, "mint", mint)
+    res = _run(AgentNftTool().agent_nft_collection_mint(MintParams(chain="robinhood", max_spend_usd=1.0)))
     assert "rpc down" in _err(res)
 
 
@@ -97,11 +77,13 @@ def test_mint_params_are_the_blind_mint():
 
     from tools.agent_nft.tool import MintParams
     p = MintParams(chain="robinhood", max_spend_usd=200.0)
-    assert (p.to, p.qty, p.min_pnl_out, p.chain) == (None, 1, 0, "robinhood")
+    assert (p.to, p.qty, p.min_out_per_token, p.chain) == (None, 1, None, "robinhood")
+    with pytest.raises(ValidationError):  # the old name is gone
+        MintParams(chain="robinhood", max_spend_usd=1.0, min_pnl_out=5)
     assert MintParams(qty=10, chain="robinhood-testnet", max_spend_usd=1.0).chain == "robinhood-testnet"
     with pytest.raises(ValidationError):  # there is no default chain
         MintParams(max_spend_usd=1.0)
-    for bad in ({"qty": 0}, {"qty": 11}, {"min_pnl_out": -1}, {"chain": "solana"}, {"seed": "POLYROB"},
+    for bad in ({"qty": 0}, {"qty": 101}, {"min_pnl_out": -1}, {"min_out_per_token": -1}, {"chain": "solana"}, {"seed": "POLYROB"},
                 {"to": "not-an-address"}):
         with pytest.raises(ValidationError):
             MintParams(**{"chain": "robinhood", "max_spend_usd": 1.0, **bad})

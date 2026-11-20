@@ -23,17 +23,17 @@ def test_load_owner_doc_active_roundtrip(tmp_path):
 
 def test_construction_combines_owner_doc(tmp_path):
     # Mirror construction.py's _combined join to prove owner facts land between
-    # SOUL and SELF, with the "Owner facts" header, only when present.
+    # SOUL and SELF, with the "Owner rules" header, only when present.
     w = OwnerDocWriter(tmp_path)
     w.propose("Owner prefers metric units.", user_id="u1", created_by="user", pending=False)
     _soul = "SOUL: I am Nova."
     _self_doc = "SELF: I learned X."
     _owner_doc = load_owner_doc(tmp_path, "u1")
     if _owner_doc:
-        _owner_doc = "## Owner facts\n\n" + _owner_doc
+        _owner_doc = "## Owner rules\n\n" + _owner_doc
     combined = "\n\n".join(p for p in ("", _soul, _owner_doc, _self_doc) if p)
-    assert combined.index(_soul) < combined.index("Owner facts")
-    assert combined.index("Owner facts") < combined.index(_self_doc)
+    assert combined.index(_soul) < combined.index("Owner rules")
+    assert combined.index("Owner rules") < combined.index(_self_doc)
     assert "metric units" in combined
 
 
@@ -56,7 +56,7 @@ def _build_contract_block(tmp_path, uid: str) -> str:
 
 def test_contract_header_spacing_matches_owner_facts(tmp_path):
     # P2 T1 review fix (minor): the contract header uses a blank line after it,
-    # aligned with the "## Owner facts\n\n" sibling.
+    # aligned with the "## Owner rules\n\n" sibling.
     cw = ContractWriter(tmp_path)
     cw.propose("Rule one.", user_id="u1", created_by="user", pending=False)
     block = _build_contract_block(tmp_path, "u1")
@@ -86,7 +86,7 @@ def test_style_line_skips_invalid_or_oversized_values():
 def test_construction_combines_contract_after_owner_facts(tmp_path):
     # Mirror construction.py's real join: SOUL, owner facts, contract block
     # (operating contract + style line), then SELF — contract lands strictly
-    # between "Owner facts" and the SELF doc.
+    # between "Owner rules" and the SELF doc.
     ow = OwnerDocWriter(tmp_path)
     ow.propose("Owner prefers metric units.", user_id="u1", created_by="user", pending=False)
     cw = ContractWriter(tmp_path)
@@ -97,13 +97,13 @@ def test_construction_combines_contract_after_owner_facts(tmp_path):
     _self_doc = "SELF: I learned X."
     _owner_doc = load_owner_doc(tmp_path, "u1")
     if _owner_doc:
-        _owner_doc = "## Owner facts\n\n" + _owner_doc
+        _owner_doc = "## Owner rules\n\n" + _owner_doc
     _contract_block = _build_contract_block(tmp_path, "u1")
     combined = "\n\n".join(
         p for p in ("", _soul, _owner_doc, _contract_block, _self_doc) if p
     )
-    assert combined.index(_soul) < combined.index("Owner facts")
-    assert combined.index("Owner facts") < combined.index("## Operating contract")
+    assert combined.index(_soul) < combined.index("Owner rules")
+    assert combined.index("Owner rules") < combined.index("## Operating contract")
     assert combined.index("## Operating contract") < combined.index(_self_doc)
     assert "Never spend more than $5" in combined
 
@@ -164,8 +164,8 @@ def _owner_block(tmp_path, uid: str) -> str:
     doc = load_owner_doc(tmp_path, uid)
     if not doc:
         return ""
-    head = (render_age_header("Owner facts", doc)
-            if measure_doc_age(doc).dated else "## Owner facts")
+    head = (render_age_header("Owner rules", doc)
+            if measure_doc_age(doc).dated else "## Owner rules")
     return head + "\n\n" + doc
 
 
@@ -173,7 +173,7 @@ def test_unstamped_owner_doc_keeps_the_bare_heading(tmp_path):
     """Default byte-identical: no provenance stamps => the pre-057 heading."""
     OwnerDocWriter(tmp_path).propose("Owner prefers metric units.", user_id="u1",
                                      created_by="user", pending=False)
-    assert _owner_block(tmp_path, "u1").startswith("## Owner facts\n\n")
+    assert _owner_block(tmp_path, "u1").startswith("## Owner rules\n\n")
 
 
 def test_stamped_owner_doc_heading_states_its_age(tmp_path):
@@ -181,7 +181,7 @@ def test_stamped_owner_doc_heading_states_its_age(tmp_path):
         "Owner prefers metric units.", user_id="u1", created_by="user",
         pending=False, source="owner said", observed_at="2026-09-19")
     head = _owner_block(tmp_path, "u1").splitlines()[0]
-    assert head.startswith("## Owner facts (")
+    assert head.startswith("## Owner rules (")
     assert "last write 2026-09-19" in head
 
 
@@ -204,4 +204,4 @@ def test_construction_actually_renders_the_age_header():
     src = inspect.getsource(construction)
     assert "render_age_header" in src
     assert "measure_doc_age" in src
-    assert '"Owner facts"' in src
+    assert '"Owner rules"' in src

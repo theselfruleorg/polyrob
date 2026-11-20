@@ -204,7 +204,7 @@ def rail_names(user_id: str, data_dir: str) -> Dict[str, str]:
     except Exception:
         _logger.debug("names: job names unavailable", exc_info=True)
     try:
-        from agents.task.goals.board import GoalBoard
+        from modules.goals.board import GoalBoard
         from core.runtime_paths import goals_db_path
         path = goals_db_path(data_dir)
         goals = (GoalBoard(path).list_recent(user_id=user_id, limit=200)

@@ -20,7 +20,6 @@ from contextlib import asynccontextmanager, contextmanager
 import logging
 import os
 import tempfile
-from pathlib import Path
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
@@ -512,14 +511,10 @@ def _wallet_data_dir(data_dir: Optional[str] = None, *, for_meta: bool = False) 
     """
     if data_dir is not None:
         return os.path.join(data_dir, "wallet")
-    env_dir = (os.environ.get("POLYROB_DATA_DIR") or "").strip()
-    if env_dir:
-        # L3: absolutize so a relative dir is CWD-independent (meta & audit agree).
-        try:
-            env_dir = str(Path(env_dir).resolve())
-        except Exception:
-            env_dir = os.path.abspath(env_dir)
-        return os.path.join(env_dir, "wallet")
+    from core.runtime_paths import pinned_data_home
+    pinned = pinned_data_home()  # L3: absolute, so meta & audit agree whatever the CWD
+    if pinned is not None:
+        return os.path.join(str(pinned), "wallet")
     try:
         from core.runtime_paths import resolve_data_home  # lazy: core-tier only
         return str(resolve_data_home() / "wallet")

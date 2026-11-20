@@ -98,6 +98,12 @@
         "token_out": {
           "description": "MINT ADDRESS of the token to buy (base58)",
           "type": "string"
+        },
+        "why": {
+          "default": null,
+          "description": "Why this act, now (one line). Required on an autonomous run; the owner reads it.",
+          "nullable": true,
+          "type": "string"
         }
       },
       "required": [

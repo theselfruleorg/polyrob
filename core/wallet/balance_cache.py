@@ -81,6 +81,7 @@ class ChainBalance:
         return self.usdc_expected and self.usdc is None and not self.error
 
 
+_ACCOUNT_FIELDS = frozenset(("chain", "account", "label", "symbol", "native", "usdc", "error"))
 _FIELDS = frozenset(("chain", "symbol", "native", "usdc", "error", "usdc_expected",
                      "lp_positions", "lp_expected"))
 
@@ -109,11 +110,25 @@ def lp_position_count(address: str, chain: str, *, rpc=None) -> Optional[int]:
 
 
 @dataclass
+class AccountBalance:
+    """124 M3: the native and USDC balance of an NFT account the treasury holds."""
+    chain: str
+    account: str
+    label: str
+    symbol: str
+    native: Optional[float] = None
+    usdc: Optional[float] = None
+    error: Optional[str] = None
+
+
+@dataclass
 class BalanceSnapshot:
     address: Optional[str] = None
     solana_address: Optional[str] = None
     taken_at: float = 0.0
     chains: List[ChainBalance] = field(default_factory=list)
+    #: 124 M3: each held NFT account; ``None`` = the holdings state could not be read.
+    accounts: Optional[List[AccountBalance]] = field(default_factory=list)
 
     @property
     def age_sec(self) -> float:
@@ -139,7 +154,10 @@ def read(data_home: Optional[str] = None) -> Optional[BalanceSnapshot]:
             address=raw.get("address"), solana_address=raw.get("solana_address"),
             taken_at=float(raw.get("taken_at") or 0.0),
             chains=[ChainBalance(**{k: v for k, v in row.items() if k in _FIELDS})
-                    for row in (raw.get("chains") or [])])
+                    for row in (raw.get("chains") or [])],
+            accounts=(None if raw.get("accounts", []) is None else
+                      [AccountBalance(**{k: v for k, v in row.items() if k in _ACCOUNT_FIELDS})
+                       for row in raw.get("accounts") or []]))
     except Exception:
         logger.debug("balance cache: unreadable (fail-open to no snapshot)",
                      exc_info=True)
@@ -157,7 +175,9 @@ def write(snapshot: BalanceSnapshot, data_home: Optional[str] = None) -> None:
             json.dump({"address": snapshot.address,
                        "solana_address": snapshot.solana_address,
                        "taken_at": snapshot.taken_at,
-                       "chains": [asdict(c) for c in snapshot.chains]}, fh)
+                       "chains": [asdict(c) for c in snapshot.chains],
+                       "accounts": (None if snapshot.accounts is None
+                                    else [asdict(a) for a in snapshot.accounts])}, fh)
         os.replace(tmp, path)
     except Exception:
         logger.debug("balance cache: write failed (fail-open)", exc_info=True)
@@ -201,6 +221,8 @@ def collect(wallet: Any, *, evm_reader=None, solana_reader=None, lp_reader=None,
                 chain=row.name, symbol=row.native_symbol or "ETH",
                 error=f"{type(exc).__name__}: {exc}"[:120]))
 
+    snap.accounts = _account_balances(evm_reader)
+
     try:
         sol_addr = getattr(wallet, "solana_address", None)
     except Exception:
@@ -217,6 +239,33 @@ def collect(wallet: Any, *, evm_reader=None, solana_reader=None, lp_reader=None,
                 chain="solana", symbol="SOL",
                 error=f"{type(exc).__name__}: {exc}"[:120]))
     return snap
+
+
+def _account_balances(evm_reader) -> Optional[List[AccountBalance]]:
+    """124 M3: each NFT account the treasury holds (the holdings state), read like a chain row.
+    None = the holdings state could not be read (never "no accounts")."""
+    from core.wallet import chains as _chains
+    try:
+        from core.wallet import holdings_state
+        rows = holdings_state.tracked()
+    except Exception:  # noqa: BLE001
+        logger.debug("balance cache: holdings state unreadable", exc_info=True)
+        return None
+    out: List[AccountBalance] = []
+    for r in rows:
+        chain, account = str(r.get("chain") or ""), str(r.get("account") or "")
+        row = _chains.get(chain)
+        if not chain or not account or row is None:
+            continue
+        sym = row.native_symbol or "ETH"
+        try:
+            native, usdc = evm_reader(account, chain)
+            out.append(AccountBalance(chain=chain, account=account, label=str(r.get("label") or ""),
+                                      symbol=sym, native=native, usdc=usdc))
+        except Exception as exc:  # noqa: BLE001
+            out.append(AccountBalance(chain=chain, account=account, label=str(r.get("label") or ""),
+                                      symbol=sym, error=f"{type(exc).__name__}: {exc}"[:120]))
+    return out
 
 
 def refresh(wallet: Any, data_home: Optional[str] = None, **kw) -> BalanceSnapshot:
@@ -266,6 +315,20 @@ def render_lines(snapshot: Optional[BalanceSnapshot]) -> List[str]:
         elif row.lp_expected and row.lp_positions is None:
             part += " · liquidity positions unknown"
         lines.append(part)
+    if snapshot.accounts is None:
+        lines.append("  NFT accounts: unknown — the holdings record is unreadable")
+    for a in snapshot.accounts or ():
+        if a.error:
+            lines.append(f"  account {a.label} {a.account} ({a.chain}): unknown — {a.error}")
+            continue
+        part = f"  account {a.label} {a.account} ({a.chain}): {_amount(a.native, a.symbol)}"
+        if a.usdc is not None:
+            part += f" · {a.usdc:,.2f} USDC"
+        lines.append(part)
+    if snapshot.accounts:
+        totals = total_native_by_symbol(snapshot)
+        lines.append("  total (treasury + NFT accounts): " + ", ".join(
+            _amount(v, k) for k, v in totals.items()))
     return lines
 
 
@@ -277,7 +340,11 @@ def total_native_by_symbol(snapshot: Optional[BalanceSnapshot]) -> Dict[str, Opt
     """
     out: Dict[str, Optional[float]] = {}
     seen_unknown: Dict[str, bool] = {}
-    for row in (snapshot.chains if snapshot else []):
+    rows = list(snapshot.chains if snapshot else []) + list((snapshot.accounts or []) if snapshot else [])
+    for row in rows:   # 124 M3: the treasury and each NFT account, each counted once
+        if isinstance(row, AccountBalance) and row.error:
+            out.setdefault(row.symbol or "?", None)
+            continue
         sym = row.symbol or "?"
         if row.native is None:
             seen_unknown.setdefault(sym, True)

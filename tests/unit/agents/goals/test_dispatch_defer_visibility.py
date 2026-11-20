@@ -12,7 +12,7 @@ import asyncio
 
 import pytest
 
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from agents.task.goals.dispatcher import GoalDispatcher
 
 @pytest.fixture(autouse=True)

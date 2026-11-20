@@ -28,7 +28,8 @@ _REACTION = {SEEN_MARK: "eyes", FAILED_MARK: "x"}
 
 def SlackSink(client: SlackClient) -> TextSink:  # noqa: N802 — kept name
     """cron/delivery sink: send a raw text to a channel id (best-effort)."""
-    return TextSink(client.send_message, label="SlackSink", surface_id="slack")
+    return TextSink(client.send_message, label="SlackSink", surface_id="slack",
+                    flavor=SlackSurface(client).capabilities.markdown_flavor)
 
 
 class SlackHarness(BaseHarness):

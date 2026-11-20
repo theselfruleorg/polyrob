@@ -214,7 +214,7 @@ class TestLoadProjectContext:
         (tmp_path / "CLAUDE.md").write_text("normal content", encoding="utf-8")
 
         # Patch out the scanner import so it acts as if unavailable.
-        with patch.dict("sys.modules", {"modules.memory.task.threat_scan": None}):
+        with patch.dict("sys.modules", {"core.security.threat_scan": None}):
             result = pc_module.load_project_context(tmp_path)
 
         # Can't guarantee result here since sys.modules patch may not block the

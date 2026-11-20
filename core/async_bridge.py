@@ -17,8 +17,15 @@ on it stay bound to a live loop for the process lifetime.
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import functools
+import inspect
+import logging
 import threading
-from typing import Any, Coroutine, Optional
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Callable, Coroutine, Optional
+
+logger = logging.getLogger(__name__)
 
 
 _REAP_WAIT_S = 5.0
@@ -117,3 +124,99 @@ def spawn_retained(coro, registry: Optional[set] = None):
     registry.add(task)
     task.add_done_callback(registry.discard)
     return task
+
+
+# --- Blocking store calls from async code (proposal 125 S15) -------------------
+#
+# A SQLite store (goals.db, cron, memory) is synchronous; a call on the event loop
+# holds every session while the file is contended (up to 17 s in execute_retry).
+# The store pool is its own: a contended goals.db must not fill the default
+# executor that asyncio.to_thread and the LLM clients share.
+
+_STORE_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="store")
+
+
+async def run_off_loop(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """Await ``fn(*args, **kwargs)`` in the store pool, with the caller's contextvars.
+
+    A cancel of the await does NOT stop the call in the thread; a terminal write
+    wraps this in :func:`shielded`.
+    """
+    loop = asyncio.get_running_loop()
+    ctx = contextvars.copy_context()
+    return await loop.run_in_executor(
+        _STORE_POOL, functools.partial(ctx.run, fn, *args, **kwargs))
+
+
+def offloaded(fn: Callable[..., Any]) -> Callable[..., Coroutine[Any, Any, Any]]:
+    """A sync method body becomes an awaitable method that runs in the store pool.
+
+    ``inspect.iscoroutinefunction`` stays True for the decorated method.
+    """
+    @functools.wraps(fn)
+    async def _wrapper(*args: Any, **kwargs: Any) -> Any:
+        return await run_off_loop(fn, *args, **kwargs)
+    return _wrapper
+
+
+class _OffLoop:
+    """The proxy :func:`off_loop` returns: each callable attribute is awaitable."""
+
+    __slots__ = ("_target", "_shield")
+
+    def __init__(self, target: Any, shield: bool = False) -> None:
+        object.__setattr__(self, "_target", target)
+        object.__setattr__(self, "_shield", shield)
+
+    def __getattr__(self, name: str) -> Any:
+        attr = getattr(self._target, name)
+        if not callable(attr):
+            return attr
+        shield = self._shield
+        if inspect.iscoroutinefunction(attr):
+            # Already async (a test double or an @offloaded method): await it as is.
+            if not shield:
+                return attr
+
+            async def _acall(*args: Any, **kwargs: Any) -> Any:
+                return await shielded(attr(*args, **kwargs))
+            return _acall
+
+        async def _call(*args: Any, **kwargs: Any) -> Any:
+            if shield:
+                return await shielded(run_off_loop(attr, *args, **kwargs))
+            return await run_off_loop(attr, *args, **kwargs)
+        _call.__name__ = name
+        return _call
+
+    def __repr__(self) -> str:
+        return f"off_loop({self._target!r})"
+
+
+def off_loop(obj: Any, *, shield: bool = False) -> Any:
+    """A proxy of a sync store: ``await off_loop(store).method(...)`` runs in the store pool.
+
+    ``shield=True`` is for a terminal write: each call is :func:`shielded` — a cancel
+    lets the write finish, then the ``CancelledError`` goes on.
+    """
+    return _OffLoop(obj, shield)
+
+
+async def shielded(aw: Any) -> Any:
+    """Await a terminal write so a cancel cannot cut it: the write finishes, then
+    the ``CancelledError`` goes on (the code after the await does not run).
+    """
+    fut = asyncio.ensure_future(aw)
+    try:
+        return await asyncio.shield(fut)
+    except asyncio.CancelledError:
+        if fut.cancelled():
+            raise
+        while not fut.done():
+            try:
+                await asyncio.wait({fut})
+            except asyncio.CancelledError:
+                continue
+        if not fut.cancelled() and fut.exception() is not None:
+            logger.warning("a shielded write failed after a cancel", exc_info=fut.exception())
+        raise

@@ -62,7 +62,7 @@ def test_artifact_id_is_scoped_to_goal_and_session(tmp_path):
 
 
 def test_eleventh_goal_check_is_rejected_without_persisting(tmp_path):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from tools.goal_tools import GoalTool, GoalCreateAction
     board = GoalBoard(str(tmp_path / "goals.db"))
     tool = GoalTool.__new__(GoalTool)

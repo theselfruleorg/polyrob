@@ -27,7 +27,7 @@ async def stage_attachments(paths, workspace, text=""):
 
 
 async def attach_to_session(orchestrator, session_id, user_id, paths):
-    from agents.task.path import pm
+    from core.session_paths import pm
     workspace = pm().get_workspace_dir(session_id, user_id)
     text, images, receipts = await stage_attachments(paths, workspace)
     # 085 W3 (A1): the turn holds only file content — none of it is typed, and

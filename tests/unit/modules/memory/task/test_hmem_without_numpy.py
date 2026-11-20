@@ -18,7 +18,7 @@ import pytest
 def no_numpy(monkeypatch):
     """Evict numpy + the H-MEM package so their module-level imports re-run
     under a blocked numpy; on teardown put the ORIGINAL modules back, so a
-    later test's ``monkeypatch.setattr("modules.memory.task.threat_scan…")``
+    later test's ``monkeypatch.setattr("core.security.threat_scan…")``
     resolves the same objects everyone else imported."""
     evicted = {m: sys.modules[m] for m in list(sys.modules)
                if m == "numpy" or m.startswith("numpy.") or m.startswith("modules.memory.task")}

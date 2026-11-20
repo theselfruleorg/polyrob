@@ -469,7 +469,7 @@ def script_changed_refusal(spec: Dict[str, Any], real: str) -> Optional[str]:
 def _script_workspace() -> Optional[str]:
     """The durable workspace root, or None when this install has none."""
     try:
-        from agents.task.path import pm
+        from core.session_paths import pm
         manager = pm()
         if not manager.is_project_root_workspace:
             return None

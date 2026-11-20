@@ -248,8 +248,8 @@ def _deployment_evidence() -> List[str]:
 def resolve_admin_data_home() -> DataHomeResolution:
     """Resolve the data home an owner-control verb may act on (see module doc)."""
     local = _local_home()
-    env_value = (os.environ.get("POLYROB_DATA_DIR") or "").strip()
-    if env_value:
+    from core.runtime_paths import pinned_data_home
+    if pinned_data_home() is not None:
         # The owner (or systemd, or an active profile) pinned it. Byte-identical
         # to the pre-fix behaviour, including the resolve/expand semantics.
         return DataHomeResolution(path=local, source="env", local_path=local,

@@ -19,7 +19,7 @@ import shutil
 from enum import Enum
 
 from core.file_lock import get_safe_file_lock
-from agents.task.path import pm, get_safe_singleton
+from core.session_paths import pm, get_safe_singleton
 from agents.task.constants import DEFAULT_USER_ID
 from core.data_perms import apply_birth_mode
 from core.state.files import atomic_write_json
@@ -305,7 +305,7 @@ class SessionManager:
 
             # Always clean the session ID
             session_id = pm().clean_session_id(session_id)
-            from agents.task.path import is_reserved_session_id
+            from core.session_paths import is_reserved_session_id
             if is_reserved_session_id(session_id):
                 # WEB-1: console seat / global stream names are never sessions
                 # (a SessionOwnershipError, so the HTTP creator answers 403).
@@ -1026,7 +1026,7 @@ class SessionManager:
                 all_sessions.append(session_info)
             
             # Then check disk for any not in memory using PathManager's structure
-            from agents.task.path import pm
+            from core.session_paths import pm
             try:
                 # Search both layouts: NEW flat (data_root/<user>/<session>/metadata.json)
                 # AND legacy (data_root/<user>/sessions/<session>/metadata.json).
@@ -1158,5 +1158,5 @@ class SessionManager:
 # Singleton access - use centralized get_safe_singleton
 def get_session_manager() -> SessionManager:
     """Get the singleton SessionManager instance using centralized singleton pattern."""
-    from agents.task.path import get_safe_singleton
+    from core.session_paths import get_safe_singleton
     return get_safe_singleton(SessionManager)()

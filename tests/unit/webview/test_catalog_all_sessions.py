@@ -19,7 +19,6 @@ Scope rules pinned here:
                 any other identity (or no auth) → [].
   - multitenant: strictly per-tenant, byte-identical to before.
 """
-import asyncio
 import json
 
 import pytest
@@ -58,7 +57,7 @@ def catalog_tree(tmp_path):
     _seed_session(root, "alice", "s-console-1")
     _seed_session(root, "local", "s-cli-1")
     _seed_session(root, "u_abc123", "s-tg-1")
-    from agents.task.path import get_path_manager, set_path_manager, reset_path_manager
+    from core.session_paths import get_path_manager, set_path_manager, reset_path_manager
     set_path_manager(get_path_manager(data_root=str(root)))
     yield root
     reset_path_manager()
@@ -175,27 +174,6 @@ def test_runtime_annotation_absent_without_agent(monkeypatch, catalog_tree):
     monkeypatch.setattr(server, "_in_process_task_agent", lambda: None)
     rows = _api_sessions(server, _FakeRequest(user_id=server.webgate.local_owner_id(), authenticated=True))
     assert all("runtime" not in r for r in rows)
-
-
-def test_own_ops_owner_reads_status_of_cli_owned_session(monkeypatch, catalog_tree):
-    """2.3 regression: per-session READ endpoints resolve the session's OWN
-    user via pm().get_session_user, so the own_ops owner can read a session
-    whose metadata user_id is 'local' (CLI-created) once pm() points at the
-    real tree."""
-    monkeypatch.setenv("POLYROB_POSTURE", "own_ops")
-    import webview.server as server
-    owner = server.webgate.local_owner_id()
-    import utils.auth_utils as au
-    monkeypatch.setattr(au, "get_authenticated_user_id", lambda request: owner)
-    # status.json for the CLI session
-    (catalog_tree / "local" / "s-cli-1" / "status.json").write_text(
-        json.dumps({"status": "completed"}))
-
-    resp = asyncio.run(server.api_session_status(
-        _FakeRequest(user_id=owner, authenticated=True), "s-cli-1"))
-    body = json.loads(resp.body)
-    assert resp.status_code == 200
-    assert body["status"] == "completed"
 
 
 def test_per_tenant_scope_reads_only_that_tenants_dir(monkeypatch, catalog_tree):

@@ -27,11 +27,9 @@ def get_profiles_dir() -> Path:
     # Start from the current file's location and go up to project root
     current_file = Path(__file__)
     project_root = current_file.parent.parent.parent.parent  # Up to project root
-    profiles_dir = project_root / "data" / "task" / "profiles"
-    
-    # Create directory if it doesn't exist
-    profiles_dir.mkdir(parents=True, exist_ok=True)
-    return profiles_dir
+    # Read-only under the hardened unit (/opt/polyrob, EROFS): never created here.
+    # A missing dir means the built-in defaults, held in memory.
+    return project_root / "data" / "task" / "profiles"
 
 
 def load_profiles_from_disk() -> Dict[str, AgentProfileModel]:
@@ -117,7 +115,11 @@ def save_default_profiles(profiles: Dict[str, AgentProfileModel]) -> None:
     """Save default profiles to disk."""
     from agents.task.utils import save_registry_items
     profiles_dir = get_profiles_dir()
-    save_registry_items(profiles, profiles_dir, "profile")
+    try:
+        profiles_dir.mkdir(parents=True, exist_ok=True)
+        save_registry_items(profiles, profiles_dir, "profile")
+    except OSError as exc:   # the code dir is read-only under the unit: keep them in memory
+        logger.info("default profiles kept in memory (%s is not writable: %s)", profiles_dir, exc)
 
 
 def get_profile(profile_id: str) -> Optional[AgentProfileModel]:

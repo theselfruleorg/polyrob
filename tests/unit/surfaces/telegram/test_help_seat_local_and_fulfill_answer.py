@@ -31,7 +31,7 @@ def test_help_for_a_seat_local_verb_names_the_seat_not_a_typo(verb):
     out = _help_for(verb)
     assert "Unknown command" not in out
     assert verb in out
-    from surfaces.telegram.unknown_verb import _SEAT_WORDS
+    from core.surfaces.command_catalog import _SEAT_WORDS
     for seat in row.seats:   # 113 W0: the owner word for the seat, not its id
         assert _SEAT_WORDS.get(seat, seat) in out
     # It still says WHAT the verb is, so the answer is useful, not just polite.
@@ -88,7 +88,7 @@ class _Agent:
 
 
 def _board_with_blocked_goal(data_dir):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
 
     board = GoalBoard(os.path.join(data_dir, "goals.db"))
     goal = board.create(user_id="alice", title="ship it")
@@ -106,7 +106,7 @@ def _board_with_blocked_goal(data_dir):
 async def test_fulfill_passes_the_owners_written_answer_into_the_retry_prompt(
         tmp_path, monkeypatch):
     import surfaces.telegram.harness as h
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
 
     monkeypatch.setattr(h, "_is_admin_owner", lambda _uid: True)
     board, goal, ask = _board_with_blocked_goal(str(tmp_path))
@@ -132,7 +132,7 @@ async def test_fulfill_without_an_answer_is_byte_compatible(tmp_path, monkeypatc
     ``payload.answer = ""`` would render as "the owner answered:" with nothing
     after it in the retry prompt."""
     import surfaces.telegram.harness as h
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
 
     monkeypatch.setattr(h, "_is_admin_owner", lambda _uid: True)
     board, goal, ask = _board_with_blocked_goal(str(tmp_path))

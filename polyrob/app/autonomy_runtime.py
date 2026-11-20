@@ -333,7 +333,7 @@ def _build_goal_ticker(task_agent, data_dir):
     # crash accounting). Runs once, before the first tick. Fail-open.
     try:
         import os as _os
-        from agents.task.goals.board import GoalBoard
+        from modules.goals.board import GoalBoard
         n = _requeue_on_boot(GoalBoard(goals_db_path(data_dir)))
         if n:
             logger.info("cold-start goal sweep: re-queued %d running goal(s)", n)
@@ -372,11 +372,11 @@ def _build_retention_ticker(data_dir):
     """097 D4: the always-on retention sweep, on its own cross-process TickLock.
     Built here (not in ``agents``) because the lock lives in ``cron`` — the
     layering ladder lets the app tier reach both."""
-    from agents.task.agent.core.retention import RETENTION_INTERVAL_SEC, RetentionSweeper
+    from agents.task.public import RETENTION_INTERVAL_SEC, RetentionSweeper
     from core.tickers import IntervalTicker
     import os
 
-    from cron.scheduler import TickLock
+    from core.file_lock import TickLock
 
     sweeper = RetentionSweeper(data_dir=data_dir)
     lock_path = os.path.join(data_dir, "retention.tick.lock")
@@ -394,7 +394,7 @@ def _build_retention_ticker(data_dir):
 
 
 def _build_curator_ticker(data_dir):
-    from agents.task.agent.core.curator import build_curator_ticker
+    from agents.task.public import build_curator_ticker
     return build_curator_ticker(data_dir=data_dir)
 
 
@@ -444,6 +444,41 @@ def _build_nft_holdings_watch(task_agent):
             logger.warning("nft holdings watch tick failed: %s", e)
 
     return IntervalTicker(_tick, interval_seconds=nft_holdings.INTERVAL_SEC)
+
+
+def _build_act_report_ticker(task_agent, data_dir):
+    """122 W1 — the owner's report of the agent's own non-money acts (``report.acts``:
+    hourly, daily, or none). Reads the act records only; NOT pause-gated (a report)."""
+    from core import act_report
+    from core.instance import resolve_owner_principal
+    from core.tickers import IntervalTicker
+
+    container = getattr(task_agent, "container", None)
+
+    async def _tick():
+        owner = resolve_owner_principal()
+        if owner:
+            await act_report.tick(container, owner, data_dir=data_dir)
+
+    return IntervalTicker(_tick, interval_seconds=act_report.INTERVAL_SEC)
+
+
+def _build_income_rule_ticker(task_agent):
+    """122 W4 — the income allocation rule: P % of income owed, then one buy of the pinned
+    token. No rule file = no work. NOT pause-gated as a loop: the buy meets the pause in the
+    guard, and a refused buy keeps its debt."""
+    from core.tickers import IntervalTicker
+    import tools.controller.policy_chain  # noqa: F401 — registers the seat runner (core.seat_runner)
+    from tools.income_rule import loop
+
+    container = getattr(task_agent, "container", None)
+
+    async def _tick():
+        result = await loop.tick(container)
+        if result.get("buy") or result.get("errors"):
+            logger.info("income rule: %s", result)
+
+    return IntervalTicker(_tick, interval_seconds=loop.INTERVAL_SEC)
 
 
 def _build_receipt_resolver():
@@ -1371,6 +1406,18 @@ def start_autonomy(*, task_agent, data_dir: str | None = None) -> AutonomyHandle
             handles._add("nft_holdings", _build_nft_holdings_watch(task_agent))
     except Exception as e:
         logger.warning("Could not start the NFT holdings watch: %s", e)
+    try:
+        # The agent acts on its own through cron jobs and goals; with neither, no report.
+        if _cron_enabled() or _goals_enabled():
+            handles._add("act_report", _build_act_report_ticker(task_agent, data_dir))
+    except Exception as e:
+        logger.warning("Could not start the act report: %s", e)
+    try:
+        from core.env import bool_env as _be
+        if _be("AGENT_WALLET_ENABLED", False):
+            handles._add("income_rule", _build_income_rule_ticker(task_agent))
+    except Exception as e:
+        logger.warning("Could not start the income rule loop: %s", e)
     # 043 A8/A42: the durable "what did this process actually start" record —
     # the status snapshot's loop-liveness check reads it as its `expected` set
     # instead of hardcoding cron/goals.

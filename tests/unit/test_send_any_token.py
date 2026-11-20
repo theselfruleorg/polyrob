@@ -120,7 +120,10 @@ class _Tool:
                     "  guard: authorized\n  RESULT: DRY RUN (simulation only)")
         else:
             body = "transfer\n  RESULT: SENT AND CONFIRMED\n  tx: 0xabc"
-        return SimpleNamespace(error=None, extracted_content=body)
+        usd = None if self.value == "unknown" else float(self.value.lstrip("$"))
+        return SimpleNamespace(error=None, extracted_content=body, metadata={
+            "simulated_usd": usd, "sent_usd": None, "unverified": True,
+            "allowed": True, "dry_run": params.dry_run})
 
 
 ORDER = ["25", USDG, "to", TO, "on", "robinhood"]

@@ -41,7 +41,7 @@ def test_the_bridge_leg_parks_an_unknown_send_in_flight():
         def sign_and_send(self, tx):
             raise BroadcastOutcomeUnknown("polyrob-signer outcome UNKNOWN")
 
-    leg = EvmOriginLeg.send(SimpleNamespace(rail=_Rail(), tx={}))
+    leg = EvmOriginLeg.send(SimpleNamespace(rail=_Rail(), tx={}, needs_owner_approval=False))
     assert leg.state == "unknown"
     assert "NOT sent" not in leg.detail and "nothing was sent" not in leg.detail
 

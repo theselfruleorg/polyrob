@@ -28,7 +28,7 @@ from polyrob_markets.hyperliquid.service import HyperliquidTool
 from polyrob_markets.hyperliquid.models import TradingLimits, AgentWallet
 from polyrob_markets.hyperliquid.store import HyperliquidDBHandler
 from core.logging import get_component_logger
-from api.dependencies import get_user_id, get_client_ip
+from polyrob.sdk import get_client_ip, get_user_id
 
 router = APIRouter(prefix="/hyperliquid", tags=["hyperliquid"])
 logger = get_component_logger("HyperliquidAPI")
@@ -43,13 +43,13 @@ def get_hyperliquid_tool(request: Request) -> HyperliquidTool:
     route on this router answered 503 "Service container not available"
     regardless of whether the service was registered.
     """
-    from api.dependencies import require_service
+    from polyrob.sdk import require_service
     return require_service("hyperliquid", missing="Hyperliquid service not available")
 
 
 def get_hyperliquid_db(request: Request) -> HyperliquidDBHandler:
     """Get HyperliquidDBHandler from the container (see get_hyperliquid_tool)."""
-    from api.dependencies import require_service
+    from polyrob.sdk import require_service
     return require_service("hyperliquid_db", missing="Hyperliquid database not available")
 
 

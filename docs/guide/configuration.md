@@ -154,7 +154,9 @@ refused: nothing is written, and the message names the file the CLI reads.
 Every write tells you which file it
 wrote and when the value applies (`live`, `next-step`, `next-turn`, `next-session`, or `restart`).
 An unreadable `preferences.toml` is never overwritten: a write refuses, reads keep the
-last good values, and `/config` shows it as UNREADABLE.
+last good values, and `/config` shows it as UNREADABLE. A write keeps every key the
+agent does not know or cannot use (for example a key a newer version wrote): only the key
+you set changes. A hand-written comment does not survive a write.
 
 An **environment flag is read when the process starts**, so a change needs a
 restart of whatever is running (the REPL, `polyrob serve`, a surface, a systemd
@@ -222,10 +224,15 @@ polyrob config explain KEY # every layer that sets KEY, which one won, and the s
 `config path` lists env files only. To validate your preferences file as well,
 name the tenant: `polyrob config check --user <uid>`.
 
-There are two environment names, `development` (default) and `production`,
-resolved from `CONFIG_ENV`, then `ENV`. There is no staging. The name selects no
-file. Under `production` (or `ENVIRONMENT=production`) the API server refuses
-to start without a strong `JWT_SECRET_KEY`.
+There are two environment names, `development` and `production`. Five
+settings can carry the name: `ENVIRONMENT`, `POLYROB_ENV`, `CONFIG_ENV`, `ENV`,
+and the `PRODUCTION=true` switch. There is no staging, and the name selects no
+file. If ANY of them says `production` (or `prod`), the box is production: the
+API server refuses to start without a strong `JWT_SECRET_KEY`, and MCP refuses
+to start without `MCP_ENCRYPTION_KEY`. The development relaxations (a
+non-`secure` console cookie) need an explicit `development` (or `dev`) name that
+no other setting contradicts. A box with no name is neither: it keeps every
+check and every `secure` cookie.
 
 ### A named profile is a whole separate home
 

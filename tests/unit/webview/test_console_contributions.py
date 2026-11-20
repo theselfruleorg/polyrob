@@ -4,7 +4,7 @@ from fastapi import FastAPI
 
 import webview.contributions as W
 
-MONEY_PATHS = {"/api/webgate/wallet", "/api/webgate/ledger", "/api/webgate/positions",
+MONEY_PATHS = {"/api/webgate/wallet", "/api/webgate/ledger",
                "/api/webgate/liquidity", "/api/webgate/book", "/api/webgate/invoices",
                "/api/webgate/invoices/{request_id}/settle", "/api/webgate/bridges",
                "/api/webgate/creations", "/api/webgate/moves",
@@ -13,7 +13,9 @@ MONEY_PATHS = {"/api/webgate/wallet", "/api/webgate/ledger", "/api/webgate/posit
                # 113 W6 (G-3): what the AI use cost, the /usage view
                "/api/webgate/usage",
                # 113 W6 (G-2): the offers and orders, and pause/resume of one offer
-               "/api/webgate/offers", "/api/webgate/offers/{offer_id}/{verb}"}
+               "/api/webgate/offers", "/api/webgate/offers/{offer_id}/{verb}",
+               # the owner's standing money rules (income rule, mandates)
+               "/api/webgate/standing"}
 
 
 def _paths(routers):

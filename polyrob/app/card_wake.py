@@ -81,7 +81,7 @@ def _unblock_goal(group: Dict[str, Any], cards_db: str) -> None:
     if not goal_id or not os.path.exists(path):
         return
     try:
-        from agents.task.goals.board import GoalBoard
+        from modules.goals.board import GoalBoard
         if GoalBoard(path).unblock(goal_id, user_id=group["user_id"],
                                    rationale="the owner decided every card this goal raised"):
             logger.info("card group %s: goal %s unblocked", group["group_id"], goal_id)

@@ -74,7 +74,7 @@ class SingularityBackend(RemoteSandboxBackend):
             return self._workspace_dir
         if self.session_id:
             try:
-                from agents.task.path import pm
+                from polyrob.sdk import pm
                 path = str(pm().get_workspace_dir(self.session_id))
                 os.makedirs(path, exist_ok=True)
                 return path

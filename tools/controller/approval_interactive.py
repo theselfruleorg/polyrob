@@ -255,19 +255,19 @@ class InteractiveCLIApprover(ApprovalProvider):
             print(f"[approval] shell: no tenant context — {key} not recorded")
             return
         try:
-            from core.prefs import load_preferences, propose_pref_change, write_preference
+            from core.prefs import load_preferences, propose_pref_change
+            from core.prefs_lists import add_list_entries
             from core.security.command_guard import glob_for
             entry = glob_for(command)
-            current = list(load_preferences(self._home_dir, self._user_id).get(key, []) or [])
-            if entry in current:
+            if entry in (load_preferences(self._home_dir, self._user_id).get(key) or []):
                 print(f"[approval] shell: already in {key}")
                 return
-            updated = current + [entry]
-            if propose:
-                ok, msg = propose_pref_change(self._user_id, key, updated, self._home_dir)
+            if propose:  # 125 S20: the ENTRY, recomputed against the list at promote
+                ok, msg = propose_pref_change(self._user_id, key, None, self._home_dir,
+                                              op="add_entry", entry=entry)
                 note = "queued for owner review (/pending)"
-            else:
-                ok, msg = write_preference(self._home_dir, self._user_id, key, updated)
+            else:  # one entry under the file lock — a concurrent answer is not lost
+                ok, msg, _added = add_list_entries(self._home_dir, self._user_id, key, [entry])
                 note = "recorded"
             if ok:
                 print(f"[approval] shell: `{command[:80]}` {note} in {key}")
@@ -284,19 +284,16 @@ class InteractiveCLIApprover(ApprovalProvider):
             print(f"[approval] '{action_name}': no tenant context — session-scoped only")
             return
         try:
-            from core.prefs import load_preferences, write_preference
+            from core.prefs_lists import add_list_entries
 
-            current = list(
-                load_preferences(self._home_dir, self._user_id).get("approvals.deny", [])
-                or []
+            # 125 S20: one entry under the file lock — two "[n]ever" answers at
+            # once both persist (a read-append-write outside the lock lost one).
+            ok, err, added = add_list_entries(
+                self._home_dir, self._user_id, "approvals.deny", [action_name],
             )
-            if action_name in current:
+            if ok and not added:
                 print(f"[approval] '{action_name}': already in approvals.deny")
                 return
-            updated = current + [action_name]
-            ok, err = write_preference(
-                self._home_dir, self._user_id, "approvals.deny", updated,
-            )
             if ok:
                 print(
                     f"[approval] '{action_name}': persisted to approvals.deny "

@@ -579,7 +579,7 @@ class HierarchicalMemory(BaseModel):
         # recallable memory. Default off => no behaviour change.
         from core.env import bool_env as _bool_env
         if _bool_env("MEMORY_THREAT_SCAN", False):
-            from modules.memory.task.threat_scan import is_suspicious
+            from core.security.threat_scan import is_suspicious
             if is_suspicious(finding):
                 logger.warning(f"🛡️ Rejected suspicious finding (threat scan): {finding[:80]}...")
                 return False

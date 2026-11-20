@@ -13,7 +13,6 @@ own machines. Export discipline:
 - the archive is created privately (0600) and never replaces an existing path;
 - extraction is traversal-guarded (no absolute members, no ``..``, no links).
 """
-import shutil
 import tarfile
 import tempfile
 import os
@@ -22,9 +21,15 @@ from pathlib import Path
 
 import click
 
+from core import fs_copy
+from core.runtime_paths import PROFILE_DATA_DIRNAME, SCRATCH_DIRNAME
+
 #: Never exported (beyond the is_credential_file name guard).
 _EXPORT_EXCLUDE_NAMES = frozenset({".env", "auth.json", "active_profile"})
 _EXPORT_EXCLUDE_DIRS = frozenset({"wallet", "logs", "__pycache__"})
+#: The profile's scratch dir (``core.runtime_paths.scratch_root`` under its data home):
+#: pip staging and old export stages, never the profile's data.
+_EXPORT_EXCLUDE_TOP = (Path(PROFILE_DATA_DIRNAME) / SCRATCH_DIRNAME,)
 
 #: Only files up to this size are candidates for text scrubbing.
 _SCRUB_MAX_BYTES = 5 * 1024 * 1024
@@ -35,6 +40,8 @@ def _is_excluded(rel: Path) -> bool:
     if rel.name in _EXPORT_EXCLUDE_NAMES:
         return True
     if any(part in _EXPORT_EXCLUDE_DIRS for part in rel.parts):
+        return True
+    if any(rel == top or top in rel.parents for top in _EXPORT_EXCLUDE_TOP):
         return True
     try:
         if is_credential_file(rel):
@@ -67,6 +74,24 @@ def _scrub_staged_tree(stage: Path) -> int:
     return hits
 
 
+def _stage_root(source: Path):
+    """The dir a stage is made in: the on-disk scratch (``<data home>/tmp``) unless it
+    lies INSIDE *source* — a profile's own scratch when that profile is active. A stage
+    inside the tree it copies copies itself until the path is too long; then the
+    system temp dir. ``None`` = the system default."""
+    from core.runtime_paths import scratch_root
+    root = scratch_root()
+    if root is None:
+        return None
+    try:
+        src = Path(source).resolve()
+        if Path(root).resolve() == src or src in Path(root).resolve().parents:
+            return None
+    except OSError:
+        return None
+    return str(root)
+
+
 def export_profile(name: str, out_path: Path) -> dict:
     """Stage → exclude creds → scrub → tar.gz. Returns a summary dict."""
     from core.profiles import ProfileNotFoundError, profiles_root, is_safe_profile_name, InvalidProfileNameError
@@ -77,7 +102,10 @@ def export_profile(name: str, out_path: Path) -> dict:
         raise ProfileNotFoundError(name, home)
 
     excluded = []
-    with tempfile.TemporaryDirectory(prefix="polyrob-export-") as tmp:
+    # On disk in the data home, not the unit's private /tmp (a small tmpfs on
+    # some boxes): a profile carries its whole data tree. Never inside that tree.
+    with tempfile.TemporaryDirectory(prefix="polyrob-export-",
+                                     dir=_stage_root(home)) as tmp:
         stage = Path(tmp) / name
 
         def _ignore(src, names):
@@ -97,7 +125,7 @@ def export_profile(name: str, out_path: Path) -> dict:
             Path(dst).write_bytes(read_bytes(src, home))
             return dst
 
-        shutil.copytree(home, stage, ignore=_ignore, copy_function=_copy_file)
+        fs_copy.copy_tree(home, stage, ignore=_ignore, copy_function=_copy_file)
         scrub_hits = _scrub_staged_tree(stage)
 
         out_path = Path(out_path).absolute()
@@ -161,7 +189,8 @@ def import_profile(archive: Path, name: str = None) -> dict:
             raise click.ClickException(
                 f"profile '{target}' already exists — import with --name <other> "
                 f"or delete it first")
-        with tempfile.TemporaryDirectory(prefix="polyrob-import-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="polyrob-import-",
+                                         dir=_stage_root(dest)) as tmp:
             try:
                 # Python 3.12+: the 'data' filter re-rejects links/absolute
                 # members and strips high-risk metadata — belt and braces on
@@ -173,7 +202,7 @@ def import_profile(archive: Path, name: str = None) -> dict:
             if not extracted.is_dir():
                 raise click.ClickException("archive holds no profile directory")
             profiles_root().mkdir(parents=True, exist_ok=True)
-            shutil.move(str(extracted), str(dest))
+            fs_copy.move(str(extracted), str(dest))
     # A restored profile has no .env (never exported) — re-pin the instance id
     # so the identity axis is intact out of the box.
     env_file = dest / ".env"

@@ -148,7 +148,7 @@ async def test_help_advertises_prose_driven_admin(env):
     """G11: the agent can act through its own tools when asked in plain words,
     and that path is strictly wider than the slash list. /help read as an
     exhaustive list of what was possible, so nobody used it."""
-    out = await act_on_inbound(_Agent(str(env)), _cmd("/help", "/help"))
+    out = await act_on_inbound(_Agent(str(env)), _cmd("/help", "/help all"))
     assert "don't have to use a command" in out
     assert "schedule a check every morning" in out
 

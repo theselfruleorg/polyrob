@@ -10,6 +10,276 @@ short, user-facing notes for each release are on its GitHub Release page.
 
 ## [Unreleased]
 
+## [1.7.14] — 2026-11-21
+
+### Added
+
+- A money call that needs the owner is ONE card of that exact call at the shown value + 5%, run once on a tap
+  with every gate again: above the ceiling, an owner-only shape, an unchecked sell, a launch, a new v4 pool or
+  position move, or a call the queue would park in chat (a goal run keeps its ask).
+- `/approve <card id>` confirms a call card and `/pending` lists open ones first; the agent's money proposal is one
+  tap; a live ERC-20 swap or v3 deposit is one call (exact approval, act, revoke); `cards_read` names buttonless cards.
+- `defi_data.nft_account` reads ANY agent NFT's account (owner, approvals, sale readiness, state, balance) with
+  `agent_nft_inspect`'s body, and a group chat may call it; `contract_read` takes a `returns` type to decode.
+- `/status all`, the terminal and the console's Money › Limits show the income rule and its debt and
+  the owner's live mandates; a rule or mandate that does not verify, or an unreadable store, is said.
+- Console Work › Log shows each act's recorded reason ("Why: …").
+- Public knowledge for every chat: the operator's `identity/public.md` (≤ 6000 chars) renders in
+  every session, a group room and a correspondent's included, so the agent can say what it is
+  and what it never shares where its SOUL docs, knowledge base and memory stay out.
+- A launch with a quote token: `defi_trade.launch_token` deploys a fixed-supply token and seeds
+  its v4 pool on the one seed path in one act (the card, an owner turn or a mandate); the
+  `launch.pair` pin and the `launch.per_day` / `launch.max_pool_usd` limits are guard checks.
+- The income rule: `/wallet income <kinds> <P>% to <token> on <network> go` owes a share of fee
+  claims, NFT sales, payments and realized profit to a buy of a pinned token, held in the
+  treasury; one buy at a minimum or once a day; a failed buy keeps the debt.
+- The owner mandate: `/nft trust … autonomous <acts> band … count … total … days … go` lets the
+  agent's own runs act on that collection with no card inside the scope; `/nft mandate` lists and
+  ends them. One store, one kernel step; the caps and `/pause` still bind.
+- `agent_nft_withdraw_token nested=<collection>#<id>` sweeps an NFT nested in an account to the
+  treasury; a move between the treasury and its own NFT account costs only its fee against the caps;
+  `wallet_sign` names the Tokenbound accounts a signature also speaks for.
+- `/persona` on Telegram shows the voice the agent runs with: the character file, what the
+  model receives, and a filled field it never sees (read only; set it in the terminal or the file).
+- Mentions carry their metrics (likes, replies, reposts), so the agent can weigh what the community
+  says; a poll or a reply is input the agent weighs in its own turn, never a trigger for an act.
+- The agent can look at any address the way `/check` does (`defi_data.address_report`): a token's
+  report, a wallet's holdings, or the chains where a bare 0x address is a token; a failed read is unknown.
+- Every act states its reason: a `why` on the money verbs (an autonomous money act without one is
+  refused), on the money notice with its lane, and on the act record with short params and source;
+  the owner preference `report.acts` (`money_only` · `every_act` hourly · `digest` daily).
+- A buyer cancels, accepts or disputes its order over HTTP with its order token
+  (`POST /api/orders/<id>/cancel|accept|dispute`), MCP (`polyrob_order_act`) and A2A (an `act` data
+  part), and accepts a delivered order in chat (`/order <id> accept`); one buyer act runs behind all.
+- The agent's `message` tool posts into a thread or forum topic (`thread_id`) or as a reply
+  (`reply_to`, now wired); the same `ReplyTarget` rides `deliver_user_message`, the router and the
+  durable queue (`outbox.db` gains `reply_to` and `actions` columns; old rows keep working).
+
+### Changed
+
+- Every owner seat presses a card through one shared press, and a typed `/approve|/reject <card id>` is
+  the card's own tap (it runs in the background); one map turns a surface into its seat; a non-owner's
+  `/help` and `/start` show only what that person can run.
+- `polyrob cron` resolves a short job id through the one short-id resolver; the box lines of
+  `polyrob doctor` name the self-hosting guide as the remedy.
+- owner.md holds only the owner's rules: one task's rules go to its skill, and the agent sees in-session that a
+  draft was decided, so it never asks for a tap the owner already gave.
+- `/persona <name>` sets the voice of every new chat on every seat (`/persona reset` removes it);
+  every session reads this one owner setting above the operator's persona.
+- `/goals` and `/goal` buttons come from the goal code below the chat apps, so every seat that draws
+  buttons (the console too) shows them.
+- The goal board lives in the modules tier and the session path manager `pm()` in core; packs read
+  `ASK_OPEN` and `pm` from `polyrob.sdk`, and the tiers above the agent reach its core through one
+  facade, `agents/task/public.py`.
+- The agent's own texts (the identity and send skills, the NFT tool fields) state the mandate, the
+  three registries, the account verbs and that a pin is not needed; the generic call names no NFT mint.
+- A collection pin grants nothing by itself: `capabilities` is ignored, and a mint, reveal or account
+  act runs with no card only inside the owner's signed mandate (re-verified at each use).
+- The room verbs (`/groups`, `/mute`, `/unmute`, `/ban`, `/unban`, `/paid`), `/dapp`, `/contacts`,
+  `/thread` and `/why` run below the seats; a room verb reaches the chat app only through its
+  registered room transport, and with none it refuses.
+- Acts through the account of an unpinned NFT and reveals of a collection with no reveal pin
+  work with the owner's card; an account kind the chain does not prove stays read-only.
+- The owner verbs (money, `/goal`, `/job`, `/skills`, `/apps`, `/prefs`, `/avatar`, the read-only
+  replies) run one procedure below the chat seats, the same for Telegram, console and terminal.
+- Internal modules moved to the tier that owns them (scrubbers, the high-impact rule, the safe fetch,
+  the threat scan, the update snapshot, the tick lock, autonomous tools, goal grants, MCP settings,
+  the cron store); old import paths are listed in the upgrade notes.
+- A pack's HTTP routes take the user id, the client IP and a service from `polyrob.sdk`, and one pack
+  never imports another.
+- `agent_nft_collection_mint` is a core verb on any collection whose sale names it back: price, phase
+  and cap are read from the sale (no package, no pin); `min_pnl_out` is now `min_out_per_token`.
+- The NFT holdings watch sees an NFT of any collection, reports one that arrives inside a held
+  account, and stops waiting on an id it cannot read; `/status` lists each NFT account and one total.
+- The agent-NFT reads (snapshot, inspect, the account resolve) work on any collection the
+  treasury owns: an unpinned collection's facts are read from the chain, with no pin needed.
+- A deposit into a held NFT account that can keep an earlier owner's approvals scans them first;
+  an NFT send's owner card shows what the NFT's account holds; the arrival notice names the kind's limits.
+- The ERC-6551 safety rules (nesting, cycles, an unminted id's account, open approvals before an
+  NFT leaves) hold for every collection from chain reads; an unreadable pin store blocks no move.
+  Generic calls to an NFT sale or market go to the typed verb; another chain's agent account is refused.
+- A genuine owner turn trades on Polymarket and Hyperliquid during the autonomy pause and under
+  `/pause trading`, like every money verb; the markets venues and the Solana verbs ask the one money
+  kernel for the turn origin.
+- Deposit credits value ETH at the graded spend price every payment uses; with no price an increase
+  waits for a later check.
+- Goal, cron, memory and `bot.db` store calls run off the event loop, so a contended database no
+  longer stalls every chat and run.
+- The A2A agent card names the instance: its name, description and provider organization come from
+  the same identity as the ERC-8004 registration file, never "POLYROB" or a fixed organization.
+- The autonomous grant reaches `agent_nft` whenever `DEFI_AGENT_AUTONOMY` and `AGENT_NFT_ENABLED`
+  are on; it no longer needs the optional agent-NFT package installed.
+- Telegram: an address, a hash or a path is a tap-to-copy box in every reply, a bare URL keeps
+  its underscores, buttons carry their colour, a tap shows what runs, and replies show no link preview.
+- Telegram: `/help` is a short menu with one button per group (`/help <group>`, `/help all` for every
+  command); a reply button can now run a whole command line (`core/surfaces/nav.py`, `nav.db`).
+- `/model` reads in plain words (no env names) and, on Telegram, carries buttons: models this box has a
+  key for, reasoning levels, "use for every new chat" and Reset.
+- Telegram: `/chats` has a button per chat and "New chat"; a bare `/approve` or `/reject` lists each
+  decision by what it does, with its buttons.
+- Telegram: the "/" menu lists the daily commands first; `/start` gives examples and buttons; `/inbox`
+  fits a phone; `/cancel`, `/mode` and the scheduled-jobs-off note name chat commands, not shell ones.
+- Telegram: `/jobs` and `/goals` carry a button per row; a shown job runs, pauses, resumes or stops with
+  one tap, a shown goal retries, pauses or stops; goal ids are copy boxes.
+- The turn-end notice says "say continue" only for a stop a continue resumes (step limit, stall, loop);
+  any other stop names its own next step, and the stop words drop "tool call" and "wall-clock cap".
+- The AI-provider outage notice in the owner's own chat speaks to the owner (it said "the owner has
+  been notified") and names `/model`; the reason lines use plain words.
+- The progress bubble names a step in words (`browser navigate`, not `browser_navigate`), drops the tool
+  count, says "Shortening my notes", and its approval reminder names `/pending`, not a shell command.
+- The agent's message rules say a chat shows no tables or headings and that a value to copy goes in
+  backticks, which Telegram makes a tap-to-copy box.
+- A failed scheduled-job notice carries "Show the job" and "Retry" buttons, built from the job id
+  (`push_owner_message(buttons=…)`).
+- Telegram: a decision tap removes only the buttons of the item it decided (the other items keep
+  theirs), and a menu or list tap keeps every button, so `/help`, `/model` and `/chats` stay usable.
+
+### Removed
+
+- Compatibility re-exports and code with no reader: thirteen Telegram re-export modules,
+  `tools/controller/delegation.py`, `cron/job_machine.py`, the money kernel's unused mandate step, the
+  container's manager registry, `judge_goal_completion`, the legacy `held_by_pause` event and `min_pnl_out`.
+- The agent-NFT package seam: core imports no `polyrob_drop`; every `agent_nft` verb is core, and
+  a collection's own view lines are its `tokenURI` and `revealBlock`.
+- `ETH_PRICE_USD_OVERRIDE`, `ETH_PRICE_USD_MAX` and the CoinGecko deposit price oracle (deposits use
+  the spend price).
+
+### Fixed
+
+- Money: a retried call reuses its open call card, an autonomous run gets none, a quote uses no mandate,
+  a failed v3 deposit or swap revokes its approval, and a launch that stops before its pool is an error.
+- The NFT holdings watch keeps a collection whose read failed, names an unreadable arrival, never caps a
+  pinned NFT when the pins cannot be read, and reports a re-nested NFT; the unpinned profile cache is bounded.
+- `polyrob profile export` of the active profile works again (the stage was inside the profile) and ships
+  no scratch dir; an update snapshot skips a symbolic link; a missing `--from` profile leaves nothing behind.
+- The model notice for a new job or goal goes out only after it is written; `/model reset` pins nothing;
+  the update busy check reads cron times in local time; the held-job check runs off the event loop.
+- A reply button whose saved command cannot be read says so; a notice held by quiet hours keeps its buttons;
+  `identity/public.md` loads even when the owner or self document cannot be read.
+- `contract_read` ABI-encodes its arguments (it sent the selector only), and the ERC-6551 approval scan halves
+  its window on a node that caps the range (Robinhood Chain: 30,000 blocks), so an approval table there is no
+  longer always UNREADABLE.
+- The pinned v4 Permit2 is a route spender like the v3 position manager, and a confirmed v4
+  declaration (seed, move, launch) makes its own Permit2 grants; the agent no longer asks the owner.
+- `/book` with no wallet says "The agent has no wallet yet." as the console does; the per-payment
+  limit shows at most the daily limit (which binds every payment); Money hides the quote form with no wallet.
+- Console Work: the log reads as owner sentences (the owner's own acts under "What you did"), Stop asks
+  first and names the job, one remedy for autonomy off, lane counts beside their title, times in UTC.
+- Console wiring: routes with no caller are gone (session status/feed, repair, app and pending
+  deciders, positions); errors send the exception type only; the feed clamps an over-max limit; the
+  send proxy keeps a 409/503 refusal's detail and reports a final 5xx as a failure.
+- The terminal `/model` sends reasoning, reset and aliases through the one model service (the same
+  refusals, the pin is kept, `reset` follows your default); an unsaved reasoning default is named.
+- Signal shows plain text and Slack and WhatsApp their own markup, not raw `**` and backticks;
+  `/help` lists only the commands of the chat app you ask on (room commands where rooms exist).
+- Under the hardened units an app snapshot, a setgid workspace file, a rollback after a deploy,
+  a root-made profile and a shared state file no longer fail; one contract (`runtime-sandbox.md`)
+  with a seam per rule, and `polyrob doctor` names a missing provisioning step.
+- Console: ⌘K opens Chats with Caps Lock on, and the header's status line wraps on a phone (it was
+  cut to "The agent …"); the whole line is also its tooltip.
+- An owner-approved collection reveal never landed: it names no `max_spend_usd`, so the tap stamped
+  no grant and the guard queued it again, and no mandate covered it. Its bound is now the
+  operator's fee cap (`collection_reveal.declared_usd`); the level-1 rig found it.
+- Console: Settings › Save writes only the settings the owner changed (an unset default's display
+  words were taken as its value, so every Save asked to confirm a guarded change and then failed);
+  a chat-box verb answer keeps its lines, bold and code.
+- Console: Agent › Settings shows and sets the heavy and light models and what the agent may choose
+  (`/model heavy|light|choice`), through the same `/model` pipeline as every chat seat.
+- Console: Agent › Overview names the model a new chat starts on from the same resolver as `/model`
+  (it ignored the owner's default), and Agent › Identity shows the character the model speaks as.
+- Console: a refused memory read says "could not read", not "no notes"; a read-only Inbox still
+  opens "Read it"; "Load older" cannot skip a page; a done card tap keeps Confirm shut; a money
+  refusal shows its reason; Work create forms are absent where they would always be refused.
+- A Slack or Discord owner gets the buttons of a proactive notice (a money card, a decision, a failed
+  job's "Show the job"/"Retry"), as on Telegram; before, these arrived as text only.
+- The console chat box and Slack/Discord draw the same reply buttons as Telegram (one rule,
+  `core.surfaces.command_reply.reply_buttons`): `/lp`, `/model`, `/restart` and `/update` cards get
+  Confirm/Cancel, and nav replies (`/model`, `/jobs`, `/chats`, `/help`) get their buttons.
+- A tree copy or move works inside the hardened service: the boot snapshot before a migration,
+  the skill and home migrations and the profile copies no longer fail on the setgid data home or
+  across two mounts (`core.fs_copy`); a big HF deploy stages on disk, not the unit's small /tmp.
+- A pinned provider whose client did not start is named: `/status` and `polyrob doctor` warn
+  that the pin did not start and name the provider the calls go to (it read the pin as live).
+- A lazy install under the service works: pip's scratch dir sits next to its target, so its
+  move is a rename (the systemd sandbox refused the setgid copy across mounts), and a failed
+  install logs pip's stderr and exit code, not the success line on stdout.
+- A buyer over HTTP, MCP or A2A reads where to give feedback on chain: its delivered order
+  carries `feedback` (the line a chat buyer's completion message has); before, it never
+  reached a machine buyer.
+- One "is the agent busy" reader serves the deploy waiter, `polyrob update` and the restart drain; a
+  locked cron store counts as busy, not idle.
+- The console serves the avatar from the same data home as every other page.
+- A position watch wakes the agent: `cronjob_edit` with a `precheck` on an alert-only read job makes
+  it the agent's watch (it was refused), and the `defi-liquidity` and `standing-work` skills arm a
+  15-minute pre-check on price and floor, not a 6-hour owner alert, with a rule for a fast fall.
+- The character reaches the model in every session (chat surfaces, cron and goal runs, delegated
+  workers, A2A), not only `/v1` and the CLI; a small sample of `postExamples`/`messageExamples`
+  and `style.writing` render, and `polyrob doctor` names a filled field the model never sees.
+- A wallet spend made outside a turn (a scheduled job, a watcher, a terminal command) counts as the
+  owner's in the ledger; before, its `wallet_spend` row had no tenant and the owner's ledger missed it.
+- An x402 seller that rejects a signed payment no longer blocks the payer's other payments and sends
+  until the authorization expires: the signed amount is booked against the caps and the same request
+  stays refused as a replay.
+- `/launch` and `polyrob wallet launch` size their default ceiling from the live native price, not a
+  fixed $6,000 per coin; with no price they ask for `--max-usd`.
+- A preference write keeps keys it cannot validate, and a list preference (`approvals.deny`,
+  `shell.allow`, …) changes by one entry under the file lock, so two answers at once lose nothing.
+- The terminal `/approve` and `/reject` resolve an id like chat: an id two kinds share is named
+  (`<kind>:<id>`), and a gone tap gets its lane's own answer.
+- Goal and cron stores open while another process holds the write lock; a goal with prerequisites is
+  created in one write; a run whose heartbeat cannot renew stops before another worker takes it.
+- The `bot.db` connection no longer deletes ledger rows whose user has no profile; the knowledge export
+  says `unreadable`, not `0`; store errors are logged; goal dispatch holds when its provider check fails.
+- A bridge re-prepared after the owner's approval books the new figure; a receipt resolution refuses
+  on an unsynced spend ledger.
+- An order paid through the facilitator `/pay` route moves to paid in that request, also with
+  `API_AUTONOMY_RUNTIME` off; before, it stayed `awaiting_payment` until a settlement watcher ran.
+- A GET at the agent card's A2A URL and at `/eip8004/validation` answers instead of 404; the card's
+  `url` is the real JSON-RPC endpoint `/a2a/rpc`, and `x402_probe` prices a POST-only paywall from
+  the seller's GET challenge (`outputSchema.input.method`).
+- A chat switched with `/model <name>` keeps its model after an idle or daily rollover; only `/new`
+  or `/model reset` ends the pin (a new session read the default and lost the switch).
+
+### Security
+
+- Root `polyrob profile create --from-profile|--from-project` copies through no-follow descriptors and
+  refuses any link; the hand-over walks bottom-up by descriptor; the default dev image is pinned by digest.
+- An app snapshot never ships an owner-only file and one whose digest mismatches is deleted; a character
+  file is protected from the agent's file tools; the public agent card never publishes the persona `bio`.
+- Email sender proof fails closed: only the topmost `Authentication-Results` from the provider's own server
+  counts (AgentMail once a sample pins its authserv-id; self-hosted IMAP stays denied), `dmarc=pass` needs
+  an aligned `header.from`, and the access check runs before any directory row.
+- The wallet rail re-checks the fee bound and the tx type before it signs; a send waiting for the owner
+  is attested only on the remote signer or after the verb proved the owner's approval (bridge, dapp).
+- An income-rule buy of unknown outcome is held, never bought again, and a reverted one keeps the debt;
+  a rollback keeps the live mandate and income-rule stores; a duplicated mandate row refuses; only the
+  owner seat makes or ends a mandate, and a mandate act states its `why` and names its mandate.
+- The agent's `why` on a money notice is a code span with tap tokens removed; an NFT's `tokenURI`
+  reaches the model capped and fenced; an NFT of an unpinned collection is announced as such, at most
+  five new collections a chain a day, and is never the default NFT.
+- A grant to an unpinned spender asked on an autonomous run is refused (an owner agent turn still gets
+  one card naming its origin); a re-prepared bridge leg above the approved figure + 5% refuses; v4
+  Permit2 grants are sized to the mint's maxima; a move's withdrawal minimums keep the declared floor.
+- An unpriced model is metered at its provider's top known price; the owner's `listed` mode binds
+  tenants; an unattended create on an unlisted model notifies the owner. Buyer acts take the order
+  token from `Authorization`, an IP caps its unpaid orders, only the owner sets the admin tier.
+- When a person's reply comes into the owner's own chat, the agent no longer sees the model, the host
+  details or the chat's memory summary there, and cannot read or write files, until the owner writes again.
+- The agent's file tools refuse the operator's `identity/identity.md`, `operating.md` and `public.md`,
+  and a group room or a correspondent's session no longer names the model or provider it runs on.
+- One environment rule: any of `ENVIRONMENT`, `POLYROB_ENV`, `CONFIG_ENV`, `ENV` or `PRODUCTION=true`
+  marks production (MCP then needs `MCP_ENCRYPTION_KEY`); only an explicit `development` drops cookie
+  `secure`, and `ENVIRONMENT=development` no longer skips the access-tier check.
+- An owner's `/send`, `/swap` and every other seat money verb meet the operator denylist and
+  `approvals.deny` like an agent call; the confirm bound comes from the rail's typed value, never
+  from report text a token symbol could forge.
+- The wallet signs an EVM transaction only when the money guard allowed that exact transaction, in
+  every signer mode (`local` included); a send that skipped the guard, or a dry run, refuses.
+- A tenant that is not the owner or an admin gets `max_steps` lowered to the interactive budget on
+  `/api`, A2A and the agent, also with no credit billing.
+- A self-wake is dropped when its budget store cannot be read, and a correspondent reply is denied
+  with no conversation store (both failed open).
+
 ## [1.7.13] — 2026-11-19
 
 ### Added

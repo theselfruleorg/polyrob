@@ -46,6 +46,15 @@ function fill(template, count) {
   return String(template || "").replace("{count}", String(count));
 }
 
+/** The act's reason line (122 W1): the `why` the act record carries, in the
+ *  copy's frame ("Why: {why}"). `""` when the row carries none — a reason is
+ *  never invented for a row that has none. */
+export function reasonText(entry, copy) {
+  const why = String((entry && entry.why) || "").trim();
+  if (!why) return "";
+  return String((copy && copy.reason) || "{why}").replace("{why}", why);
+}
+
 /** A timestamp in plain words, drawn from the event's own `ts` (epoch seconds). */
 export function relTime(ts, copy, nowMs) {
   const now = Number.isFinite(nowMs) ? nowMs : Date.now();
@@ -98,6 +107,12 @@ export function entryRow(entry, copy, nowMs) {
   what.dataset.label = (copy && copy.header_what) || "";
   what.appendChild(document.createTextNode(entry.summary || ""));
   what.appendChild(el("span", "why", classLabel(entry.cls, copy)));
+  const reason = reasonText(entry, copy);
+  if (reason) {
+    const line = el("span", "why", reason);
+    line.dataset.reason = "1";
+    what.appendChild(line);
+  }
 
   // The raw record: present only when the endpoint sent the payload (raw=1).
   if (Object.prototype.hasOwnProperty.call(entry, "payload")) {

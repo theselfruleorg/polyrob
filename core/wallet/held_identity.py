@@ -29,11 +29,11 @@ def account_identities(home_dir=None, user_id=None, instance_id=None) -> List[Di
     ``{chain, chain_id, collection, token_id, account, agent_id, registry}``. Empty while
     ``AGENT_NFT_ENABLED`` is off (the watch does not run, so its rows may be stale). Raises when
     the holdings file is unreadable."""
-    from core.wallet import erc8004, nft_holdings
+    from core.wallet import erc8004, holdings_state, nft_holdings
     if not nft_holdings.enabled():
         return []
     out = []
-    for row in nft_holdings.tracked(home_dir, user_id, instance_id):
+    for row in holdings_state.tracked(home_dir, user_id, instance_id):
         agent_id = row.get("agent_id")
         if row.get("identity_held") is not True or isinstance(agent_id, bool) \
                 or not isinstance(agent_id, int):

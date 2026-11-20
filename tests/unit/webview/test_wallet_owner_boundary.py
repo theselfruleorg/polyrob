@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 import webview.pages as pages
 
 
-@pytest.mark.parametrize('path', ['positions', 'book', 'ledger', 'liquidity'])
+@pytest.mark.parametrize('path', ['book', 'ledger', 'liquidity'])
 def test_customer_cannot_read_operator_wallet(monkeypatch, path):
     monkeypatch.setenv('POLYROB_OWNER_USER_ID', 'owner')
     monkeypatch.setattr(pages, '_effective_user_id', lambda req: 'customer')

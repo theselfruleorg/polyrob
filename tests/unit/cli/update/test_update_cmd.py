@@ -118,7 +118,7 @@ def test_apply_supported_method_runs_engine(monkeypatch, tmp_path):
     from pathlib import Path
 
     import cli.commands.update as up
-    from cli.update.context import UpdateContext
+    from core.update_snapshot.context import UpdateContext
     from cli.update.detect import InstallContext
     from cli.update.engine import ApplyResult
 
@@ -166,7 +166,7 @@ def test_apply_unsupported_method_json_is_structured(monkeypatch):
 
 def test_apply_json_without_yes_never_blocks_on_stdin(monkeypatch, tmp_path):
     import cli.commands.update as up
-    from cli.update.context import UpdateContext
+    from core.update_snapshot.context import UpdateContext
     _patch(monkeypatch, method="git", current="0.4.2", latest="0.4.3")
     monkeypatch.setattr(up, "build_runners", lambda ctx, **kw: object(), raising=False)
     uctx = UpdateContext(data_home=tmp_path, snapshots_root=tmp_path / "s", db_paths=[])
@@ -203,7 +203,7 @@ def test_apply_fails_when_latest_version_cannot_be_determined(monkeypatch):
 
 def _apply_env(monkeypatch, tmp_path, *, ok=True):
     """Common --apply harness: git install, update available, nothing in use."""
-    from cli.update.context import UpdateContext
+    from core.update_snapshot.context import UpdateContext
 
     _patch(monkeypatch, method="git", current="0.4.2", latest="0.4.3")
     monkeypatch.setattr(up, "build_runners", lambda ctx, **kw: object(), raising=False)
@@ -216,7 +216,7 @@ def test_rollback_json_emits_json(monkeypatch, tmp_path):
     """--rollback --json emits a machine-readable success payload (not prose)."""
     import contextlib
 
-    from cli.update.context import UpdateContext
+    from core.update_snapshot.context import UpdateContext
 
     uctx = UpdateContext(data_home=tmp_path, snapshots_root=tmp_path / "s", db_paths=[])
     monkeypatch.setattr(up, "resolve_update_context", lambda *a, **k: uctx)
@@ -333,7 +333,7 @@ def test_apply_lock_held_is_clean_error(monkeypatch, tmp_path):
 
 def test_git_channel_apply_uses_branch_upstream_not_releases(monkeypatch, tmp_path):
     import cli.commands.update as up
-    from cli.update.context import UpdateContext
+    from core.update_snapshot.context import UpdateContext
     from cli.update.detect import GIT, InstallContext
     from cli.update.engine import ApplyResult
 
@@ -382,7 +382,7 @@ def test_git_channel_detached_head_refuses_before_snapshot(monkeypatch, tmp_path
 
 def _apply_rig(monkeypatch, tmp_path):
     import cli.commands.update as up
-    from cli.update.context import UpdateContext
+    from core.update_snapshot.context import UpdateContext
     from cli.update.engine import ApplyResult
     _patch(monkeypatch, method="git", current="0.4.2", latest="0.4.3")
     monkeypatch.setattr(up, "build_runners", lambda ctx, **kw: object(), raising=False)

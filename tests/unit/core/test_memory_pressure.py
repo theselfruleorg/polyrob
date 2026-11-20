@@ -222,7 +222,7 @@ def test_a_new_hold_after_a_clear_is_noted_again(evlog, tmp_path, monkeypatch, p
 
 @pytest.mark.asyncio
 async def test_a_held_goal_is_not_claimed(tmp_path, monkeypatch, evlog, low_memory):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from agents.task.goals.dispatcher import GoalDispatcher
     monkeypatch.setenv("GOALS_ENABLED", "true")
     board = GoalBoard(str(tmp_path / "goals.db"))
@@ -242,7 +242,7 @@ async def test_a_held_goal_is_not_claimed(tmp_path, monkeypatch, evlog, low_memo
 @pytest.mark.asyncio
 async def test_an_empty_board_under_pressure_claims_to_hold_nothing(tmp_path, monkeypatch, evlog,
                                                                     low_memory):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from agents.task.goals.dispatcher import GoalDispatcher
     monkeypatch.setenv("GOALS_ENABLED", "true")
     disp = GoalDispatcher(GoalBoard(str(tmp_path / "goals.db")), None,

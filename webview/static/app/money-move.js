@@ -10,11 +10,41 @@
  * server gates), it shows what came back verbatim, and it writes no copy —
  * the words ride on #money-move's data attributes and the card's own text.
  */
-import { postJson } from './http.js';
+import { postJson, serverAnswer } from './http.js';
 import { drawCard, press } from './cards.js';
 
 export const PICKERS_URL = '/api/webgate/cards/pickers';
 export const QUOTE_URL = '/api/webgate/cards/quote';
+export const WALLET_URL = '/api/webgate/wallet';
+
+/** True only when the wallet read SAYS there is no wallet. A failed read keeps
+ *  the form: the quote's own gates still answer, and unknown is not "none". */
+export async function walletIsOff(fetcher) {
+  try {
+    const res = await fetcher(WALLET_URL, { credentials: 'include' });
+    if (!res || !res.ok) return false;
+    const body = await res.json();
+    return Boolean(body && body.state === 'disabled');
+  } catch (err) { return false; }
+}
+
+/** No wallet: the form would quote a move nothing can make. Hide it (and its
+ *  note) and say what the console's Money › Book says, with the one action. */
+export function showNoWallet(section, form, copy) {
+  form.hidden = true;
+  const note = form.nextElementSibling;
+  if (note && note.classList.contains('entry-meta')) note.hidden = true;
+  const entry = document.createElement('div');
+  entry.className = 'entry';
+  entry.dataset.noWallet = '1';
+  for (const [cls, text] of [['entry-title', copy.no_wallet], ['entry-body', copy.no_wallet_how]]) {
+    const p = document.createElement('p');
+    p.className = cls;
+    p.textContent = text || '';
+    entry.appendChild(p);
+  }
+  form.before(entry);
+}
 
 /** The request body for the form's current values. Swap buys `token_out`. */
 export function quoteBody(values) {
@@ -59,6 +89,10 @@ export async function mount(section, { fetcher = globalThis.fetch, postFetcher }
   const form = section.querySelector('#money-move-form');
   const result = section.querySelector('#money-move-result');
   const copy = { ...section.dataset };
+  if (await walletIsOff(fetcher)) {
+    showNoWallet(section, form, copy);
+    return { noWallet: true };
+  }
   let pickers = { chains: [], swap_chains: [], tokens: [], recipients: [] };
   // FE7: a failed read leaves the Chain list EMPTY (it is a select, it cannot
   // be typed), so the form says the read failed instead of going quietly blank.
@@ -136,7 +170,10 @@ export async function mount(section, { fetcher = globalThis.fetch, postFetcher }
     submit.disabled = true;
     try {
       const { body } = await postJson(QUOTE_URL, quoteBody(values), { fetcher: postFetcher });
-      show(body && body.message, body && body.card);
+      // A refusal (read-only, not the wallet's owner) names itself in
+      // `detail`/`error`, not `message`: show what the server said.
+      show(body && body.card ? body.message : serverAnswer(body, copy.unreachable),
+           body && body.card);
     } catch (err) {
       show(copy.unreachable, null);
     } finally { submit.disabled = false; }

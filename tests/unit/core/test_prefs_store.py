@@ -136,7 +136,7 @@ def test_clean_style_tone_and_persona_unaffected(tmp_path):
 
 
 def test_style_tone_scan_error_fails_closed(tmp_path, monkeypatch):
-    import modules.memory.task.threat_scan as threat_scan
+    import core.security.threat_scan as threat_scan
 
     def _raise(_text):
         raise RuntimeError("boom")
@@ -336,3 +336,54 @@ def test_a_broken_file_warns_once_per_file_state(tmp_path, caplog):
     _hand_edit(p, "still [not toml")
     load_preferences(tmp_path, "u1")
     assert len([r for r in caplog.records if "unreadable" in r.message]) == 2
+
+
+# --- 125 S19: a write keeps the keys it cannot validate (B-H4) ---------------------
+
+
+def test_a_write_keeps_a_key_it_does_not_know(tmp_path):
+    """A key the running version does not know (a newer version wrote it, or an
+    update rolled back) survives an unrelated write — in the file AND its copy."""
+    from core.prefs_io import backup_path
+    p = preferences_path(tmp_path, "u1")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("[goals]\ndaily_quota = 4\n[future]\nnew_key = 1\n"
+                 "names = [\"a\", \"b\"]\n", encoding="utf-8")
+    ok, err = write_preference(tmp_path, "u1", "style.verbosity", "terse")
+    assert ok, err
+    import tomllib
+    for f in (p, backup_path(p)):
+        raw = tomllib.loads(f.read_text(encoding="utf-8"))
+        assert raw["future"] == {"new_key": 1, "names": ["a", "b"]}
+        assert raw["goals"]["daily_quota"] == 4 and raw["style"]["verbosity"] == "terse"
+    assert "future.new_key" not in load_preferences(tmp_path, "u1")  # reads still validate
+
+
+def test_a_write_keeps_an_out_of_range_value(tmp_path):
+    p = preferences_path(tmp_path, "u1")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("[style]\nverbosity = \"shouty\"\n", encoding="utf-8")
+    assert write_preference(tmp_path, "u1", "goals.daily_quota", 4)[0]
+    assert 'verbosity = "shouty"' in p.read_text(encoding="utf-8")
+    assert "style.verbosity" not in load_preferences(tmp_path, "u1")
+
+
+def test_a_write_of_the_new_name_drops_the_old_alias(tmp_path):
+    p = preferences_path(tmp_path, "u1")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("[digest]\ntimezone = \"UTC\"\n", encoding="utf-8")
+    assert write_preference(tmp_path, "u1", "owner.timezone", "Europe/Berlin")[0]
+    text = p.read_text(encoding="utf-8")
+    assert "[digest]" not in text and "Europe/Berlin" in text
+    assert load_preferences(tmp_path, "u1")["owner.timezone"] == "Europe/Berlin"
+
+
+def test_a_value_the_writer_cannot_render_refuses_and_names_the_key(tmp_path):
+    """A TOML date has no rendering here: the write refuses, the file is unchanged."""
+    p = preferences_path(tmp_path, "u1")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    before = "[future]\nwhen = 2026-01-01\n"
+    p.write_text(before, encoding="utf-8")
+    ok, err = write_preference(tmp_path, "u1", "goals.daily_quota", 4)
+    assert not ok and "future.when" in err
+    assert p.read_text(encoding="utf-8") == before

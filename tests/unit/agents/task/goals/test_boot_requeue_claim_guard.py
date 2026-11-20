@@ -21,7 +21,7 @@ import sys
 
 import pytest
 
-from agents.task.goals.board import GoalBoard, STATUS_READY, STATUS_RUNNING
+from modules.goals.board import GoalBoard, STATUS_READY, STATUS_RUNNING
 
 
 @pytest.fixture()

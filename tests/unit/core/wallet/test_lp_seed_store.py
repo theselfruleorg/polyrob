@@ -106,18 +106,13 @@ def test_a_missing_store_is_no_declaration_and_an_unreadable_one_says_so(tmp_pat
         S.get("s0000000000", user_id="owner", path=str(broken))
 
 
-def test_the_card_carries_only_the_confirm_line_and_the_validated_numbers(tmp_path, db):
-    st = cards.CardStore(str(tmp_path / "cards.db"))
+def test_the_summary_carries_the_validated_numbers(db):
     ref, f = S.propose("owner", {**BASE, "price_source": "agent"}, origin="agent", path=db)
-    card = S.seed_card("owner", ref, f, origin="agent", st=st, notes=("the pool does NOT exist yet",))
-    assert card.line == f"/lp seed confirm {ref}"
-    body = card.body
+    body = "\n".join(S.summary_lines(f))
     assert f["pool_id"] in body and "fee 1%" in body and "no hook" in body
     assert "at most 2 ETH and 12,750,000 TKN" in body
-    assert "the AGENT proposed" in body and "does NOT exist yet" in body
-    assert "sends nothing" in body and "raises no limit" in body
-    assert len(body) <= cards.MAX_BODY_CHARS
-    owner = S.card_body(S.validate({**BASE, "price_source": "owner"}))
+    assert "the AGENT proposed" in body
+    owner = "\n".join(S.summary_lines(S.validate({**BASE, "price_source": "owner"})))
     assert "a number you typed" in owner
 
 
@@ -126,7 +121,8 @@ def test_the_card_carries_only_the_confirm_line_and_the_validated_numbers(tmp_pa
     ["/lp", "seed", "confirm"], ["/lp", "seed", "confirm", "s1", "go"],
     ["/lp", "remove", "42", "go"],
 ])
-def test_a_job_card_carries_lp_only_as_seed_confirm(tmp_path, words):
+def test_a_job_card_never_carries_lp(tmp_path, words):
+    """126: a declaration is a call card; no job card carries an /lp line."""
     st = cards.CardStore(str(tmp_path / "cards.db"))
     with pytest.raises(ValueError):
         cards.job_card("owner", words, title="t", st=st)

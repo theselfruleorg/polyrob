@@ -75,7 +75,7 @@ GOAL_RUN = "goal_run"
 #: The goal board could not read its open asks, so no goal is served (fail-closed).
 #: One row per 10 minutes at most; ``/status`` raises a CRIT while it is fresh and
 #: goals are ready. attrs: error (≤200 chars), ready. Producer:
-#: ``agents/task/goals/board_asks.py``.
+#: ``modules/goals/board_asks.py``.
 GOAL_HOLD_UNREADABLE = "goal_hold_unreadable"
 GOAL_COMPLETION = "goal_completion"          # consumed by cron/digest rollup
 SELF_WAKE = "self_wake"
@@ -130,7 +130,7 @@ INBOUND_ROUTED = "inbound_routed"
 #: An inbound that never became a turn: an allowlist drop, a tier denial, a
 #: missing mention, a participant with no bound session. Carries `reason`.
 ACCESS_DENIED = "access_denied"
-#: A threat scan (`modules.memory.task.threat_scan.is_suspicious`) flagged
+#: A threat scan (`core.security.threat_scan.is_suspicious`) flagged
 #: content. The local verdict is unchanged; this only makes it visible.
 INJECTION_FLAGGED = "injection_flagged"
 #: 045 lane 4: a NAMED perimeter limiter tripped (``core/rate_limit.py::
@@ -247,7 +247,6 @@ SURFACE_POLL_ERROR = "surface_poll_error"
 #: the pause/resume and app verbs recorded downstream.
 CONSOLE_CONFIG_WRITE = "console_config_write"
 CONSOLE_PREF_WRITE = "console_pref_write"
-CONSOLE_PENDING_DECIDE = "console_pending_decide"
 CONSOLE_GOAL_VERB = "console_goal_verb"
 CONSOLE_GOAL_CREATE = "console_goal_create"
 CONSOLE_CRON_CANCEL = "console_cron_cancel"
@@ -302,6 +301,9 @@ MODEL_REASONING_SET = "model_reasoning_set"
 #: 112 W2: a run's model tier chosen by the AGENT (or stored on a job/goal by an owner
 #: turn): attrs kind (child|goal|job), tier, model, why. Producer: ``core/model_routing.py``.
 MODEL_ROUTED = "model_routed"
+#: 122 W1: one owner report of the agent's own acts (``core.act_report``): attrs mode,
+#: since, until (the period it covered — the next report starts there), acts, outcome.
+ACT_REPORT = "act_report"
 
 # 098 state machines: owner-visible outcomes of guarded lifecycles
 #: an inbound email failed N times and is quarantined (one owner notice)

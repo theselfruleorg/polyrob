@@ -16,8 +16,23 @@ from typing import Any, Callable, List, Optional
 logger = logging.getLogger(__name__)
 
 
-def split_for_surface(surface_id: str, text: str) -> List[str]:
-    """*text* in chunks that fit ``surface_id``'s per-message limit (OS1).
+def surface_flavor(container: Any, surface_id: str) -> str:
+    """The ``capabilities.markdown_flavor`` of the registered *surface_id*, or
+    ``"none"`` (pass through) when it is not registered or cannot be read."""
+    try:
+        registry = container.get_service("surface_registry") if container else None
+        surface = registry.get(surface_id) if registry is not None else None
+        return str(getattr(getattr(surface, "capabilities", None), "markdown_flavor",
+                           "none") or "none")
+    except Exception:
+        return "none"
+
+
+def split_for_surface(surface_id: str, text: str, flavor: str = "none") -> List[str]:
+    """*text* in chunks that fit ``surface_id``'s per-message limit (OS1), rendered
+    for the surface's ``markdown_flavor`` (``core.surfaces.rendering``): a surface
+    that shows no markdown gets plain text or its own markup, never ``**raw**``
+    markers.
 
     The limit is the catalog's ``max_message_chars`` — the ONE number per
     platform. A reply over it (``/help`` is ~6,600 chars) used to go out whole:
@@ -31,6 +46,10 @@ def split_for_surface(surface_id: str, text: str) -> List[str]:
         limit = int(spec.max_message_chars) if spec is not None else 0
     except Exception:
         limit = 0
+    if flavor and flavor != "none":
+        from core.surfaces.rendering import render_for_flavor
+        return [c for c in render_for_flavor(text, flavor, limit if limit > 0
+                                             else max(1, len(text))) if c] or [text]
     if limit <= 0 or len(text) <= limit:
         return [text]
     from core.surfaces.surface import split_message
@@ -60,7 +79,8 @@ async def route_and_act(container: Any, task_agent: Any, inbound: Any,
 
     async def safe_deliver(reply):
         if admit_inbound_reply(inbound, decision, reply):
-            if not await _send_with_actions(container, inbound, reply):
+            if not await _send_with_actions(container, inbound, reply,
+                                            getattr(decision, "command", None)):
                 await deliver(reply_text(reply))
         elif await _owner_reply_to_dm(container, inbound, decision, reply_text(reply),
                                       deliver, deliver_dm, noted):
@@ -121,28 +141,15 @@ async def _owner_reply_to_dm(container: Any, inbound: Any, decision: Any, text: 
     return True
 
 
-def _reply_actions(reply) -> list:
-    """The buttons of a carded command reply (``CommandReply.card_id``), none for
-    anything else. Read-only: a missing card store is not created here."""
-    from core.surfaces.command_reply import CommandReply
-    cid = getattr(reply, "card_id", None) if isinstance(reply, CommandReply) else None
-    if not cid:
-        return []
-    try:
-        from core.surfaces import cards
-        st = cards.existing_store()
-        card = st.get(cid) if st is not None else None
-        return cards.card_actions(card) if card is not None else []
-    except Exception:
-        logger.debug("card actions unavailable (the text keeps the commands)", exc_info=True)
-        return []
-
-
-async def _send_with_actions(container: Any, inbound: Any, reply: Any) -> bool:
-    """113 W7 F-09: a carded reply on a surface that ``supports_actions`` goes out
-    through the message router WITH the card's buttons. True = sent; False = the
-    caller delivers the text (it keeps every command, so nothing is lost)."""
-    actions = _reply_actions(reply)
+async def _send_with_actions(container: Any, inbound: Any, reply: Any,
+                             command: Optional[str] = None) -> bool:
+    """113 W7 F-09: a reply with buttons (a card's, a reply's next-step actions or
+    a decision list's — ``core.surfaces.command_reply.reply_buttons``, the rule
+    every seat shares) on a surface that ``supports_actions`` goes out through
+    the message router WITH them. True = sent; False = the caller delivers the
+    text (it keeps every command, so nothing is lost)."""
+    from core.surfaces.command_reply import reply_buttons
+    actions = reply_buttons(reply, command, getattr(inbound, "text", "") or "")
     if not actions or container is None:
         return False
     try:
@@ -184,14 +191,16 @@ class TextSink:
     thing that differed was the client method it called.
     """
 
-    def __init__(self, send, *, label: str, surface_id: str = "") -> None:
+    def __init__(self, send, *, label: str, surface_id: str = "",
+                 flavor: str = "none") -> None:
         self._send = send
         self._label = label
         self._surface_id = surface_id
+        self._flavor = flavor
 
     async def send_message(self, chat_id, text) -> bool:
         try:
-            for chunk in split_for_surface(self._surface_id, str(text)):
+            for chunk in split_for_surface(self._surface_id, str(text), self._flavor):
                 await self._send(str(chat_id), chunk)
             return True
         except Exception:
@@ -272,9 +281,13 @@ class BaseHarness:
             return None
 
         async def _send(address: str, text: str) -> None:
-            for chunk in split_for_surface(self.surface_id, text):
+            for chunk in split_for_surface(self.surface_id, text, self._flavor()):
                 await send(address, chunk)
         return _send
+
+    def _flavor(self) -> str:
+        """This surface's ``markdown_flavor``, read from its registered Surface."""
+        return surface_flavor(self._container, self.surface_id)
 
     async def _before_route(self, target) -> None:
         """Transport hook run before routing (e.g. a typing indicator)."""
@@ -291,7 +304,7 @@ class BaseHarness:
         async def _deliver(text: str) -> None:
             # OS1: split to the platform's limit; stop at the first failed
             # chunk (the rest would arrive without its start).
-            for chunk in split_for_surface(self.surface_id, text):
+            for chunk in split_for_surface(self.surface_id, text, self._flavor()):
                 try:
                     await self._deliver_to(target, chunk)
                 except Exception:
@@ -390,7 +403,9 @@ def register_surface_and_sink(container: Any, surface: Any, *, sink_name: str,
     register_surface(container, surface)
     if container.get_service(sink_name) is None:
         container.register_service(sink_name, TextSink(
-            send, label=sink_label, surface_id=str(getattr(surface, "surface_id", "") or "")))
+            send, label=sink_label, surface_id=str(getattr(surface, "surface_id", "") or ""),
+            flavor=str(getattr(getattr(surface, "capabilities", None), "markdown_flavor",
+                               "none") or "none")))
 
 
 async def fetch_capped(url: str, *, allowed_hosts: tuple,

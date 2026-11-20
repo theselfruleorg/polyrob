@@ -41,7 +41,7 @@ from core.tool_capabilities import (
 # MCPTool.__init__ is config parsing only (attrs + `${VAR}` placeholder resolution,
 # fail-open to defaults; server CONNECTIONS live in the deferred async initialize(),
 # which the CLI already defers until a session first loads the tool). Registration
-# is gated by the mcp tool's own gate (tools/mcp/config.py::mcp_gate_on: explicit
+# is gated by the mcp tool's own gate (core/mcp_config.py::mcp_gate_on: explicit
 # MCP_ENABLED, else the operator's local server file) — absent secrets make the affected
 # server connections fail loudly at load time (an owner ask), never a silent
 # "not found in container".

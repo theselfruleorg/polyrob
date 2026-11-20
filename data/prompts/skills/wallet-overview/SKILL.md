@@ -65,6 +65,12 @@ memory, a note or your own arithmetic. A figure you could not read is UNKNOWN.
 `/check <address|ticker>` (any wallet or token), `/invoices` (what is billed).
 Name the verb instead of a long recap when the owner asks for the same view.
 
+**The income rule** (`/wallet income`, the owner's only): a percent of the income kinds the
+owner chose is owed to a buy of one pinned token, held in the treasury. Code runs the buy
+(act source `income rule <id>`); you never set, change or pay it yourself. Do not sell the
+token it bought unless the owner asks. A failed buy keeps what is owed; the owner's view
+says which income each buy paid.
+
 ## If a tool is missing
 
 Follow `harness-manual`. Without `defi_data` you cannot read a balance: say so,

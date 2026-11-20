@@ -4,7 +4,7 @@ This page covers what the agent does on a chain with its own wallet: read-only s
 (`defi_data`), value movement behind the transaction guard (`defi_trade`), the Solana
 rail, the book, bridges, NFTs, deploys, contract calls, launchpads, web dapps,
 liquidity, agent NFT accounts, the `/trade` mandate, and venue trading in the `markets`
-pack. The wallet itself, its caps and the signer are in [wallet.md](wallet.md); the
+pack. The wallet itself, its limits and the signer are in [wallet.md](wallet.md); the
 safety model and the order in which you arm each step are in
 [payments.md](payments.md#9-arming-it-one-step-at-a-time).
 
@@ -52,9 +52,10 @@ constructed and nothing is broadcast**, so this tool cannot move value:
 | `new_pools` | Newest-indexed pools (the fresh-launch frontier), unscreened | all, incl. Solana |
 | `trending` | Pools an indexer ranks trending, unscreened | all, incl. Solana |
 | `scan` | The same pools with a verdict each — SURVIVOR / CANDIDATE / TOO_NEW / PASS / WASH / UNSCREENABLE — from measured depth, flow, age and participation thresholds | all, incl. Solana |
-| `nft_holdings` | The NFTs an address holds, own wallet by default — "I could not look" is never an empty list (needs `NFT_TOOLS_ENABLED`) | EVM |
-| `nft_info` | One NFT straight from the chain: owner, standard, metadata URI; an unanswered field reads NOT CHECKED (needs `NFT_TOOLS_ENABLED`) | EVM |
-| `contract_read` | Raw `eth_call` (returns raw hex, gas- and size-capped) | EVM |
+| `nft_holdings` | The NFTs an address holds, own wallet by default — "I could not look" is never an empty list | EVM |
+| `nft_info` | One NFT straight from the network: owner, standard, metadata URI; an unanswered field reads NOT CHECKED | EVM |
+| `nft_account` | ANY agent NFT's token-bound account (`<chain>:<collection>/<id>`): owner, account address, open approvals with their coverage, lock or sale readiness, state, identity, native balance, the sale phase — the read of `agent_nft_inspect`, allowed in a group chat | EVM |
+| `contract_read` | Read-only `eth_call` on any contract: the arguments are ABI-encoded from the signature (`ownerOf(uint256)` with `[5]`), and `returns` (`address`, `(uint256,address)`) decodes the result; the raw hex is always shown (gas- and size-capped) | EVM |
 | `wallet_holdings` | ANY wallet's public holdings on one chain — "check this address". A base58 address reads on Solana; a 0x address needs its chain. The agent's own address through it stays an owner read | all, incl. Solana |
 | `wallet_activity` | ANY wallet's recent transfers and swaps, with a net-flow summary the verb computes (not a cost-basis P&L) | Solana; EVM via Blockscout, or via `ALCHEMY_API_KEY` where Blockscout has no open API (Robinhood mainnet) or does not answer |
 | `token_origin` | Who deployed a token, what else they deployed, whether they still hold it; on Solana the launch buyers and any shared funder ("addresses, not people") | Solana; EVM via Blockscout |
@@ -70,7 +71,8 @@ on EVM the proxy slots and `owner()`, Honeypot.is (Ethereum, Base) and GoPlus. A
 source did not run is listed as NOT CHECKED with the reason. Prices come from up to three
 sources (DexScreener, GeckoTerminal, Jupiter); when they disagree the price is DISPUTED
 and is never used to size or value a spend. `/check <address> [chain]` or `/check <TICKER>`
-runs the same reads for the owner with no model turn.
+runs the same reads for the owner with no model turn. The agent has the same read
+(`address_report`), so you can also ask it in chat what an address is.
 
 `token_info` also carries a **survivability** block: will the pool still be there? Each
 gate (pool age and depth, liquidity, LP locked or burned, a sell simulation, the sell tax,
@@ -172,17 +174,18 @@ exact), and `DEFI_MONITOR_EXITS` (default OFF) lets a forged main-agent turn —
 the self-wake monitor loop — run **EXIT-shaped operations only**: revoke,
 exit-bounded approve, or a sell of a held token into the chain's quote asset
 with the measured inflow asserted post-simulation. Entries, transfers and leaf
-turns still refuse; all caps still apply. An approve/revoke records $0 against
-the daily cap (the grant is still headroom-checked before landing; value is
-recorded once, on the swap), and cap arithmetic runs in cents.
+turns still refuse; all limits still apply. An approve/revoke records $0 against
+the daily limit (the grant is still headroom-checked before landing; value is
+recorded once, on the swap), and limit arithmetic runs in cents.
 
 **An unvalued grant is not a free grant.** "Exit-bounded" means
 two things, not one: the grant cannot exceed the wallet's own held balance of
 the token, **and** its spender is the destination the intent declares *and* a
-route spender the chain pins (`univ3_router` / `aggregator_spender`) — the sell
+route spender the network pins (`univ3_router` / `aggregator_spender`, the v3 deposit
+manager, the v4 Permit2) — the sell
 leg approves the router, nobody else. A grant that no source can price is then
 charged the **autonomous ceiling** (`DEFI_AUTONOMOUS_MAX_USD`) plus a cent, so
-it stays executable but lands on the owner queue and is charged to the caps
+it stays executable but lands on the owner queue and is charged to the limits
 instead of passing unattended at $0.00. A grant that is not exit-bounded and
 cannot be priced refuses outright, at the verb, naming the router as the
 remedy. `revoke_approval` declares no grant and is untouched — clearing a
@@ -203,7 +206,7 @@ Nine ordered gates, every one fail-closed:
    autonomous turn is refused, and an *unprovable* origin refuses.
 3. **Structural** — zero amount, zero/burn destination.
 4. **RPC trust** — refuses to arm on the shared public endpoint. Simulation, deltas and
-   caps all read from the RPC, so it cannot be the trust anchor for moving money; pin
+   limits all read from the RPC, so it cannot be the trust anchor for moving money; pin
    `DEFI_EVM_RPC_BASE`.
 5. **Simulation trustworthiness** — a revert, an RPC error or an unreadable balance
    refuses. Simulation runs as one `eth_simulateV1` bundle (`[reads, tx, reads]`) so
@@ -212,9 +215,9 @@ Nine ordered gates, every one fail-closed:
 6. **Delta assertion** — outflow ≤ declared, and a **measured-zero outflow on a declared
    send refuses** (zero is never a cheap transfer; it is an unmeasured one). An
    *undeclared* allowance grant refuses outright — a hidden `approve` is the one effect a
-   USD cap cannot bound, because the drain happens in a later transaction the cap never
+   USD limit cannot bound, because the drain happens in a later transaction the limit never
    sees.
-7. **Pricing** — an unpriceable outflow or unknown decimals refuses. No cap can bound a
+7. **Pricing** — an unpriceable outflow or unknown decimals refuses. No limit can bound a
    number you do not have. A pinned USD stablecoin (a row's `usdc` and `stables`, e.g.
    USDG on Robinhood, USDT on Ethereum — decided by the pinned network and address, never by the token's
    `symbol()`) is valued at its peg while every source is within 2% of $1, and
@@ -237,22 +240,24 @@ Nine ordered gates, every one fail-closed:
    figure more than 10x off.
 8. **Caps** — the per-tx ceiling, rolling daily cap and replay guard, held under a
    reservation across authorize → broadcast → record so two concurrent transfers cannot
-   both clear a nearly-exhausted cap.
+   both clear a nearly-exhausted limit.
 9. **Approval lane** — above `DEFI_AUTONOMOUS_MAX_USD` (default `$25`) a call the
    agent makes ON ITS OWN returns `lane=owner_queue` with `allowed=False`. A queue lane
-   is not an execute grant: nothing is queued by that result. A LIVE call raises the
-   owner's approval card before the tool runs; once the owner approves THAT call, the
-   grant rides with it and the guard sends it (`lane=owner_approved`), still held to the
-   declared bound and every cap.
+   is not an execute grant: nothing is sent by that result. A LIVE call that reaches
+   this lane becomes ONE approval in your chat holding that exact call, bound to the value it
+   showed plus 5%; your Confirm runs it once, with every limit again. The same holds for
+   an unchecked sell of an untrusted token, a token launch and a grant to an unpinned
+   spender.
 
 **Who is asking (step 0).** Owner intent in a genuine owner turn is authorization. When
 the owner asks — in chat, with an owner verb (`/send … go`, `/swap … go`, `/bridge … go`,
 `/pay`), or with Confirm on an action card (the same line, run for the owner) —
 the pause and the autonomous ceiling do not apply (`lane=owner_direct`); they bound what
-the agent does on its own. A model-built spend in the owner's chat above the ceiling is
+the agent does on its own. A verb the operator denies (`POLYROB_TOOL_DENYLIST` or your
+`approvals.deny` preference) stays denied for your own `/send` and `/swap` too. A model-built spend in the owner's chat above the ceiling is
 still tapped once by the owner, because the model wrote the address; a payout-shaped
-`call` or an endowed deploy is tapped at ANY value, in the owner's turn too. The per-tx cap,
-the daily cap, the simulation and the declared bound bind everyone. A call with no
+`call` or an endowed deploy is tapped at ANY value, in the owner's turn too. The per-tx limit,
+the daily limit, the simulation and the declared bound bind everyone. A call with no
 context (the remote signer, an internal call) is never treated as the owner. Once the
 owner has made every decision a run asked for, the agent continues by itself: one wake per
 group of decisions, carrying each outcome. A failed Confirm offers its extra check as a
@@ -270,7 +275,7 @@ every EVM chain the address exists on), chain identity is pinned from config and
 read from the RPC, and a preflight verifies the node actually serves the expected chain
 before broadcasting. **Typed-data signing is kept off the money path entirely** — a
 signed EIP-2612/Permit2 payload is not a transaction, so it would never reach the guard:
-no simulation, no delta, no cap, no audit row, and the drain happens later in a
+no simulation, no delta, no limit, no audit row, and the drain happens later in a
 transaction the agent never sees.
 
 `defi_trade` is classified `money` + `high_impact` + `delegate_blocked`, so it is
@@ -299,7 +304,7 @@ All of this is ANDed with — never a replacement for — `AGENT_WALLET_MAX_PER_
 
 **What the mechanism cannot see**, stated rather than implied: the declaration and the
 calldata can share an author (prompt injection authors both, and they will agree — the
-turn-origin refusal and the caps are the defence there, not the delta assertion); a
+turn-origin refusal and the limits are the defence there, not the delta assertion); a
 permit signature never reaches the guard at all; and the RPC is the oracle for
 everything the guard knows.
 
@@ -433,6 +438,29 @@ From chat (Telegram, the REPL, the console) — no shell needed:
 Each shows what it would do first; `go` records it. The console's Money › Book
 shows the same list, the positions the rail tracks, and the same buttons.
 
+### A share of income buys a trusted token (`/wallet income`)
+
+One rule, set only by you: a percent of the agent's income buys a token you trust, and the
+token stays in the agent's wallet. The agent cannot set or change it.
+
+```
+/wallet income                                         # the rule, what it owes, the last buys
+/wallet income all 25% to <token> on <network> [min <usd>] go
+/wallet income end go                                  # the amount owed stays, shown
+/wallet income settle <buy> landed|lost go             # your word on a buy of unknown end
+```
+
+- **The income it reads** (`all`, or a comma list): `fees` (launch fee claims), `nft` (NFT
+  sales with a `Sold` event), `payments` (offer and x402 payments), `trading` (realized
+  profit, also inside an NFT account the wallet holds). It reads the records the wallet
+  already keeps; income from before the rule never counts.
+- **First an amount owed, then a buy.** Each income adds its share to the amount owed. One
+  buy runs when the amount passes the minimum (default 10 USD), or once a day from 1 USD. The
+  buy is a normal swap of the native coin: your limits, the pause and the no-ask limit apply.
+  A buy above the no-ask limit comes to you as a decision; nothing is forced.
+- **A failed buy keeps the amount owed** and tells you why. `/wallet income` shows which
+  income each buy paid.
+
 ---
 
 ## Bridging between chains
@@ -492,8 +520,8 @@ everything is exactly the owner who needs to know where their in-flight funds ar
 
 ## NFTs
 
-Gated `NFT_TOOLS_ENABLED` (default OFF). Four verbs: `defi_data.nft_holdings` / `nft_info` (read) and `defi_trade.nft_transfer` /
-`nft_revoke_approval` (write).
+The writes `defi_trade.nft_transfer` / `nft_revoke_approval` are gated `NFT_TOOLS_ENABLED` (default OFF).
+The reads `defi_data.nft_holdings` / `nft_info` / `nft_account` need no flag.
 
 **There is deliberately no grant verb.** `setApprovalForAll(operator, true)` is refused
 by `tx_guard` for every transaction and is not expressible anywhere in the tree — it is
@@ -661,7 +689,10 @@ terminal and `/lp` in chat. For Uniswap v4, add `v4` in chat to `positions`, `po
 
 - **Uniswap v3** on Robinhood, Base, Ethereum, Arbitrum and Polygon: add (a new deposit, or more to an
   existing one), remove (a percentage, optionally burning the empty deposit NFT) and
-  collect.
+  collect. A live add is ONE call: it makes the exact approvals the pinned deposit
+  manager lacks, mints, then sets them back to zero. A live ERC-20 swap does the same
+  (exact approval to the pinned router, the swap, the revoke), so `/swap … go` needs
+  no separate approval.
 - **Uniswap v4** on Robinhood only (the v4 contracts on Base, Ethereum, Arbitrum and Polygon
   are pinned for reads; pinned, hash-checked before each write; only a pool with no hook, or a pinned one, is accepted — the one pinned hook is Robinhood's): `lp_add(protocol='v4')` opens a new **full-range**
   deposit in a Pons graduated pool (a held deposit, a custom range and a move are below). The token leg moves through Permit2: first a standing
@@ -689,13 +720,26 @@ terminal and `/lp` in chat. For Uniswap v4, add `v4` in chat to `positions`, `po
   quotes the first deposit of a pool that has no price yet).
 - **A new v4 pool, or a custom range, is your declaration.** `/lp seed <token_a> <token_b>
   <amount_a> <amount_b> price <n> fee <n> spacing <n> [range ticks:lo,hi]` (or the agent's
-  `lp_add(protocol='v4', …, tick_spacing=…)`) sends nothing: it puts one decision in your chat
-  with the pool id, the range, the price, both amounts and the value. Confirm declares it for
-  one use within one hour. `/lp seed run <ref> max <usd> go` then creates the pool and mints
-  the deposit in ONE transaction, so the pool never stands empty at a price somebody else
-  can set; on a pool that exists it mints only while the pool is within your price gap
-  (1% by default, 5% at most). Confirm raises no limit: the wallet's limits and `LP_ETH_CAP`
-  still judge it. The result reads the deposit and the pool back from the network.
+  `lp_add(protocol='v4', …, tick_spacing=…)`) sends nothing: it puts ONE approval in your chat
+  with the pool id, the range, the price, both amounts, the value and the dry run. ONE Confirm
+  declares it (one use within one hour) and creates the pool and mints the deposit in ONE
+  transaction, bound to the shown value plus 5%, so the pool never stands empty at a price
+  somebody else can set (`/lp seed run <ref> max <usd> go` stays as the typed form); on a pool that exists it mints only while the pool is within your price gap
+  (1% by default, 5% at most). The run makes the token leg's Permit2 grants first, sized to
+  the declared amount, so there is no separate approval to give.
+  Confirm raises no limit: the wallet's limits and `LP_ETH_CAP` still judge it. The result reads the deposit and the pool back from the network.
+- **Launch a token with its pool in one act.** `defi_trade.launch_token` deploys a new
+  fixed-supply token, declares its v4 pool against a quote token you name (another token, or
+  the native coin as the zero address), makes the Permit2 grants and seeds the pool at your
+  starting price — the seed path above, with nothing split. It is your act: it runs on your
+  decision for that one call, on an owner turn, or on a mandate that names the launch and its
+  quote token (`/lp launch mandate <quote token> seed <usd> count <n> days <d> go`). Three
+  settings bound every launch, and the transaction guard checks them again:
+  `launch.pair` (`<network>:<token>` — set it and every launch must pair to that token on
+  that network), `launch.per_day` (default 1; every token deploy of the last 24 hours
+  counts) and `launch.max_pool_usd` (the most one seed may hold, at the launch price).
+  `/lp launch` shows them with `LP_ETH_CAP`, which bounds a native-coin leg. If a step
+  stops, the reply says what is done and the one call that finishes it.
 - **A watch on a deposit costs nothing per check.** Ask the agent to watch a v4 deposit: a
   scheduled read compares its typed fields (in range or not, the ETH left, its value) with
   the limit you set, and only an alert or a failed read reaches you.
@@ -704,12 +748,14 @@ terminal and `/lp` in chat. For Uniswap v4, add `v4` in chat to `positions`, `po
   withdrawal or a fee collection to you the same way. It cannot propose a plain deposit
   this way; a new pool, a custom range and a move reach you as the declaration below.
 - **Move a v4 deposit to a new range.** `/lp move <id> range full|ticks:lo,hi|low,high [pct n]`
-  (or the agent's `lp_add(protocol='v4', move_from=…)`) sends nothing: one decision in your chat
-  names what is withdrawn, the new range, what the new range takes and what stays in the wallet
-  (nothing is swapped). After Confirm, `/lp seed run <ref> max <usd> go` withdraws that part and
-  mints the new range: two transactions. It checks the mint first, so a mint that would refuse
-  stops the move before the withdrawal. If the mint refuses later, the funds are in the wallet
-  and the same line continues. The mint meets your per-transaction limit and `LP_ETH_CAP`.
+  (or the agent's `lp_add(protocol='v4', move_from=…)`) sends nothing: ONE approval in your chat
+  shows the move's dry run — what is withdrawn, the new range, what it takes, what stays in the
+  wallet (nothing is swapped) — and its bound (the mint's value plus 5%). ONE Confirm declares
+  the move, makes the Permit2 grants it lacks, withdraws that part and mints the new range; the
+  approval shows each step as it finishes. It checks the mint first, so a mint that would refuse
+  stops the move before the withdrawal. If a price moved past the bound, tap Refresh for a new
+  dry run. If the mint stops after the withdrawal, the funds are in the wallet and the rest of
+  the move is a new approval (one tap). The mint meets your per-transaction limit and `LP_ETH_CAP`.
 
 The guard checks both asset legs, the pinned code and destination, who owns the deposit,
 and the mint, hold or burn of its NFT. Collect minimums use the actual read-only collect
@@ -739,7 +785,7 @@ it. There are no grants, bindings or operator keys.
 signs and the account holds, through the same `tx_guard` (`TxIntent.via_account`), recorded
 against the account. Every other money verb refuses the argument with "this verb does not act
 from an NFT account". A call from an account grants no allowance and does not address the
-account's own collection, sale or sale rails. Account-admin calls (such as `lock`) refuse, and
+account's own collection, sale or sale contracts. Account-admin calls (such as `lock`) refuse, and
 every pre-flight read — the pinned code, the lock state (a kind with a lock), that the signing
 wallet IS the NFT's owner — fails closed. A refused simulation names the contract's own error
 with its arguments (for example `NotListed()` from the sale, or `Refused(target, selector)`
@@ -756,18 +802,33 @@ Two account kinds are supported, each a standard:
   `/nft trust` pins one only when the collection and the account prove the kind by ERC-165,
   and pins its code by hash.
 
+- **Any NFT the wallet owns works.** `agent_nft_snapshot`, `agent_nft_inspect` and `/nft`
+  read an unpinned collection from the network (its code, its supply, its account kind). An act
+  through the account of an unpinned NFT, and a reveal of a collection you did not pin for
+  reveals, wait for your tap. An account of a kind the wallet cannot prove is read-only.
+- **A mandate lets the agent act without asking, inside a scope you set.**
+  `/nft trust <collection> on <network> autonomous <acts> band <min>-<max> count <n> total <usd> days <d> go`
+  trusts the collection and gives one mandate (acts: mint, reveal, buy, sale, account). The
+  agent's own goals and scheduled jobs may then run those acts on that collection,
+  within the price band, the count, the total and the days, without asking you. The limits
+  and `/pause` still bind; a changed contract sends the act back to you as a decision.
+  `/nft mandate` lists them; `/nft mandate end <id> go` ends one at once.
 - **Collections are pinned, none by default.** The owner pins one from chat with
-  `/nft trust <collection> on <chain> [go]` (a read-only fact check first): the agent may then
-  watch it and act from its accounts, never mint or reveal. Only the system
-  administrator's root-owned `/etc/polyrob/agent_nft_collections.json` can grant `mint`
-  or `reveal`. A malformed or writable registry refuses as a whole. The file uses the
+  `/nft trust <collection> on <network> [go]` (a read-only fact check first). A pin records the
+  collection's facts and is the place a mandate is scoped to; it grants nothing by itself. A
+  mint, a reveal or an act through an account runs without asking only inside a mandate. The
+  system administrator's root-owned `/etc/polyrob/agent_nft_collections.json` pins the same
+  way (a remote signer reads it); its `capabilities` field grants nothing any more. A
+  malformed or writable registry refuses as a whole. The file uses the
   collection pin schema `agent-nft-profile/2`; a file in schema 1 still loads.
   `polyrob nft profile upgrade` prints the new form and the difference; `… go` (as root)
   writes it and keeps the old file.
-- **A mint pays the collection's pinned sale**, never the collection. A pin with `mint`
-  must pin its `sale` (address, code hash, the most one token may cost). The whitelist mint
-  takes `allowance` and `proof` and pays the base price exactly; a public mint pays between
-  the base price and the pinned maximum, and the sale returns an excess at its settlement.
+- **A mint pays the collection's sale**, never the collection, and needs no pin.
+  `agent_nft_collection_mint collection=<address>` reads the collection's `SALE()` and the
+  sale's phase and price from the network, and every mint waits for your tap. The whitelist
+  mint takes `allowance` and `proof` and pays the base price exactly; a public mint pays the
+  price now plus one step, and the sale returns the excess at its settlement. A pinned
+  collection's sale also keeps the pin's price limit.
 - **The sale pays the wallet back.** After the sale is settled, `agent_nft_sale_settle` settles
   the wallet's own auction records, and the sale returns what each paid above the clearing
   price. `agent_nft_sale_claim` takes what the sale holds for the wallet (`owed`). Both send
@@ -811,17 +872,30 @@ Two account kinds are supported, each a standard:
 - **Always owner-approved:** `agent_nft_collection_mint`, `agent_nft_withdraw_token` (the
   owner's `/nft send <id> <to> on <chain>`), `agent_nft_sale_ready`, `agent_nft_sale_list`,
   `agent_nft_sale_accept`, `agent_nft_buy` and
-  `agent_nft_bind_identity` (it puts the agent's card on the account's own ERC-8004
+  `agent_nft_bind_identity` (it puts the agent's profile on the account's own ERC-8004
   identity: `setAgentURI` on the identity an ERC-6551P NFT has from its mint, or a
   `register()` when there is none; the agent's own registration file then names that
   identity, so the two entries link). There is no
   "adopt" step: an NFT that arrives is the agent's to act from at once, and the tokens its
-  account already holds are recorded as inherited positions.
-- A holdings watch (every 300 s, no model turn) tells the owner once when an NFT of a
-  pinned collection arrives in or leaves the agent's wallet; `/nft` lists them with their
-  accounts.
-- The collection mint and the picture, holdings and brief live in a separately
-  installed agent-NFT package; without it those verbs refuse and name the remedy.
+  account already holds are recorded as inherited holdings.
+- **The ERC-6551 safety rules hold for every NFT, pinned or not.** The wallet reads the facts
+  from the network. It refuses to send an NFT into an account of its own collection (deployed
+  or not), into an account bound to another network, or into a loop of accounts that leads
+  back to it (a cycle locks both NFTs). It refuses anything sent to the account of a token
+  that is not minted yet, and anything sent to the address of one of its own accounts on
+  another network. An
+  NFT leaves only when its account has no open approval (`agent_nft_revoke_all` clears them).
+  An NFT sent into an account the agent itself holds needs your tap, and the decision says how
+  to get it back. Before the wallet puts anything into an account it holds that can keep an
+  earlier owner's approvals (a Tokenbound account), it scans them, and the decision for an NFT
+  send shows what the NFT's account holds. A generic call that mints, buys, reveals or claims on an NFT sale or market is
+  refused and names the `agent_nft_*` verb to use. `agent_nft_withdraw_token nested=…` sweeps
+  a nested NFT back to the wallet. A move between the wallet and its own NFT account counts
+  only its fee against the limits.
+- A holdings watch (every 300 s, no model turn) tells the owner once when an NFT arrives in
+  or leaves the agent's wallet, pinned or not, and when an NFT arrives inside one of its
+  accounts (nested); `/nft` lists them with their accounts. `/status` shows the wallet, each
+  NFT account and one total.
 - `AGENT_NFT_REVEAL_MAX_GAS_USD` (default `$1.00`) bounds the gas fee of one reveal.
 
 ## The trading mandate (`/trade`)
@@ -892,6 +966,11 @@ set.
   the order value within the per-venue cap (`HYPERLIQUID_TRADE_MAX_USD` /
   `POLYMARKET_TRADE_MAX_USD`, default `$5` each). A blocked order returns a `dry_run`
   result, never a silent submission.
+- **Who may trade** is the same money kernel every other verb asks: a forged or
+  unattended turn (a goal, a scheduled job or a self-wake run) never places, changes or cancels an
+  order. A genuine owner turn is the owner acting, so the owner pause and
+  `/pause trading` do not hold it, exactly as in step 0 above. A direct call with no
+  context is never the owner: the pause holds it, except a cancel made by hand.
 - Hyperliquid order requests must include `max_usd`, the maximum USD notional
   the owner approves. The live price and worst-case slippage must fit that bound.
   Approval cards always show this ceiling and Polymarket's `size_usd` amount.
@@ -924,8 +1003,9 @@ set.
 > cancel runs without a tap too, unless it would remove a trigger order (a stop-loss or
 > take-profit), or the open orders cannot be read — then it asks; `revoke_agent` never
 > asks (it only reduces authority). The owner pause (`polyrob autonomy pause` / `/pause`;
-> the legacy `AUTONOMY_HALT` facet) freezes them too — during an incident, cancel open orders directly
-> at the venue, not through the agent.
+> the legacy `AUTONOMY_HALT` facet) freezes the agent's own trading; the owner can still
+> trade or cancel in a chat turn. During an incident, cancel open orders directly at the
+> venue if the agent itself is suspect.
 
 ---
 

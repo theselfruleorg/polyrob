@@ -35,7 +35,7 @@ def workspace(tmp_path, monkeypatch):
 			d.mkdir(exist_ok=True)
 			return d / filename
 
-	import agents.task.path as path_mod
+	import core.session_paths as path_mod
 	monkeypatch.setattr(path_mod, "pm", lambda: _PM())
 	return tmp_path / "workspace"
 

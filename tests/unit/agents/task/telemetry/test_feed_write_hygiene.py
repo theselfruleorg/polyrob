@@ -23,7 +23,7 @@ class _FakeEvent:
 
 @pytest.fixture
 def tele(tmp_path, monkeypatch):
-    from agents.task.path import PathManager
+    from core.session_paths import PathManager
     from agents.task.telemetry.sequence import SequenceGenerator
     import agents.task.telemetry.service as svc
 

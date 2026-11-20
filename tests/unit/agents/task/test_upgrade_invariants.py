@@ -54,7 +54,7 @@ def test_skill_reads_refuse_file_links(skills, tmp_path):
 
 
 def test_scanner_unavailable_cannot_publish(skills, monkeypatch):
-    monkeypatch.setitem(sys.modules, "modules.memory.task.threat_scan", None)
+    monkeypatch.setitem(sys.modules, "core.security.threat_scan", None)
     result = skills.create_skill("audit", BODY, user_id="u1", created_by="user", pending=False)
     assert not result.ok and "scanner unavailable" in " ".join(result.errors)
 
@@ -77,7 +77,7 @@ def test_project_context_refuses_unavailable_scanner_and_oversized_file(tmp_path
     (tmp_path / "AGENTS.md").write_text("x" * (4 * 1024 * 1024 + 1))
     assert load_project_context(tmp_path, confine_to_root=True) is None
     (tmp_path / "AGENTS.md").write_text("# Context\n\nSummarize the supplied fixture.\n")
-    monkeypatch.setitem(sys.modules, "modules.memory.task.threat_scan", None)
+    monkeypatch.setitem(sys.modules, "core.security.threat_scan", None)
     assert load_project_context(tmp_path, confine_to_root=True) is None
 
 

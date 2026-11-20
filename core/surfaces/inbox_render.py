@@ -389,6 +389,12 @@ def render_book(body: Mapping[str, Any], *, width: int = WIDTH,
         return "\n".join(_wrap(str(body["error"]), "  ", width))
     chains = dict(body.get("chains") or {})
     verdict = str(body.get("verdict") or "").lower()
+    if verdict == "no_wallet":
+        # read_book's plain fact about a new install: the console's Money > Book
+        # words, never "could not read ... on no chain at all".
+        from core.copy import t
+        return "\n".join(_wrap(t("book.no_wallet"), "  ", width)
+                         + _wrap(t("book.no_wallet_how"), "  ", width))
     out = _wrap(_VERDICT_WORDS.get(verdict, "I could not read the book."),
                 "  ", width)
 

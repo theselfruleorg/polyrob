@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.autonomy_marker import mark_autonomous
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from tools.goal_tools import GoalCreateAction, GoalTool, GoalUpdateAction
 
 
@@ -153,7 +153,9 @@ def test_goal_create_and_update_carry_the_agents_model(tmp_path, priced, monkeyp
     g = t._goal_board.list(user_id="alice")[0]
     assert (g.payload["model"], g.payload["provider"], g.payload["model_by"],
             g.payload["model_why"]) == ("x/mid", "openrouter", "agent", "a long synthesis")
-    assert told == []                                        # a create tells nothing
+    # audit 2026-11-21 L-12: an unattended create on a model off the owner's set is told
+    assert len(told) == 1 and "I created a goal on a model you do not use or list: x/mid" in told[0]
+    told.clear()
     # goal_update needs a genuine owner turn (an older rule). A pricier model is set at
     # once: there is no price gate.
     ctx = _ctx()
@@ -164,3 +166,20 @@ def test_goal_create_and_update_carry_the_agents_model(tmp_path, priced, monkeyp
     assert not r.error and "back to the default" in r.extracted_content
     assert not t._goal_board.get(g.id).payload.get("model")
     assert told == []      # x/mid -> default: a clear is in the result, not a notice
+
+
+def test_a_refused_create_sends_no_model_notice(tmp_path, priced, monkeypatch):
+    """L-12: the notice says a goal was created, so a create that is refused (here a
+    duplicate) sends none."""
+    told = []
+    monkeypatch.setattr("tools.goal_tools.notify_model_change",
+                        lambda c, text: told.append(text) if text else None)
+    t = _tool(tmp_path)
+    mark_autonomous("run-sess")
+    ctx = _ctx(session_id="run-sess")
+    first = GoalCreateAction(title="Write the long weekly market report", model="x/mid", why="w")
+    assert not run(t.goal_create(first, ctx)).error
+    told.clear()
+    r = run(t.goal_create(first, ctx))
+    assert r.error and "Duplicate" in r.error
+    assert told == []

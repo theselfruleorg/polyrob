@@ -43,7 +43,7 @@ from core.app_service.registry import (
     STATUS_APPROVED, STATUS_DEPLOYING, STATUS_FAILED, STATUS_LIVE, STATUS_PAUSED,
     STATUS_PENDING, STATUS_STOPPED, AppServiceRegistry,
 )
-from core.app_service.snapshot import open_owned_dir, snapshot_tree
+from core.app_service.snapshot import open_owned_dir, remove_entry, snapshot_tree
 from core.autonomy_control import allows
 from core.container_hardening import hardening_flags
 from core.event_kinds import APP_FAILED, APP_LIVE, APP_REMOVED, APP_STOPPED
@@ -289,7 +289,9 @@ class AppSupervisor:
             snap_dir, total, files, skipped = self._snapshot(row, src, digest)
             from core.ship_tree import tree_digest
             if not tree_digest(snap_dir).startswith(str(row["workspace_digest"])):
-                # ship == tested: publish only the bytes the tests ran on.
+                # ship == tested: publish only the bytes the tests ran on. The
+                # refused copy never stays on disk (audit 2026-11-21 M-9).
+                self._drop_snapshot(row, digest)
                 raise DeployError("the snapshot does not match the tested workspace digest "
                                   "— run the tests and request the deploy again")
             host_port = int(row["host_port"]) if row.get("host_port") else self.allocate_port()
@@ -375,6 +377,20 @@ class AppSupervisor:
             self._emit(APP_FAILED, row, {"error": str(e)[:300], "log_tail": tail[-1500:]})
             logger.warning("app_service: deploy of %s/%s failed: %s", uid, slug, e)
             return False
+
+    def _drop_snapshot(self, row: Dict[str, Any], digest: str) -> None:
+        parts = ["apps", safe_tenant(row["user_id"]), row["slug"], "snapshots"]
+        try:
+            fd = open_owned_dir(self.data_dir, parts, create=False)
+        except OSError:
+            return
+        try:
+            remove_entry(fd, digest)
+        except OSError:
+            logger.warning("app_service: could not delete the refused snapshot %s", digest,
+                           exc_info=True)
+        finally:
+            os.close(fd)
 
     def _snapshot(self, row: Dict[str, Any], src: str, digest: str):
         """Copy the tested tree to ``<apps>/<tenant>/<slug>/snapshots/<digest>``

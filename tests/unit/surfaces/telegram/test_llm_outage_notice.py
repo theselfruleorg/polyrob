@@ -182,8 +182,8 @@ async def test_notice_includes_reason_phrase_for_402_shaped_status():
     assert sent == [CREDIT_DEATH_NOTICE]
     assert sent[0] == (
         OUTAGE_NOTICE_TEXT + "\n" +
-        "The model provider reports the account is out of credits — top up or "
-        "switch provider, then send another message."
+        "The provider says the account is out of credit — top it up or "
+        "switch the model, then send another message."
     )
 
 
@@ -194,8 +194,17 @@ async def test_non_outage_failure_keeps_legacy_generic_notice():
     sent = await _drive(_FakeAgent(status="Session failed: Unknown error"))
     assert len(sent) == 1
     assert sent[0] != OUTAGE_NOTICE_TEXT
-    assert "My turn ended early" in sent[0] and "continue" in sent[0]
+    # a fatal error names its next step; a continue cannot fix it (UX review H10)
+    assert "My turn ended early" in sent[0] and "Next: `/status`" in sent[0]
     assert llm_outage_notice._last_notice_at == {}
+
+
+def test_the_owner_reads_an_outage_notice_addressed_to_the_owner():
+    """2026-11-20 UX review H12: never "the owner has been notified" to the owner."""
+    from core.surfaces.llm_outage_notice import outage_notice_text
+    assert "the owner has been notified" not in outage_notice_text(owner=True)
+    assert "/model" in outage_notice_text(owner=True)
+    assert outage_notice_text(owner=False) == OUTAGE_NOTICE_TEXT
 
 
 def test_classifier_matches_all_known_exhaustion_shapes():

@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from tools.web_fetch.fetcher import WebFetchError, safe_fetch
+from core.security.safe_fetch import WebFetchError, safe_fetch
 from tests.unit.tools.web_fetch.test_fetcher import _FakeResp, _FakeSession, _factory
 
 
@@ -27,7 +27,7 @@ async def test_compressed_response_refused_before_body_read():
 
 @pytest.mark.asyncio
 async def test_default_transport_disables_automatic_decompression(monkeypatch):
-    import tools.web_fetch.fetcher as fetcher
+    import core.security.safe_fetch as fetcher
     captured = {}
     monkeypatch.setattr(fetcher.aiohttp, 'TCPConnector', lambda **kw: object())
     monkeypatch.setattr(fetcher.aiohttp, 'ClientSession', lambda **kw: captured.update(kw))

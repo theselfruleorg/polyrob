@@ -7,7 +7,7 @@ metadata:
   polyrob-priority: '3'
   polyrob-owner-only: 'true'
   polyrob-triggers: '{"tool_ids":["goal","cronjob"]}'
-  polyrob-version: '3'
+  polyrob-version: '4'
 ---
 # Standing work
 
@@ -80,16 +80,30 @@ is locked; `model="default"` clears yours.
   `depends_on`. Give the later job a later time, by at least the earlier job's
   `max_duration_seconds`: `every 3d from <T>`, then `every 3d from <T + offset>`.
 
-## 4. The $0 watch
+## 4. The $0 watch — and the wake hook
 
-For an on-chain number, the tick can run with no model call:
-- `read_verb={verb, params, alert, deliver_on:"alert"}` — the verb reads, the code
-  compares the `alert` bound, and only an ALERT or an error reaches the owner.
-- `precheck={verb, params, alert?, move_pct?, field?, max_quiet_hours?}` — a quiet
-  read skips the tick at $0; a crossed bound or a move runs the model with the read
-  attached.
-- A liquidity position is watched this way too (`defi_data.lp_positions` by id; the
-  fields are in `defi-liquidity`).
+For an on-chain number, the tick can run with no model call. Two kinds, and they differ
+in WHO is told:
+
+- `precheck={verb, params, alert?, move_pct?, field?, max_quiet_hours?}` — the WAKE HOOK.
+  A quiet read skips the tick at $0; a crossed bound or a move of `move_pct` since the
+  last wake runs YOU with the read attached, to decide and act. Use it for every watch
+  where something must be done on the change: a position, an exit, a price trigger.
+- `read_verb={verb, params, alert, deliver_on:"alert"}` — an ALERT ONLY. The code
+  compares and sends the owner one line. You never run and never decide. Use it only
+  when the owner asked for a notice and nothing else.
+
+Rules for both:
+- Every number you watch goes in the `alert` or `move_pct`. A condition written only in
+  the task text is never checked by code. Never promise the owner a watch on a number
+  the payload does not hold.
+- Quiet ticks cost $0, so tick often on money that can move fast (`*/15 * * * *`). A 6 h
+  or weekly tick on a pool or a price misses the move.
+- A bound that stays crossed fires on every tick: move or clear it in the run that acted.
+- A read job that should wake you: `cronjob_edit(job_id, precheck={…})` turns it into a
+  precheck job. Do not keep two jobs on one number.
+- A liquidity position: `defi_data.lp_positions` by id; the fields and the rule are in
+  `defi-liquidity` (reference §7).
 - ⚠️ Only the `defi_data` public reads named in the `read_verb` schema can run this
   way. A web page, a feed or any other source runs the model on every tick: tell the
   owner the cost per tick and pick a slow cadence.

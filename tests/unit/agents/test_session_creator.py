@@ -18,7 +18,7 @@ def _sm(tmp_path):
     """A SessionManager rooted at tmp_path, with pm() pointed at the same
     root so create_session's on-disk writes and a fresh instance's
     _load_sessions_from_disk() glob agree on where to look."""
-    from agents.task.path import get_path_manager, set_path_manager
+    from core.session_paths import get_path_manager, set_path_manager
     set_path_manager(get_path_manager(data_root=str(tmp_path)))
     return SessionManager(base_dir=str(tmp_path))
 

@@ -218,6 +218,29 @@ def test_the_scan_is_chunked_and_a_bad_page_refuses():
         erc6551.open_approvals(Broken(), ACCOUNT, 0, live=False)
 
 
+def test_the_scan_halves_its_window_when_the_node_caps_the_range():
+    # Robinhood Chain refuses an address-less eth_getLogs over 30,000 blocks (2026-11-20):
+    # a fixed 50,000 window made every approval table UNREADABLE there.
+    class Capped(FakeRpc):
+        def __call__(self, method, params):
+            if method == "eth_getLogs":
+                f = params[0]
+                if int(f["toBlock"], 16) - int(f["fromBlock"], 16) + 1 > 30_000:
+                    raise RuntimeError("only 30000 are allowed for this request")
+            return super().__call__(method, params)
+    rpc = Capped(head=60_000)
+    assert erc6551.open_approvals(rpc, ACCOUNT, 0, step=50_000, live=False) == []
+    assert rpc.log_queries == [(0, 24_999), (25_000, 49_999), (50_000, 60_000)]
+
+    class Floor(FakeRpc):
+        def __call__(self, method, params):
+            if method == "eth_getLogs":
+                raise RuntimeError("down")
+            return super().__call__(method, params)
+    with pytest.raises(RuntimeError):      # an unread range never reads as "none"
+        erc6551.open_approvals(Floor(head=10_000), ACCOUNT, 0, live=False)
+
+
 # --- W3: Permit2 in the approval table ------------------------------------------------------
 # A Permit2 allowance is held BY Permit2, keyed (owner, token, spender), and survives a sale.
 # "Empty open-approval table" is the sale-safety claim, so the scan must read it.

@@ -107,7 +107,7 @@ async def test_the_yield_probe_runs_under_the_tick_lock(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_WORKSPACE_LOCK_DIR", str(tmp_path / "locks"))
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))  # the turn marker stays per-test
     from core import interactive_gate as g
-    from cron.scheduler import TickLock
+    from core.file_lock import TickLock
     g._busy_depth = 0
     g.mark_busy()
     store = CronJobStore(str(tmp_path / "cron.db"))

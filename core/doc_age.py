@@ -6,7 +6,7 @@ whether it was measured this morning or asserted in July. `core.doc_claims`
 puts a date on each line; this module turns those dates into the ONE header the
 foundation block renders:
 
-    ## Owner facts (last write 2026-09-19; 3 lines older than 30 days; 2 lines undated)
+    ## Owner rules (last write 2026-09-19; 3 lines older than 30 days; 2 lines undated)
 
 ⚠️ An UNDATED line is reported as undated, never as fresh: a line written with
 no ``source`` carries no stamp, so the header says so instead of implying a
@@ -113,7 +113,7 @@ def render_age_header(title: str, text: str, *, now: Optional[date] = None) -> s
 
 
 #: the self-context blocks that carry provenance stamps, and their reader names.
-_DATED_BLOCKS = {"owner_rules": "Owner facts", "self_doc": "Self notes"}
+_DATED_BLOCKS = {"owner_rules": "Owner rules", "self_doc": "Self notes"}
 
 
 def stale_lines_note(blocks, *, now: Optional[date] = None,

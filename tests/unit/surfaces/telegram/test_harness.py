@@ -331,7 +331,8 @@ async def test_command_new_in_a_direct_chat_stops_nothing_and_drops_no_binding()
 async def test_command_help_returns_text(monkeypatch):
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u_abc")   # the owner's /help (F-05)
     ta = _FakeTaskAgent()
-    out = await act_on_inbound(ta, _result(RouteKind.COMMAND, command="/help"), spawn=lambda c: None)
+    out = await act_on_inbound(ta, _result(RouteKind.COMMAND, command="/help", text="/help all"),
+                                spawn=lambda c: None)
     assert out and "/task" in out
 
 

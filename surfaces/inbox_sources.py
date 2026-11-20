@@ -133,7 +133,7 @@ def collect_tool_approvals(user_id: str, *, data_dir: str) -> List[Item]:
     path = _store(goals_db_path(data_dir))
     if path is None:
         return []
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     board = GoalBoard(path)
     out: List[Item] = []
     from tools.defi.token_identity_ask import list_pending_items
@@ -209,7 +209,7 @@ def collect_asks(user_id: str, *, data_dir: str) -> List[Item]:
     so listing them twice under two ids is how an owner decides one thing and
     still sees it waiting.
     """
-    from agents.task.goals.board import ASK_OPEN, GoalBoard
+    from modules.goals.board import ASK_OPEN, GoalBoard
     from core.goal_vocab import has_own_surface
     path = _store(goals_db_path(data_dir))
     if path is None:

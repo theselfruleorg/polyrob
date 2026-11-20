@@ -67,7 +67,7 @@ def _recover_direct_update(echo: Callable[[str], None]) -> None:
     open, its process gone) is rolled back before the code it left half-installed
     builds anything. Never raises."""
     try:
-        from cli.update.context import resolve_update_context
+        from core.update_snapshot.context import resolve_update_context
         from cli.update.journal import recover_open_update
         if recover_open_update(resolve_update_context().snapshots_root,
                                echo=echo) == "rolled_back":

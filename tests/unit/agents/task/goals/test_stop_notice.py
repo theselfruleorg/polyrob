@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from agents.task.goals import escalation
-from agents.task.goals.board import ASK_OPEN, GoalBoard, STATUS_BLOCKED, STATUS_CANCELLED
+from modules.goals.board import ASK_OPEN, GoalBoard, STATUS_BLOCKED, STATUS_CANCELLED
 from core.sqlite_util import execute_retry
 
 LATER = 10 ** 6  # seconds: past the settle time and inside no test window
@@ -159,7 +159,7 @@ def test_an_outage_that_can_heal_waits_until_it_stops_healing(board, told):
     g = _block(board)
     board.stamp_block_kind(g.id, "provider_outage")
     assert _tell(board) == 0
-    from agents.task.goals.payload_keys import patch
+    from modules.goals.payload_keys import patch
     patch(board.db_path, g.id, set_keys={"provider_retry_exhausted": True})
     assert _tell(board) == 1
 
@@ -299,7 +299,7 @@ def test_a_run_that_told_the_owner_without_a_block_marks_nothing(board, told):
 def test_the_claim_holds_when_sqlite_parses_the_told_time_one_ulp_apart(board, told, told_at):
     """A told time whose JSON text SQLite and Python parse to different doubles: the
     compare-and-set must still claim the next stop (``IS ?`` on the float did not)."""
-    from agents.task.goals.payload_keys import patch
+    from modules.goals.payload_keys import patch
     g = _block(board)
     patch(board.db_path, g.id, set_keys={"stop_told": told_at})
     execute_retry(board.db_path, "UPDATE goals SET completed_at=? WHERE id=?", (told_at + 60, g.id))

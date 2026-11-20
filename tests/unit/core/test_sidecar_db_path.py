@@ -74,7 +74,7 @@ def test_update_snapshot_captures_legacy_session_tree_files(_home, monkeypatch):
     legacy_dir.mkdir(parents=True, exist_ok=True)
     for name in ("telemetry_events.db", "messages.db"):
         (legacy_dir / name).write_bytes(b"SQLite format 3\x00")
-    from cli.update.context import resolve_update_context
+    from core.update_snapshot.context import resolve_update_context
     ctx = resolve_update_context(local=True)
     captured = {p.resolve() for p in ctx.db_paths}
     for name in ("telemetry_events.db", "messages.db"):

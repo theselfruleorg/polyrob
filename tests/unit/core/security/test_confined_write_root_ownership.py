@@ -29,17 +29,20 @@ def test_root_write_matches_parent_group_and_opens_group_bits(tmp_path, monkeypa
     monkeypatch.setattr(cw.os, "geteuid", lambda: 0)
     real_fstat = os.fstat
     monkeypatch.setattr(cw.os, "fstat", lambda fd: _fake_stat(4242))
-    chown = MagicMock(); chmod = MagicMock()
+    chown = MagicMock(); chmod = MagicMock(); widen = MagicMock()
     monkeypatch.setattr(cw.os, "chown", chown); monkeypatch.setattr(cw.os, "chmod", chmod)
+    import core.fs_copy
+    monkeypatch.setattr(core.fs_copy, "widen_dir_mode", widen)
     target = tmp_path / "user_alice" / "skill-x" / "SKILL.md"
     cw.write_confined_text(target, tmp_path, "hello")
     assert target.read_text() == "hello"
     # the new directories and the file were re-grouped to the parent's gid …
     groups = {c.args[2] for c in chown.call_args_list}
     assert groups == {4242}
-    # … and made group-accessible (dirs 0770, file 0660)
-    modes = sorted({c.args[1] for c in chmod.call_args_list})
-    assert modes == [0o660, 0o770]
+    # … and made group-accessible: the file 0660; the dirs 0770 through the seam
+    # that keeps their inherited setgid bit (runtime-sandbox contract)
+    assert {c.args[1] for c in chmod.call_args_list} == {0o660}
+    assert {c.args[1] for c in widen.call_args_list} == {0o770}
 
 
 def test_root_write_under_a_root_group_parent_is_left_alone(tmp_path, monkeypatch):

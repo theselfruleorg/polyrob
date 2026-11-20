@@ -19,7 +19,7 @@ WRITERS = [SelfContextWriter, OwnerDocWriter, ContractWriter]
 
 @pytest.fixture(autouse=True)
 def _clean_scan(monkeypatch):
-    import modules.memory.task.threat_scan as ts
+    import core.security.threat_scan as ts
     monkeypatch.setattr(ts, "is_identity_suspicious", lambda body: False)
 
 

@@ -356,7 +356,7 @@ def test_migration_cross_volume_verification_failure_rolls_back(tmp_path, monkey
     (legacy / "SKILL.md").write_text("# real\nbody\n")
 
     real_replace = migration.os.replace
-    real_copytree = migration.shutil.copytree
+    real_copytree = migration.fs_copy.copy_tree
 
     def _fake_replace(src, dst, *a, **k):
         if str(dst).endswith("corrupt-skill"):
@@ -372,7 +372,7 @@ def test_migration_cross_volume_verification_failure_rolls_back(tmp_path, monkey
         return result
 
     monkeypatch.setattr(migration.os, "replace", _fake_replace)
-    monkeypatch.setattr(migration.shutil, "copytree", _corrupting_copytree)
+    monkeypatch.setattr(migration.fs_copy, "copy_tree", _corrupting_copytree)
 
     moved = migration.migrate_legacy_user_skills(
         legacy_root=tmp_path / "pkg" / "data" / "prompts" / "skills"

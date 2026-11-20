@@ -41,13 +41,13 @@ class _Board:
 
 
 def test_a_waiting_goal_is_refused_with_its_blocking_edge():
-    from surfaces.telegram import owner_ops
+    from cron import owner_goals
 
     prereq = _goal("a66f5f92a7e2", "ready")
     prereq.title = "Treasury: refresh the watchlist"
     board = _Board([_goal(), prereq], {"2dee2891a085": ["a66f5f92a7e2"]})
 
-    out = owner_ops.goal_reply("u", "/tmp", ["retry", "2dee2891"], board=board)
+    out = owner_goals.goal_reply("u", "/tmp", ["retry", "2dee2891"], board=board)
     assert "waiting" in out.lower()
     assert "a66f5f92" in out, "the owner must be told WHAT it waits on"
     assert "refresh the watchlist" in out, "an id alone is not an explanation"
@@ -55,21 +55,21 @@ def test_a_waiting_goal_is_refused_with_its_blocking_edge():
 
 def test_the_refusal_offers_a_real_next_step():
     from core.owner_remedy import unknown_owner_actions
-    from surfaces.telegram import owner_ops
+    from cron import owner_goals
 
     prereq = _goal("a66f5f92a7e2", "ready")
     board = _Board([_goal(), prereq], {"2dee2891a085": ["a66f5f92a7e2"]})
-    out = owner_ops.goal_reply("u", "/tmp", ["retry", "2dee2891"], board=board)
+    out = owner_goals.goal_reply("u", "/tmp", ["retry", "2dee2891"], board=board)
     assert "/goal show" in out
     assert unknown_owner_actions(out) == []
 
 
 def test_a_blocked_goal_still_transitions_normally():
     """The carve-out must not soften the verbs that already worked."""
-    from surfaces.telegram import owner_ops
+    from cron import owner_goals
 
     g = _goal(status="blocked")
     board = _Board([g])
     board.update_status = lambda *a, **k: True
-    out = owner_ops.goal_reply("u", "/tmp", ["retry", "2dee2891"], board=board)
+    out = owner_goals.goal_reply("u", "/tmp", ["retry", "2dee2891"], board=board)
     assert "waiting on" not in out.lower()

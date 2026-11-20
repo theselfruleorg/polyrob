@@ -660,6 +660,8 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
                                event_log: Any = ...,
                                ask_id: Optional[str] = None,
                                card_id: Optional[str] = None,
+                               buttons: Optional[list] = None,
+                               reply_target: Any = None,
                                _hold_id: Optional[str] = None) -> str:
     """Deliver *text* to *user_id*'s principal through the one rail.
 
@@ -690,6 +692,13 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
     screening; the rail only transports). Passed to the sink as ``media=``;
     a legacy sink without that kwarg still gets the text (fail-open to
     text-only, never a lost message).
+
+    ``reply_target`` (110 W3, a :class:`core.surfaces.envelopes.ReplyTarget`) lands
+    the notice in a thread / forum topic, or as a reply, of the ONE chat it names
+    (its surface and chat id must equal a recipient's; other recipients get the
+    plain send). A threaded send goes through the router, which carries the
+    thread and the anchor, on the live path and on the durable queue. ``None`` is
+    byte-identical to before.
 
     ``priority`` (2026-07-20): ``critical`` bypasses the daily cap and hourly
     rate limit (dedup still applies) so a halt/security notice can never be
@@ -803,7 +812,8 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
                                             "held_text": body,
                                             "held_args": _held_args(
                                                 recipient_override, recipient_surface,
-                                                attachments, priority, ask_id, card_id)})
+                                                attachments, priority, ask_id, card_id,
+                                                reply_target, buttons)})
                 except Exception:
                     # OB9: no durable hold = the message would be lost, so it
                     # goes out now instead (the rail's fail-open posture).
@@ -918,19 +928,34 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
         async def _send_one(_sid: str, _addr: str) -> str:
             """``"sent"`` | ``"queued"`` | ``"failed"`` | ``"no_sink"``."""
             nonlocal sent_mid
-            sink = tg_sink if (_sid == "telegram" and tg_sink is not None) else router
+            _threaded = (reply_target is not None and router is not None
+                         and getattr(reply_target, "threaded", False)
+                         and str(reply_target.surface_id) == _sid
+                         and str(reply_target.chat_id) == str(_addr))
+            sink = tg_sink if (_sid == "telegram" and tg_sink is not None
+                               and not _threaded) else router
             if sink is None:
                 return "no_sink"
             kwargs = {} if _sid == "telegram" and sink is tg_sink else {"surface_id": _sid}
-            if _sid == "telegram" and sink is tg_sink:
+            if _threaded:
+                kwargs["target"] = reply_target
+            if _sid != "email":
                 # 064 F2: a code-produced decision card carries its own tokens as
-                # buttons; any other notice carries none.
+                # buttons; any other notice carries none. Every chat seat gets
+                # them (Slack and Discord draw buttons; a surface without
+                # ``supports_actions`` ignores them and the text keeps each
+                # command). Email cannot tap: it gets the taps footer below.
                 from core.surfaces.actions import notice_actions
                 _acts = notice_actions(source, body, ask_id=ask_id)
                 if card_id:
                     # Action cards (2026-09-27): the buttons come from the
                     # STORED card (its state decides them), never from the text.
                     _acts = _card_buttons(card_id, uid)
+                elif buttons and not _acts:
+                    # A code-written notice's next steps: ``Action``s the caller
+                    # built (``core.surfaces.nav.actions``), re-checked here.
+                    from core.surfaces.actions import actions_for
+                    _acts = actions_for(list(buttons))
                 if _acts:
                     kwargs["actions"] = _acts
             # D70: an email notice is not a reply, so it must not arrive with a
@@ -956,7 +981,8 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
                 over the default surface instead.
                 """
                 for drop in ((), ("actions",), ("actions", "subject"),
-                             ("actions", "subject", "surface_id")):
+                             ("actions", "subject", "target"),
+                             ("actions", "subject", "target", "surface_id")):
                     kw = {k: v for k, v in kwargs.items() if k not in drop}
                     try:
                         return send(_addr, text_, **kw)
@@ -1070,12 +1096,50 @@ def _recipient_key(recipient_override: Optional[str], recipient_surface: Optiona
 
 
 def _held_args(recipient_override, recipient_surface, attachments, priority,
-               ask_id, card_id) -> dict:
+               ask_id, card_id, reply_target=None, buttons=None) -> dict:
     """The delivery arguments a quiet-hours hold replays on release (OB4)."""
-    return {"recipient_override": recipient_override,
-            "recipient_surface": recipient_surface,
-            "attachments": list(attachments or []),
-            "priority": priority, "ask_id": ask_id, "card_id": card_id}
+    out = {"recipient_override": recipient_override,
+           "recipient_surface": recipient_surface,
+           "attachments": list(attachments or []),
+           "priority": priority, "ask_id": ask_id, "card_id": card_id}
+    if reply_target is not None:  # 110 W3: the thread/anchor survives the hold
+        out["reply_target"] = {"surface_id": reply_target.surface_id,
+                               "chat_id": reply_target.chat_id,
+                               "thread_id": reply_target.thread_id,
+                               "reply_to": reply_target.reply_to}
+    if buttons:  # a code-written notice's next steps survive the hold too
+        out["buttons"] = [{"label": str(getattr(b, "label", "") or ""),
+                           "command": str(getattr(b, "command", "") or ""),
+                           "style": str(getattr(b, "style", "default") or "default")}
+                          for b in buttons]
+    return out
+
+
+def _held_buttons(raw):
+    """The ``Action``s a hold stored (re-checked on send), or None."""
+    if not isinstance(raw, list):
+        return None
+    from core.surfaces.envelopes import Action
+    out = []
+    for b in raw:
+        try:
+            out.append(Action(label=str(b["label"]), command=str(b["command"]),
+                              style=str(b.get("style") or "default")))
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
+    return out or None
+
+
+def _held_reply_target(raw):
+    """The ``ReplyTarget`` a hold stored, or None (absent or invalid)."""
+    if not isinstance(raw, dict):
+        return None
+    from core.surfaces.envelopes import ReplyTarget
+    try:
+        return ReplyTarget(**{k: raw.get(k) for k in
+                              ("surface_id", "chat_id", "thread_id", "reply_to")})
+    except (TypeError, ValueError):
+        return None
 
 
 def _override_is_owner(container: Any, user_id: str, recipient_override: Optional[str],
@@ -1242,6 +1306,8 @@ async def release_quiet_held(container: Any, *, event_log: Any = ...,
                 attachments=args.get("attachments") or None,
                 priority=args.get("priority"),
                 ask_id=args.get("ask_id"), card_id=args.get("card_id"),
+                reply_target=_held_reply_target(args.get("reply_target")),
+                buttons=_held_buttons(args.get("buttons")),
                 _hold_id=hold_id or None)
         except Exception:
             logger.warning("release_quiet_held: delivery failed", exc_info=True)

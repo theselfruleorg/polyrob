@@ -120,7 +120,7 @@ def test_suspicious_description_is_quarantined(tmp_path):
 
 def test_suspicious_body_is_quarantined(tmp_path, monkeypatch):
     # Flag only the BODY (not the description) by scanning the serialized prompt.
-    from modules.memory.task import threat_scan
+    from core.security import threat_scan
 
     real = threat_scan.is_skill_content_suspicious
 
@@ -140,7 +140,7 @@ def test_suspicious_body_is_quarantined(tmp_path, monkeypatch):
 
 
 def test_scan_error_fails_closed_to_quarantine(tmp_path, monkeypatch):
-    from modules.memory.task import threat_scan
+    from core.security import threat_scan
 
     def boom(text):
         raise RuntimeError("scanner blew up")

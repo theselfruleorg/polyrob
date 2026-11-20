@@ -15,6 +15,9 @@ one before it left. Every money write goes through ``tx_guard.authorize`` (struc
 """
 from __future__ import annotations
 
+#: The rig's sale BASE (0.033 ether); core reads it from the sale (124 section 7).
+BASE_WEI = 33 * 10 ** 15
+
 import asyncio
 import os
 import types
@@ -100,7 +103,7 @@ def _mint_tx(s, *, kind="mint", qty=1, value=None, to=None, target=None, allowan
     target = target or s.r.sale
     data = (M.encode_mint_wl(to, qty, 0, allowance, list(proof)) if kind == "mintWL"
             else M.encode_mint(to, qty, 0))
-    value = qty * M.BASE_WEI if value is None else value
+    value = qty * BASE_WEI if value is None else value
     first = s.r.next_id()
     ids = tuple(range(first, first + qty)) if ids is None else tuple(ids)
     rail = EvmRail(chain=R.CHAIN, signer=s.signer)
@@ -165,7 +168,7 @@ def test_01_pin_py_profile_is_the_pinned_registry(rig):
     assert CR.runtime_refusal(r.rpc, p) is None and CR.sale_runtime_refusal(r.rpc, p) is None
     # the pinned constants of the mint shape ARE the sale's
     from core.wallet import collection_mint as M
-    assert r.uint(r.sale, "BASE()") == M.BASE_WEI
+    assert r.uint(r.sale, "BASE()") == BASE_WEI
     assert r.uint(r.sale, "START_PRICE()") == p.sale.max_price_wei
 
 
@@ -876,8 +879,8 @@ def test_18_publish_the_card_through_the_account(rig):
     import json
     from core.wallet import collection_registry as CR
     from core.wallet import erc8004_reputation as REP
+    from core.wallet import holdings_state
     from core.wallet import identity_card as C
-    from core.wallet import nft_holdings
     from tools.agent_nft import view as V
     from tools.agent_nft.tool import BindParams
     from eth_account import Account
@@ -886,7 +889,7 @@ def test_18_publish_the_card_through_the_account(rig):
     agent_id = REP.agent_id_of(r.core_rpc, r.collection, 1)
     assert r.address_of(R.IDENTITY_TESTNET, "ownerOf(uint256)", agent_id).lower() == acc1.lower()
     _watch(s)
-    (row,) = [x for x in nft_holdings.tracked(chain=R.CHAIN)
+    (row,) = [x for x in holdings_state.tracked(chain=R.CHAIN)
               if x["token_id"] == 1 and x["collection"] == r.collection]
     assert row["agent_id"] == agent_id and row["identity_held"] is True, row
     mock = r.code(R.IDENTITY_TESTNET)

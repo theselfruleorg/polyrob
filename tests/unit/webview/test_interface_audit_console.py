@@ -35,7 +35,7 @@ def _pages_client(monkeypatch, tmp_path, user_id="alice"):
 
 
 def _board(tmp_path):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     return GoalBoard(os.path.join(str(tmp_path), "goals.db"))
 
 
@@ -373,7 +373,8 @@ def test_the_cold_open_verb_answers_inline_and_creates_no_session(monkeypatch):
     resp = client.post("/api/task/sessions", json={"task": "/status"})
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"success": True,
-                           "command_reply": "answered /status for alice"}
+                           "command_reply": "answered /status for alice",
+                           "command_actions": []}
     assert created == []
 
 

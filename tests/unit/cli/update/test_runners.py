@@ -278,9 +278,9 @@ def test_pip_steps_run_with_tmpdir_on_disk_under_the_data_home(tmp_path, monkeyp
 
 
 def test_an_operator_tmpdir_wins(tmp_path, monkeypatch):
-    import core.runtime_paths as rp
+    from core.runtime_paths import scratch_root
     monkeypatch.setenv("TMPDIR", str(tmp_path / "mine"))
-    assert rp.install_tmp_dir() is None
+    assert scratch_root() is None
 
 
 def test_lazy_installer_child_env_carries_a_disk_tmpdir(tmp_path, monkeypatch):

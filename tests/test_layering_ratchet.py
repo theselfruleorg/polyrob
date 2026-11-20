@@ -32,10 +32,6 @@ REPO_ROOT = CORE_DIR.parent
 # `agents.task.constants` is deliberately ABSENT — WS-1 killed that edge.
 ALLOWLISTED_CORE_TO_AGENTS_EDGES = frozenset({
     ('core/self_evolution.py', 'agents.task.agent.skill_manager'),
-    # 044 T5: the room gate resolves high-impact-call policy from the SAME
-    # correspondent-gate classification the taint gate uses (one policy, not
-    # two), inside a function only — see core/surfaces/room_policy.py.
-    ('core/surfaces/room_policy.py', 'agents.task.agent.core.correspondent_gate'),
 })
 
 
@@ -219,9 +215,6 @@ def _string_refs(rel: str):
 
 
 ALLOWLISTED_UPWARD_EDGES = frozenset({
-    ('agents/task/agent/core/curator.py', 'cron.scheduler'),
-    ('agents/task/agent/core/tool_availability.py', 'tools.goal_tools'),
-    ('agents/task/agent/messages/context_references.py', 'tools.web_fetch.fetcher'),
     # W7: the DOM node's CSS-selector helper borrows the browser context's builder (lazy).
     ('agents/task/loop_types/dom_views.py', 'tools.browser.context'),
     ('agents/task/agent/orchestrator.py', 'tools.browser.browser'),
@@ -230,37 +223,21 @@ ALLOWLISTED_UPWARD_EDGES = frozenset({
     ('agents/task/agent/orchestrator.py', 'tools.controller.service'),
     ('agents/task/agent/orchestrator.py', 'tools.descriptors'),
     ('agents/task/agent/orchestrator.py', 'tools.filesystem'),
-    ('agents/task/agent/sub_agent_manager.py', 'tools.controller.delegation'),
     ('agents/task/agent/sub_agent_manager.py', 'tools.controller.service'),
     ('agents/task/agent/tool_call_tracker.py', 'tools.mcp.validation_tracker'),
-    ('agents/task/goals/dispatcher.py', 'cron.scheduler'),
-    ('agents/task/goals/dispatcher.py', 'tools.goal_tools'),
     ('agents/task/session/browser_pool.py', 'tools.browser.browser'),
     ('agents/task/session/cleanup.py', 'tools.shell.backend_pool'),
-    ('agents/task/tool_defaults.py', 'tools.coding'),
     ('core/activity_evidence.py', 'modules.credits.unified_ledger'),
     ('core/activity_evidence.py', 'modules.memory.registry'),
     ('core/config.py', 'modules.llm.profiles'),
-    ('core/config.py', 'tools.mcp.config'),
-    ('core/instance.py', 'modules.memory.task.threat_scan'),
-    ('core/prefs.py', 'modules.memory.task.threat_scan'),
     ('core/recap.py', 'modules.credits.unified_ledger'),
     ('core/recap.py', 'modules.skills.skill_usage'),
     ('core/runtime_config.py', 'modules.llm.profiles'),
-    ('core/self_context_writer.py', 'modules.memory.task.threat_scan'),
     ('core/surfaces/continuity.py', 'modules.llm.messages'),
     ('core/surfaces/continuity.py', 'modules.memory.registry'),
-    ('core/surfaces/message_router.py', 'modules.llm.brain_scrubber'),
     ('core/surfaces/transcription.py', 'modules.transcription'),
     ('modules/memory/episodic.py', 'agents.task.runtime'),
-    # S6 (2026-08-29): the subscription-renewal ask store seam (notify mixin).
-    ('modules/x402/settlement_notify.py', 'agents.task.goals.board'),
-    ('tools/cronjob_tools.py', 'cron.jobs'),
-    ('tools/cronjob_tools.py', 'cron.schedule'),
     ('tools/cronjob_tools.py', 'cron.service'),
-    # W7: boot-time migrations snapshot through the CLI updater (one helper pair).
-    ('migrations/boot.py', 'cli.update.context'),
-    ('migrations/boot.py', 'cli.update.snapshot'),
 })
 
 # W7: upward "pkg.module:attr" registry rows. The registry pattern is fine (the
@@ -269,14 +246,6 @@ ALLOWLISTED_UPWARD_EDGES = frozenset({
 # to the tier that owns its targets to delete rows.
 ALLOWLISTED_UPWARD_STRING_REFS = frozenset({
     ('core/delivery_channels.py', 'polyrob_x.cron_delivery'),
-    ('core/money_verbs.py', 'cli.ui.commands.h_check'),
-    ('core/money_verbs.py', 'cli.ui.commands.h_holdings'),
-    ('core/money_verbs.py', 'cli.ui.commands.h_send'),
-    ('core/money_verbs.py', 'cli.ui.commands.h_swap'),
-    ('core/money_verbs.py', 'surfaces.telegram.check_ops'),
-    ('core/money_verbs.py', 'surfaces.telegram.holdings_ops'),
-    ('core/money_verbs.py', 'surfaces.telegram.send_ops'),
-    ('core/money_verbs.py', 'surfaces.telegram.swap_ops'),
     ('core/surfaces/catalog.py', 'cli.commands.discord'),
     ('core/surfaces/catalog.py', 'cli.commands.email'),
     ('core/surfaces/catalog.py', 'cli.commands.signal'),
@@ -398,7 +367,11 @@ def test_upward_string_refs_only_shrink():
 # of tools/controller/action_registration.py (a module already inside the component).
 # +1 (120 W5): tools/controller/contact_history_action.py, the contact_history action split
 # out of tools/controller/action_registration.py (a module already inside the component).
-LARGEST_CROSS_PACKAGE_SCC_CEILING = 152
+# +2 (124 W1-W3): core/wallet/nft_rules.py, the ERC-6551 rules split out of core/wallet/tx_guard.py
+# (a module already inside the component), and core/wallet/holdings_state.py, the holdings
+# state reads the guard's cross-chain and deposit rules need (split out of nft_holdings, which
+# stays outside the cycle).
+LARGEST_CROSS_PACKAGE_SCC_CEILING = 154
 _SCC_TIGHTNESS_SLACK = 10
 
 
@@ -508,11 +481,10 @@ def test_largest_cross_package_cycle_only_shrinks():
 # The entry points (api, cli, surfaces, webview) share a tier, so the ladder does
 # not police them — but a package-level cycle between two of them is a tangle.
 # These rows CLOSE the one live cycle (cli/commands/dashboard.py launches the
-# console; the console reads three CLI helpers). Shrink-only.
+# console; the console reads two CLI helpers). Shrink-only.
 ALLOWLISTED_ENTRY_TIER_CYCLE_EDGES = frozenset({
     ('webview/pages.py', 'cli.commands.doctor'),
     ('webview/pages.py', 'cli.commands.owner'),
-    ('webview/pages.py', 'cli.config_store'),
 })
 
 

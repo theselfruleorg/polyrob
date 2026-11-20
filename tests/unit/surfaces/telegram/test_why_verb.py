@@ -25,7 +25,7 @@ def _seed(tmp_path, monkeypatch):
 
 def test_lists_gate_refusals_newest_first(tmp_path, monkeypatch):
     _seed(tmp_path, monkeypatch)
-    from surfaces.telegram.why_ops import why_reply
+    from core.surfaces.owner_reads import why_reply
     out = why_reply("owner", str(tmp_path), [])
     assert out.startswith("Last 2 refusal(s)")
     assert out.index("email — pause") < out.index("defi_trade — money_gate")
@@ -35,14 +35,14 @@ def test_lists_gate_refusals_newest_first(tmp_path, monkeypatch):
 
 def test_limit_and_bad_arg(tmp_path, monkeypatch):
     _seed(tmp_path, monkeypatch)
-    from surfaces.telegram.why_ops import why_reply
+    from core.surfaces.owner_reads import why_reply
     assert why_reply("owner", str(tmp_path), ["1"]).startswith("Last 1 refusal(s)")
     assert why_reply("owner", str(tmp_path), ["x"]).startswith("Usage")
 
 
 def test_absent_store_is_unavailable(tmp_path, monkeypatch):
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH", str(tmp_path / "none.db"))
-    from surfaces.telegram.why_ops import why_reply
+    from core.surfaces.owner_reads import why_reply
     out = why_reply("owner", str(tmp_path), [])
     assert out.startswith("Refusals: unavailable(")
     assert not (tmp_path / "none.db").exists()

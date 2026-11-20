@@ -10,7 +10,7 @@ One core, many renderers: every handler here is THIN plumbing over the SAME
 primitives the other seats call —
 - owner pause (031): ``core.surfaces.owner_admin.pause_autonomy``/``resume_autonomy_scopes``
   (honest VERIFIED-state reporting, never a checkmark on an unproven halt);
-- asks: the goal-board asks store (``agents.task.goals.board.GoalBoard.asks``/
+- asks: the goal-board asks store (``modules.goals.board.GoalBoard.asks``/
   ``fulfill_ask`` at ``goals_db_path(admin_data_dir())`` — the CLI's
   ``_goal_board`` resolution, over the ONE 031 deployed-home seam);
 - outbound allowlist: the pure ``_do_allow``/``_do_deny``/``_do_allowlist``
@@ -74,7 +74,7 @@ def _goal_board(*, write: "bool | None" = None):
     """The SAME board resolution as ``polyrob owner``'s ``_goal_board`` and the
     REPL's /goals handler — over :func:`_admin_data_dir` (C2), never
     ``get_data_root()``, which does not apply the 031 deployed-home rule."""
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from core.runtime_paths import goals_db_path
     return GoalBoard(goals_db_path(_admin_data_dir(write=write)))
 
@@ -193,7 +193,7 @@ def h_asks(ctx) -> None:
         return
     tenant = _tenant(ctx)
     try:
-        from agents.task.goals.board import ASK_OPEN
+        from modules.goals.board import ASK_OPEN
         from core.goal_vocab import has_own_surface
         rows = [a for a in _goal_board(write=False).asks(user_id=tenant, status=ASK_OPEN)
                 if not has_own_surface(a.payload or {})]
@@ -236,7 +236,7 @@ def h_fulfill(ctx) -> None:
         ctx.emit(f"no open ask '{ask_id}' for tenant {tenant} — see /asks",
                  title="fulfill")
         return
-    from agents.task.goals.rail_answers import decision_note
+    from modules.goals.rail_answers import decision_note
     ctx.emit(f"✅ ask {ask_id} fulfilled — {decision_note(board, ask_id, unblocked) or 'saved'}",
              title="fulfill")
 
@@ -250,10 +250,10 @@ def h_missed(ctx) -> None:
     """`/missed [n]` — owner notices the delivery rail could not send live:
     suppressed by the daily cap, held by an owner pause, or undelivered (no
     live sink / send failed). The chat seat's own reply
-    (``surfaces.telegram.status_ops._missed_reply``): one verb, one text."""
+    (``core.surfaces.owner_reads.missed_reply``): one verb, one text."""
     from core.surfaces.owner_verb_log import record_owner_command
-    from surfaces.telegram.status_ops import _missed_reply
-    text = _missed_reply(_tenant(ctx), _admin_data_dir(write=False),
+    from core.surfaces.owner_reads import missed_reply
+    text = missed_reply(_tenant(ctx), _admin_data_dir(write=False),
                          list(getattr(ctx, "args", []) or []))
     # The status seats list what came "since your last /missed" (116 W5.6).
     record_owner_command(_tenant(ctx), "/missed", "repl", text,
@@ -359,10 +359,10 @@ def _invoice_statuses() -> tuple:
 def h_invoices(ctx) -> None:
     """`/invoices [<status>] | refunded <id> [tx-hash]` — the agent's
     receivables, tenant-scoped. The chat seat's own reply
-    (``surfaces.telegram.owner_ops.invoices_reply``) over this seat's bot.db
+    (``tools.defi.owner_verbs.invoices.invoices_reply``) over this seat's bot.db
     (113 W4 item 3): one verb, one text. A word that is not a status answers
     the usage line before any database is opened."""
-    from surfaces.telegram.owner_ops import invoices_reply
+    from tools.defi.owner_verbs.invoices import invoices_reply
     from core.async_bridge import run_coroutine_sync
     args = list(getattr(ctx, "args", None) or [])
     tenant = _tenant(ctx)

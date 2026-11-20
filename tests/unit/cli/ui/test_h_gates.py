@@ -143,3 +143,58 @@ def test_both_verbs_are_registered():
     assert reg.lookup("approve") is not None
     assert reg.lookup("gates") is not None
     assert reg.lookup("approve").group == "needs you"
+
+
+# ---------------------------------------------------------------------------
+# proposal 125 S10: the REPL resolves the target through the ONE resolver
+# ---------------------------------------------------------------------------
+
+
+def _record_decisions(monkeypatch):
+    seen = []
+
+    def _decide(kind, item_id, *, approve, **kw):
+        seen.append((kind, item_id, approve))
+        return True, "Decided."
+
+    monkeypatch.setattr("tools.controller.approval_queue.decide_pending", _decide)
+    return seen
+
+
+_SHARED = [{"id": "x1", "kind": "skill", "preview": "a skill"},
+           {"id": "x1", "kind": "correspondent", "preview": "a contact"}]
+
+
+@pytest.mark.parametrize("verb", ["approve", "reject"])
+def test_an_id_two_kinds_share_decides_nothing(monkeypatch, verb):
+    from cli.ui.commands import h_gates, h_reject
+    _fake_pending(monkeypatch, _SHARED)
+    seen = _record_decisions(monkeypatch)
+    ctx, buf = _ctx(["x1"])
+    (h_gates.h_approve if verb == "approve" else h_reject.h_reject)(ctx)
+    out = buf.getvalue()
+    assert seen == []
+    assert "<kind>:<id>" in out
+    assert "skill:x1" in out and "correspondent:x1" in out
+
+
+@pytest.mark.parametrize("verb", ["approve", "reject"])
+def test_a_kind_qualified_id_decides_that_kind(monkeypatch, verb):
+    from cli.ui.commands import h_gates, h_reject
+    _fake_pending(monkeypatch, _SHARED)
+    seen = _record_decisions(monkeypatch)
+    ctx, _ = _ctx(["skill:x1"])
+    (h_gates.h_approve if verb == "approve" else h_reject.h_reject)(ctx)
+    assert seen == [("skill", "x1", verb == "approve")]
+
+
+@pytest.mark.parametrize("verb", ["approve", "reject"])
+def test_a_gone_tap_reaches_the_tool_approval_lane(monkeypatch, verb):
+    """A `tap-<id>` that left the open queue: only its lane can say whether it was
+    decided, expired or never existed — never a flat "no pending item"."""
+    from cli.ui.commands import h_gates, h_reject
+    _fake_pending(monkeypatch, [])
+    seen = _record_decisions(monkeypatch)
+    ctx, _ = _ctx(["tap-gone1"])
+    (h_gates.h_approve if verb == "approve" else h_reject.h_reject)(ctx)
+    assert seen == [("tool_approval", "tap-gone1", verb == "approve")]

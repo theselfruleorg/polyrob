@@ -100,7 +100,7 @@ async def test_search_prints_a_secret_as_set_never_its_value(monkeypatch, tmp_pa
 @pytest.mark.asyncio
 async def test_search_text_is_the_telegram_text(monkeypatch, tmp_path):
     from core import config_service
-    from surfaces.telegram.prefs_ops import _config_reply
+    from core.prefs_reply import config_reply as _config_reply
     seat = _config_reply(UID, str(_home()), "default", ["search", "quota"])
     core_text = config_service.search_reply("quota", user_id=UID, home_dir=_home())
     assert seat == core_text
@@ -203,7 +203,7 @@ async def test_check_that_did_not_run_is_not_no_issues(monkeypatch, tmp_path):
 
 def test_check_text_is_the_telegram_text(monkeypatch, tmp_path):
     from core import config_service
-    from surfaces.telegram.prefs_ops import _config_reply
+    from core.prefs_reply import config_reply as _config_reply
     _env_file().write_text("CODE_EXEC_ENABLE=true\n")
     assert _config_reply(UID, str(_home()), "default", ["check"]) == config_service.check_reply(
         user_id=UID, home_dir=_home())

@@ -22,6 +22,15 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setenv('POLYROB_DATA_DIR', str(tmp_path))
 
 
+@pytest.fixture(autouse=True)
+def _authorized(monkeypatch):
+    """These tests pin the submission journal, not the guard: every transaction here
+    counts as authorized (125 S3; the guard record is pinned in
+    test_rail_requires_attestation.py)."""
+    from core.signer import attest
+    monkeypatch.setattr(attest, "peek", lambda tx, **_: "authorized")
+
+
 @pytest.mark.parametrize('damage', ['deleted_db', 'empty_db', 'deleted_marker', 'bad_marker',
                                    'deleted_row', 'changed_identity', 'invalid_identity', 'unknown_state'])
 def test_lost_or_damaged_journal_refuses_new_spending(damage):
@@ -81,9 +90,9 @@ def test_signing_error_leaves_durable_reservation_before_second_attempt(monkeypa
     monkeypatch.setattr(rail, 'preflight', lambda: (True, ''))
     monkeypatch.setattr(rail, '_rpc', Mock(side_effect=AssertionError('must not broadcast')))
     with pytest.raises(RuntimeError):
-        rail.sign_and_send({'chainId': 8453, 'nonce': 3})
+        rail.sign_and_send({'chainId': 8453, 'nonce': 3, 'gas': 21000, 'maxFeePerGas': 10 ** 9, 'type': 2})
     with pytest.raises(ValueError, match='unaccounted'):
-        rail.sign_and_send({'chainId': 8453, 'nonce': 3})
+        rail.sign_and_send({'chainId': 8453, 'nonce': 3, 'gas': 21000, 'maxFeePerGas': 10 ** 9, 'type': 2})
     assert signer.sign_transaction.call_count == 1
     assert journal.unresolved()[0]['state'] == 'reserved'
 
@@ -94,7 +103,7 @@ def test_marker_fsync_failure_prevents_signing(monkeypatch):
     monkeypatch.setattr(rail, 'preflight', lambda: (True, ''))
     monkeypatch.setattr(store, '_write_marker', Mock(side_effect=OSError('disk full')))
     with pytest.raises(OSError):
-        rail.sign_and_send({'chainId': 8453, 'nonce': 3})
+        rail.sign_and_send({'chainId': 8453, 'nonce': 3, 'gas': 21000, 'maxFeePerGas': 10 ** 9, 'type': 2})
     signer.sign_transaction.assert_not_called()
     with pytest.raises(ValueError, match='marker missing'):
         journal.unresolved()
@@ -108,7 +117,7 @@ def test_signed_hash_binding_failure_cannot_broadcast(monkeypatch):
     monkeypatch.setattr(rail, '_rpc', rpc)
     monkeypatch.setattr(journal, 'bind_signed_hash', Mock(side_effect=OSError('disk full')))
     with pytest.raises(OSError):
-        rail.sign_and_send({'chainId': 8453, 'nonce': 3})
+        rail.sign_and_send({'chainId': 8453, 'nonce': 3, 'gas': 21000, 'maxFeePerGas': 10 ** 9, 'type': 2})
     rpc.assert_not_called()
     assert journal.unresolved()[0]['state'] == 'reserved'
 

@@ -153,7 +153,7 @@ def room_help_reply(task_agent: Any, result: Any) -> Optional[Any]:
         return room_admin_help(task_agent, result)
     from core.surfaces.command_reply import CommandReply
     from core.surfaces.room_actions import render_member_help
-    from surfaces.telegram.harness import _agent_name
+    from core.surfaces.command_catalog import agent_name as _agent_name
     src = getattr(result.inbound.identity, "source", None)
     surface = str(getattr(src, "surface_id", "") or "telegram")
     chat_id = str(getattr(src, "chat_id", "") or "")

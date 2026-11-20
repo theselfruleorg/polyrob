@@ -256,7 +256,9 @@ async def test_dev_mode_defaults_to_node_capable_image(monkeypatch, tmp_path):
     _pin_workdir(monkeypatch, str(tmp_path))
     b = DockerBackend(session_id="s-img", docker_runner=fake, dev_mode=True)
     await b.setup()
-    assert "nikolaik/python-nodejs:python3.11-nodejs20" in _setup_argv(fake)
+    from core.container_hardening import DEV_IMAGE_DEFAULT
+    assert DEV_IMAGE_DEFAULT.startswith("nikolaik/python-nodejs:python3.11-nodejs20@sha256:")
+    assert DEV_IMAGE_DEFAULT in _setup_argv(fake)
 
 
 @pytest.mark.asyncio

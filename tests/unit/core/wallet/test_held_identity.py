@@ -13,7 +13,7 @@ import json
 
 import pytest
 
-from core.wallet import abi, erc8004, held_identity, nft_holdings
+from core.wallet import abi, erc8004, held_identity, holdings_state, nft_holdings
 from tests.collection_pins import pin, polyrob_profile
 
 PINNED = "0xC011000000000000000000000000000000000001"
@@ -80,7 +80,7 @@ def test_the_watch_records_the_accounts_identity_and_reads_it_once(home):
     _home, account = home
     chain = Chain(account)
     _tick(chain)
-    (row,) = nft_holdings.tracked()
+    (row,) = holdings_state.tracked()
     assert row["agent_id"] == 9 and row["identity_held"] is True
     reads = chain.agent_reads
     _tick(chain)
@@ -96,7 +96,7 @@ def test_an_identity_moved_out_of_the_account_is_not_named(home):
     _tick(chain)
     chain.identity_owner = "0x" + "77" * 20
     _tick(chain)
-    assert nft_holdings.tracked()[0]["identity_held"] is False
+    assert holdings_state.tracked()[0]["identity_held"] is False
     assert held_identity.account_identities() == []
 
 
@@ -105,12 +105,12 @@ def test_an_unreadable_identity_changes_nothing(home):
     chain = Chain(account)
     chain.views_broken = True
     _tick(chain)
-    assert "agent_id" not in nft_holdings.tracked()[0]
+    assert "agent_id" not in holdings_state.tracked()[0]
     chain.views_broken = False
     _tick(chain)
     chain.owner_broken = True
     _tick(chain)                                # identity_held stays what it was
-    assert nft_holdings.tracked()[0]["identity_held"] is True
+    assert holdings_state.tracked()[0]["identity_held"] is True
 
 
 def test_a_token_minted_without_an_identity_names_none(home):
@@ -118,14 +118,14 @@ def test_a_token_minted_without_an_identity_names_none(home):
     chain = Chain(account)
     chain.has = False
     _tick(chain)
-    assert nft_holdings.tracked()[0]["agent_id"] is None
+    assert holdings_state.tracked()[0]["agent_id"] is None
     assert held_identity.account_identities() == []
 
 
 def test_an_unreadable_holdings_file_raises_and_feedback_says_nothing(home):
     _home, account = home
     _tick(Chain(account))
-    path = nft_holdings.state_path()
+    path = holdings_state.state_path()
     path.write_text("{not json")
     with pytest.raises(ValueError):
         held_identity.account_identities()

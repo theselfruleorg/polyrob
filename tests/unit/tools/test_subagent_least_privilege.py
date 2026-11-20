@@ -10,7 +10,7 @@ import types
 import pytest
 
 import agents.task.agent.service  # noqa: F401 — avoid controller<->orchestrator import cycle
-from tools.controller.delegation import (
+from core.delegation_policy import (
     DELEGATE_BLOCKED_TOOLS,
     DELEGATION_ACTION_NAMES,
     LEAF,

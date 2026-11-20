@@ -57,7 +57,7 @@ def create_history_gif(
 
         # Determine output path using PathManager
         if not output_path:
-            from agents.task.path import pm
+            from core.session_paths import pm
             output_dir = pm().get_subdir(session_id, "results", user_id=user_id)
             output_path = str(output_dir / f"history_{int(time.time())}.gif")
 
@@ -104,7 +104,7 @@ def get_conversation_screenshots(
     # If no screenshots in history, try to find saved screenshot files
     if not screenshot_paths and session_id:
         try:
-            from agents.task.path import pm
+            from core.session_paths import pm
             # Get screenshot directory using path manager
             screenshots_dir = pm().get_subdir(session_id, "screenshots", user_id=user_id)
 
@@ -459,7 +459,7 @@ def _normalize_output_path(output_path: str) -> str:
     if uuid_match:
         session_id = uuid_match.group(1)
         # Normalize output path if it contains a session ID
-        from agents.task.path import pm
+        from core.session_paths import pm
         output_path = str(pm().normalize_path(output_path, session_id))
 
     return output_path

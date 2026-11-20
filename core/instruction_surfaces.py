@@ -60,9 +60,12 @@ INSTRUCTION_SURFACES: Tuple[InstructionSurface, ...] = (
     InstructionSurface("soul", FROZEN, "operator", False,
                        "<data>/identity/identity.md + operating.md"),
     InstructionSurface("owner_rules", STANDING, "owner", True,
-                       "owner.md (owner_doc_manage; quarantine -> owner promote)"),
+                       "owner.md (owner_doc_manage: a clean owner turn applies at once, "
+                       "else a draft -> owner promote; the legacy contract.md is read "
+                       "with it and no tool writes it)"),
     InstructionSurface("skills", STANDING, "owner", True,
-                       "SKILL.md (skill_manage; quarantine -> owner promote)"),
+                       "SKILL.md (skill_manage: live at once from the owner's chat; a "
+                       "correspondent, room or tenant write is a draft -> owner promote)"),
     InstructionSurface("rail_prose", SCOPED, "owner", False,
                        "a cron job's or goal's task text (cronjob_schedule / goal_manage)"),
     InstructionSurface("workspace_doctrine", SCOPED, "agent", False,

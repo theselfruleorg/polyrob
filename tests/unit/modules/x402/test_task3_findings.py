@@ -38,7 +38,7 @@ def _env(monkeypatch):
 
 
 def _board(tmp_path):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     return GoalBoard(str(tmp_path / "goals.db"))
 
 
@@ -249,7 +249,7 @@ async def test_m11_renewal_grant_refused_on_amount_mismatch(tmp_path, monkeypatc
         watcher = SettlementWatcher(agent, db=db, goal_board=board)
         await watcher.tick_once()  # queues an ask
 
-        from agents.task.goals.board import ASK_OPEN
+        from modules.goals.board import ASK_OPEN
         ask = board.asks(user_id="alice", status=ASK_OPEN)[0]
         assert ask.payload["amount_usd"] == 10.0  # amount stamped (M11)
         board.decide_ask(ask.id, user_id="alice", approved=True)
@@ -286,7 +286,7 @@ async def test_m11_renewal_grant_expired_by_ttl_not_consumed(tmp_path, monkeypat
         agent = _Agent()
         watcher = SettlementWatcher(agent, db=db, goal_board=board)
         await watcher.tick_once()
-        from agents.task.goals.board import ASK_OPEN
+        from modules.goals.board import ASK_OPEN
         ask = board.asks(user_id="alice", status=ASK_OPEN)[0]
         board.decide_ask(ask.id, user_id="alice", approved=True)
 

@@ -101,6 +101,12 @@ async def chat_command(task_agent: Any, result: Any, cmd: str) -> str:
             task_agent.close_chat_episode(out["closed_key"])
         except Exception:
             logger.debug("chat close: episode not written", exc_info=True)
+    if cmd == "/chats" or (cmd == "/chat" and not args):
+        from core.surfaces.command_reply import CommandReply
+        from core.surfaces.nav import actions
+        uid = inbound.identity.user_id
+        return CommandReply(text=out["text"], actions=tuple(actions(uid, chats.chat_buttons(
+            registry, base_key=split_chat_key(decision.session_key or "")[0], user_id=uid))))
     return out["text"]
 
 

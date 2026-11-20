@@ -57,7 +57,7 @@ async def test_cronjob_schedule_refuses_a_rig_past_the_self_goal_ceiling(
     `money_rail` resolved to `defi_trade` at dispatch. Previously this test
     stored `rig="ops"` from the agent tool — that encoded the widening."""
     import tools.goal_tools as gt
-    monkeypatch.setattr(gt, "allowed_self_goal_tools", lambda: gt._SELF_GOAL_ALLOWED_TOOLS)
+    monkeypatch.setattr("core.tool_grants.allowed_self_goal_tools", lambda: __import__("core.tool_grants", fromlist=["x"]).SELF_GOAL_ALLOWED_TOOLS)
     t = _tool(tmp_path)
     res = await t.cronjob_schedule(
         CronScheduleAction(task="read the board and report", schedule="*/15 * * * *",

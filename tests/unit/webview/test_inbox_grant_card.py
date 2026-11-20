@@ -11,7 +11,7 @@ from bs4 import BeautifulSoup
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from core.surfaces.inbox import Item
 from tools.controller import approval_queue as aq
 
@@ -68,9 +68,14 @@ def test_too_big_params_are_not_stored():
 @pytest.mark.asyncio
 async def test_the_queue_writes_the_params_on_its_ask(tmp_path, monkeypatch):
     """The real ``request()`` path stores the params the web card renders."""
-    from agents.task.goals.board import ASK_OPEN
+    from modules.goals.board import ASK_OPEN
     from agents.task.loop_types.execution_context import ActionExecutionContext
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
+    # 126 wave 5: a money call a card CAN carry becomes a call card; this pins the
+    # queue's own ask (a call no card carries, or a goal run).
+    async def _no_card(*a, **k):
+        return None
+    monkeypatch.setattr("tools.controller.call_card_run.card_for_parked_call", _no_card)
     board = GoalBoard(str(tmp_path / "goals.db"))
     provider = aq.OwnerQueueApprover(board=board, poll_interval=0.02,
                                      container=None)

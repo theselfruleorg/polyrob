@@ -137,11 +137,41 @@ def step_3_collection_shapes(c: GuardContext) -> Optional[Decision]:
         _markets = _tga._sale_rails(intent.chain)[1]
     except Exception:  # noqa: BLE001 — an untrusted registry pins nothing here
         _markets = {}
+    if not any(str(a or "").lower() in _markets for a in (intent.to, (tx or {}).get("to"))):
+        from core.wallet import nft_rules as _nft_rules
+        _found = _nft_rules.unpinned_market(
+            intent.chain, tx, c.account_rpc or _tg.simulation._default_rpc_for(intent.chain))
+        if _found is not None:   # 124 W4: an unpinned collection's market — the owner's card
+            _markets = dict(_markets)
+            _markets[_found[0]] = _found[1]
+            c.card_reasons.append(("UNPINNED", f"{_found[0]} is the market of a collection you "
+                                               f"did not pin: the act is your call"))
     c.sale_buyer, _buy_err = _tgs.gate(intent, tx, holder, _markets)
     if _buy_err:
         _tg._record_money_refusal("money_gate", tool_self, execution_context,
                                   detail=f"sale_buyer: {_buy_err}")
         return Decision(False, f"refused: {_buy_err}")
+    return None
+
+
+def step_3_nft_typed_verb(c: GuardContext) -> Optional[Decision]:
+    """3. 124 section 5.4: a generic call that makes a known NFT sale, market or collection call
+    goes to the typed verb (``core.wallet.nft_rules.typed_verb_refusal``)."""
+    intent, tx = c.intent, c.tx
+    if (intent.is_collection_mint or intent.is_collection_reveal or c.sale_call
+            or c.sale_act or c.sale_buyer):
+        return None
+    from core.wallet import nft_rules
+    sel = str((tx or {}).get("data") or "").lower()[:10]
+    if sel not in nft_rules.NFT_SELECTORS:
+        return None
+    why = nft_rules.typed_verb_refusal(
+        c.account_rpc or _tg.simulation._default_rpc_for(intent.chain), (tx or {}).get("to"),
+        (tx or {}).get("data"))
+    if why:
+        _tg._record_money_refusal("money_gate", c.tool_self, c.execution_context,
+                                  detail=f"typed_verb: {why}")
+        return Decision(False, f"refused: {why}")
     return None
 
 
@@ -392,8 +422,36 @@ def step_4_rpc_trust(c: GuardContext) -> Optional[Decision]:
         if intent.is_collection_mint:
             from core.wallet import collection_mint as _collection_mint
             _code_why = _collection_mint.runtime_refusal(intent.chain, intent.to, _code_rpc)
+            try:
+                _pinned_sale = _collection_mint.profile_of_sale(intent.chain, intent.to)
+            except Exception:  # noqa: BLE001 — an unreadable pin store is no pin
+                _pinned_sale = None
+            if not _code_why and _pinned_sale is None:
+                # The review (2026-11-20): a sale nobody pinned answers its own views; the
+                # guard itself (and the signer's re-run) holds it to the owner's card.
+                c.card_reasons.append(("UNPINNED", f"{intent.to} is the sale of a collection "
+                                                   f"you did not pin: the mint is your call"))
         else:
-            _code_why = _tg._collection_runtime_refusal(intent.chain, intent.to, _code_rpc)
+            from core.wallet import collection_reveal as _reveal
+            try:
+                _pinned = str(intent.to or "").lower() in _reveal.pinned_collections(intent.chain)
+            except Exception:  # noqa: BLE001 — an unreadable pin store is no pin
+                _pinned = False
+            if _pinned:   # a pinned collection: its code against its pin
+                _code_why = _tg._collection_runtime_refusal(intent.chain, intent.to, _code_rpc)
+            else:
+                # 124 W4: any other collection — an ERC-721 by the chain.
+                from core.wallet import nft_rules
+                try:
+                    _code_why = (None if nft_rules.is_nft_contract(_code_rpc, intent.to)
+                                 else f"{intent.to} is not an ERC-721 collection; refusing")
+                except Exception as exc:  # noqa: BLE001
+                    _code_why = f"{intent.to} could not be read ({exc}); failing closed"
+            if _code_why is None:
+                # 124 W5: a reveal is the owner's card unless the owner approved this call —
+                # a tap, or a mandate that covers it (core.wallet.standing_grant).
+                c.card_reasons.append(("REVEAL", f"a reveal of {intent.to} is your call (a "
+                                                 f"mandate with `reveal` makes it standing)"))
         if _code_why:
             _tg._record_money_refusal("money_gate", tool_self, execution_context,
                                       detail=f"collection: {_code_why}")
@@ -442,7 +500,7 @@ def step_4_rpc_trust(c: GuardContext) -> Optional[Decision]:
             intent, sender, account_rpc or _tg.simulation._default_rpc_for(intent.chain),
             inner_to=inner_targets(c.outer_tx) or tx.get("to"), journal_to=journal_to,
             owner_asked=bool(c.owner_direct or c.owner_granted), sale_act=c.sale_act,
-            notes=c.notes)
+            notes=c.notes, card=c.card_reasons)
         if preflight:
             _tg._record_money_refusal("money_gate", tool_self, execution_context, detail=f"account: {preflight}")
             return Decision(False, f"refused: {preflight}")

@@ -88,7 +88,7 @@ def _factory(script, log):
 
 @pytest.mark.asyncio
 async def test_safe_fetch_sends_put_with_a_json_body():
-    from tools.web_fetch.fetcher import safe_fetch
+    from core.security.safe_fetch import safe_fetch
     log = []
     res = await safe_fetch("https://api.example.com/x", method="PUT", json_body={"a": 1},
                            validate=False,
@@ -99,7 +99,7 @@ async def test_safe_fetch_sends_put_with_a_json_body():
 
 @pytest.mark.asyncio
 async def test_safe_fetch_refuses_a_redirect_to_another_host_when_asked():
-    from tools.web_fetch.fetcher import WebFetchError, safe_fetch
+    from core.security.safe_fetch import WebFetchError, safe_fetch
     script = [(302, {"Location": "https://other.example.org/"}, b"")]
     with pytest.raises(WebFetchError, match="another origin"):
         await safe_fetch("https://api.example.com/x", validate=False, same_host_redirects=True,
@@ -125,11 +125,11 @@ def http_tool(monkeypatch):
 
     async def fake_fetch(url, **kw):
         sent.append((url, kw))
-        from tools.web_fetch.fetcher import FetchResult
+        from core.security.safe_fetch import FetchResult
         return FetchResult(final_url=url, status=201, content_type="application/json",
                            body=b'{"enrolled":true}')
 
-    monkeypatch.setattr("tools.web_fetch.fetcher.safe_fetch", fake_fetch)
+    monkeypatch.setattr("core.security.safe_fetch.safe_fetch", fake_fetch)
     yield mod, object.__new__(mod.HttpRequestTool), sent
     mod._APPROVED.clear()
 
@@ -255,7 +255,7 @@ async def test_a_leaf_sub_agent_or_stranger_never_sends(http_tool, ctx):
 
 @pytest.mark.asyncio
 async def test_a_same_host_redirect_may_not_downgrade_or_change_port():
-    from tools.web_fetch.fetcher import _origin_key
+    from core.security.safe_fetch import _origin_key
     assert _origin_key("https://a.example/x") == _origin_key("https://A.example:443/y")
     assert _origin_key("https://a.example/x") != _origin_key("http://a.example/x")
     assert _origin_key("https://a.example/x") != _origin_key("https://a.example:8443/x")

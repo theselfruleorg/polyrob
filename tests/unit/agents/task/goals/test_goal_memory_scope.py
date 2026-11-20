@@ -1,7 +1,7 @@
 """025 — the goal side of memory scopes: root label, regime clamp, promotion."""
 import pytest
 
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from agents.task.goals import memory_scope as GM
 from modules.memory import scope as S
 

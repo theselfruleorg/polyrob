@@ -39,6 +39,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from core import fs_copy
 from core.skills import scopes
 
 logger = logging.getLogger(__name__)
@@ -119,7 +120,7 @@ def _replace_dir(src: Path, dest: Path, *, keep_skill_md: Optional[str] = None) 
     tmp = dest.parent / f".tmp-{dest.name}-{os.getpid()}"
     old = dest.parent / f".old-{dest.name}-{os.getpid()}"
     shutil.rmtree(tmp, ignore_errors=True)
-    shutil.copytree(src, tmp, symlinks=False,
+    fs_copy.copy_tree(src, tmp, symlinks=False,
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".*"))
     if keep_skill_md is not None:
         (tmp / "SKILL.md").write_text(keep_skill_md, encoding="utf-8")

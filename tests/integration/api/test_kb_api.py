@@ -53,7 +53,7 @@ def _make_client(user_id: str = "tenant_a") -> TestClient:
 # ---------------------------------------------------------------------------
 
 class _StubPathManager:
-    """Minimal stand-in for agents.task.path.PathManager."""
+    """Minimal stand-in for core.session_paths.PathManager."""
 
     def __init__(self, workspace_root: Path):
         self._root = workspace_root
@@ -122,7 +122,7 @@ def test_ingest_path_uses_authenticated_user_id(tmp_path):
             "skipped_office": 0, "skipped_too_large": 0, "failed": 0,
         }
 
-    import agents.task.path as _path_mod
+    import core.session_paths as _path_mod
     import tools.knowledge_ingest as ki_mod
     import api.kb.endpoints as ep_mod
 
@@ -195,7 +195,7 @@ def test_ingest_path_traversal_returns_400(tmp_path):
     workspace.mkdir()
     stub_pm = _StubPathManager(workspace)
 
-    import agents.task.path as _path_mod
+    import core.session_paths as _path_mod
     orig_pm = _path_mod.pm
     _path_mod.pm = lambda: stub_pm
 
@@ -306,7 +306,7 @@ def test_upload_routes_through_kb_ingest_with_source_name(tmp_path):
             "skipped_office": 0, "skipped_too_large": 0, "failed": 0,
         }
 
-    import agents.task.path as _path_mod
+    import core.session_paths as _path_mod
     import tools.knowledge_ingest as ki_mod
     import api.kb.endpoints as ep_mod
 
@@ -353,7 +353,7 @@ def test_upload_strips_path_traversal_in_filename(tmp_path):
             "skipped_office": 0, "skipped_too_large": 0, "failed": 0,
         }
 
-    import agents.task.path as _path_mod
+    import core.session_paths as _path_mod
     import tools.knowledge_ingest as ki_mod
     import api.kb.endpoints as ep_mod
 

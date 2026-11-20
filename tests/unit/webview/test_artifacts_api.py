@@ -50,7 +50,7 @@ def _reset_ledger():
 def _private_data_home(monkeypatch, tmp_path):
     """The API resolves the session workspace (070 W0.15) — keep it in tmp."""
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
-    import agents.task.path as pth
+    import core.session_paths as pth
     pth.reset_path_manager()
     yield
     pth.reset_path_manager()
@@ -61,7 +61,7 @@ def test_lists_recorded_artifacts_with_kind_and_verdict(monkeypatch, tmp_path):
     import webview.webgate as webgate
     owner = webgate.local_owner_id()  # "local" — the single-user tenant
 
-    import agents.task.path as pth
+    import core.session_paths as pth
     clean = pth.pm().clean_session_id("sess-art")
 
     ledger = artmod.get_artifact_ledger()
@@ -148,7 +148,7 @@ def _record_in(tmp_path, monkeypatch, files):
     """Record *files* (relative to the session workspace, or absolute) for one
     session and return the API body."""
     monkeypatch.delenv("POLYROB_PROJECT_DIR", raising=False)
-    import agents.task.path as pth
+    import core.session_paths as pth
     pth.reset_path_manager()
     artmod = _ledger_on(tmp_path, monkeypatch)
     import webview.webgate as webgate
@@ -186,7 +186,7 @@ def test_get_never_writes_verified_at(monkeypatch, tmp_path):
     """Audit WR1: the console's GET is a READ — no ``verified_at`` write."""
     artmod = _ledger_on(tmp_path, monkeypatch)
     import webview.webgate as webgate
-    import agents.task.path as pth
+    import core.session_paths as pth
     owner = webgate.local_owner_id()
     clean = pth.pm().clean_session_id("sess-ro")
     ledger = artmod.get_artifact_ledger()

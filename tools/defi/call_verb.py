@@ -162,6 +162,9 @@ def _spend_price(chain: str, address: str):
 def _register_card_context() -> None:
     from tools.controller.grant_card import register_card_context
     register_card_context("defi_trade_call", payout_card_context)
+    # 124 D2: an NFT that leaves shows what its account holds.
+    from tools.defi.nft_verbs import nft_transfer_card_context
+    register_card_context("defi_trade_nft_transfer", nft_transfer_card_context)
     # The spend-grade price the core payout predicate (the controller hook's
     # spend_exemption) values a declared inflow with (085 W2, money M-1).
     from core.config_policy.spend_lane import register_spend_price
@@ -496,7 +499,7 @@ async def perform_call(tool, params, execution_context=None):
                              price_fn=tool._price,
                              fallback_price_fn=tool._fallback_price,
                              forged_fn=_is_forged_or_autonomous_turn,
-                             autonomous_ok_fn=_is_autonomous_goal_turn, **guard_kw)
+                             autonomous_ok_fn=_is_autonomous_goal_turn, dry_run=bool(params.dry_run), **guard_kw)
 
         header = (
             f"call {data[:10]} on {to_addr} ({params.chain})\n"
@@ -524,9 +527,10 @@ async def perform_call(tool, params, execution_context=None):
                        f"(simulation used {decision.sim_gas_used})\n")
 
         if params.dry_run:
-            return tool._ar(content=header + (
+            from tools.base_tool import dry_run_result
+            return dry_run_result(tool, header + (
                 "  RESULT: DRY RUN — the guard would allow this, but nothing was "
-                "broadcast. Re-run with dry_run=false to send."))
+                "broadcast. Re-run with dry_run=false to send."), decision.amount_usd)
 
         try:
             tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)

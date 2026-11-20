@@ -178,7 +178,7 @@ def _resolve_workspace_dir(orchestrator: Any) -> Optional[str]:
         session_id = getattr(orchestrator, "session_id", None)
         if not session_id:
             return None
-        from agents.task.path import pm
+        from core.session_paths import pm
         # On a shared project-root workspace (local CLI) a full scan would list
         # the whole repo — only per-session workspaces are scanned unbounded;
         # the shared case still works when a started_ts window is supplied.
@@ -209,7 +209,7 @@ def _is_shared_project_workspace() -> bool:
     completion came to list 20 unrelated files (chat-first review 2026-08-22, G1).
     """
     try:
-        from agents.task.path import pm
+        from core.session_paths import pm
         return bool(pm().is_project_root_workspace)
     except Exception:
         logger.debug("workspace-shape probe failed", exc_info=True)

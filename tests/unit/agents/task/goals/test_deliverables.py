@@ -7,7 +7,7 @@ import asyncio
 
 import pytest
 
-from agents.task.goals.board import Goal
+from modules.goals.board import Goal
 from agents.task.goals.dispatcher import GoalDispatcher
 from core.identity import LocalIdentity
 from core.instance import resolve_owner_user_id
@@ -22,7 +22,7 @@ _OWNER_TENANT = LocalIdentity.USER_ID
 
 def _ws(monkeypatch, tmp_path, session_id="sess-d", user_id=_OWNER_TENANT):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path / "data_root"))
-    from agents.task.path import pm
+    from core.session_paths import pm
     return pm().get_workspace_dir(session_id, user_id)
 
 
@@ -265,7 +265,7 @@ def test_notify_owner_done_strips_attachments_on_tenant_mismatch(monkeypatch, tm
     monkeypatch.setenv("DELIVERABLES_ATTACH_ENABLED", "true")
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "owner-a")
     import asyncio
-    from agents.task.goals.board import Goal
+    from modules.goals.board import Goal
     disp = _dispatcher()
     told = asyncio.run(disp._notify_owner_done(
         Goal(id="g1", user_id="tenant-b", title="t"), "sess-mt", "made b.md",

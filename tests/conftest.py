@@ -210,6 +210,12 @@ def _reset_process_singletons():
     leaked them into every later test (order-dependent failures). The hooks a
     test found are restored, never dropped."""
     _reset_singletons(after=False)
+    # 126: the owner-line seam a surface registers at import (core.surfaces.act) makes
+    # propose_action run its quote at once; a test opts in by registering it itself.
+    _act = _loaded("core.surfaces.act")
+    _owner_line = getattr(_act, "_OWNER_COMMAND", None) if _act is not None else None
+    if _act is not None:
+        _act._OWNER_COMMAND = None
     _ac = _loaded("core.autonomy_control")
     _hooks = None
     if _ac is not None:
@@ -227,6 +233,8 @@ def _reset_process_singletons():
         if _ar is not None:
             _ar._self_binding_sweep_scheduled = False
             _ar.reset_cold_start_latches()  # 098 CL-03: once per process, not per suite
+        if _act is not None:
+            _act._OWNER_COMMAND = _owner_line
         _reset_singletons(after=True)
 
 
@@ -320,7 +328,7 @@ def _isolate_path_manager():
     os.environ.pop("POLYROB_PROJECT_DIR", None)
     os.environ.pop("POLYROB_DATA_DIR", None)
     try:
-        from agents.task.path import reset_path_manager
+        from core.session_paths import reset_path_manager
         reset_path_manager()
     except Exception:
         reset_path_manager = None  # type: ignore

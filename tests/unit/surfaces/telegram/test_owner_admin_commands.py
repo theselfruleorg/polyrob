@@ -119,7 +119,7 @@ async def test_approve_unknown_id(env):
 
 @pytest.mark.asyncio
 async def test_asks_and_fulfill_roundtrip(env):
-    from agents.task.goals.board import ASK_FULFILLED, GoalBoard
+    from modules.goals.board import ASK_FULFILLED, GoalBoard
     import os
     board = GoalBoard(os.path.join(str(env), "goals.db"))
     a = board.create_ask(user_id="alice", what="Grant Twitter write access",
@@ -135,7 +135,7 @@ async def test_asks_and_fulfill_roundtrip(env):
 
 @pytest.mark.asyncio
 async def test_fulfill_refused_for_non_owner(env):
-    from agents.task.goals.board import ASK_OPEN, GoalBoard
+    from modules.goals.board import ASK_OPEN, GoalBoard
     import os
     board = GoalBoard(os.path.join(str(env), "goals.db"))
     a = board.create_ask(user_id="alice", what="Grant Twitter write access")
@@ -147,7 +147,7 @@ async def test_fulfill_refused_for_non_owner(env):
 
 @pytest.mark.asyncio
 async def test_help_mentions_owner_verbs(env):
-    out = await act_on_inbound(_Agent(str(env)), _cmd("/help", "/help"))
+    out = await act_on_inbound(_Agent(str(env)), _cmd("/help", "/help all"))
     assert "/pending" in out and "/asks" in out
 
 
@@ -155,7 +155,7 @@ async def test_help_mentions_owner_verbs(env):
 # namespaced tap-<id> so they never collide with a self-evolution proposal id. ---------
 
 def _seed_tool_approval(home, uid="alice", tool_name="x402_request"):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     import os
     board = GoalBoard(os.path.join(str(home), "goals.db"))
     ask = board.create_ask(
@@ -178,7 +178,7 @@ async def test_pending_lists_tool_approval_ask(env):
 
 @pytest.mark.asyncio
 async def test_approve_resolves_tool_approval_ask(env):
-    from agents.task.goals.board import ASK_FULFILLED
+    from modules.goals.board import ASK_FULFILLED
     board, ask = _seed_tool_approval(env)
     out = await act_on_inbound(_Agent(str(env)), _cmd("/approve", f"/approve tap-{ask.id}"))
     assert "approved" in out.lower()
@@ -188,7 +188,7 @@ async def test_approve_resolves_tool_approval_ask(env):
 
 @pytest.mark.asyncio
 async def test_reject_resolves_tool_approval_ask(env):
-    from agents.task.goals.board import ASK_REJECTED
+    from modules.goals.board import ASK_REJECTED
     board, ask = _seed_tool_approval(env)
     out = await act_on_inbound(_Agent(str(env)), _cmd("/reject", f"/reject tap-{ask.id}"))
     assert "rejected" in out.lower()

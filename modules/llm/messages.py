@@ -48,6 +48,9 @@ class MessageOrigin:
                                         # orchestrator may dispatch, foundation-pinned
     SELF_CONTEXT = "self_context"       # frozen SOUL/identity doc pinned in the foundation
     PROJECT_CONTEXT = "project_context" # auto-loaded CLAUDE.md/AGENTS.md for CLI mode
+    PUBLIC_KNOWLEDGE = "public_knowledge"  # operator-written facts safe for ANY audience
+                                        # (identity/public.md): the one instance text a
+                                        # group or correspondent session also gets
     SYSTEM_NOTE = "system_note"         # other system-generated notice
     TOOL_NOTICE = "tool_notice"         # tool deferral / throttling notice
     CORRESPONDENT = "correspondent"     # reply from a third party the agent
@@ -87,6 +90,7 @@ _ORIGIN_ENVELOPE = {
     MessageOrigin.WORKER_CATALOG: "worker-catalog",
     MessageOrigin.SELF_CONTEXT: "self-context",
     MessageOrigin.PROJECT_CONTEXT: "project-context",
+    MessageOrigin.PUBLIC_KNOWLEDGE: "public-knowledge",
     MessageOrigin.SYSTEM_NOTE: "system-note",
     MessageOrigin.TOOL_NOTICE: "tool-notice",
     MessageOrigin.CORRESPONDENT: "correspondent-message",

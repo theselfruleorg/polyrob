@@ -2,8 +2,8 @@
 except block but never imported it, so a transient DB error during circuit-breaker
 failure recording raised NameError instead of failing open as documented.
 """
-import agents.task.goals.board as board_mod
-from agents.task.goals.board import GoalBoard
+import modules.goals.board as board_mod
+from modules.goals.board import GoalBoard
 
 
 def test_append_attempt_failopen_on_db_error(tmp_path, monkeypatch):

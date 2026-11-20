@@ -38,7 +38,7 @@ from core.event_kinds import (
     CONSOLE_SELF_CONTEXT_WRITE,
 )
 from core.runtime_paths import cron_db_path
-from webview import webgate
+from webview import job_routes, webgate
 from webview.audit import console_write
 from webview.copy import has, t
 
@@ -896,7 +896,7 @@ async def api_running(request: Request):
 
 def _sessions_root() -> str:
     """The PathManager session root (``<root>/<user>/<session>/``)."""
-    from agents.task.path import pm
+    from core.session_paths import pm
     return str(pm().data_root)
 
 
@@ -1467,7 +1467,7 @@ async def api_goal_create(request: Request):
     """Create a goal from the console, with the owner's grant (043 A5)."""
     from webview.pages import _owner_console_required
     _owner_console_required()
-    from agents.task.goals.board import DuplicateGoalError
+    from modules.goals.board import DuplicateGoalError
 
     from core.owner_create import create_goal
     from webview.pages import _effective_user_id, _webgate_goal_board
@@ -1518,7 +1518,7 @@ async def api_cron_create(request: Request):
     _owner_console_required()
 
     from cron.jobs import CronJobStore
-    from cron.service import CronService, ScheduleError, duplicate_job_text, scheduler_off_note
+    from cron.service import CronService, ScheduleError, duplicate_job_text
     from core.owner_create import create_cron
     from webview.pages import _data_dir, _effective_user_id
     user_id = _effective_user_id(request)
@@ -1557,7 +1557,7 @@ async def api_cron_create(request: Request):
         return JSONResponse({"ok": False, "message": t("work.create.cron_bad_schedule"),
                              "detail": str(exc)}, status_code=400)
     console_write(CONSOLE_CRON_CREATE, user_id=user_id, attrs={"job_id": job.id})
-    note = scheduler_off_note()  # 080 F-5: say when nothing will run it (the ONE text)
+    note = job_routes.console_scheduler_note()  # 080 F-5: the ONE remedy, in console words
     return JSONResponse({"ok": True, "id": job.id, "scheduler_note": note,
                          "message": " ".join(x for x in (t("work.create.cron_ok"), note) if x)}, status_code=201)
 

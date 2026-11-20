@@ -125,7 +125,7 @@ def test_webview_startup_installs_polyrob_data_dir_sessions(
     monkeypatch.delenv("WEBGATE_MULTITENANT", raising=False)
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "vlp"))
 
-    from agents.task.path import pm, reset_path_manager
+    from core.session_paths import pm, reset_path_manager
     reset_path_manager()
     try:
         asyncio.run(server.startup_event())
@@ -141,7 +141,7 @@ def test_webview_startup_explicit_data_root_still_wins(
     monkeypatch.setenv("DATA_ROOT", str(tmp_path / "explicit"))
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "vlp"))
 
-    from agents.task.path import pm, reset_path_manager
+    from core.session_paths import pm, reset_path_manager
     reset_path_manager()
     try:
         asyncio.run(server.startup_event())
@@ -157,7 +157,7 @@ def test_webview_startup_unset_is_legacy_byte_identical(
     server = _stub_heavy_startup
     monkeypatch.delenv("WEBGATE_MULTITENANT", raising=False)
 
-    from agents.task.path import pm, reset_path_manager
+    from core.session_paths import pm, reset_path_manager
     reset_path_manager()
     try:
         asyncio.run(server.startup_event())

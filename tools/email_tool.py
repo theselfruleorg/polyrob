@@ -1069,7 +1069,7 @@ class EmailTool(EmailMailboxMixin, BaseTool):
         if err:
             return [], err
         try:
-            from modules.memory.task.threat_scan import is_suspicious as _scanner
+            from core.security.threat_scan import is_suspicious as _scanner
         except ImportError:
             _scanner = None
         for real in validated:

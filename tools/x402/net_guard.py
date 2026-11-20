@@ -55,7 +55,7 @@ async def validate_x402_url(url: str, *, validator=None):
     a sinkholed DNS must not freeze the event loop for every other session.
     """
     try:
-        from tools.shell.loopback_allow import is_loopback_allowed
+        from core.security.loopback_allow import is_loopback_allowed
         if is_loopback_allowed(url):
             return None, "127.0.0.1"
     except Exception:

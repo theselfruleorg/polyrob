@@ -222,7 +222,7 @@ def _goal_board(container: Any):
     """
     if container is None:
         raise _ToolUnavailable("goal board unavailable (server not fully initialized)")
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from core.runtime_paths import goals_db_path
 
     data_dir = getattr(getattr(container, "config", None), "data_dir", None)
@@ -347,7 +347,7 @@ async def _call_pending_approvals(
 
 
 async def _call_offers(name, arguments, user_id, container):
-    # 099 W6: the offers listed on `mcp` — list, order, read YOUR order.
+    # 099 W6: the offers listed on `mcp` — list, order, read and act on YOUR order.
     from api.commerce_endpoints import mcp_call
     return await mcp_call(name, arguments, user_id)
 
@@ -362,6 +362,7 @@ _TOOL_DISPATCH = {
     "polyrob_list_offers": _offer_tool("polyrob_list_offers"),
     "polyrob_create_order": _offer_tool("polyrob_create_order"),
     "polyrob_order_status": _offer_tool("polyrob_order_status"),
+    "polyrob_order_act": _offer_tool("polyrob_order_act"),
     "polyrob_usage_summary": _call_usage_summary,
     "polyrob_goals_list": _call_goals_list,
     "polyrob_goal_show": _call_goal_show,

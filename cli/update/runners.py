@@ -175,8 +175,8 @@ def build_runners(
         # A private, unpredictable directory prevents shared-/tmp link attacks.
         # It sits on disk under the data home: pip unpacks every wheel into
         # TMPDIR, and a small tmpfs /tmp fails the install with Errno 122.
-        from core.runtime_paths import install_tmp_dir
-        root = install_tmp_dir()
+        from core.runtime_paths import scratch_root
+        root = scratch_root()
         with tempfile.TemporaryDirectory(prefix="polyrob-update-",
                                          dir=str(root) if root else None) as staging:
             old_tmp = os.environ.get("TMPDIR")

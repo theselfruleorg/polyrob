@@ -50,7 +50,7 @@ A small ticker (same shape as the cron/goal tickers, wired through
    creates the NEXT renewal invoice ahead of `paid_through` (respecting
    ``PAYMENT_APPROVAL_MODE`` — ``auto`` invoices immediately, ``approve``
    queues a durable owner ``tool_approval`` ask via the EXISTING
-   ``agents.task.goals.board.GoalBoard`` and invoices only once approved on a
+   ``modules.goals.board.GoalBoard`` and invoices only once approved on a
    later tick), and moves a lapsed subscription through
    ``active -> grace -> suspended`` (one owner + one correspondent notice on
    suspend). ``cron/runner.py`` consults the resulting status to $0-skip a
@@ -110,7 +110,7 @@ class SettlementWatcher(SettlementScanMixin, SettlementNotifyMixin,
 
         ``goal_board`` (Task 14): test/injection seam for the durable-ask
         store the subscription-renewal approve-mode flow rides
-        (`agents.task.goals.board.GoalBoard`). Production lazily builds one
+        (`modules.goals.board.GoalBoard`). Production lazily builds one
         against `core.runtime_config.get_data_root()`'s `goals.db` — the SAME
         file the goal dispatcher/owner CLI already use — so an injected
         instance in tests never touches a real data home.

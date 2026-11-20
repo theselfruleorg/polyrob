@@ -70,6 +70,23 @@ def test_service_validates_and_refuses_a_precheck_on_a_model_free_job(tmp_path):
     assert changed
 
 
+def test_a_precheck_on_a_read_job_makes_it_the_agents_watch(tmp_path):
+    """Pool drain 2026-11-20: the agent added a precheck to its alert-only position
+    watch and was refused, so the agent never woke on the fall. The edit converts."""
+    store = CronJobStore(str(tmp_path / "cron.db"))
+    svc = CronService(store)
+    job = svc.schedule(task="watch the TKN pool; decide on a move", schedule_spec="30m",
+                       user_id="alice",
+                       payload={"read_verb": {"verb": "defi_data.price",
+                                              "params": {"chain": "base", "address": TKN},
+                                              "alert": {"field": "usd", "below": 0.5}}})
+    changed = svc.edit(job.id, user_id="alice",
+                       payload_updates={"precheck": _spec(move_pct=5, field="usd")})
+    assert set(changed) >= {"precheck", "read_verb"}
+    after = store.get(job.id, user_id="alice").payload
+    assert "read_verb" not in after and after["precheck"]["move_pct"] == 5.0
+
+
 # -- the verdict --------------------------------------------------------------
 
 @pytest.mark.asyncio

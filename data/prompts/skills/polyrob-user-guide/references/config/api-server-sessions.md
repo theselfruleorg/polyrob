@@ -30,7 +30,7 @@ One line per setting: NAME — default — meaning. Code anchors and full prose:
 - UVICORN_WORKERS — default: 1 — Uvicorn worker count (read in `main.py`).
 - UVICORN_RELOAD — default: OFF (false) — Uvicorn auto-reload (read in `main.py`).
 - UVICORN_FORWARDED_ALLOW_IPS — default: 127.0.0.1 — Which proxies `polyrob serve` trusts for `X-Forwarded-For`/`X-Forwarded-Proto`.
-- ENVIRONMENT / ENV — default: development (varies by site) — Environment selector.
+- ENVIRONMENT / ENV — default: unset (neither production nor development) — Deployment environment name. `production`/`prod` makes the box production (every refusal: a weak `JWT_SECRET_KEY`, no `MCP_ENCRYPTION_KEY`); an explicit `development`/`dev` that no other name contradicts lets the console and API auth cooki…
 - LOG_LEVEL — default: INFO — Logging level.
 - POLYROB_LOG_FILE — default: per entrypoint (bot.log / email.log / webview.log) — Basename of the rotating log file under `<data_home>/logs/`; overrides the per-entrypoint default.
 - CHAT_TOOL_IDS — default: task — Tools loaded for the chat surface.
@@ -40,4 +40,4 @@ One line per setting: NAME — default — meaning. Code anchors and full prose:
 - AUTONOMOUS_RUN_BUDGET_USD — default: 2.0 (0 = off) — Per-run provider-spend cap in USD for an autonomous (cron/goal) run.
 - CHAT_SKIP_CREDIT_CHECK — default: ON (truthy) — Skip the credit check on chat-path turns.
 - API_SECRET / ADMIN_TOKEN — default: unset (secret, masked) — Secret key for the legacy `AuthenticationMiddleware` on the API app (`API_SECRET` wins, `ADMIN_TOKEN` is the fallback name); unset = that middleware is not added.
-- PRODUCTION — default: OFF ('true' enables) — Marks the deploy as production independent of `ENV`: a missing `JWT_SECRET_KEY` then becomes a fatal startup error instead of a dev warning.
+- PRODUCTION — default: OFF ('true' enables) — Marks the box production whatever the environment names say: a weak or missing `JWT_SECRET_KEY` is a fatal startup error, MCP requires `MCP_ENCRYPTION_KEY`, and no development relaxation applies.

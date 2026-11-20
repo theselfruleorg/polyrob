@@ -13,7 +13,7 @@ must not import the tools tier (layering ratchet).
 import asyncio
 from types import SimpleNamespace
 
-from agents.task.goals.board import Goal, STATUS_READY
+from modules.goals.board import Goal, STATUS_READY
 from agents.task.goals.dispatcher import GoalDispatcher
 from agents.task.runtime.run_outcome import RunOutcome
 

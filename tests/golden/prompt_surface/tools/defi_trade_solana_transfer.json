@@ -32,6 +32,12 @@
         "token": {
           "description": "'native' (or 'SOL') to send SOL itself, or the SPL token's MINT address (base58). A ticker is not accepted — resolve it to a mint with defi_data.token_resolve first. Wrapped SOL: send 'native'.",
           "type": "string"
+        },
+        "why": {
+          "default": null,
+          "description": "Why this act, now (one line). Required on an autonomous run; the owner reads it.",
+          "nullable": true,
+          "type": "string"
         }
       },
       "required": [

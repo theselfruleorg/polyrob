@@ -68,7 +68,7 @@ def test_result_trusted_by_default():
 
 
 def test_offloaded_untrusted_file_is_wrapped(tmp_path, monkeypatch):
-    from agents.task import path as path_mod
+    from core import session_paths as path_mod
 
     written = {}
 
@@ -93,7 +93,7 @@ def test_offloaded_untrusted_file_is_wrapped(tmp_path, monkeypatch):
 
 
 def test_offloaded_trusted_file_not_wrapped(tmp_path, monkeypatch):
-    from agents.task import path as path_mod
+    from core import session_paths as path_mod
 
     written = {}
 
@@ -124,7 +124,7 @@ def _pm_into(tmp_path, monkeypatch):
 
     The wire-cap spill (2026-10-13 A4, test_ws5_tool_result_spill.py) is turned OFF
     here, so these tests pin the F26 per-result / per-turn thresholds alone."""
-    from agents.task import path as path_mod
+    from core import session_paths as path_mod
     monkeypatch.setenv("TOOL_RESULT_MAX_TOKENS", "0")
 
     written = []

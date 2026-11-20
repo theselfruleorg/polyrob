@@ -303,6 +303,6 @@ def test_the_live_env_file_wins_the_remedy_over_a_snapshot(custody, monkeypatch)
 
 def test_update_context_and_the_gap_share_one_snapshot_root(tmp_path):
     from core.runtime_paths import UPDATE_SNAPSHOT_CONFIG_SUBDIR, update_snapshots_root
-    from cli.update import snapshot
+    from core.update_snapshot import snapshot
     assert snapshot._FILE_SUBDIR == UPDATE_SNAPSHOT_CONFIG_SUBDIR
     assert update_snapshots_root(tmp_path) == tmp_path / "snapshots"

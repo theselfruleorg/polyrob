@@ -28,7 +28,7 @@ from __future__ import annotations
 import logging
 import math
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Optional, Sequence, Tuple
 
 from core.env import bool_env, float_env
@@ -75,16 +75,10 @@ class TxIntent:
     #: refused every approval outright (found on prod 2026-08-14; the unit tests
     #: stub the guard, so they could not see it).
     is_allowance_op: bool = False
-    #: The wallet's OWN on-chain balance of `token` at call time (028, 2026-08-22).
-    #: An allowance grant on `token` that does not exceed this is EXIT-bounded —
-    #: it cannot put more at risk than the wallet already holds, because the
-    #: spender can never move more than the approved amount and the approved
-    #: amount is capped here at what is already owned. This lets a priced-at-
-    #: entry position that later loses DexScreener "high" confidence still be
-    #: approved for exit (fallback_price_fn values it for the cap checks below;
-    #: the exemption is what removes the *requirement* of a high-confidence
-    #: price, not the requirement of SOME price). None (default) = no exemption,
-    #: byte-identical to pre-028 behaviour — the caller must opt in.
+    #: The wallet's OWN on-chain balance of `token` at call time (028). An allowance
+    #: grant on `token` within it is EXIT-bounded (the spender can never move more than
+    #: is already owned), so an exit approval needs SOME price (fallback_price_fn), not
+    #: a high-confidence one. None (default) = no exemption — the caller must opt in.
     held_balance_raw: Optional[int] = None
     #: The token the transaction is expected to RECEIVE (a swap's token_out),
     #: declared so the guard can MEASURE it (2026-08-26 exit untying). Two jobs:
@@ -313,6 +307,10 @@ class TxIntent:
     is_transfer: bool = False
     value_ack: bool = False
     payout_shape: bool = False  # 085 W2: pays an unpinned address; step 9 = owner only
+    why: Optional[str] = None  # 122 W1: the act's reason (core.act_reason); autonomous needs one
+    #: 122 W3: a launch mark — ``("deploy", quote)`` or ``("seed", currency0, currency1)``;
+    #: step 7a holds it to the ``launch.*`` owner pin and ceilings (core.wallet.launch_policy).
+    launch: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -519,7 +517,7 @@ def _chain_quote_asset(chain: str) -> Optional[str]:
 
 
 def pinned_route_spenders(chain: str) -> frozenset:
-    """The spenders a legitimate swap leg may be approved to on *chain*.
+    """The spenders a legitimate swap or v4 liquidity leg may be approved to on *chain*.
 
     The chain registry already pins both — ``univ3_router`` (a locally built
     route IS the registry's own router) and ``aggregator_spender`` (a third
@@ -538,10 +536,10 @@ def pinned_route_spenders(chain: str) -> frozenset:
     if row is None:
         return frozenset()
     from core.wallet.dex_registry import row_for
-    dex = row_for(chain, "v3")
+    dex, v4 = row_for(chain, "v3"), row_for(chain, "v4")  # v4: the pinned Permit2
     return frozenset(a.lower() for a in (
         row.univ3_router, row.aggregator_spender,
-        dex.position_manager if dex else None) if a)
+        dex.position_manager if dex else None, v4.permit2 if v4 else None) if a)
 
 
 def _grant_is_exit_bounded(intent: TxIntent, g_token: str, g_spender: str,
@@ -655,6 +653,7 @@ def _autonomous_turn_allowed(execution_context, tool_self, autonomous_ok_fn, *,
 #: controller clears it after the call, so it never outlives the action it was
 #: minted for.
 OWNER_GRANT_KEY = "owner_grant"
+AFTER_DECISION_HOOKS: list = []  #: fn(ctx, decision) after each LIVE decision (standing_grant)
 
 
 def _owner_grant_covers(execution_context, intent) -> bool:
@@ -712,7 +711,8 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
               liquidity_rpc: Optional[Callable] = None,
               account_rpc: Optional[Callable] = None,
               approve_above_usd: Optional[float] = None,
-              unverified_within_caps: bool = False) -> Decision:
+              unverified_within_caps: bool = False,
+              dry_run: bool = False) -> Decision:
     """Authorize *tx* against *intent*. Returns a Decision; never broadcasts.
 
     ``approve_above_usd`` replaces the owner's ask-above dial in step 9 for a caller
@@ -724,11 +724,13 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
     The caller must hold ``gate.reserve()`` across authorize → broadcast →
     record so a concurrent transaction cannot both clear a nearly-exhausted cap.
 
-    066 P2: with ``WALLET_SIGNER`` = ``shadow``/``remote`` an allowed decision
-    (or the owner-approval lane) is recorded in :mod:`core.signer.attest`, so
-    the signing point can hand the SAME intent to ``polyrob-signer``, which runs
-    this very function again in its own process. ``local`` records nothing.
+    An allowed decision is recorded in :mod:`core.signer.attest` in EVERY signer
+    mode (``EvmRail.sign_and_send`` signs only a recorded tx); ``owner_queue`` only
+    under ``remote``, which re-runs this function — elsewhere the verb records it
+    via ``attest.record_owner_cleared`` (L-7). A ``dry_run`` records nothing.
     """
+    from core.act_reason import with_bound_why  # 122 W1: the reason the Controller bound
+    intent = with_bound_why(intent)
     decision = _authorize(
         intent, tx, holder=holder, gate=gate, execution_context=execution_context,
         tool_self=tool_self, simulate_fn=simulate_fn, price_fn=price_fn,
@@ -737,22 +739,19 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
         autonomous_ok_fn=autonomous_ok_fn, liquidity_rpc=liquidity_rpc,
         account_rpc=account_rpc, approve_above_usd=approve_above_usd,
         unverified_within_caps=unverified_within_caps)
+    for hook in ([] if dry_run else AFTER_DECISION_HOOKS): hook(execution_context, decision)
     if decision.allowed and decision.lane in ("owner_direct", "owner_approved"):
-        # Book the spend with the lane it was authorized on, so the pause alarm
-        # can tell the owner acting from the agent breaching (fail-open: a fake
-        # gate without the note is only a less precise audit row).
+        # Book the lane: the pause alarm tells the owner acting from the agent (fail-open).
         try:
             gate.note_lane(intent.idempotency_key, decision.lane)
         except Exception:
             logger.debug("spend lane note skipped", exc_info=True)
-    if decision.allowed or decision.lane == "owner_queue":
+    if not dry_run and (decision.allowed or decision.lane == "owner_queue"):
         try:
-            from core.signer import MODE_LOCAL, signer_mode
-            if signer_mode() != MODE_LOCAL:
-                from core.signer import attest
-                attest.record(intent, tx)
+            from core.signer import attest, signer_mode  # L-7: a queue is an ASK
+            if decision.allowed or signer_mode() == "remote": attest.record(intent, tx)
         except Exception:
-            logger.warning("signer attestation not recorded; the signer will refuse this send",
+            logger.warning("tx_guard attestation not recorded; the rail will refuse this send",
                            exc_info=True)
     return decision
 
@@ -1133,107 +1132,27 @@ def _strip_journal_leg(intent: TxIntent, tx: dict, *, signer: str
     return stripped, str(j_to).lower(), None
 
 
-def _pinned_collection_accounts(chain: str):
-    """``(chain_id, {pinned collection + sale address}, frozenset of every account address of every
-    pinned collection's ids 0..max_supply)`` from the owner's collection registry. Raises when
-    the registry cannot be trusted (the callers refuse)."""
-    from core.wallet import collection_registry, erc6551
-    chain_id = collection_registry.chain_id_of(chain)
-    profiles = collection_registry.profiles_on(chain_id)
-    pinned = {a for p in profiles for a in (p.address, p.sale and p.sale.address) if a}
-    accounts = frozenset().union(*(
-        erc6551.collection_account_addresses(chain_id, p.address, p.max_supply,
-                                             implementation=v.implementation, salt=v.salt)
-        for p in profiles for v in p.accounts))
-    return chain_id, pinned, accounts
-
-
-def _collection_account_destination_refusal(chain: str, tx: dict, nft_out) -> Optional[str]:
-    """W2, the half a code read cannot see: an account that is NOT DEPLOYED YET has no code, so
-    a pinned collection's token sent (or minted) to ``accountOf(k)`` for a token ``k`` not yet
-    minted passes the contract's own check and later sits inside token k's account. Pure CREATE2
-    math instead (``erc6551.collection_account_addresses``, every id up to each profile's
-    ``max_supply``), against (a) every measured move of a pinned collection's token and (b)
-    every ABI word of a call addressed to a pinned collection (a ``mint(to, …)`` /
-    ``transferFrom(…, to, …)`` names its destination there). Static, no RPC. An untrusted
-    collection registry refuses (fail closed)."""
+def _chain_id(chain: str) -> int:
+    from core.wallet import collection_registry
     try:
-        _chain_id, pinned, accounts = _pinned_collection_accounts(chain)
-    except Exception as exc:  # noqa: BLE001
-        # Owner decision 2026-10-01: an untrusted registry refuses only what it guards — a
-        # transaction that moves an NFT (and the collection mint/reveal shapes, which refuse in
-        # their own modules). A swap or a send with no NFT movement does not depend on it.
-        if nft_out:
-            return (f"the owner's collection registry cannot be trusted ({exc}) — the nesting "
-                    f"rule cannot run for this NFT move; failing closed")
-        return None
-    if not pinned:
-        return None
-    why = ("{what} names {dest}, the ERC-6551 account address of a pinned collection's token "
-           "(deployed or not) — a token inside such an account can own itself and is bricked "
-           "forever")
-    for (contract, std, dest, token_id, _amt) in nft_out or ():
-        if str(contract).lower() in pinned and str(dest or "").lower() in accounts:
-            return why.format(what=f"the move of {std} {contract} #{token_id}", dest=dest)
-    to = str((tx or {}).get("to") or "").lower()
-    data = str((tx or {}).get("data") or "").lower().removeprefix("0x")
-    if to in pinned and len(data) >= 8:
-        body = data[8:]
-        for i in range(0, len(body) - 63, 64):
-            word = body[i:i + 64]
-            if word[:24] == "0" * 24 and ("0x" + word[24:]) in accounts:
-                return why.format(what=f"a call to the pinned collection {to}", dest="0x" + word[24:])
-    return None
+        return collection_registry.chain_id_of(chain)
+    except Exception:  # noqa: BLE001 — an unknown chain derives no account
+        return 0
 
 
 def _future_account_refusal(intent: TxIntent, tx: dict, deltas, holder: str, rpc) -> Optional[str]:
-    """C5: refuse any asset sent to ``accountOf(k)`` of a pinned collection when token ``k`` is
-    NOT MINTED — native value, ERC-20, NFT, any shape. The candidates are every address the
-    transaction names: the declared destination, the called contract, each measured transfer's
-    counterparty, each measured NFT move, and every ABI word of the calldata (a router's
-    ``recipient``, an ERC-20 ``transfer(to, …)``). A candidate inside a profile's offline account
-    set (pure CREATE2) is checked with ``ownerOf(k)`` on the collection; a failed read refuses
-    (fail closed). An untrusted registry stops only what it guards (owner decision 2026-10-01:
-    the NFT-move rule above already refuses then)."""
-    from core.wallet import abi, collection_registry, erc6551
-    try:
-        chain_id = collection_registry.chain_id_of(intent.chain)
-        profiles = collection_registry.profiles_on(chain_id)
-    except Exception:  # noqa: BLE001
-        return None
-    if not profiles:
-        return None
-    cands = {str(intent.to or ""), str((tx or {}).get("to") or "")}
-    cands.update(str(dest) for (_t, dest, _a) in deltas.holder_transfers or ())
-    cands.update(str(dest) for (_c, _s, dest, _i, _a) in deltas.holder_nft_out or ())
-    data = str((tx or {}).get("data") or "").lower().removeprefix("0x")
-    body = data[8:] if len(data) >= 8 else ""
-    for i in range(0, len(body) - 63, 64):
-        word = body[i:i + 64]
-        if word[:24] == "0" * 24:
-            cands.add("0x" + word[24:])
-    cands = {c.lower() for c in cands if c} - {str(holder).lower(), _ZERO_ADDRESS.lower()}
-    for addr in sorted(cands):
-        for p in profiles:
-            for v in p.accounts:
-                k = erc6551.collection_account_token_id(chain_id, p.address, p.max_supply, addr,
-                                                        implementation=v.implementation, salt=v.salt)
-                if k is None:
-                    continue
-                try:
-                    raw = rpc("eth_call", [{"to": p.address, "data": abi.encode_call(
-                        "ownerOf", [{"type": "uint256"}], [k])}, "latest"])
-                    owner = abi.decode([{"type": "address"}], raw)[0]
-                    minted = str(owner).lower() != _ZERO_ADDRESS.lower()
-                except Exception as exc:  # noqa: BLE001 — a revert IS "not minted"; so is a failure
-                    minted, why = False, f" (ownerOf({k}) failed: {exc})"
-                else:
-                    why = ""
-                if not minted:
-                    return (f"the transaction names {addr}, the ERC-6551 account of {p.address} "
-                            f"#{k}, a token not minted yet{why} — whoever mints #{k} later owns "
-                            f"every asset sent there; failing closed")
-    return None
+    """124 F1/F2 (C5): no asset into the account of a token not minted yet, for every collection
+    the transaction touches — ``core.wallet.nft_rules.future_account_refusal``."""
+    from core.wallet import nft_rules
+    return nft_rules.future_account_refusal(rpc, _chain_id(intent.chain), intent, tx, deltas, holder)
+
+
+def _cross_chain_refusal(intent: TxIntent, tx: dict, deltas) -> Optional[str]:
+    """124 C1: never send to the address of an agent account that lives on another chain."""
+    from core.wallet import nft_rules
+    return nft_rules.cross_chain_refusal(intent.chain,
+                                         nft_rules.transaction_addresses(intent, tx, deltas))
+
 
 
 def _collection_runtime_refusal(chain: str, collection: Optional[str], rpc) -> Optional[str]:
@@ -1256,120 +1175,21 @@ def _same_addr(a, b) -> bool:
 
 def _pinned_nft_departure_refusal(chain: str, nft_out, rpc, *, holder: Optional[str] = None,
                                   accepted: Sequence[str] = ()) -> Optional[str]:
-    """069 v4 §5 rule 5 (+ rule 3 for the collection's code). For every measured move of a
-    PINNED collection's token out of the holder: the collection's live code must hash to the
-    pinned ``runtime_sha256``, and the token's ERC-6551 account (every pinned account version)
-    must have NO open approval — ERC-20 allowances, ERC-721 approvals, ApprovalForAll and
-    Permit2 (``erc6551.open_approvals``, scanned from the profile's ``deploy_block`` to the
-    head, every row live-confirmed; a row whose live read failed stays). The scan is complete
-    by construction (the account cannot approve anything before its collection exists); any
-    failed read is an incomplete scan and refuses. A token of an unpinned collection is not
-    judged here.
-
-    Any contract can emit an ``Approval`` naming the account, so a row whose events no
-    transaction SENT by an owner of the NFT emitted (``erc6551.attribute``) may be fabricated
-    and cannot always be revoked. Only such a row — never one an owner's transaction granted —
-    may be accepted by the owner, by its key in ``accepted`` (the intent's
-    ``accepted_unattributed_approvals``; the verb is always owner-approved and the card lists
-    the keys)."""
-    from core.wallet import collection_registry, erc6551
-    try:
-        chain_id = collection_registry.chain_id_of(chain)
-        pinned = {p.address: p for p in collection_registry.profiles_on(chain_id)}
-    except Exception as exc:  # noqa: BLE001
-        return (f"the owner's collection registry cannot be trusted ({exc}) — the approval "
-                f"rule cannot run for this NFT move; failing closed")
-    head = None
-    for (contract, std, _dest, token_id, _amt) in nft_out or ():
-        profile = pinned.get(str(contract).lower())
-        if profile is None:
-            continue
-        why = collection_registry.runtime_refusal(rpc, profile)
-        if why:
-            return why
-        if "permit2" not in tuple(getattr(erc6551, "APPROVAL_KINDS", ())):
-            return ("the approval scan does not cover Permit2 — an incomplete table is never "
-                    "'empty'; failing closed")
-        for version in profile.accounts:
-            account = erc6551.account_address(chain_id, profile.address, int(token_id),
-                                              salt=version.salt,
-                                              implementation=version.implementation)
-            try:
-                if head is None:
-                    head = int(rpc("eth_blockNumber", []), 16)
-                rows = erc6551.open_approvals(rpc, account, profile.deploy_block, to_block=head)
-            except Exception as exc:  # noqa: BLE001
-                return (f"the approval scan of {account}, the account of {std} {contract} "
-                        f"#{token_id}, did not complete ({exc}) — an incomplete table is never "
-                        f"'empty', so the token may not leave; failing closed")
-            if rows:
-                try:
-                    owners = erc6551.nft_owners(rpc, profile.address, int(token_id),
-                                                profile.deploy_block, head)
-                    if holder:
-                        owners.add(str(holder).lower())
-                    rows = erc6551.attribute(rpc, rows, owners)
-                except Exception:  # noqa: BLE001 — origin unread: every row stays undecided
-                    pass
-                taken = {str(k).strip().lower() for k in accepted or ()}
-                rows = [r for r in rows if r.attributed is True or r.key not in taken]
-            if rows:
-                def _origin(r):
-                    if r.attributed is True:
-                        return ""
-                    why = ("no transaction an owner of this NFT sent emitted it"
-                           if r.attributed is False else "its origin could not be read")
-                    return f" [{why}; the owner may accept it as {r.key}]"
-                shown = "; ".join(
-                    f"{r.kind} {r.contract}"
-                    + (f" #{r.token_id}" if r.token_id is not None else "")
-                    + f" → {r.spender}" + ("" if r.verified else " (unconfirmed)") + _origin(r)
-                    for r in rows[:5])
-                more = f" (+{len(rows) - 5} more)" if len(rows) > 5 else ""
-                return (f"{std} {contract} #{token_id} may not leave while its account "
-                        f"{account} has {len(rows)} open approval(s): {shown}{more}. "
-                        f"Approvals survive a transfer of the NFT, so the next owner's account "
-                        f"could still be drained. Clear approvals first: agent_nft_revoke_all, "
-                        f"then send it")
-    return None
+    """124 D1 (069 v4 §5 rule 5): every agent NFT leaves only with no open approval on its
+    account, any collection — ``core.wallet.nft_rules.departure_refusal``."""
+    from core.wallet import nft_rules
+    return nft_rules.departure_refusal(rpc, chain, _chain_id(chain), nft_out, holder=holder,
+                                       accepted=accepted)
 
 
-def _nft_nesting_refusal(chain: str, nft_out, rpc) -> Optional[str]:
-    """W2. For each measured NFT move out of the holder, read the destination's code: when it is
-    an ERC-6551 registry clone (any implementation) whose footer names the moved token's OWN
-    collection — or a pinned collection when the moved token is from a pinned collection —
-    refuse (a self-cycle or a nesting that can close a cycle). A clone bound to ANOTHER chain
-    refuses too: there ``owner()`` is ``address(0)`` and the token is lost. Unreadable code
-    refuses, and so does an untrusted collection registry."""
-    from core.wallet import erc6551
-    try:
-        chain_id, pinned, _accounts = _pinned_collection_accounts(chain)
-    except Exception as exc:  # noqa: BLE001
-        return (f"the owner's collection registry cannot be trusted ({exc}) — the nesting rule "
-                f"cannot run; failing closed")
-    for (contract, std, dest, token_id, _amt) in nft_out:
-        d = str(dest or "").lower()
-        if not d or int(d, 16) == 0 or d == _DEAD_ADDRESS.lower():
-            continue  # a burn: no account to nest into
-        try:
-            clone = erc6551.read_clone(rpc, dest)
-        except Exception as exc:  # noqa: BLE001
-            return (f"could not read the code at {dest}, the destination of {std} {contract} "
-                    f"#{token_id} ({exc}) — a token-bound account there could brick the token; "
-                    f"failing closed")
-        if clone is None:
-            continue
-        _impl, _salt, f_chain, f_contract, f_id = clone
-        if f_chain != chain_id:
-            return (f"{dest} is a token-bound account of chain {f_chain}, not {chain} "
-                    f"({chain_id}) — here its owner() is address(0), so {std} {contract} "
-                    f"#{token_id} sent there is lost")
-        c = str(contract).lower()
-        if f_contract.lower() == c or (c in pinned and f_contract.lower() in pinned):
-            return (f"{std} {contract} #{token_id} would move into {dest}, the token-bound "
-                    f"account of {f_contract} #{f_id} — a token inside an account of its own "
-                    f"collection can own itself and is bricked forever")
-    return None
+def _nft_nesting_refusal(chain: str, nft_out, rpc, *, tx: Optional[dict] = None,
+                         holder: str = ""):
+    """124 N4-N7, C3 for every measured NFT move, any collection (``core.wallet.nft_rules``):
+    a :class:`core.wallet.nft_rules.Nesting` — its ``refusal``, and the NFTs that go into an
+    account the agent itself holds (the owner's card)."""
+    from core.wallet import nft_rules
+    return nft_rules.nesting(rpc, chain, _chain_id(chain), tx, nft_out, holder)
+
 
 
 def _price_allowance_grants(intent: TxIntent, *, price_fn, fallback_price_fn,

@@ -134,12 +134,14 @@ Text-only surfaces deliver the text and note the omission honestly.
 and `auto` under effective `AUTONOMY_MODE=autonomous`; an explicit value wins in both
 modes.
 
-- **`approve`** — every payment request (receive and spend) goes through the durable,
-  remotely approvable `owner_queue` provider (`tools/controller/approval_queue.py`): it
-  records a durable ask, pushes one owner notification, and waits for the payment
-  approval timeout. Approve from Telegram with `/approve tap-<id>` (or
-  `polyrob owner pending`). A post-timeout approval becomes a one-shot grant
-  (`APPROVAL_GRANT_TTL_HOURS`).
+- **`approve`** — every payment request (receive and spend) goes through the
+  `owner_queue` provider (`tools/controller/approval_queue.py`). A money call in your
+  chat becomes ONE approval holding that exact call: your Confirm runs it once (or
+  `/approve <card id>`). A call no approval can carry, and a call from a goal run, still
+  records a durable ask that blocks the goal, pushes one notification and waits for
+  the payment approval timeout; approve it with `/approve tap-<id>` (or
+  `polyrob owner pending`). A post-timeout approval of such an ask becomes a one-shot
+  grant (`APPROVAL_GRANT_TTL_HOURS`).
 - **`auto`** — an invoice (`x402_request`, the receive side) runs at once within the
   invoice caps and notifies the owner after the fact. The spend side does not change:
   a venue order still waits for the owner's tap. Auto mode never widens a cap.
@@ -152,7 +154,8 @@ A pending invoice completes by any of:
    settles only with `--tx-hash`: an attestation alone never pays an order.
 2. **Payer-driven facilitator** — a machine payer hits
    `POST /api/x402/requests/{id}/pay` (the public endpoint runs the x402 facilitator
-   verify+settle).
+   verify+settle). An order's invoice paid here moves the order to paid in the same
+   request, also on an API process that runs no autonomy loops.
 3. **On-chain detection** — gated `X402_SETTLE_ONCHAIN_DETECT` (a treasury
    address is required). ⚠️ **Silently inert unless `X402_INVOICE_ENABLED` is also on** — the
    settlement watcher only starts when the autonomy runtime sees `X402_INVOICE_ENABLED` on
@@ -217,13 +220,18 @@ follows for each order, and asks you for two decisions:
    functions it may call. Confirm, and buyers can order.
 
 Buyers order in the chats you list (`/offers`, `/buy <offer> field=value`,
-`/order <id>`, `/order <id> cancel`, `/order <id> dispute <reason>` — answered by
-code, never by the AI), over HTTP (`GET /api/offers`, `POST /api/offers/<id>/orders`,
-then `GET /api/orders/<id>?token=…` for the status), as other agents and apps, or on
+`/order <id>`, `/order <id> cancel`, `/order <id> accept`, `/order <id> dispute <reason>`
+— answered by code, never by the AI), over HTTP (`GET /api/offers`,
+`POST /api/offers/<id>/orders`, then `GET /api/orders/<id>?token=…` for the status and
+`POST /api/orders/<id>/cancel|accept|dispute` with the header
+`Authorization: Bearer <order_token>` for the same acts; a token in the URL of an act is
+refused), as other agents and apps
+(they do the same acts on their own order with `polyrob_order_act`, or with an order
+message whose data is `{"order_id", "act", "reason"}`), or on
 a marketplace the operator configures in `<data_home>/commerce_markets.json`.
 One offer takes at most 25 unpaid orders at a time from HTTP, agents, apps and
-marketplaces (the next one refuses until some are paid or expire); chat and
-public-reply buyers have no such limit.
+marketplaces (the next one refuses until some are paid or expire), and at most 5 of
+them from one HTTP address; chat and public-reply buyers have no such limit.
 **Public replies:** where the agent can read public replies (X today), it
 announces a live offer in one post; a person replies under it with `/buy field=value`
 (or `/order <id>`), and code answers under that reply with the exact amount, asset,
@@ -433,7 +441,8 @@ There is no local feedback API: the agent signs no feedback grant and keeps no
 feedback of its own. The **Identity** side (6.1 above) signs and broadcasts.
 When an order is delivered, the buyer's message names where to give feedback on
 network (the Reputation Registry, the network and the agentId), if the agent has an
-identity; a feedback call needs no permission from the agent.
+identity; a buyer over HTTP, MCP or A2A reads the same line as `feedback` on its order.
+A feedback call needs no permission from the agent.
 
 ---
 
@@ -509,8 +518,9 @@ run. Do not price a service on them.
   crypto deposit address derived from `PAYMENT_MASTER_SEED`, plus balance, transaction
   and deposit reads; the routes are listed in [api.md](api.md#money-and-pricing).
   On-chain deposits are watched by an out-of-band monitor
-  (`DEPOSIT_MONITOR_ENABLED`, default OFF; ETH price via an oracle bounded by
-  `ETH_PRICE_USD_MAX`); there is no in-band credit-purchase POST.
+  (`DEPOSIT_MONITOR_ENABLED`, default OFF; ETH is valued at the same graded spend
+  price a payment uses, and no price means no credit until a later check has one);
+  there is no in-band credit-purchase POST.
 - **Treasury sweeper** (`modules/payments/treasury_sweeper.py`): sweeps per-user deposit
   balances into `TREASURY_ADDRESS` on an interval (`SWEEP_INTERVAL`, default 3600s). It
   **signs and broadcasts real fund-moving transactions**, so it has its own dedicated

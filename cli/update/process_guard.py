@@ -80,30 +80,8 @@ def dbs_in_use(db_paths: Iterable[Path]) -> List[Path]:
     return out
 
 
-def workspace_lock_busy(lock_dir: Optional[Path] = None) -> bool:
-    """True if the cross-process workspace turn lock is currently held.
-
-    Uses the CLI's ``POLYROB_WORKSPACE_LOCK_DIR`` convention when ``lock_dir`` is not
-    given. Inert (returns False) when no lock is configured — the SQLite probe is then
-    the only signal. Only a TimeoutError means "held"; any other error is RAISED (an
-    update guard must not read "unknown" as "free"), and each caller names it.
-    """
-    root = str(lock_dir) if lock_dir else os.environ.get("POLYROB_WORKSPACE_LOCK_DIR")
-    if not root:
-        return False
-    lock_path = os.path.join(root, "workspace.turn.lock")
-    if not os.path.exists(lock_path):
-        return False
-    from core.file_lock import SafeFileLock
-
-    try:
-        with SafeFileLock(lock_path, timeout=0):
-            return False
-    except TimeoutError:
-        return True  # held by someone else
-    except Exception as exc:
-        logger.warning("workspace lock probe failed on %s: %s", lock_path, exc)
-        raise
+# The workspace turn-lock probe lives with the one busy reader (proposal 125 S13).
+from core.agent_activity import workspace_lock_busy  # noqa: E402,F401
 
 
 # Persistent server/agent subcommands. A running one of these can open the DBs at any

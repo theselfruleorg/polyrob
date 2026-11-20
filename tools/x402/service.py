@@ -20,6 +20,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from tools.act_reason_param import ActReason
 from tools.base_tool import BaseTool
 
 # Minimal stand-in used when no BotConfig is provided (e.g. in unit tests).
@@ -32,7 +33,7 @@ class QuoteParams(BaseModel):
     url: str = Field(..., description="URL of a possibly-paid resource to price")
 
 
-class FetchParams(BaseModel):
+class FetchParams(ActReason):   # why: audit 2026-11-21 L-3
     url: str = Field(..., description="URL to fetch; pays via x402 if it returns 402")
     method: str = Field("GET", description="HTTP method")
     body: Optional[str] = Field(None, description="Optional request body")
@@ -164,6 +165,9 @@ def _render_probe(row: dict) -> str:
         lines.append(f"  network   : {row.get('network') or '?'}")
         lines.append(f"  asset     : {row.get('asset') or '?'}")
         lines.append(f"  payTo     : {row.get('pay_to') or '?'}")
+        if row.get("pay_method") and row["pay_method"] != row["method"]:
+            lines.append(f"  pay with  : {row['pay_method']} — the price is for a {row['pay_method']}; "
+                         f"pay it with x402_fetch method {row['pay_method']}")
         if row.get("accepts"):
             acc = "; ".join(f"{a['network']} / {a['asset']} / {a['scheme']}"
                             for a in row["accepts"])
@@ -270,7 +274,7 @@ class X402PayTool(BaseTool):
                     f"{params.url}: no x402 price found on a plain GET. This is NOT "
                     f"proof it is free — a POST-only paywall (JSON-RPC, A2A) or an "
                     f"unparseable challenge looks identical here. Use x402_probe for "
-                    f"the full read (accepts[], payability score); POST-only discovery is unavailable."))
+                    f"the full read (accepts[], payability score, and the POST price a seller states on a GET)."))
             payee = details.get("pay_to") if details else None
             return self._ar(content=(f"{params.url} requires x402 payment of ${price:.4f} USD\n"
                                      f"payTo: {payee or 'unknown — probe before paying'}\n"
@@ -501,6 +505,9 @@ class X402PayTool(BaseTool):
                     elif cap_charge > res.amount_usd:
                         header += f"[Spend cap charged ${cap_charge:.4f}, the signed authorization ceiling.]\n"
                 else:
+                    rejected = self._release_rejected(wallet, res, params, idem)
+                    if rejected:
+                        return self._ar(error=rejected)
                     if getattr(res, "submission_ref", None):
                         return self._ar(error=(
                             "Payment authorization was prepared but settlement is unconfirmed; "
@@ -521,6 +528,34 @@ class X402PayTool(BaseTool):
                               "no transaction exists. Do NOT report this as a "
                               "completed payment.]\n")
         return self._ar(content=f"{header}{res.body}")
+
+    @staticmethod
+    def _release_rejected(wallet, res, params, idem) -> Optional[str]:
+        """F8: the seller answered 402 to a SIGNED authorization — it rejected the
+        payment. The authorization stays valid until it expires, so it may still
+        be submitted: book its signed ceiling against the caps (the one booking
+        path, `policy.record`, which marks the journal row booked) and the
+        wallet's other rails are free again. Before, the row refused every rail
+        until the authorization expired. The text, or None when this is not a
+        rejected signed payment (or the booking failed: the row stays)."""
+        ref = getattr(res, "submission_ref", None)
+        if not (ref and getattr(res, "payment_sent", False)
+                and getattr(res, "status_code", None) == 402):
+            return None
+        charge = x402_cap_charge(res, params.max_amount_usd)
+        try:
+            wallet.policy.record(venue="x402", action="pay_rejected", amount_usd=charge,
+                                 counterparty=res.pay_to, idempotency_key=idem,
+                                 result_ref=None, chain=None, submission_ref=ref)
+        except Exception as exc:  # noqa: BLE001 — the row stays; the old text applies
+            logging.getLogger(__name__).warning(
+                "x402: rejected authorization %s not booked (%s)", ref, type(exc).__name__)
+            return None
+        return (f"[PAYMENT REJECTED: the seller answered 402 to a signed authorization of "
+                f"${charge:.4f} to {res.pay_to or 'an unknown payee'} and served nothing. "
+                "It may still be submitted until it expires, so it is booked against your "
+                "caps; your other payments are not blocked. Do NOT retry this same request "
+                "(it is refused as a replay) and do NOT report it as paid.]")
 
     @BaseTool.action("Show the agent wallet: address, ON-CHAIN USDC/gas balance, spend caps, the unaccounted submissions that block a send, and payment audit", param_model=EmptyWalletParams)
     async def x402_wallet_status(self, params: EmptyWalletParams, execution_context=None):

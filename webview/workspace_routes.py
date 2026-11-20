@@ -115,7 +115,7 @@ def walk_tree(root: Path, *, depth: int = TREE_MAX_DEPTH,
 async def api_workspace_tree(request: Request, session_id: str, path: str = "",
                              depth: int = TREE_MAX_DEPTH):
     """The session's workspace tree, capped (see the module docstring)."""
-    from agents.task.path import pm
+    from core.session_paths import pm
     from utils.auth_utils import get_authenticated_user_id
 
     paths = pm()

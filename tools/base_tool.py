@@ -21,6 +21,42 @@ from core.logging import get_component_logger
 from core.container import DependencyContainer
 from enum import Enum
 from pydantic import BaseModel
+import contextvars
+
+#: 126: the action call running now — ``(action id, params model)`` — so a verb deep
+#: in its own code can hand the EXACT call it was given to an owner card
+#: (``tools.controller.call_card_run.owner_lane_card``). Set by every action.
+_CURRENT_CALL: "contextvars.ContextVar[Optional[tuple]]" = contextvars.ContextVar(
+    "current_action_call", default=None)
+
+
+def current_call() -> Optional[tuple]:
+    """``(action id, params model)`` of the action running now, or None."""
+    return _CURRENT_CALL.get()
+
+
+def dry_run_result(tool, content: str, simulated_usd=None):
+    """126 wave 4: a passed dry run with its TYPED facts (``simulated_usd``, ``allowed``)
+    — a card bounds its call from these, never from the report text. A tool whose
+    ``_ar`` takes no metadata (a test fake) gets the plain content."""
+    meta = {"simulated_usd": simulated_usd, "allowed": True}
+    try:
+        return tool._ar(content=content, metadata=meta)
+    except TypeError:
+        return tool._ar(content=content)
+
+
+def _call_token(func, args):
+    """Mark ``func(self, params, …)`` as the call running now (never raises)."""
+    try:
+        if len(args) >= 2 and isinstance(args[1], BaseModel):
+            from core.action_names import namespaced_action_name
+            name = getattr(args[0], "name", None) or ""
+            return _CURRENT_CALL.set((namespaced_action_name(str(name), func.__name__),
+                                      args[1]))
+    except Exception:
+        pass
+    return None
 from functools import wraps
 
 # Tool-specific exceptions are in tools.exceptions module
@@ -187,7 +223,12 @@ class BaseTool(BaseComponent):
                 # For async functions, just add the metadata
                 @wraps(func)
                 async def async_wrapper(*args, **kwargs):
-                    return await func(*args, **kwargs)
+                    token = _call_token(func, args)
+                    try:
+                        return await func(*args, **kwargs)
+                    finally:
+                        if token is not None:
+                            _CURRENT_CALL.reset(token)
 
                 # Transfer metadata to wrapper
                 async_wrapper._description = description

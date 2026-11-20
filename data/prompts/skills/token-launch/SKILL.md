@@ -1,16 +1,16 @@
 ---
 name: token-launch
-description: 'Launching or deploying a token (launchpad, ERC-20, SPL, compiled bytecode), trading on a launchpad curve, claiming its creator fees, the metadata that must be set before a launch, and putting a launch, deploy or claim to the owner as a card.'
+description: 'Launching or deploying a token (launchpad, a token with its v4 pool, ERC-20, SPL, compiled bytecode), trading on a launchpad curve, claiming its creator fees, the metadata that must be set before a launch, and putting a launch, deploy or claim to the owner as a card.'
 license: MIT
 metadata:
   polyrob-when: 'Launching or deploying a token, or claiming its fees'
   polyrob-priority: '2'
   polyrob-triggers: '{"tool_ids":["defi_trade","launchpad"]}'
-  polyrob-version: '3'
+  polyrob-version: '4'
 ---
 # Token Launch — launching, deploying, claiming
 
-Launching and deploying are separate from trading: read this before `launchpad_launch`, `deploy_token`,
+Launching and deploying are separate from trading: read this before `launchpad_launch`, `launch_token`, `deploy_token`,
 `deploy_contract` or `launchpad_claim`. A raw `call` and a web dapp are in
 `contract-call`; `wrap`/`unwrap` are in `trade-execution`.
 
@@ -42,11 +42,30 @@ exempt (the factory exempts the deployer), so an opening buy is not taxed.
 **`defi_trade.deploy_token`** deploys a plain fixed-supply ERC-20 — no
 launchpad, no curve, no liquidity. The whole supply lands in your wallet and
 there is no mint function, ever. This does **not** make the token tradable. If
-the goal is a tradable token, use `launchpad_launch`, not this.
+the goal is a tradable token, use `launchpad_launch` or `launch_token`, not this.
 
 Do not pass `vanity` or `salt` to it — both are refused. Through the CREATE2
 factory the constructor's deployer is the factory, so the whole supply would be
 minted to the factory and lost.
+
+**`defi_trade.launch_token`** is a token WITH its pool, in one act: it deploys
+the same fixed-supply token, declares its Uniswap v4 pool against `quote_token`
+(an address; the native coin is `0x0000000000000000000000000000000000000000`),
+makes the two Permit2 grants of each token leg and seeds the pool at
+`initial_price` (quote per ONE new token) — the `defi-liquidity` seed path, not
+a second one. Use it when the goal is a tradable token you control, not a curve.
+- It is the owner's act: it runs live only on the owner's card for that call, on
+  an owner turn, or under a mandate that names `defi_trade_launch_token` and that
+  quote token with `max_spend_usd` inside its band. A dry run needs none of it.
+- `max_spend_usd` covers the seed at the launch price (both legs) plus fees.
+- The owner may pin `launch.pair` (`<network>:<token>`): then the ONLY pair is
+  that one, and any other refuses by name — do not try another quote. The
+  owner's limits `launch.per_day` (every token deploy of 24 hours counts) and
+  `launch.max_pool_usd` bind too, and a native quote leg needs `LP_ETH_CAP`
+  above 0. `/lp launch` (owner) shows all of them.
+- A stopped step names what is done (the token address, the declaration
+  CONFIRMED for one hour) and the one call that finishes. Do not run the launch
+  again: a second call deploys a second token.
 
 **`defi_trade.solana_deploy_token`** is the Solana twin: a fixed-supply SPL
 token whose mint authority is revoked in the same transaction, with no freeze

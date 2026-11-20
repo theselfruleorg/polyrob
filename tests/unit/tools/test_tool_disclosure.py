@@ -178,7 +178,7 @@ def test_autonomous_load_cannot_escape_nonmoney_ceiling(monkeypatch):
     from agents.task import session_class
     from tools import goal_tools
     monkeypatch.setattr(session_class, 'is_autonomous_session', lambda sid: True)
-    monkeypatch.setattr(goal_tools, 'allowed_self_goal_tools', lambda: frozenset({'web_fetch'}))
+    monkeypatch.setattr('core.tool_grants.allowed_self_goal_tools', lambda: frozenset({'web_fetch'}))
     controller = FakeController(services={'coding', 'web_fetch'})
     controller.session_id = 'autonomous-run'
     result = asyncio.run(perform_load_tool(controller, 'coding'))
@@ -378,7 +378,7 @@ def test_a_cron_job_loads_beyond_the_self_goal_ceiling(monkeypatch):
     from core import autonomy_marker as am
     from tools import goal_tools
     monkeypatch.setattr(session_class, 'is_autonomous_session', lambda sid: True)
-    monkeypatch.setattr(goal_tools, 'allowed_self_goal_tools', lambda: frozenset({'web_fetch'}))
+    monkeypatch.setattr('core.tool_grants.allowed_self_goal_tools', lambda: frozenset({'web_fetch'}))
     am.mark_autonomous('owner-job-run', cron_job_id='job-owner')
     am.note_job('job-owner', 'Daily: run the release check')
     am.mark_autonomous('agent-job-run')

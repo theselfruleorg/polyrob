@@ -11,7 +11,7 @@ shared "system" bucket or an anon bucket the board would reject outright.
 import pytest
 
 from agents.task.constants import DEFAULT_USER_ID
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from core.identity import resolve_identity
 from tools.goal_tools import GoalTool
 from tools.cronjob_tools import CronJobTool

@@ -2,6 +2,8 @@
 label on a line from a chat the person is not in."""
 import pytest
 
+from core.surfaces.command_reply import reply_actions, reply_text
+
 from core.surfaces.chats import reply_prefix
 from core.surfaces.dispatcher import RouteDecision, RouteKind, route_inbound
 from core.surfaces.envelopes import Identity, InboundMessage, SessionSource
@@ -86,8 +88,10 @@ async def test_a_line_goes_to_the_focused_chat_and_main_stays_warm(reg):
 async def test_the_list_has_a_tap_and_the_tap_switches(reg):
     ta = _TaskAgent(reg)
     await _say(ta, "/new side")
-    _, listing = await _say(ta, "/chats")
+    _, reply = await _say(ta, "/chats")
+    listing = reply_text(reply)
     assert "1. main" in listing and "/chat_main" in listing and "you are here" in listing
+    assert [a.label for a in reply_actions(reply)] == ["main", "+ New chat"]
     decision, out = await _say(ta, "/chat_main")
     assert decision.kind == RouteKind.COMMAND and "Now in chat: main" in out
     _, out = await _say(ta, "/chat_c2")
@@ -112,7 +116,7 @@ async def test_rename_names_the_chat_in_the_list(reg):
     _, out = await _say(ta, "/rename home")
     assert "home" in out
     _, listing = await _say(ta, "/chats")
-    assert "main (home)" in listing
+    assert "main (home)" in reply_text(listing)
 
 
 @pytest.mark.asyncio

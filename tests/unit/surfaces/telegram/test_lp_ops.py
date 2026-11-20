@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
-from surfaces.telegram import lp_ops as L
+from tools.defi.owner_verbs import lp as L
 from cli.commands.wallet_lp import lp_cmd
 
 
@@ -29,7 +29,7 @@ async def test_positions_dispatch(monkeypatch):
     polling loop is never blocked for the length of a quote."""
     seen = []
 
-    async def _dispatch(uid, action, values):
+    async def _dispatch(uid, action, values, **kw):
         seen.append((uid, action, values))
         return SimpleNamespace(error=None, extracted_content='positions')
 

@@ -24,7 +24,7 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setenv("POLYROB_POSTURE", "local")
     monkeypatch.setenv("ENV", "development")
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    import agents.task.path as pth
+    import core.session_paths as pth
     pth.reset_path_manager()
     import webview.webgate as wg
     importlib.reload(wg)
@@ -38,7 +38,7 @@ def client(monkeypatch, tmp_path):
 
 
 def _feed(sid):
-    import agents.task.path as pth
+    import core.session_paths as pth
     from core.identity import ANON_USER_ID
     clean = pth.pm().clean_session_id(sid)
     feed = pth.pm().get_feed_dir(clean, user_id=ANON_USER_ID)
@@ -108,6 +108,22 @@ def test_an_unknown_type_and_a_bad_limit_are_refused(client):
     _feed("sess-bad")
     assert http.get(PATH.format(sid="sess-bad") + "?event_type=bogus").status_code == 400
     assert http.get(PATH.format(sid="sess-bad") + "?limit=0").status_code == 400
+
+
+def test_a_limit_above_the_max_is_clamped_not_refused(client, monkeypatch):
+    """transcript.js asks ``limit=300``; a lower WEBVIEW_FEED_MAX_LIMIT must not
+    turn every history load into a 400."""
+    http, srv = client
+    monkeypatch.setattr(srv, "FEED_MAX_LIMIT", 2)
+    feed = _feed("sess-clamp")
+    now = time.time()
+    for i in range(1, 6):
+        _write(feed, f"{i:06d}_status.json",
+               {"type": "status", "timestamp": now + i, "_seq": i, "data": {}}, now + i)
+    r = http.get(PATH.format(sid="sess-clamp") + "?limit=300")
+    assert r.status_code == 200
+    assert [e["_seq"] for e in r.json()["events"]] == [4, 5]
+    assert r.json()["has_more"] is True
 
 
 def _routes(routes, depth=0):

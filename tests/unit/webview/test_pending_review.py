@@ -1,4 +1,4 @@
-"""Pending self-evolution review — /pending + /api/webgate/pending* (parity G5).
+"""Pending self-evolution review — /api/webgate/pending + the Inbox deciders (parity G5).
 
 The 2026-07-12 UI-surface review: CLI (`polyrob owner pending/promote/reject`),
 REPL (`/pending`) and Telegram (`/pending /approve /reject`) can all act on the
@@ -27,8 +27,13 @@ def _client(monkeypatch, tmp_path, user_id="u1"):
     # `webview.inbox.build_inbox`, whose collectors resolve the data home
     # via `webgate.data_dir()`. Patch the ONE seam both readers share.
     monkeypatch.setattr(pages.webgate, "data_dir", lambda: str(tmp_path))
+    import webview.inbox as inbox
+    monkeypatch.setattr(inbox, "unbound_console", lambda: None)
     app = FastAPI()
     app.include_router(pages.router)
+    # 2026-11-20: the console decides through the Inbox routes (the
+    # `/pending/{kind}/{id}/{promote,reject}` pair had no caller and is gone).
+    app.include_router(inbox.router)
     return TestClient(app), pages
 
 
@@ -72,7 +77,7 @@ def test_promote_applies_the_pref(monkeypatch, tmp_path):
     from core.prefs import load_preferences
     client, _ = _client(monkeypatch, tmp_path)
     pid = _propose(tmp_path)
-    r = client.post(f"/api/webgate/pending/pref_change/{pid}/promote")
+    r = client.post(f"/api/webgate/inbox/pref_change/{pid}/decide")
     assert r.status_code == 200
     assert r.json()["ok"] is True
     assert load_preferences(tmp_path, "u1").get("budget.wallet_daily_usd") == 2.5
@@ -84,7 +89,7 @@ def test_reject_archives_without_applying(monkeypatch, tmp_path):
     from core.prefs import load_preferences
     client, _ = _client(monkeypatch, tmp_path)
     pid = _propose(tmp_path)
-    r = client.post(f"/api/webgate/pending/pref_change/{pid}/reject")
+    r = client.post(f"/api/webgate/inbox/pref_change/{pid}/reject")
     assert r.status_code == 200
     assert r.json()["ok"] is True
     assert load_preferences(tmp_path, "u1").get("budget.wallet_daily_usd") is None
@@ -93,7 +98,7 @@ def test_reject_archives_without_applying(monkeypatch, tmp_path):
 
 def test_promote_unknown_item_is_ok_false_not_500(monkeypatch, tmp_path):
     client, _ = _client(monkeypatch, tmp_path)
-    r = client.post("/api/webgate/pending/pref_change/nope/promote")
+    r = client.post("/api/webgate/inbox/pref_change/nope/decide")
     assert r.status_code == 200
     assert r.json()["ok"] is False
 
@@ -103,8 +108,8 @@ def test_read_only_blocks_promote_and_reject_allows_list(monkeypatch, tmp_path):
     pid = _propose(tmp_path)
     monkeypatch.setenv("WEBVIEW_READ_ONLY", "true")
     assert client.get("/api/webgate/pending").status_code == 200
-    assert client.post(f"/api/webgate/pending/pref_change/{pid}/promote").status_code == 403
-    assert client.post(f"/api/webgate/pending/pref_change/{pid}/reject").status_code == 403
+    assert client.post(f"/api/webgate/inbox/pref_change/{pid}/decide").status_code == 403
+    assert client.post(f"/api/webgate/inbox/pref_change/{pid}/reject").status_code == 403
 
 
 def test_decisions_are_tenant_scoped(monkeypatch, tmp_path):
@@ -113,7 +118,7 @@ def test_decisions_are_tenant_scoped(monkeypatch, tmp_path):
     from core.prefs import load_preferences
     pid = _propose(tmp_path, user_id="u1")
     client, _ = _client(monkeypatch, tmp_path, user_id="u2")
-    r = client.post(f"/api/webgate/pending/pref_change/{pid}/promote")
+    r = client.post(f"/api/webgate/inbox/pref_change/{pid}/decide")
     assert r.status_code == 200 and r.json()["ok"] is False
     assert load_preferences(tmp_path, "u1").get("budget.wallet_daily_usd") is None
 

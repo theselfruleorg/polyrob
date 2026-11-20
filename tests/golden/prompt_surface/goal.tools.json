@@ -106,7 +106,7 @@
     },
     {
       "name": "message",
-      "sha": "dce9fd246f75"
+      "sha": "bae505d4879a"
     },
     {
       "name": "tool_call",
@@ -146,7 +146,7 @@
     },
     {
       "name": "owner_doc_manage",
-      "sha": "95f8a92c9f32"
+      "sha": "45d5139c9e78"
     },
     {
       "name": "preferences",
@@ -154,7 +154,7 @@
     },
     {
       "name": "propose_action",
-      "sha": "b722649fd2e6"
+      "sha": "671e09d9eefb"
     },
     {
       "name": "room_moderate",
@@ -166,11 +166,11 @@
     },
     {
       "name": "self_context_manage",
-      "sha": "7ca08bf9fa47"
+      "sha": "f6613c0b7c61"
     },
     {
       "name": "skill_manage",
-      "sha": "0e2b5f77f08e"
+      "sha": "1eb442199328"
     },
     {
       "name": "trade_mandate_propose",
@@ -366,7 +366,7 @@
     },
     {
       "name": "cronjob_schedule",
-      "sha": "88a032c40f57"
+      "sha": "7e2dcac73003"
     },
     {
       "name": "cronjob_show",

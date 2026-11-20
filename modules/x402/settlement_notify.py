@@ -155,6 +155,19 @@ class SettlementNotifyMixin:
                                       source="x402_invoice",
                                       session_id=inv.get("session_id") or None)
 
+    async def settle_order_now(self, request_id: str) -> bool:
+        """F11: move the order of ONE just-completed ``offer_order`` invoice now,
+        through the same claim-then-notify path as the tick (`_settle_order`), so
+        a `/pay` completion pays its order with or without a running watcher. The
+        wake claim keeps it exactly-once across processes. True when it ran."""
+        from modules.x402 import invoicing
+        inv = await invoicing.settled_unnotified_invoice(request_id, db=self._db)
+        if not inv or inv.get("kind") != "offer_order":
+            return False
+        if await self._skip_unvalued_settlement(inv):
+            return False
+        return await self._wake_once(inv, self._settle_order)
+
     async def _settle_order(self, inv: dict) -> None:
         """099: an order bought a DELIVERABLE. It never wakes a session (a self-wake
         cannot sign); the order service pays the order and writes ONE fulfillment
@@ -401,13 +414,13 @@ class SettlementNotifyMixin:
             return False
     def _goal_board(self):
         """The durable-ask store the approve-mode renewal flow rides
-        (`agents.task.goals.board.GoalBoard`). Lazily built against the SAME
+        (`modules.goals.board.GoalBoard`). Lazily built against the SAME
         `goals.db` the owner CLI / dispatcher use unless a test injected one
         via the constructor's `goal_board` seam."""
         if self._goal_board_override is not None:
             return self._goal_board_override
         import os
-        from agents.task.goals.board import GoalBoard
+        from modules.goals.board import GoalBoard
         from core.runtime_config import get_data_root
         return GoalBoard(goals_db_path(get_data_root()))
     async def _push_owner_notice(self, user_id: str, text: str,

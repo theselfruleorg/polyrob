@@ -15,6 +15,7 @@ from typing import Dict, List, Mapping, Optional
 
 from core.signer.caps import SignerConfig, render_signer_toml
 from core.signer import DEFAULT_SOCKET, DEFAULT_STATE_DIR
+from core.wallet.onchain import FUNDABLE_VENUES
 
 _RPC_PREFIX = "DEFI_EVM_RPC_"
 
@@ -115,7 +116,7 @@ def build_config(env: Mapping[str, str], *, data_dir: str, agent_uids: List[int]
         socket=DEFAULT_SOCKET, state_dir=DEFAULT_STATE_DIR,
         client_uids=tuple(int(u) for u in agent_uids), socket_group=socket_group,
         network=network if network in ("testnet", "mainnet") else "testnet",
-        operational_venue=venue if venue in ("treasury", "x402") else "treasury",
+        operational_venue=venue if venue in FUNDABLE_VENUES else "treasury",
         expected_addresses=identity_record(data_dir),
         sweep_destination=dest if dest and dest.startswith("0x") and len(dest) == 42 else None,
         sweep_tokens=tokens, env=pins)

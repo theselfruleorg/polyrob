@@ -224,7 +224,7 @@ class HITLManager:
             self._output_callbacks.append(callback)
 
     def reset_output_stream(self) -> None:
-        from modules.llm.brain_scrubber import StreamingBrainScrubber
+        from core.brain_scrubber import StreamingBrainScrubber
         self._output_scrubber = StreamingBrainScrubber()
 
     async def stream_output(self, chunk: str) -> None:

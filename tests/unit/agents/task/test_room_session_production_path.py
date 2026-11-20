@@ -61,7 +61,7 @@ def _seed_owner_docs(data_dir):
     (identity / "user_owner1").mkdir(parents=True, exist_ok=True)
     (identity / "SELF_CONTEXT.md").write_text(f"# Soul\n{_SOUL_MARKER}\n")
     (identity / "user_owner1" / "OWNER.md").write_text(
-        f"# Owner facts\n{_OWNER_DOC_MARKER}\n")
+        f"# Owner rules\n{_OWNER_DOC_MARKER}\n")
 
 
 @pytest.fixture

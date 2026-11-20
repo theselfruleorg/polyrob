@@ -8,7 +8,7 @@ gated tool call too, by queuing it as a durable ask instead of blocking a thread
 
 Reuses EXISTING seams — no parallel mechanisms:
   - the durable asks store the goal-board budget/blocker escalation gates already
-    write to (`agents.task.goals.board.GoalBoard` — ``kind='ask'`` rows in
+    write to (`modules.goals.board.GoalBoard` — ``kind='ask'`` rows in
     ``goals.db``; `create_ask`/`asks`/`decide_ask`/`consume_ask_grant`);
   - the ONE owner-notification rail (`core.surfaces.user_delivery.deliver_user_message`
     — the same primitive `core.self_evolution.push_owner_message` and the goal
@@ -57,23 +57,14 @@ TOOL_APPROVAL_ASK_KIND = "tool_approval"
 #: W1: the buy identity gate's "which contract is real?" ask
 #: (``tools/defi/token_identity_ask.py``) — listed and decided with the rest.
 TOKEN_IDENTITY_ASK_KIND = "token_identity"
-TAP_PREFIX = "tap-"
 DEFAULT_POLL_INTERVAL_SEC = 2.0
 
 
-def tap_display_id(ask_id: str) -> str:
-    """The namespaced id a `tool_approval` ask is SHOWN as (Telegram `/pending`,
-    `polyrob owner pending`) — disambiguates from a self-evolution proposal id in
-    the single-id `/approve <id>` / `/reject <id>` dispatch (no explicit `kind`)."""
-    return f"{TAP_PREFIX}{ask_id}"
-
-
-def strip_tap_prefix(display_id: str) -> Optional[str]:
-    """Inverse of :func:`tap_display_id`. None when `display_id` isn't tap-prefixed."""
-    if isinstance(display_id, str) and display_id.startswith(TAP_PREFIX):
-        real = display_id[len(TAP_PREFIX):]
-        return real or None
-    return None
+# proposal 125 S10: the tap-id helpers and the resolver live in approval_target
+# (the one seat resolver, outside the tools/cron import cycle); importable from here.
+from tools.controller.approval_target import (  # noqa: E402,F401
+    TAP_PREFIX, resolve_pending_target, strip_tap_prefix, tap_display_id,
+)
 
 
 def _normalize_params(params: Any) -> Dict[str, Any]:
@@ -162,7 +153,7 @@ def list_pending_tool_approvals(board: Any, user_id: str) -> List[Dict[str, Any]
     ``core.self_evolution.list_pending``'s items (``kind``/``id``/``chars``/``preview``)
     so a caller (Telegram ``/pending``, ``polyrob owner pending``) can concatenate the
     two lists and dispatch on them uniformly."""
-    from agents.task.goals.board import ASK_OPEN
+    from modules.goals.board import ASK_OPEN
     out: List[Dict[str, Any]] = []
     for a in board.asks(user_id=user_id, status=ASK_OPEN):
         payload = a.payload or {}
@@ -259,7 +250,7 @@ def all_pending(*, user_id: str, home_dir: Any, instance_id: str,
 
     try:
         if board is None:
-            from agents.task.goals.board import GoalBoard
+            from modules.goals.board import GoalBoard
             board = GoalBoard(_goals_db_path(home_dir))
         items += list_pending_tool_approvals(board, user_id)
     except Exception:
@@ -303,35 +294,6 @@ def all_pending(*, user_id: str, home_dir: Any, instance_id: str,
     return PendingSet(items, unavailable)
 
 
-def resolve_pending_target(target: str, pending: Any) -> Optional[Dict[str, Any]]:
-    """Map what the owner tapped or typed back to ONE item of the live queue.
-
-    Accepts the tappable alias (``p-a1b2c3``), the displayed id, or a
-    ``kind:id`` pair. Returns ``None`` when it names none or more than one \u2014
-    refusing is the only honest answer, because acting on either of two matches
-    decides a proposal the owner never looked at.
-    """
-    from core.self_evolution import resolve_pending_alias
-
-    items = list(getattr(pending, "items", pending) or [])
-    want = str(target or "").strip()
-    if not want:
-        return None
-    hit = resolve_pending_alias(want, items)
-    if hit is not None:
-        return hit
-    from core.self_evolution import split_id_rev
-    want, typed_rev = split_id_rev(want)  # 098 review: `<id>@<rev>` -> seat_rev
-    exact = [it for it in items if str(it.get("id", "")) == want]
-    if len(exact) == 1:
-        return dict(exact[0], seat_rev=typed_rev) if typed_rev else exact[0]
-    if typed_rev:
-        return None
-    qualified = [it for it in items
-                 if f"{it.get('kind', '')}:{it.get('id', '')}" == want]
-    return qualified[0] if len(qualified) == 1 else None
-
-
 def decide_pending(kind: str, item_id: Any, *, approve: bool, user_id: str,
                    home_dir: Any, instance_id: str, board: Any = None,
                    correspondent_registry: Any = None,
@@ -357,13 +319,13 @@ def decide_pending(kind: str, item_id: Any, *, approve: bool, user_id: str,
         return decide(item_id, approve=approve)
     if kind == TOKEN_IDENTITY_ASK_KIND:
         if board is None:
-            from agents.task.goals.board import GoalBoard
+            from modules.goals.board import GoalBoard
             board = GoalBoard(_goals_db_path(home_dir))
         from tools.defi.token_identity_ask import decide_item
         return decide_item(board, item_id, approve=approve, user_id=user_id)
     if kind == TOOL_APPROVAL_ASK_KIND:
         if board is None:
-            from agents.task.goals.board import GoalBoard
+            from modules.goals.board import GoalBoard
             board = GoalBoard(_goals_db_path(home_dir))
         # 030 WS-E3: pass the live agent so an approval wakes the originating
         # session (resume-on-grant) instead of waiting for a byte-identical
@@ -806,7 +768,7 @@ async def run_approved_outbound(metadata: Dict[str, Any], user_id: str,
     sent it, or a second drain, finds the grant consumed and sends nothing.
     Returns True when the row is finished (sent, already sent, or not sendable —
     the owner is told), False to retry later (no sender in this process yet)."""
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     ask_id = str(metadata.get("ask_id") or "")
     db = metadata.get("goals_db")
     board = GoalBoard(db) if db else GoalBoard(_goals_db_path(None))
@@ -1021,7 +983,7 @@ def make_payment_auto_notify_hook(container: Any, payment_tools: Iterable[str],
             return
         await _push_owner_notification(
             container, user_id,
-            _auto_approval_text(action_name, request_id, amount, purpose))
+            _auto_approval_text(action_name, request_id, amount, purpose or _act_why(params)))
 
     return _hook
 
@@ -1037,6 +999,19 @@ def _emit_tool_auto_approved(user_id: str, session_id: str, action_name: str) ->
                 source="approval", attrs={"action": action_name})
     except Exception:
         logger.debug("auto_notify: audit event skipped", exc_info=True)
+
+
+def _act_why(params: Any) -> str:
+    """122 W1: the act's reason — its ``why`` param, else the one the Controller bound."""
+    from core.act_reason import clean_why, current_act_why
+    p = params if isinstance(params, dict) else {}
+    return clean_why(p.get("why")) or current_act_why()
+
+
+def _auto_ran_text(action_name: str, params: Any) -> str:
+    """The act-and-report line: what ran, the lane that let it run, and why (122 W1)."""
+    return (f"[auto-approved] {action_name} · lane: reported (AUTONOMY_MODE=autonomous) "
+            f"· why: {_act_why(params) or 'not given'}")
 
 
 def make_tool_auto_notify_hook(container: Any, tools: Iterable[str],
@@ -1076,9 +1051,7 @@ def make_tool_auto_notify_hook(container: Any, tools: Iterable[str],
         user_id = getattr(context, "user_id", None) or ""
         session_id = getattr(context, "session_id", None) or ""
         _emit_tool_auto_approved(user_id, session_id, action_name)
-        await _push_owner_notification(
-            container, user_id,
-            f"[auto-approved] {action_name} ran under AUTONOMY_MODE=autonomous")
+        await _push_owner_notification(container, user_id, _auto_ran_text(action_name, params))
 
     return _hook
 
@@ -1157,7 +1130,7 @@ class OwnerQueueApprover(ApprovalProvider):
     def _board(self):
         if self._board_override is not None:
             return self._board_override
-        from agents.task.goals.board import GoalBoard
+        from modules.goals.board import GoalBoard
         return GoalBoard(_goals_db_path(self._home_dir))
 
     @staticmethod
@@ -1172,7 +1145,7 @@ class OwnerQueueApprover(ApprovalProvider):
         owner decision on an identical prior request. Returns True at most once
         per grant — a second identical call after consumption falls through to a
         fresh ask (`consume_ask_grant` is the atomic single-winner claim)."""
-        from agents.task.goals.board import ASK_FULFILLED
+        from modules.goals.board import ASK_FULFILLED
         ttl_hours = self._grant_ttl_hours()
         now = time.time()
         for a in board.asks(user_id=user_id, status=ASK_FULFILLED):
@@ -1196,7 +1169,7 @@ class OwnerQueueApprover(ApprovalProvider):
 
     @staticmethod
     def _find_open_ask(board: Any, user_id: str, req_hash: str):
-        from agents.task.goals.board import ASK_OPEN
+        from modules.goals.board import ASK_OPEN
         for a in board.asks(user_id=user_id, status=ASK_OPEN):
             payload = a.payload or {}
             if payload.get("ask_kind") == TOOL_APPROVAL_ASK_KIND \
@@ -1329,6 +1302,17 @@ class OwnerQueueApprover(ApprovalProvider):
             return True
 
         ask = self._find_open_ask(board, user_id, req_hash)
+        if ask is None and hash_params is None and not goal_turn:
+            # 126 wave 5 (owner, 2026-11-21): a MONEY call is no longer parked for a
+            # grant the agent's retry redeems — it is ONE call card holding the exact
+            # call, and the owner's Confirm runs it. An ask already open (made before),
+            # a non-money tool and a GOAL run keep this queue (its ask blocks the goal
+            # and the goal's next run redeems the grant, so the goal knows the outcome).
+            from tools.controller.call_card_run import card_for_parked_call
+            carded = await card_for_parked_call(action_name, params, context,
+                                                self._resolve_container())
+            if carded:
+                return ApprovalOutcome("carded", carded)
         created_new = ask is None
         if ask is not None:
             # REUSING an open ask: widen the goal list rather than leaving it as

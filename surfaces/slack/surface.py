@@ -12,7 +12,7 @@ from typing import Any
 
 from core.surfaces.envelopes import (OutboundMessage, SendResult,
                                      SurfaceCapabilities)
-from core.surfaces.surface import Surface, split_message
+from core.surfaces.surface import Surface
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ class SlackSurface(Surface):
             supports_edit=True,
             is_multi_tenant=True,
             max_message_bytes=_SLACK_MAX,
-            markdown_flavor="none",    # Slack mrkdwn accepts plain text safely
+            markdown_flavor="mrkdwn",  # agent markdown -> Slack mrkdwn (core.surfaces.rendering)
             media_out=True,            # 030 D6: external-upload flow
             supports_actions=True,     # order 0017: explicit actions → Block Kit buttons (blocks.py)
         )
@@ -64,8 +64,10 @@ class SlackSurface(Surface):
             from surfaces.slack.blocks import SECTION_MAX, render_blocks
             has_actions = bool(render_blocks(" ", msg.actions))   # explicit actions only
             # A section holds 3000 chars: with buttons the text splits to that.
-            chunks = split_message(msg.text or "",
-                                   SECTION_MAX if has_actions else _SLACK_MAX)
+            # The agent's markdown becomes Slack mrkdwn (core.surfaces.rendering).
+            from core.surfaces.rendering import render_for_flavor
+            chunks = render_for_flavor(msg.text or "", self.capabilities.markdown_flavor,
+                                       SECTION_MAX if has_actions else _SLACK_MAX)
             for i, chunk in enumerate(chunks):
                 # The buttons ride the LAST chunk; the text keeps the commands.
                 extra = ({"blocks": render_blocks(chunk, msg.actions)}

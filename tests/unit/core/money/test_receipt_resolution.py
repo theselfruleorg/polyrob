@@ -143,3 +143,36 @@ def test_a_success_counts_against_the_caps(empty_gate):
 def test_a_timed_out_or_unread_receipt_is_left_for_the_resolver(empty_gate, status):
     _book(empty_gate, status)
     assert [e["result_ref"] for e in open_receipts(empty_gate.audit_log)] == [TX2]
+
+
+class _SharedSink(list):
+    """A durable-sink stand-in: ``refresh`` and ``healthy`` like the shared file."""
+
+    def __init__(self, rows, *, healthy=True, raises=False):
+        super().__init__(rows)
+        self.healthy = healthy
+        self._raises = raises
+
+    def refresh(self):
+        if self._raises:
+            raise OSError("audit file unreadable")
+        return False
+
+
+@pytest.mark.parametrize("kw", [{"healthy": False}, {"raises": True}])
+def test_note_receipt_refuses_on_an_unsynced_ledger(gate, kw):
+    """Proposal 125 S9 B-M7: an unhealthy or raising shared sink cannot say the
+    entry is still pending — resolve nothing, append nothing."""
+    entry = next(e for e in gate.audit_log if e.get("result_ref") == TX)
+    gate._audit = _SharedSink(gate.audit_log, **kw)
+    before = len(gate._audit)
+    assert gate.note_receipt(entry, "reverted") is False
+    assert len(gate._audit) == before
+    assert receipt_states(gate._audit).get(TX) == "pending_receipt"
+
+
+def test_note_receipt_on_a_healthy_shared_sink_still_resolves(gate):
+    entry = next(e for e in gate.audit_log if e.get("result_ref") == TX)
+    gate._audit = _SharedSink(gate.audit_log)
+    assert gate.note_receipt(entry, "confirmed") is True
+    assert receipt_states(gate._audit).get(TX) == "confirmed"

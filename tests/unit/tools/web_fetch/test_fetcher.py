@@ -2,7 +2,7 @@ from urllib.parse import urlparse
 
 import pytest
 
-from tools.web_fetch.fetcher import safe_fetch, WebFetchError, FetchResult
+from core.security.safe_fetch import safe_fetch, WebFetchError, FetchResult
 
 
 # A fake aiohttp-ish response/session so tests never touch the network.
@@ -119,5 +119,5 @@ async def test_redirect_cap():
 
 def test_accept_header_admits_json():
 	"""A JSON endpoint must not be content-negotiated away to HTML (D1)."""
-	from tools.web_fetch.fetcher import _DEFAULT_HEADERS
+	from core.security.safe_fetch import _DEFAULT_HEADERS
 	assert "application/json" in _DEFAULT_HEADERS["Accept"]

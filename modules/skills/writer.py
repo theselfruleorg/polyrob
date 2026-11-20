@@ -268,7 +268,7 @@ class SkillWriterMixin:
         # hidden instruction set can't be smuggled past the plain-text .pending
         # review — the docs (SKILL_AUTHORING_STANDARD §8) promise the unicode check.
         try:
-            from modules.memory.task.threat_scan import (
+            from core.security.threat_scan import (
                 is_skill_content_suspicious as is_suspicious,
             )
         except Exception:
@@ -895,7 +895,7 @@ class SkillWriterMixin:
         if not check.is_valid:
             return SkillWriteResult(skill_id, False, errors=check.errors)
         try:
-            from modules.memory.task.threat_scan import is_skill_content_suspicious
+            from core.security.threat_scan import is_skill_content_suspicious
             added = self._added_lines(prior, content)
             if added and is_skill_content_suspicious(added):
                 return SkillWriteResult(skill_id, False,

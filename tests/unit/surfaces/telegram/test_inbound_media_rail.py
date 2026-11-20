@@ -55,7 +55,7 @@ class _FakeAgent:
 @pytest.fixture()
 def workspace(tmp_path, monkeypatch):
     """Point the path manager's workspace at a temp dir for every session id."""
-    from agents.task import path as path_mod
+    from core import session_paths as path_mod
 
     root = tmp_path / "ws"
 

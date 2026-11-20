@@ -226,7 +226,7 @@ def _enable(monkeypatch):
 
 
 def _fake_pm(monkeypatch, subdir_path):
-    """Stub agents.task.path.pm() so the tool never touches the real path manager."""
+    """Stub core.session_paths.pm() so the tool never touches the real path manager."""
     calls = []
 
     class _FakePM:
@@ -235,7 +235,7 @@ def _fake_pm(monkeypatch, subdir_path):
             os.makedirs(subdir_path, exist_ok=True)
             return subdir_path
 
-    monkeypatch.setattr("agents.task.path.pm", lambda: _FakePM())
+    monkeypatch.setattr("core.session_paths.pm", lambda: _FakePM())
     return calls
 
 
@@ -246,7 +246,7 @@ async def test_flag_off_no_snapshot_dir_created_byte_identical(tmp_path, monkeyp
     def _boom():
         raise AssertionError("pm() must never be called when CODING_SNAPSHOT_ENABLED is off")
 
-    monkeypatch.setattr("agents.task.path.pm", _boom)
+    monkeypatch.setattr("core.session_paths.pm", _boom)
     (tmp_path / "x.py").write_text("a = 1\n")
     t = _tool(tmp_path)
     res = await t.str_replace(
@@ -417,7 +417,7 @@ async def test_flag_on_but_no_session_id_skips_snapshot(tmp_path, monkeypatch):
     def _boom():
         raise AssertionError("pm() must never be called without a resolvable session_id")
 
-    monkeypatch.setattr("agents.task.path.pm", _boom)
+    monkeypatch.setattr("core.session_paths.pm", _boom)
     (tmp_path / "x.py").write_text("a = 1\n")
     t = _tool(tmp_path)
     ctx = SimpleNamespace(

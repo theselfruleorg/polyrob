@@ -1,4 +1,4 @@
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from agents.task.goals.context import build_goal_run_task, extract_outcome_line
 
 
@@ -82,7 +82,7 @@ def test_goal_run_task_teaches_deliverable_attachment():
     """The agent-messaged-first case suppresses the framework completion push
     (`not run.user_messages`), so the AGENT itself must know to attach files —
     today's x402-recon flow sent `media_paths=None` while naming the file."""
-    from agents.task.goals.board import Goal
+    from modules.goals.board import Goal
     from agents.task.goals.context import build_goal_run_task
     text = build_goal_run_task(Goal(id="g", user_id="u", title="t"))
     assert "media_paths" in text

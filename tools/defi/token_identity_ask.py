@@ -45,7 +45,7 @@ _NOTICES: set = set()
 
 
 def _board(container: Any = None):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from core.runtime_paths import container_data_home, goals_db_path
     home = container_data_home(container) if container is not None else None
     return GoalBoard(goals_db_path(home))

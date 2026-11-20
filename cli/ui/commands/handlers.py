@@ -146,10 +146,10 @@ async def _h_usage(ctx: CommandContext) -> None:
     already accumulated into ``SessionState`` and say which source we show.
     """
     # 2026-10-14 D6: the owner spend view — the SAME lines Telegram and the
-    # console print (surfaces/telegram/usage_ops.py). `/usage <days>` shows it
+    # console print (cron/usage_reply.py). `/usage <days>` shows it
     # alone; a bare `/usage` shows this chat's breakdown first, then the view.
     from cli.ui.commands.h_owner import _admin_data_dir, _tenant
-    from surfaces.telegram.usage_ops import usage_reply
+    from cron.usage_reply import usage_reply
     args = list(ctx.args or [])
     try:
         view = usage_reply(_tenant(ctx), _admin_data_dir(write=False), args)
@@ -596,7 +596,7 @@ async def _h_model(ctx: CommandContext) -> None:
 def _h_cwd(ctx: CommandContext) -> None:
     """Show the session's workspace directory."""
     try:
-        from agents.task.path import pm
+        from core.session_paths import pm
 
         path = pm().get_workspace_dir(ctx.session_id, ctx.user_id)
         ctx.emit(str(path), title="cwd")
@@ -606,9 +606,9 @@ def _h_cwd(ctx: CommandContext) -> None:
 
 async def _h_memory(ctx: CommandContext) -> None:
     """``/memory [search <query> | scopes]`` — the chat seat's own reply
-    (``surfaces.telegram.self_memory_ops.memory_reply``, 113 W6 G-6): the
+    (``modules.memory.self_memory_reply.memory_reply``, 113 W6 G-6): the
     active provider, a cross-session recall, or the quarantined scopes."""
-    from surfaces.telegram.self_memory_ops import memory_reply
+    from modules.memory.self_memory_reply import memory_reply
     ctx.emit(await memory_reply(ctx.user_id or "local", list(ctx.args or [])), title="memory")
 
 
@@ -650,7 +650,7 @@ def _session_info_rows(ctx: CommandContext) -> list:
 
     workspace = "—"
     try:
-        from agents.task.path import pm
+        from core.session_paths import pm
 
         workspace = str(pm().get_workspace_dir(ctx.session_id, ctx.user_id))
     except Exception:
@@ -840,7 +840,7 @@ def _resolve_feed_dir(ctx: CommandContext, session_id: str) -> Optional[Path]:
     # Instead we construct the candidate path from the pm data_root without any
     # mkdir calls and add it only when the dir is already present.
     try:
-        from agents.task.path import pm
+        from core.session_paths import pm
 
         _pm = pm()
         clean_id = _pm.clean_session_id(session_id)
@@ -873,13 +873,13 @@ def _resolve_feed_dir(ctx: CommandContext, session_id: str) -> Optional[Path]:
 def _h_apps(ctx: CommandContext) -> None:
     """``/apps [list|show|approve|reject|kill|logs <slug>]`` (E5).
 
-    Thin over ``surfaces.telegram.apps_ops.apps_reply`` — the SAME helper the
-    phone renders, exactly as ``/goal`` consumes ``owner_ops.goal_reply``. The
+    Thin over ``core.app_service.owner_ops.apps_reply`` — the SAME helper the
+    phone renders, exactly as ``/goal`` consumes ``cron.owner_goals.goal_reply``. The
     REPL used to be list-only, so an app waiting on an owner address could be
     SEEN here and only approved somewhere else.
     """
     from cli._admin_home import admin_data_dir
-    from surfaces.telegram.apps_ops import apps_reply
+    from core.app_service.owner_ops import apps_reply
     args = list(ctx.args or [])
     # `via` IS the audit field that records WHERE the decision was made, and
     # approve/reject/kill/start/remove MUTATE the shared home (057 WS-G euid rule).
@@ -950,7 +950,7 @@ def _h_todos(ctx: CommandContext) -> None:
     """Show todos from the agent's session todo file."""
     import re
     from cli.ui import candy
-    from agents.task.path import pm
+    from core.session_paths import pm
 
     # Resolve the SAME file the task tool writes (session-scoped), not ./todo.md in
     # CWD — the agent never writes there, so the old path always showed "no todos".
@@ -986,7 +986,7 @@ def _h_todos(ctx: CommandContext) -> None:
 
 def _h_logs(ctx: CommandContext) -> None:
     """Show recent log entries for the session."""
-    from agents.task.path import pm
+    from core.session_paths import pm
 
     # Resolve via pm() (the SSOT: data_root/user/session/logs) rather than a
     # hand-rolled CWD glob whose depth never matched the real layout.
@@ -1030,7 +1030,7 @@ def _h_export(ctx: CommandContext) -> None:
     output = args[1] if len(args) > 1 else None
 
     from datetime import datetime
-    from agents.task.path import pm
+    from core.session_paths import pm
 
     # Resolve the session dir via pm() (works under POLYROB_DATA_DIR too, unlike the
     # old hardcoded <cwd>/.polyrob/sessions glob).

@@ -51,10 +51,16 @@ def test_refusals_is_pure():
 
 
 def test_threat_report_is_pure():
-    """045 lane 3. Same contract: the scanner is INJECTED by the caller
-    (layering ratchet — core never imports modules.*), so this module must
-    never reach for `modules.memory.task.threat_scan` itself."""
+    """045 lane 3. Same contract: the scanner is INJECTED by the caller, so the
+    report ledger never reaches for an upper tier."""
     _assert_pure("core.security.threat_report")
+
+
+def test_threat_scan_is_pure():
+    """Proposal 125 S21i: the prompt-injection scan is a core module (it moved
+    from the memory module); identity docs, prefs and the self-context writer
+    read it downward, so it must stay stdlib-only."""
+    _assert_pure("core.security.threat_scan")
 
 
 def test_forged_kinds_identity_across_homes():

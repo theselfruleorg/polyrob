@@ -31,6 +31,20 @@ def _value_check_line(basis, amount_usd) -> str:
     return ""
 
 
+def send_facts(decision, *, priced: bool, dry_run) -> dict:
+    """The typed facts of one send (125 S1): ``simulated_usd`` (the caps value,
+    fee included), ``sent_usd`` (what the send moves, the number a declared bound
+    holds), ``unverified`` (below spend grade), ``allowed`` and ``dry_run``. An
+    unpriced send carries None for both values: a placeholder is a cap charge,
+    never a value a seat may bind to."""
+    basis = getattr(decision, "valuation_basis", None)
+    sent = getattr(decision, "value_usd", None)
+    return {"simulated_usd": decision.amount_usd if priced else None,
+            "sent_usd": sent if priced else None,
+            "unverified": basis in ("unpriced", "low_confidence"),
+            "allowed": bool(decision.allowed), "dry_run": bool(dry_run)}
+
+
 def owner_typed_anyway(params, execution_context) -> bool:
     """The owner's extra 'send anyway' step (085 W8, txguard LEAD-3).
 
@@ -157,7 +171,7 @@ async def perform_transfer(tool, params, execution_context=None):
             execution_context=execution_context, tool_self=tool,
             price_fn=tool._price, fallback_price_fn=getattr(tool, "_fallback_price", None),
             forged_fn=_is_forged_or_autonomous_turn,
-            autonomous_ok_fn=_is_autonomous_goal_turn, **guard_kw)
+            autonomous_ok_fn=_is_autonomous_goal_turn, dry_run=bool(params.dry_run), **guard_kw)
 
         basis = getattr(decision, "valuation_basis", None)
         value = ("unknown" if decision.amount_usd is None or basis == "unpriced"
@@ -172,9 +186,16 @@ async def perform_transfer(tool, params, execution_context=None):
                   + _value_check_line(basis, decision.amount_usd) +
                   f"  guard: {decision.reason}\n"
                   f"  lane:  {decision.lane}\n")
+        # 125 S1: the facts a seat binds to, never parsed from the text (the
+        # header carries on-chain text a contract controls). None = not valued.
+        facts = send_facts(decision, priced=value != "unknown", dry_run=params.dry_run)
 
         if not decision.allowed:
-            return tool._ar(content=header + _not_sent_text(decision.lane))
+            from tools.defi.trade_tool import owner_lane_result
+            return await owner_lane_result(
+                tool, execution_context, text=header, lane=decision.lane,
+                dry_run=bool(params.dry_run), value_usd=decision.amount_usd,
+                why=decision.reason, metadata=facts)
 
         # Same gas sizing as _run_guarded (§3a) — a transfer fits the
         # default, but the sized limit is uniformly more honest.
@@ -190,7 +211,7 @@ async def perform_transfer(tool, params, execution_context=None):
 
         if params.dry_run:
             return tool._ar(content=header + (
-                _DRY_RUN_HEAD + " Re-run with dry_run=false to send."))
+                _DRY_RUN_HEAD + " Re-run with dry_run=false to send."), metadata=facts)
 
         try:
             tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
@@ -247,11 +268,11 @@ async def perform_transfer(tool, params, execution_context=None):
     if receipt.succeeded:
         return tool._ar(content=header + (
             f"  RESULT: SENT AND CONFIRMED\n"
-            f"  tx: {tx_hash}\n  block: {receipt.block_number}") + journal)
+            f"  tx: {tx_hash}\n  block: {receipt.block_number}") + journal, metadata=facts)
     if receipt.status == "pending":
         return tool._ar(content=header + (
             f"  RESULT: BROADCAST BUT NOT CONFIRMED within the timeout. The "
-            f"transaction may still land — do NOT retry blindly.\n  tx: {tx_hash}") + journal)
+            f"transaction may still land — do NOT retry blindly.\n  tx: {tx_hash}") + journal, metadata=facts)
     return tool._ar(content=header + (
         f"  RESULT: REVERTED ON-CHAIN — the transfer did NOT happen, but gas "
-        f"was spent.\n  tx: {tx_hash}") + journal)
+        f"was spent.\n  tx: {tx_hash}") + journal, metadata=facts)

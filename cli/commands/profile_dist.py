@@ -38,6 +38,8 @@ from pathlib import Path
 
 import click
 
+from core import fs_copy
+
 _MANIFEST_NAME = "polyrob.profile.yaml"
 
 _DEFAULT_DIST_OWNED = ("characters", "skills", "cron", "mcp.json", _MANIFEST_NAME)
@@ -172,7 +174,7 @@ def _copy_owned(src: Path, home: Path, owned: list, *, replace: bool) -> list:
         if replace and d.exists():
             shutil.rmtree(d) if d.is_dir() else d.unlink()
         if s.is_dir():
-            shutil.copytree(s, d, dirs_exist_ok=True)
+            fs_copy.copy_tree(s, d, dirs_exist_ok=True)
         else:
             d.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(s, d)

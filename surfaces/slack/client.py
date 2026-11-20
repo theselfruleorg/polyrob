@@ -78,7 +78,7 @@ class SlackClient:
                            blocks: Optional[list] = None) -> dict:
         from html import escape
         body: dict = {"channel": await self._resolve_channel(channel),
-                      "text": escape(text, quote=False), "mrkdwn": False,
+                      "text": escape(text, quote=False), "mrkdwn": True,
                       "parse": "none", "link_names": False}
         if blocks:
             body["blocks"] = blocks

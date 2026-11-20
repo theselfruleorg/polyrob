@@ -46,16 +46,13 @@ def _dynamic_default_tools() -> list[str]:
     This is what an unset ``POLYROB_AGENT_TOOLSET`` yields; ``resolve_toolset``
     routes ``"default"`` (and unknown names) here so choosing "default" by name —
     e.g. accepting the `polyrob init` wizard default — is behavior-identical to
-    never setting the env at all. Never raises: a failed dynamic import falls
-    back to the static base.
+    never setting the env at all. The coding gate is a pure tier-0 env read; the
+    anysite gate reads the registered gate (off when its pack is not loaded).
     """
     tools = list(_profile("default:cli"))
-    try:
-        from tools.coding import coding_tools_enabled
-        if coding_tools_enabled():
-            tools.append('coding')
-    except Exception:
-        pass
+    from core.config_policy.capability_toggles import coding_tools_enabled
+    if coding_tools_enabled():
+        tools.append('coding')
     # The anysite gate is registered by the discovery pack in the loader's phase 2
     # (core.tool_gates); unregistered (pack absent / not loaded) reads as off.
     from core.tool_gates import gate_on

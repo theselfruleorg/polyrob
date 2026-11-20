@@ -7,7 +7,7 @@ mainnet wallet. Money tools + no metering = refuse the run with a clear error
 """
 import asyncio
 
-from agents.task.goals.board import Goal, STATUS_READY
+from modules.goals.board import Goal, STATUS_READY
 from agents.task.goals.dispatcher import GoalDispatcher
 
 

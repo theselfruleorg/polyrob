@@ -28,7 +28,7 @@ def test_datagen_export_command(tmp_path, monkeypatch):
     class _FakePM:
         data_root = tmp_path
 
-    monkeypatch.setattr("agents.task.path.pm", lambda: _FakePM())
+    monkeypatch.setattr("core.session_paths.pm", lambda: _FakePM())
     out = tmp_path / "corpus.jsonl"
     result = CliRunner().invoke(
         datagen, ["export", "-o", str(out), "--format", "raw"])

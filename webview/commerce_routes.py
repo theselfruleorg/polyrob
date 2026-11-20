@@ -62,7 +62,7 @@ async def api_offers(request: Request):
         rows = ords.list_orders(user_id=uid, limit=ORDER_LIMIT + 1)
     except Exception as e:  # noqa: BLE001 — an unreadable store is not "no offers"
         logger.warning("offers: the commerce store could not be read", exc_info=True)
-        return JSONResponse({"readable": False, "error": f"{type(e).__name__}: {str(e)[:160]}"})
+        return JSONResponse({"readable": False, "error": type(e).__name__})  # logged, never sent
     return JSONResponse({"readable": True, "offers": offers,
                          "orders": [_order_row(r) for r in rows[:ORDER_LIMIT]],
                          "orders_truncated": len(rows) > ORDER_LIMIT, "user_id": uid})

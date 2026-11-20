@@ -91,13 +91,13 @@ async def test_non_owner_is_refused(home, monkeypatch):
 def test_tainted_session_is_blocked_by_the_capability_gate():
     """A correspondent-tainted session never reaches the action at all (WS-A
     high-impact list) — neither pause nor resume from third-party data."""
-    from agents.task.agent.core.correspondent_gate import _HIGH_IMPACT_NAMES
+    from core.security.high_impact import _HIGH_IMPACT_NAMES
     assert "autonomy_control" in _HIGH_IMPACT_NAMES
 
 
 @pytest.mark.asyncio
 async def test_cancel_goals_cancels_ready_rows(home):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     b = GoalBoard(str(home / "goals.db"))
     g = b.create(user_id="alice", title="held")
     c = _Controller(str(home))
@@ -118,9 +118,9 @@ def test_module_has_no_future_annotations():
 
 
 def test_registered_on_the_real_controller_and_excluded_for_leaves():
-    from tools.controller.delegation import LEAF, delegation_exclusions_for_child
+    from core.delegation_policy import LEAF, delegation_exclusions_for_child
     assert "autonomy_control" in delegation_exclusions_for_child(LEAF)
-    from agents.task.agent.core.correspondent_gate import _HIGH_IMPACT_NAMES
+    from core.security.high_impact import _HIGH_IMPACT_NAMES
     assert "autonomy_control" in _HIGH_IMPACT_NAMES
     src = pathlib.Path("tools/controller/service.py").read_text(encoding="utf-8")
     assert "register_autonomy_control_action(self)" in src

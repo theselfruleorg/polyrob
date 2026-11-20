@@ -44,7 +44,9 @@ describe("chat-open startSession", () => {
     const calls = [];
     const fetcher = async (url, init) => {
       calls.push(JSON.parse(init.body));
-      return { ok: true, status: 200, json: async () => ({ success: true, command_reply: reply }) };
+      return { ok: true, status: 200, json: async () => ({ success: true, command_reply: reply,
+        command_actions: [{ label: "Confirm", command: "/card_0123456789_ok", style: "primary" },
+                          { label: "Cancel", command: "/card_0123456789_no", style: "danger" }] }) };
     };
     document.getElementById("chat-input").value = "/send 1 USDC to x";
     expect(await startSession("/send 1 USDC to x", { fetcher })).toEqual({ ok: true });

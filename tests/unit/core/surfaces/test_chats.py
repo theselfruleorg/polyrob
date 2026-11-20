@@ -201,3 +201,20 @@ def test_a_number_means_the_chat_the_list_shows_before_main_has_a_row(tmp_path):
     _verb(reg, "/chat", "main")
     assert "no messages yet" in _verb(reg, "/rename", "home")["text"]   # main has no row
     assert _verb(reg, "/close", "2")["closed_key"] == key
+
+
+# --- buttons (2026-11-20 Telegram UX review, M12) ------------------------------------ #
+
+def test_chat_buttons_name_every_other_chat_and_offer_a_new_one(reg):
+    _verb(reg, "/new", "research")                     # research is open now
+    lines = [b.line for b in chats.chat_buttons(reg, base_key=BASE_A, user_id="u_a")]
+    assert lines == ["/chat main", "/new"]
+    _verb(reg, "/chat", "main")
+    labels = [b.label for b in chats.chat_buttons(reg, base_key=BASE_A, user_id="u_a")]
+    assert labels == ["research", "+ New chat"]
+
+
+def test_no_chat_buttons_for_another_tenant(reg):
+    _verb(reg, "/new", "research")
+    lines = [b.line for b in chats.chat_buttons(reg, base_key=BASE_A, user_id="u_b")]
+    assert lines == ["/new"]

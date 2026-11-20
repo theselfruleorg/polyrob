@@ -60,7 +60,7 @@ _AUDIENCE_GATED_ONLY = {"defi_data.wallet_holdings",
 
 
 def test_only_allowlisted_reads_on_non_money_tools():
-    from agents.task.agent.core.correspondent_gate import is_high_impact
+    from core.security.high_impact import is_high_impact
     from core.tool_capabilities import ids_with
     from core.verb_policy_rows import CORE_VERB_ROWS
     for verb, (_m, _c, action, _p) in R.READ_VERBS.items():
@@ -76,7 +76,7 @@ def test_only_allowlisted_reads_on_non_money_tools():
 
 def test_cron_scheduling_is_closed_to_correspondents_and_rooms():
     """The premise of _AUDIENCE_GATED_ONLY."""
-    from agents.task.agent.core.correspondent_gate import is_high_impact_call
+    from core.security.high_impact import is_high_impact_call
     from core.verb_policy_rows import CORE_VERB_ROWS
     assert CORE_VERB_ROWS["cronjob"]["cronjob_schedule"].get("room_denied")
     assert is_high_impact_call("cronjob_schedule", "cronjob")

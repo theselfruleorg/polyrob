@@ -74,7 +74,11 @@ LIVE_STATUSES = ("scheduled", "running", "paused")
 # Owner-facing helpers every seat shares (080 WS-2). One text per fact.
 # ---------------------------------------------------------------------------
 
-def scheduler_off_note() -> str:
+#: The chat-seat line that turns scheduled jobs on (a chat verb, never a shell command).
+SCHEDULER_ON_CHAT_LINE = "/config set AUTONOMY_POSTURE full"
+
+
+def scheduler_off_note(seat: str = "terminal") -> str:
     """"" when the scheduler runs; else the ONE sentence every seat prints.
 
     Before 080 three seats named three different remedies for this one state
@@ -90,6 +94,9 @@ def scheduler_off_note() -> str:
         logger.warning("scheduler probe failed", exc_info=True)
         return (f"I could not check whether the scheduler is on ({type(exc).__name__}) "
                 f"— the job is stored, but I cannot promise that anything will run it.")
+    if seat == "chat":   # 2026-11-20 UX review H9: a phone cannot run a shell command
+        return ("Scheduled jobs are turned off, so nothing will run this job. Turn them on: "
+                f"`{SCHEDULER_ON_CHAT_LINE}` (it applies after /restart).")
     from core.remedy import flag_command
     return ("The scheduler is off — nothing will run this job; turn it on with "
             f"`{flag_command('AUTONOMY_POSTURE', 'full')}` (takes effect: restart).")
@@ -541,6 +548,13 @@ class CronService:
                                                  "precheck")
                                         and v is not None})
             payload_updates.update(checked)
+            # A read job only tells the owner; a precheck WAKES the agent on the same
+            # read. Adding a precheck to a read job makes it the agent's watch (pool
+            # drain 2026-11-20: the agent asked for exactly this, was refused, and its
+            # position kept a watch that only ever alerted, 6 h late).
+            if (payload_updates.get("precheck") and current.get("read_verb")
+                    and "read_verb" not in payload_updates):
+                payload_updates["read_verb"] = None
             after = {**(job.payload or {}), **payload_updates}
             _no_mixed_kinds({k: v for k, v in after.items() if v is not None})
             if schedule_spec is None and not _interval_floor(

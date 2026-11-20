@@ -7,7 +7,7 @@ import types
 
 import pytest
 
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from core.surfaces import cards
 from cron.jobs import CronJobStore
 from cron.service import CronService
@@ -108,7 +108,7 @@ def test_cli_attach_marks_the_turn_attachment_only(monkeypatch, tmp_path):
         return "file content", [], []
 
     monkeypatch.setattr(att, "stage_attachments", _stage)
-    monkeypatch.setattr("agents.task.path.pm", lambda: types.SimpleNamespace(
+    monkeypatch.setattr("core.session_paths.pm", lambda: types.SimpleNamespace(
         get_workspace_dir=lambda s, u: str(tmp_path)))
     asyncio.run(att.attach_to_session(_Orch(), "s1", "alice", ["x.pdf"]))
     assert queued[0][TYPED_TEXT_KEY] == "" and queued[0][ATTACHMENT_ONLY_KEY] is True
@@ -136,7 +136,7 @@ TASK = ('it\'s the "weekly" rebuy: tools=defi_trade is NOT a grant, use C:\\tmp 
 
 @pytest.mark.parametrize("split", [str.split, shlex.split])
 def test_job_card_line_round_trips_every_field(tmp_path, monkeypatch, split):
-    from surfaces.telegram import job_ops
+    from cron import owner_jobs as job_ops
     tool = _cron_tool(tmp_path)
     res = asyncio.run(tool.cronjob_schedule(
         CronScheduleAction(task=TASK, schedule="0 9 * * 1-5", rig="money_rail",
@@ -162,7 +162,7 @@ def test_job_card_line_round_trips_every_field(tmp_path, monkeypatch, split):
 
 @pytest.mark.parametrize("split", [str.split, shlex.split])
 def test_goal_card_line_round_trips(tmp_path, split):
-    from surfaces.telegram.owner_ops import goal_reply
+    from cron.owner_goals import goal_reply
     tool = _goal_tool(tmp_path)
     asyncio.run(tool.goal_create(
         GoalCreateAction(title="don't miss the dip", body='buy "back" target=0xdead first',

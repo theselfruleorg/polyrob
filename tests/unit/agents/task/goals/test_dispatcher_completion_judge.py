@@ -8,7 +8,7 @@ directive: capability/platform knowledge lives in agent memory/skills):
 """
 import asyncio
 
-from agents.task.goals.board import Goal, STATUS_BLOCKED, STATUS_READY
+from modules.goals.board import Goal, STATUS_BLOCKED, STATUS_READY
 from agents.task.goals.dispatcher import GoalDispatcher
 
 

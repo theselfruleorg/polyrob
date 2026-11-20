@@ -82,7 +82,7 @@ def _bridge(monkeypatch, body):
 
     monkeypatch.setattr(bv, "perform_bridge", _perform)
     monkeypatch.setattr(tt, "DefiTradeTool", lambda: object())
-    from surfaces.telegram.owner_ops import bridge_reply
+    from tools.defi.owner_verbs.bridge import bridge_reply
     return asyncio.run(bridge_reply("alice", "", ["robinhood", "base", "0.13"]))
 
 
@@ -97,7 +97,7 @@ def test_bridge_good_quote_keeps_its_go_hint(monkeypatch):
 
 
 def test_token_and_claim_seats_share_the_rule():
-    from surfaces.telegram.token_ops import _render
+    from tools.defi.owner_verbs.token import _render
     refused = SimpleNamespace(error=None, extracted_content=_NOT_SENT)
     good = SimpleNamespace(error=None, extracted_content="deploy quote")
     assert "Add `go`" not in _render(refused, retry_hint="/deploy X 1 go")
@@ -123,7 +123,7 @@ def test_a_card_tap_is_recorded_as_its_stored_line(env, caplog):
     agent = _agent(env.dir)
     reply = _run(agent, f"/send 1 native to {ADDR} on ethereum")
     card = cards.store().get(reply.card_id)
-    with caplog.at_level(logging.INFO, logger="surfaces.telegram.card_ops"):
+    with caplog.at_level(logging.INFO, logger="surfaces.card_press"):
         out = _run(agent, f"/card_{card.card_id}_ok")
     assert "SENT" in reply_text(out)
     rows = _rows(agent)

@@ -149,6 +149,18 @@ async def _require_owner_approval(tool, *, params_summary: dict,
     box. A timeout leaves the ask OPEN and the grant redeemable by the next run.
     """
     import asyncio
+    # 126 wave 5 (owner, 2026-11-21): the live bridge above the ceiling is ONE owner
+    # card holding this exact call; its Confirm runs it as the owner seat. The queue
+    # below stays for a call no card can carry and for an autonomous run (a goal gets
+    # no card; its durable ask blocks the goal and the next run redeems the grant).
+    try:
+        from tools.controller.call_card_run import owner_lane_card
+        card = await owner_lane_card(tool, execution_context, title="Bridge",
+                                     why="Above the autonomous ceiling: the owner decides.")
+    except Exception:  # noqa: BLE001
+        card = None
+    if card is not None:
+        return False, str(card.extracted_content)
     try:
         from tools.controller.approval import approval_wait_timeout_sec
         from tools.controller.approval_queue import OwnerQueueApprover
@@ -661,12 +673,17 @@ async def perform_bridge(tool, params, execution_context=None):
             # two different problems. The header is the one copy.
             return tool._ar(content=header + "  RESULT: NOT SENT.")
 
-    amount_usd = svm_usd if svm_origin else quote.amount_in_usd
-    if (not svm_origin and amount_usd is not None and prepared is not None
-            and getattr(prepared, "amount_usd", None) is not None):
+    def _booked_usd(prepared_leg):
         # The guard's spend-grade figure when it is higher than Relay's (the
         # SVM origin books the same max). Over-counting is the safe direction.
-        amount_usd = max(float(prepared.amount_usd), float(amount_usd))
+        # ONE rule for the first prepare and the re-prepare after the owner wait.
+        figure = svm_usd if svm_origin else quote.amount_in_usd
+        if (not svm_origin and figure is not None and prepared_leg is not None
+                and getattr(prepared_leg, "amount_usd", None) is not None):
+            figure = max(float(prepared_leg.amount_usd), float(figure))
+        return figure
+
+    amount_usd = _booked_usd(prepared)
     if amount_usd is None and not params.dry_run:
         # The ledger is the only place every OTHER money verb sees this spend
         # against ITS cap. Booking an unknown as 0.00 would silently widen every
@@ -686,11 +703,12 @@ async def perform_bridge(tool, params, execution_context=None):
         # expect one that does.
         _dry_ceiling = _autonomous_ceiling(execution_context)
         _over = amount_usd is not None and amount_usd > _dry_ceiling
-        return tool._ar(content=header + (
+        from tools.base_tool import dry_run_result
+        return dry_run_result(tool, header + (
             f"  lane:   {'owner queue — above' if _over else 'autonomous — within'} "
             f"the ${_dry_ceiling:,.2f} ceiling\n"
             "  phase 2 : would assert the measured arrival against the floor\n"
-            "\n[DRY RUN] nothing was broadcast."))
+            "\n[DRY RUN] nothing was broadcast."), amount_usd)
 
     # RPC trust, the `solana_swap` mirror: the blockhash, the simulation and the
     # balance reads all come from the RPC, so a shared public endpoint cannot be
@@ -819,6 +837,18 @@ async def perform_bridge(tool, params, execution_context=None):
             if not prepared.ok:
                 return tool._ar(content=header + "  re-check after approval:\n"
                                 + prepared.header + "  RESULT: NOT SENT.")
+            # 125 B-M5: the fresh leg carries a fresh figure; check and book it.
+            approved_usd = amount_usd
+            amount_usd = _booked_usd(prepared)
+            # Audit 2026-11-21 L-9: the owner approved `approved_usd`; a fresh leg
+            # that books more than 5% above it is not the bridge the owner approved.
+            if (approved_usd is not None and amount_usd is not None
+                    and float(amount_usd) > float(approved_usd) * 1.05):
+                return tool._ar(content=header + (
+                    f"  re-check after approval: REFUSED — the fresh leg books "
+                    f"${float(amount_usd):,.2f}, more than 5% above the "
+                    f"${float(approved_usd):,.2f} the owner approved. Quote it again "
+                    f"and ask the owner for the new figure.\n  RESULT: NOT SENT."))
     else:
         if svm_autonomous_origin and not getattr(gate, "has_daily_cap", False):
             # The `solana_swap` bar, for the same reason: an unattended origin
@@ -891,7 +921,9 @@ async def perform_bridge(tool, params, execution_context=None):
                 evm_leg.owner_cleared = bool(_needs_owner) or owner_direct
                 _sent = await _asyncio.to_thread(evm_leg.send, prepared)
             else:
-                _sent = await _asyncio.to_thread(EvmOriginLeg.send, prepared)
+                _sent = await _asyncio.to_thread(
+                    EvmOriginLeg.send, prepared,
+                    owner_cleared=bool(_needs_owner) or owner_direct)
             if _sent.state == "unknown":
                 # It may have left: parked in flight, so the arrival watcher
                 # measures the destination — never FAILED, never "not sent".

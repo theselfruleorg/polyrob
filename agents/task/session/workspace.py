@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional
 
-from agents.task.path import pm
+from core.session_paths import pm
 
 
 class WorkspaceMixin:
@@ -39,7 +39,7 @@ class WorkspaceMixin:
                 return self.session_manager.get_subdirectory(self.session_id, subdir_name, self.user_id)
             else:
                 # Fallback using path manager directly
-                from agents.task.path import pm
+                from core.session_paths import pm
                 return pm().get_subdir(self.session_id, subdir_name, self.user_id)
         except Exception as e:
             self.logger.error(f"Failed to get subdirectory {subdir_name}: {e}")

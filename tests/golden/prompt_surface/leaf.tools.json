@@ -106,7 +106,7 @@
     },
     {
       "name": "message",
-      "sha": "dce9fd246f75"
+      "sha": "bae505d4879a"
     },
     {
       "name": "tool_call",
@@ -122,7 +122,7 @@
     },
     {
       "name": "owner_doc_manage",
-      "sha": "95f8a92c9f32"
+      "sha": "45d5139c9e78"
     },
     {
       "name": "room_moderate",
@@ -134,11 +134,11 @@
     },
     {
       "name": "self_context_manage",
-      "sha": "7ca08bf9fa47"
+      "sha": "f6613c0b7c61"
     },
     {
       "name": "skill_manage",
-      "sha": "0e2b5f77f08e"
+      "sha": "1eb442199328"
     },
     {
       "name": "delegation_status",

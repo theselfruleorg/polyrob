@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from agents.task.path import PathManager
+from core.session_paths import PathManager
 
 
 @pytest.fixture

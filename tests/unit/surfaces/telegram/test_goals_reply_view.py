@@ -5,7 +5,7 @@
 hit the same oldest-rows eviction the agent's ``goal_list`` hit, at 1000 rows.
 Counts come from SQL over every row; the recent list is newest-first.
 """
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from surfaces.telegram.harness import _goals_reply
 
 

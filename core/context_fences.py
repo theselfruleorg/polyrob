@@ -28,7 +28,7 @@ CONTROL_FENCE_TAGS = (
     "recalled-from-past-sessions",  # modules/llm/messages.py RECALL envelope
     "owner-instructions",           # agents/task/agent/prompts.py
     "memory-system",                # agents/task/agent/prompts.py
-    "owner_answer",                 # agents/task/goals/rail_answers.py
+    "owner_answer",                 # modules/goals/rail_answers.py
     # modules/llm/messages.py _ORIGIN_ENVELOPE (core cannot import it; the
     # superset is pinned by tests/unit/core/test_context_fences.py)
     "system-directive",
@@ -44,6 +44,7 @@ CONTROL_FENCE_TAGS = (
     "compacted-history",
     "self-wake",
     "runtime-identity",
+    "public-knowledge",
     "tool-addition",
     # other injected blocks
     "restart-note",                 # agents/task/runtime/run_as_session.py

@@ -9,7 +9,7 @@ The attempts ledger already carries what FAILED. This adds what SUCCEEDED: the
 artifacts the previous attempt really wrote, verified against the ledger, so the
 run continues instead of restarting.
 """
-from agents.task.goals.board import Goal
+from modules.goals.board import Goal
 from agents.task.goals.context import build_goal_run_task
 
 

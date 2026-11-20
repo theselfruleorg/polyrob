@@ -10,7 +10,7 @@ import jwt
 import uuid
 from datetime import datetime, timedelta
 import logging
-import os
+from core.env import is_development_env
 import re
 from typing import Optional
 from api.auth_constants import is_admin_role, is_admin_wallet
@@ -289,8 +289,9 @@ async def verify_signature(request: VerifyRequest):
     # - secure=True: Cookie only sent over HTTPS (nginx terminates SSL)
     # - httponly=True: Prevents JavaScript access (XSS protection)
     # - samesite="lax": CSRF protection while allowing navigation
-    is_production = os.environ.get("ENVIRONMENT", "production") == "production"
-    secure = is_production  # Only require HTTPS in production
+    # Only an EXPLICIT development name relaxes `secure`; an unnamed box keeps it.
+    is_production = not is_development_env()
+    secure = is_production
     httponly = True
     samesite = "strict"
     max_age = OWNER_COOKIE_TTL_SECONDS  # W5: ≤24h, agrees with the owner minter

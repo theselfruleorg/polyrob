@@ -239,19 +239,6 @@ def job_definition_token(job: Any) -> str:
         return f"job:err:{time.time()}"
 
 
-def drop_baselines(db_path: str, *, job_id: Optional[str] = None) -> None:
-    """Forget the baseline of *job_id* (resume/cancel), or of every job no
-    longer in ``cron_jobs`` (after a prune). A missing table is a no-op."""
-    try:
-        if job_id is not None:
-            execute_retry(db_path, "DELETE FROM wake_gate WHERE job_id=?", (job_id,))
-        else:
-            execute_retry(db_path, "DELETE FROM wake_gate WHERE job_id NOT IN "
-                                   "(SELECT id FROM cron_jobs)")
-    except sqlite3.OperationalError as e:
-        if "no such table" not in str(e).lower():
-            raise
-
 
 def compute_wake_fingerprint(
     user_id: str, *, data_dir: str, exclude_job_id: Optional[str] = None,

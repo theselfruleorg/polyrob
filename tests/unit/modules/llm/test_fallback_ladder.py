@@ -272,3 +272,17 @@ def test_model_family(model, family):
 
 def test_deepseek_spec_is_ranked_after_openrouter():
     assert get_spec("deepseek").fallback_rank == get_spec("openrouter").fallback_rank + 1
+
+
+@pytest.mark.parametrize("money_run", [False, True])
+def test_the_coding_plan_glm_falls_to_the_same_model_on_openrouter(monkeypatch, money_run):
+    """An experiment box's shape (2026-11-20): DEFAULT_PROVIDER=zai-coding, DEFAULT_MODEL=glm-5.3,
+    LLM_FALLBACK_PROVIDERS=openrouter. When the plan's quota ends (a 429 on zai-coding),
+    the next rung is OpenRouter's z-ai/glm-5.3: the same family and catalog price, so the
+    price rule passes, and a money run stays on the same model id."""
+    mgr = _manager(monkeypatch, ["zai-coding", "openrouter"], primary="zai-coding_client")
+    monkeypatch.setenv("LLM_FALLBACK_PROVIDERS", "openrouter")
+    monkeypatch.setenv("DEFAULT_PROVIDER", "zai-coding")
+    monkeypatch.setenv("DEFAULT_MODEL", "glm-5.3")
+    got = _walk(mgr, "zai-coding", original="glm-5.3", money_run=money_run)
+    assert (got.provider, got.model_name) == ("openrouter", "z-ai/glm-5.3")

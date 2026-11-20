@@ -1,6 +1,6 @@
 from core.app_service.owner_ops import APPS_EMPTY_LINE
 """/apps on Telegram (032): joins the three lists and renders the shared owner text."""
-from surfaces.telegram.apps_ops import apps_reply
+from core.app_service.owner_ops import apps_reply
 
 
 def test_apps_joins_the_three_lists():
@@ -36,7 +36,7 @@ def test_the_seat_reaches_the_audit_trail(monkeypatch):
     recorded as having come from the phone — the one field whose whole job is
     to say WHERE an owner decision was made."""
     from core.app_service import owner_ops as core_ops
-    from surfaces.telegram import apps_ops
+    from core.app_service import owner_ops as apps_ops
 
     seen = {}
 
@@ -57,7 +57,7 @@ def test_the_seat_reaches_the_audit_trail(monkeypatch):
 
 def test_every_deciding_verb_carries_the_seat(monkeypatch):
     from core.app_service import owner_ops as core_ops
-    from surfaces.telegram import apps_ops
+    from core.app_service import owner_ops as apps_ops
 
     seen = []
 

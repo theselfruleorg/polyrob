@@ -2,7 +2,7 @@
 import pytest
 
 from agents.task.goals import escalation
-from agents.task.goals.board import Goal, STATUS_BLOCKED, STATUS_READY
+from modules.goals.board import Goal, STATUS_BLOCKED, STATUS_READY
 
 
 def _blocked_goal():
@@ -33,7 +33,7 @@ async def test_blocked_goal_creates_ask_in_every_posture(tmp_path, monkeypatch):
     """A blocked goal always leaves a silent, durable ask for `owner fulfill` to consume."""
     monkeypatch.delenv("AUTONOMY_POSTURE", raising=False)         # silent posture
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
-    from agents.task.goals.board import GoalBoard, ASK_OPEN, STATUS_BLOCKED
+    from modules.goals.board import GoalBoard, ASK_OPEN, STATUS_BLOCKED
     from agents.task.goals.dispatcher import GoalDispatcher
 
     board = GoalBoard(str(tmp_path / "g.db"))

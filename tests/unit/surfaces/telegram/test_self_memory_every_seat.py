@@ -7,7 +7,7 @@ emits the same replies; a group room refuses both (owner reads).
 import asyncio
 
 from core import verbs
-from surfaces.telegram import self_memory_ops
+from modules.memory import self_memory_reply as self_memory_ops
 
 
 class _Provider:

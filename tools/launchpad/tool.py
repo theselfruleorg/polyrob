@@ -16,6 +16,7 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from tools.act_reason_param import ActReason
 from tools.base_tool import BaseTool
 from tools.defi.account_mode import NoAccountMode
 from tools.wallet_holder import WalletHolderMixin
@@ -38,7 +39,7 @@ def launchpad_enabled() -> bool:
     return bool_env(FLAG, False)
 
 
-class LaunchParams(NoAccountMode):
+class LaunchParams(ActReason, NoAccountMode):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(..., description="Token name, e.g. 'Demo Coin'.")
     symbol: str = Field(..., description="Ticker, e.g. 'DEMO'.")
@@ -64,7 +65,7 @@ class LaunchParams(NoAccountMode):
         "WOULD happen without broadcasting."))
 
 
-class TradeParams(NoAccountMode):
+class TradeParams(ActReason, NoAccountMode):
     model_config = ConfigDict(extra="forbid")
     token: str = Field(..., description=(
         "CONTRACT ADDRESS of the launchpad token (0x…). The curve is looked up "
@@ -91,7 +92,7 @@ class StatusParams(BaseModel):
     token: str = Field(..., description="CONTRACT ADDRESS of the launchpad token.")
 
 
-class ClaimParams(NoAccountMode):
+class ClaimParams(ActReason, NoAccountMode):
     model_config = ConfigDict(extra="forbid")
     token: str = Field(..., description=(
         "CONTRACT ADDRESS of a token YOU launched. Everything else is read on "
@@ -110,6 +111,38 @@ class ClaimParams(NoAccountMode):
         "signs as the NFT's owner. Only accounts of a pinned collection; needs AGENT_NFT_ENABLED."))
     nft: Optional[str] = Field(None, description=(
         "Optional — the same as `account`, naming the NFT: '<collection>#<id>' or '<id>'."))
+
+
+#: The native a launch spends beyond the opening buy: the factory's launch fee (read
+#: live at launch, 0.0005 today) plus gas, with room. A seat-side bound only — the guard
+#: prices the REAL outflow and holds it to the ceiling.
+LAUNCH_FEE_GAS_ROOM_NATIVE = 0.01
+#: The least ceiling a launch declares (a launch with no buy still pays the fee and gas).
+LAUNCH_CEILING_FLOOR_USD = 25.0
+
+
+def default_launch_ceiling(buy_amount: float, price_fn=None) -> Optional[float]:
+    """The ONE default ``max_spend_usd`` of a launch, for every seat (125 S8).
+
+    The native spend price × (buy + launch fee + gas room) × ``send_order.TOKEN_COUNT_ROOM``,
+    at least ``LAUNCH_CEILING_FLOOR_USD``. *price_fn* ``(chain) -> price`` defaults to
+    ``price_sources.native_spend_price``. ``None`` when no finite native price can be
+    read: the seat refuses and asks for an explicit ceiling, never a guessed figure.
+    """
+    import math
+
+    from tools.defi.send_order import TOKEN_COUNT_ROOM
+    from tools.launchpad import pons_abi as P
+    if price_fn is None:
+        from tools.defi.price_sources import native_spend_price as price_fn
+    try:
+        unit = price_fn(P.CHAIN)
+    except Exception:  # noqa: BLE001 — unpriced: the seat refuses
+        return None
+    if unit is None or not math.isfinite(float(unit)) or float(unit) <= 0:
+        return None
+    native = max(0.0, float(buy_amount or 0.0)) + LAUNCH_FEE_GAS_ROOM_NATIVE
+    return max(LAUNCH_CEILING_FLOOR_USD, float(unit) * native * TOKEN_COUNT_ROOM)
 
 
 def _fmt_native(wei) -> str:
@@ -190,17 +223,13 @@ class LaunchpadTool(WalletHolderMixin, BaseTool):
     def _native_worth_text(self, wei: int) -> str:
         """USD worth of a native amount, computed here so the model never has to.
 
-        Priced through the chain's wrapped native, the same proxy the guard
-        prices the claim fee with. `unknown` on any failure — never $0.00.
+        Priced through the one native-price reader (``native_spend_price``: the
+        wrapped native the guard prices the claim fee with). `unknown` on any
+        failure — never $0.00.
         """
-        from core.wallet import chains
+        from tools.defi import price_sources
         from tools.launchpad import pons_abi as P
-        row = chains.get(P.CHAIN)
-        proxy = getattr(row, "wrapped_native", None) if row else None
-        try:
-            unit = self._price(P.CHAIN, proxy) if proxy else None
-        except Exception:
-            unit = None
+        unit = price_sources.native_spend_price(P.CHAIN, self._price)
         if not unit or unit <= 0:
             return "unknown (no native price right now)"
         native = wei / 10 ** 18

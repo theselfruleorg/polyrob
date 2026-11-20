@@ -32,7 +32,7 @@ RECEIPT_LOG_MAX_CHARS = 200_000
 def receipts_dir(session_id: str, user_id: Optional[str]) -> Optional[Path]:
     """``<session data dir>/shell_jobs`` or None when the path cannot resolve."""
     try:
-        from agents.task.path import pm
+        from core.session_paths import pm
         return Path(pm().get_data_dir(session_id or "shell", user_id)) / "shell_jobs"
     except Exception:
         logger.debug("shell receipts: data dir unresolved", exc_info=True)

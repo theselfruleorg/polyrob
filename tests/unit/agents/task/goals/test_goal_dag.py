@@ -8,7 +8,7 @@ owner ``unblock`` override, and the creation-time terminal-bad-dep closure.
 """
 import pytest
 
-from agents.task.goals.board import (
+from modules.goals.board import (
     GoalBoard, STATUS_BLOCKED, STATUS_CANCELLED, STATUS_DONE, STATUS_READY,
     STATUS_WAITING,
 )

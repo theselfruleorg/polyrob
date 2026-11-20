@@ -38,7 +38,7 @@ def _clean_env(monkeypatch):
 
 
 def _board(data_dir):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     return GoalBoard(os.path.join(data_dir, "goals.db"))
 
 

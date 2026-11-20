@@ -23,6 +23,8 @@ def register(reg, Command) -> None:
     # resolution runs phase 2, so run it here — idempotent, once per process.
     from core.packs.loader import load_packs
     load_packs()
+    from cli.ui.commands.seat_handlers import ensure
+    ensure()                                 # 125 S14: the REPL registers its own handlers
     from core.verbs import VERB_TABLE, handler_ref, registered_verbs
     contributed = {v.name for v in registered_verbs()}
     for verb in VERB_TABLE:

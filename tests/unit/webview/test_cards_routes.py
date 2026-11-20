@@ -34,7 +34,9 @@ class _Tool:
         body = ("transfer\n  simulated value: $100.0000\n"
                 + ("  RESULT: DRY RUN (simulation only)" if params.dry_run
                    else "  RESULT: SENT AND CONFIRMED\n  tx: 0xabc"))
-        return SimpleNamespace(error=None, extracted_content=body)
+        return SimpleNamespace(error=None, extracted_content=body, metadata={
+            "simulated_usd": 100.0, "sent_usd": None, "unverified": False,
+            "allowed": True, "dry_run": params.dry_run})
 
 
 class _Agent:

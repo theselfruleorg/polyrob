@@ -117,7 +117,7 @@ def test_console_cancel_permitted_for_a_non_owner_on_their_own_session(srv, monk
     fake = _AgentWithCancel(str(tmp_path))
     monkeypatch.setattr(srv, "_in_process_task_agent", lambda: fake)
     reply = asyncio.run(srv._maybe_handle_console_command("sess1", "u_stranger", "/cancel"))
-    assert reply.startswith("Task cancelled.") and "/pause" in reply
+    assert reply.startswith("Stopped.") and "/pause" in reply
     assert fake.cancelled == ["sess1"]
 
 
@@ -147,3 +147,23 @@ def test_a_routing_failure_on_a_known_verb_is_an_error_reply(srv, monkeypatch, t
     reply = asyncio.run(srv._maybe_handle_console_command(
         "s", "alice", "/send 1 native to 0xabc on base go"))
     assert reply is not None and reply.startswith("/send could not run here")
+
+
+def test_a_reply_with_buttons_keeps_them_for_the_console(srv, monkeypatch, tmp_path):
+    """The chat box draws the SAME buttons Telegram does (reply_buttons): a nav
+    reply's next-step actions reach the JSON answer, not only its text."""
+    monkeypatch.setattr(srv, "_in_process_task_agent", lambda: _Agent(str(tmp_path)))
+    import surfaces.telegram.harness as harness
+    from core.surfaces.command_reply import CommandReply
+    from core.surfaces.envelopes import Action
+    from webview.console_commands import reply_buttons_json
+
+    async def _menu(*a, **k):
+        return CommandReply("Pick one.", actions=(Action("Status", "/status", "primary"),))
+
+    monkeypatch.setattr(harness, "_handle_command", _menu)
+    reply = asyncio.run(srv._maybe_handle_console_command("s", "alice", "/model"))
+    assert reply == "Pick one."
+    assert reply_buttons_json(reply) == [
+        {"label": "Status", "command": "/status", "style": "primary"}]
+    assert reply_buttons_json("plain text") == []

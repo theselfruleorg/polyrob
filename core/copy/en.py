@@ -85,4 +85,10 @@ STRINGS = {
     "status.section.packs": "add-ons",
     "status.section.money": "money records",
     "status.section.economics": "AI credit",
+    "status.section.income_rule": "the income rule",
+    "status.section.mandates": "standing grants",
+    # The book with no wallet: the SAME words the console's Money > Book says
+    # (webview money.book.empty_title / empty_how; a test pins them equal).
+    "book.no_wallet": "The agent has no wallet yet.",
+    "book.no_wallet_how": "To give it one, run polyrob wallet init in a terminal on the agent's machine.",
 }

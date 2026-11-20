@@ -65,7 +65,7 @@ def _erc20_payout(payout_shape):
     # The call verb binds intent.to to the decoded payee when the target is the token.
     intent = tx_guard.TxIntent(chain="base", token=TOKEN, to=PAYEE, amount_raw=20_000_000,
                                max_spend_usd=25, idempotency_key=f"k-erc20-{payout_shape}",
-                               watch_spenders=(TOKEN,), payout_shape=payout_shape)
+                               watch_spenders=(TOKEN,), payout_shape=payout_shape, why="pay")
     deltas = Deltas(ok=True, native_delta=0, token_deltas={TOKEN: -20_000_000},
                     holder_transfers=((TOKEN, PAYEE, 20_000_000),), gas_used=50000)
     return intent, tx, deltas
@@ -76,7 +76,7 @@ def _native_payout(payout_shape):
           "gas": 30000, "maxFeePerGas": 10 ** 8}
     intent = tx_guard.TxIntent(chain="base", token=None, to=PAYEE, amount_raw=5 * 10 ** 15,
                                max_spend_usd=300, idempotency_key=f"k-native-{payout_shape}",
-                               payout_shape=payout_shape)
+                               payout_shape=payout_shape, why="pay")
     deltas = Deltas(ok=True, native_delta=-5 * 10 ** 15, token_deltas={}, gas_used=21000)
     return intent, tx, deltas
 
@@ -110,7 +110,7 @@ def test_an_inflow_declared_call_keeps_the_autonomous_lane():
     tx = {"to": ROUTER, "data": "0x12345678" + "00" * 32, "value": 0, "chainId": 8453,
           "gas": 200000, "maxFeePerGas": 10 ** 8}
     intent = tx_guard.TxIntent(chain="base", token=TOKEN, to=ROUTER, amount_raw=10_000_000,
-                               max_spend_usd=25, idempotency_key="k-inflow",
+                               max_spend_usd=25, idempotency_key="k-inflow", why="trade",
                                watch_spenders=(ROUTER,), inflow_token=TOKEN_OUT,
                                min_inflow_raw=9_000_000, payout_shape=False)
     deltas = Deltas(ok=True, native_delta=0,
@@ -235,6 +235,7 @@ PAYOUT_ANSWERS = {
     "defi_trade_call": "payout_shape",
     "defi_trade_deploy_contract": "payout_shape (value > 0); endowment proven to stay",
     "defi_trade_deploy_token": "no endowment; the supply is minted to the wallet",
+    "defi_trade_launch_token": "the deploy and the pinned position manager; the position is minted to the wallet",
     "defi_trade_solana_deploy_token": "rent only; the mint is the wallet's",
     "defi_trade_lp_add": "pinned position manager; the position is minted to the wallet",
     "defi_trade_lp_remove": "risk reducing: proceeds return to the wallet",

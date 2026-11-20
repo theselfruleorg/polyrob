@@ -7,7 +7,7 @@ import asyncio
 import os
 import pytest
 
-from cron.scheduler import TickLock
+from core.file_lock import TickLock
 
 
 # ---------------------------------------------------------------------------

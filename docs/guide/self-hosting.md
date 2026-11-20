@@ -274,7 +274,9 @@ posture, owner credentials and read-only settings.
 
 `polyrob doctor` on the box reports the health of whatever is running — providers,
 memory, autonomy state, active pauses — and is the first thing to run when a unit
-misbehaves.
+misbehaves. Its `box:` lines name a provisioning step your settings need and the box
+lacks: the trusted lazy installer, the signer, the code-execution sandbox, the apps
+supervisor, or a `/tmp` tmpfs too small for an install.
 
 ### The isolated browser (required with a wallet)
 

@@ -7,7 +7,7 @@
 """
 import pytest
 
-from agents.task.goals.board import GoalBoard, STATUS_DONE, STATUS_READY
+from modules.goals.board import GoalBoard, STATUS_DONE, STATUS_READY
 
 
 @pytest.fixture

@@ -10,7 +10,7 @@
           "type": "string"
         },
         "chain": {
-          "description": "Chain to deploy on — CHOOSE IT DELIBERATELY, because the same address is a different token on a different chain. Chains that can move value: ethereum, base, robinhood, arbitrum, polygon. Gas differs by orders of magnitude, so a cent-scale trade can cost more in gas on ethereum than it is worth, while base is a fraction of a cent. Per-chain guidance: the `chain` parameter of defi_trade.swap.",
+          "description": "Chain to deploy on — CHOOSE IT DELIBERATELY, because the same address is a different token on a different chain. Chains that can move value: ethereum, base, robinhood, arbitrum, polygon. Gas and per-chain guidance: the `chain` parameter of defi_trade.swap.",
           "type": "string"
         },
         "constructor_args": {
@@ -42,6 +42,12 @@
         "vanity": {
           "default": "",
           "description": "Optional HEX prefix to mine the address for, e.g. 'b0b' or 'dead' (0-9a-f only, max 8 characters — each character is 16x the work). Implies the CREATE2 path.",
+          "type": "string"
+        },
+        "why": {
+          "default": null,
+          "description": "Why this act, now (one line). Required on an autonomous run; the owner reads it.",
+          "nullable": true,
           "type": "string"
         }
       },

@@ -10,7 +10,7 @@ from core.config import BotConfig
 from core.container import DependencyContainer
 from core.exceptions import AgentError
 from core.version import get_version
-from modules.memory.models import ConversationContext, Message
+from modules.memory.models import Message
 from modules.llm.billing_guard import fresh_credential
 from modules.llm.llm_client import LLMClient
 
@@ -29,7 +29,6 @@ class BaseAgent(BaseComponent):
         
         # Initialize core components - all will be properly set in _initialize()
         self.llm_client = None
-        self.knowledge_base = None
         self.character_manager = None
         self.active_character = None
         self.memory_manager = None
@@ -39,7 +38,6 @@ class BaseAgent(BaseComponent):
         self._enabled = True
         self._last_result = None
         self._init_lock = asyncio.Lock()
-        self.llm_available = False
         
         # LLM config with character settings if available
         self.llm_config = {
@@ -53,15 +51,6 @@ class BaseAgent(BaseComponent):
         # Update with character settings if available
         if self.active_character and hasattr(self.active_character, 'settings'):
             self.llm_config.update(self.active_character.settings)
-
-    def _get_default_character(self):
-        """Get default character configuration."""
-        return {
-            'name': 'Assistant',
-            'personality': 'Helpful and professional',
-            'background': 'An AI assistant designed to help users with various tasks',
-            'traits': ['helpful', 'knowledgeable', 'professional']
-        }
 
     async def _initialize(self) -> None:
         """Initialize agent base components."""
@@ -83,17 +72,11 @@ class BaseAgent(BaseComponent):
                                 break
                 
                 if not self.llm_client:
-                    self.llm_available = False
                     self.logger.error("No LLM client available - agent functionality will be limited")
-                else:
-                    self.llm_available = True
                 
                 # Get optional services properly, only if they exist
                 if self.container.has_service('memory_manager'):
                     self.memory_manager = self.container.get_service('memory_manager')
-                
-                if self.container.has_service('knowledge_base'):
-                    self.knowledge_base = self.container.get_service('knowledge_base')
                 
                 # Get character manager and role-specific character
                 if self.container.has_service('character_manager'):
@@ -156,11 +139,6 @@ class BaseAgent(BaseComponent):
             'memory_manager': 'Memory management service'
         }
 
-    @property
-    def is_enabled(self) -> bool:
-        """Check if agent is enabled."""
-        return self._initialized and self.llm_available
-
     async def initialize(self) -> None:
         """Initialize agent and its components."""
         try:
@@ -172,226 +150,6 @@ class BaseAgent(BaseComponent):
         except Exception as e:
             self.logger.error(f"Failed to initialize {self.name} agent: {str(e)}")
             raise AgentError(f"Failed to initialize agent: {str(e)}")
-
-    async def set_character(self, character: 'Character') -> None:
-        """Set or update the agent's character."""
-        try:
-            self.active_character = character
-            if self.llm_client:
-                self.llm_client.active_character = character
-            self.logger.info(f"Updated {self.name} agent character to {character.name}")
-        except Exception as e:
-            self.logger.error(f"Error setting character: {e}")
-            raise AgentError(f"Failed to set character: {str(e)}")
-
-    async def get_character_info(self) -> Optional[Dict[str, Any]]:
-        """Get information about the current character."""
-        if not self.active_character:
-            return None
-            
-        return {
-            "name": self.active_character.name,
-            "bio": self.active_character.bio,
-            "style": self.active_character.style,
-            "knowledge": self.active_character.knowledge,
-            "topics": self.active_character.topics,
-            "adjectives": self.active_character.adjectives
-        }
-
-    async def set_llm_client(self, client_name: str) -> bool:
-        """Set the LLM client to use for this agent.
-        
-        Args:
-            client_name: Name of the client to use ('anthropic_client', 'openai_client', 'llm')
-            
-        Returns:
-            bool: True if client was set successfully, False otherwise
-        """
-        if not self.container:
-            self.logger.error("No container available to get LLM client")
-            return False
-            
-        # Get the client from container
-        client = self.container.get_service(client_name)
-        if not client:
-            self.logger.error(f"LLM client '{client_name}' not found")
-            return False
-            
-        # Set client and log
-        self.llm_client = client
-        self.logger.info(f"Switched to LLM client: {client_name} ({client.__class__.__name__})")
-        
-        return True
-
-    async def get_llm_settings(self) -> Dict[str, Any]:
-        """Get current LLM settings for this agent.
-        
-        Returns:
-            Dict containing current LLM settings
-        """
-        if not self.llm_client:
-            return self.llm_config
-            
-        # Get client type
-        client_type = self.llm_client.__class__.__name__.lower()
-        
-        # Get model information
-        model_info = {
-            "name": getattr(self.llm_client, 'model_type', 'unknown'),
-            "provider": client_type.replace('client', ''),
-            "temperature": getattr(self.llm_client, 'temperature', self.llm_config.get('temperature', 0.7)),
-            "max_tokens": getattr(self.llm_client, 'max_tokens', self.llm_config.get('max_tokens', 1000)),
-            "initialized": getattr(self.llm_client, '_initialized', False),
-            "client_name": getattr(self.llm_client, 'name', client_type)
-        }
-        
-        return model_info
-
-    async def refresh_llm_status(self) -> None:
-        """Refresh the current LLM client status.
-        
-        This method ensures the current LLM client information is up-to-date.
-        Used primarily by the settings handler to get accurate client status.
-        """
-        if not self.llm_client:
-            self.logger.warning("No LLM client to refresh")
-            return
-            
-        # If the client has an initialize method, check its status
-        if hasattr(self.llm_client, 'initialize') and not getattr(self.llm_client, '_initialized', False):
-            try:
-                self.logger.debug(f"Refreshing LLM client {self.llm_client.__class__.__name__}")
-                await self.llm_client.initialize()
-            except Exception as e:
-                self.logger.error(f"Error refreshing LLM client: {e}")
-                
-        # Log the current status
-        status = {
-            "client": self.llm_client.__class__.__name__,
-            "name": getattr(self.llm_client, 'name', self.llm_client.__class__.__name__.lower()),
-            "initialized": getattr(self.llm_client, '_initialized', False)
-        }
-        self.logger.debug(f"LLM client status: {status}")
-
-    async def update_llm_settings(self, settings: Dict[str, Any]) -> bool:
-        """Update LLM settings for this agent.
-        
-        Args:
-            settings: Dictionary of settings to update
-            
-        Returns:
-            bool: True if settings were updated successfully
-        """
-        if not self.llm_client:
-            self.logger.error("No LLM client available")
-            return False
-            
-        try:
-            # Extract client_name if provided
-            client_name = settings.pop('client_name', None)
-            
-            # If client_name is provided, we may need to switch clients
-            if client_name and client_name != getattr(self.llm_client, 'name', None):
-                # Only switch if it's different from current
-                if self.container:
-                    new_client = self.container.get_service(client_name)
-                    if new_client:
-                        # Ensure the client is initialized
-                        if not getattr(new_client, '_initialized', False) and hasattr(new_client, 'initialize'):
-                            await new_client.initialize()
-                            
-                        self.llm_client = new_client
-                        self.logger.info(f"Switched to client: {client_name}")
-                    else:
-                        self.logger.warning(f"Client {client_name} not found in container")
-                        return False
-            
-            # Try using update_settings method if available
-            if hasattr(self.llm_client, 'update_settings'):
-                self.llm_client.update_settings(settings)
-                self.logger.info(f"Updated settings via update_settings: {settings}")
-                
-                # Also update our local config
-                self.llm_config.update(settings)
-                return True
-            
-            # Otherwise update attributes directly
-            for key, value in settings.items():
-                # Update the client instance attributes directly
-                if hasattr(self.llm_client, key):
-                    # Save previous value for logging
-                    prev_val = getattr(self.llm_client, key)
-                    # Set the new value
-                    setattr(self.llm_client, key, value)
-                    self.logger.info(f"Updated {key} = {value} (was {prev_val})")
-                else:
-                    self.logger.warning(f"LLM client {self.llm_client.__class__.__name__} does not have attribute {key}")
-                
-                # Also update our local config for future reference
-                self.llm_config[key] = value
-            
-            return True
-        except Exception as e:
-            self.logger.error(f"Error updating LLM settings: {e}")
-            return False
-
-    async def get_available_llm_clients(self) -> Dict[str, Dict[str, Any]]:
-        """Get information about available LLM clients.
-        
-        Returns:
-            Dict mapping client names to client information
-        """
-        result = {}
-        
-        # Try to get LLM manager if available
-        llm_manager = self.container.get_service('llm_manager')
-        if llm_manager:
-            # Use LLM manager to get client info
-            return await llm_manager.get_available_clients()
-            
-        # Manual fallback if LLM manager not available
-        for client_name in ['anthropic_client', 'openai_client', 'llm']:
-            client = self.container.get_service(client_name)
-            if client:
-                # Get basic information
-                result[client_name] = {
-                    'name': client_name,
-                    'model': getattr(client, 'model_type', 'unknown'),
-                    'initialized': getattr(client, '_initialized', False),
-                    'is_primary': (client_name == 'llm')
-                }
-                
-        return result
-
-    async def _prepare_context(
-        self, 
-        input_text: str,
-        metadata: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        """Prepare base context for response generation."""
-        try:
-            # The retired SystemPromptManager (2026-09-29) was the only source;
-            # the task agent builds its own system prompt.
-            system_prompt = ""
-            
-            # Dead branch removed (D10, 2026-07-11): MemoryManager.knowledge_base is
-            # permanently None since the RAG KB was retired — cross-session recall
-            # lives in the MemoryProvider backends now.
-            knowledge_context = ""
-            
-            return {
-                "system": system_prompt,
-                "knowledge_context": knowledge_context,
-                "messages": []
-            }
-
-        except Exception as e:
-            self.logger.error(f"Error preparing context: {e}")
-            return {
-                "system": "",
-                "knowledge_context": "",
-                "messages": []
-            }
 
     @abstractmethod
     async def process_input(
@@ -414,53 +172,6 @@ class BaseAgent(BaseComponent):
     ) -> bool:
         """Start a new conversation."""
         raise NotImplementedError("Subclasses must implement start_conversation")
-
-    def get_capabilities(self) -> Dict[str, Any]:
-        """Get agent capability information.
-
-        Returns:
-            Dictionary with agent capabilities
-        """
-        # Determine required and optional services
-        required_services = []
-        optional_services = []
-
-        # Check which services are available
-        if self.llm_client:
-            required_services.append("llm")
-        if self.memory_manager:
-            optional_services.append("memory")
-        if self.knowledge_base:
-            optional_services.append("knowledge_base")
-        if self.character_manager:
-            optional_services.append("character_manager")
-
-        # Build features list based on agent type
-        features = []
-        if hasattr(self, 'process_message'):
-            features.append("message_processing")
-        if hasattr(self, 'handle_command'):
-            features.append("command_handling")
-        if hasattr(self, 'process'):
-            features.append("generic_processing")
-        if hasattr(self, 'create_session'):
-            features.append("session_management")
-        if hasattr(self, 'run_automation'):
-            features.append("automation")
-
-        return {
-            "id": self.name,
-            "name": self.__class__.__name__,
-            "version": getattr(self, 'version', None) or get_version(),
-            "enabled": self._enabled,
-            "features": features,
-            "required_services": required_services,
-            "optional_services": optional_services,
-            "description": self.__doc__ or f"{self.__class__.__name__} agent",
-            "initialized": self._initialized,
-            "llm_available": self.llm_available,
-            "llm_config": self.llm_config if self.llm_config else {}
-        }
 
     @abstractmethod
     async def cleanup(self) -> None:

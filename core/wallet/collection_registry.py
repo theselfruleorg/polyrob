@@ -84,6 +84,7 @@ import json
 import logging
 import os
 import re
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
 
@@ -139,6 +140,12 @@ class CollectionRegistryError(RuntimeError):
     """The registry file exists but cannot be trusted (unreadable, writable, or off-schema)."""
 
 
+class NotACollection(ValueError):
+    """A DEFINITE answer from the chain: the contract is not an ERC-721 collection this build
+    reads (it says no to ERC-721, or names an account kind ERC-165 does not prove). Any other
+    ``ValueError`` of :func:`read_facts` is a read that failed — try again, never "not one"."""
+
+
 @dataclass(frozen=True)
 class AccountVersion:
     registry: str        # lowercase
@@ -190,6 +197,9 @@ class CollectionProfile:
     sale: Optional[Sale] = None
     #: The spec the file was WRITTEN in (``spec`` is the in-memory form). Not compared.
     source_spec: str = field(default=SPEC_V2, compare=False)
+    #: 124 W3: False for a profile read from the chain for an UNPINNED collection
+    #: (:func:`chain_profile` below) — no autonomy, every money act a card.
+    pinned: bool = field(default=True, compare=False)
 
     def account_version(self, implementation: Optional[str]) -> Optional[AccountVersion]:
         """The pinned account version whose implementation is *implementation*, or None."""
@@ -499,10 +509,9 @@ MAX_OWNER_SUPPLY = 20_000
 
 def _owner_shape_refusal(p: CollectionProfile) -> Optional[str]:
     """Why an owner-store profile is not the shape ``/nft trust`` writes, or None. Checked on
-    READ, not only by the writer: a store the agent forged through a shell must not arm a mint,
-    a reveal or an on-chain journal target, or carry a supply that hangs the guard."""
-    if p.capabilities:
-        return f"{p.address} carries capabilities {list(p.capabilities)} (only the admin file grants them)"
+    READ, not only by the writer: a store the agent forged through a shell must not pin a sale
+    or an on-chain journal target, or carry a supply that hangs the guard (124 W5: capabilities
+    grant nothing — autonomy is the signed owner mandate)."""
     if p.sale is not None:
         return f"{p.address} carries a sale (only the admin file pins one)"
     if p.journal_log or p.journal_prefix:
@@ -558,9 +567,11 @@ def profiles() -> Tuple[CollectionProfile, ...]:
 
 
 def profiles_on(chain_id: int, capability: Optional[str] = None) -> Tuple[CollectionProfile, ...]:
-    """The pinned profiles on *chain_id*, optionally only those declaring *capability*."""
+    """The pinned profiles on *chain_id*. ``"mint"`` = only those that pin a sale. 124 W5: a
+    ``capabilities`` field grants nothing any more — the one autonomy grant is the owner's
+    mandate (``core.wallet.standing_grant``); every other value of *capability* is ignored."""
     return tuple(p for p in profiles() if p.chain_id == int(chain_id)
-                 and (capability is None or capability in p.capabilities))
+                 and (capability != "mint" or p.sale is not None))
 
 
 def chain_id_of(chain: str) -> int:
@@ -627,3 +638,300 @@ def sale_runtime_refusal(rpc, profile: CollectionProfile) -> Optional[str]:
         return f"the pinned collection {profile.address} pins no sale"
     return code_pin_refusal(rpc, profile.sale.address, profile.sale.runtime_sha256,
                             "pinned sale")
+
+# ---------------------------------------------------------------------------- the chain facts
+# 124 W3: what a profile needs, read from the chain — for /nft trust (core/wallet/
+# collection_trust.py) and for an UNPINNED collection (chain_profile). Here, not in
+# collection_trust, so a cycle module (the account resolve) may read them.
+
+from typing import Any, Callable  # noqa: E402
+
+Rpc = Callable[..., Any]
+
+#: ERC-165 interface id of ERC-721.
+_ERC721_IID = "80ac58cd"
+
+
+def _call(rpc: Rpc, to: str, data: str, block: str = "latest") -> str:
+    return rpc("eth_call", [{"to": to, "data": data}, block])
+
+
+def _uint_view(rpc: Rpc, to: str, signature: str) -> Optional[int]:
+    from core.wallet import abi
+    try:
+        raw = _call(rpc, to, abi.selector(signature))
+        return int(abi.decode([{"type": "uint256"}], raw)[0])
+    except Exception:  # noqa: BLE001 — absent view
+        return None
+
+
+def _string_view(rpc: Rpc, to: str, signature: str) -> str:
+    from core.wallet import abi
+    try:
+        return str(abi.decode([{"type": "string"}], _call(rpc, to, abi.selector(signature)))[0])
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _is_erc721(rpc: Rpc, address: str) -> bool:
+    """``supportsInterface(ERC-721)``. A revert or no data = False; a read that FAILED (a
+    timeout, a refused RPC) raises ``ValueError`` — "says no" and "unread" differ."""
+    from core.wallet import abi
+    try:
+        raw = _call(rpc, address, abi.selector("supportsInterface(bytes4)")
+                    + _ERC721_IID.ljust(64, "0"))
+    except Exception as exc:  # noqa: BLE001
+        if "revert" in str(exc).lower():
+            return False
+        raise ValueError(f"I could not read supportsInterface(0x{_ERC721_IID}) of {address} "
+                         f"({type(exc).__name__}) — try again") from exc
+    try:
+        return bool(abi.decode([{"type": "bool"}], raw)[0])
+    except Exception:  # noqa: BLE001 — no data: not ERC-165
+        return False
+
+
+def _address_view(rpc: Rpc, to: str, signature: str, *, strict: bool = False) -> Optional[str]:
+    """The address a view returns, or None when the view is absent (a revert, no data).
+    ``strict``: a read that FAILED (a timeout, a refused or rate-limited RPC) raises
+    ``ValueError`` instead — "absent" and "unread" pin different account kinds."""
+    from core.wallet import abi
+    try:
+        raw = _call(rpc, to, abi.selector(signature))
+    except Exception as exc:  # noqa: BLE001
+        if strict and "revert" not in str(exc).lower():
+            raise ValueError(f"I could not read {signature} of {to} ({type(exc).__name__}) — "
+                             f"try again; nothing was pinned") from exc
+        return None
+    try:
+        got = str(abi.decode([{"type": "address"}], raw)[0])
+    except Exception:  # noqa: BLE001 — absent view (no data)
+        return None
+    return None if int(got, 16) == 0 else got.lower()
+
+
+def _supports(rpc: Rpc, address: str, iid: str) -> bool:
+    """ERC-165 ``supportsInterface(iid)``. A revert or no data = False; a read that FAILED (a
+    timeout, a refused RPC) raises ``ValueError`` — "does not answer" and "unread" differ."""
+    from core.wallet import abi
+    try:
+        raw = _call(rpc, address, abi.selector("supportsInterface(bytes4)")
+                    + str(iid).lower().removeprefix("0x").ljust(64, "0"))
+    except Exception as exc:  # noqa: BLE001
+        if "revert" in str(exc).lower():
+            return False
+        raise ValueError(f"I could not read supportsInterface({iid}) of {address} "
+                         f"({type(exc).__name__}) — try again; nothing was pinned") from exc
+    try:
+        return bool(abi.decode([{"type": "bool"}], raw)[0])
+    except Exception:  # noqa: BLE001 — no data: not ERC-165
+        return False
+
+
+def erc165_proves(rpc: Rpc, address: str, iid: str) -> bool:
+    """The ERC-165 detection rule: the contract answers ERC-165 itself (``0x01ffc9a7`` true,
+    ``0xffffffff`` false) AND *iid*. A contract that says yes to everything proves nothing."""
+    return (_supports(rpc, address, "0x01ffc9a7") and not _supports(rpc, address, "0xffffffff")
+            and _supports(rpc, address, iid))
+
+
+def _rail_view(rpc: Rpc, address: str, signature: str, impl: str) -> Optional[str]:
+    """A sale rail of a PROVEN ERC-6551P collection (``MARKET()`` / ``ZONE()``, part of the
+    interface ERC-165 proved): the address, or None when it is the zero address. A revert or
+    a failed read refuses — a collection that claims the interface answers both."""
+    got = _address_view(rpc, address, signature, strict=True)
+    if got is not None:
+        return got
+    from core.wallet import abi
+    try:
+        raw = _call(rpc, address, abi.selector(signature))
+        if int(str(abi.decode([{"type": "address"}], raw)[0]), 16) == 0:
+            return None
+    except Exception:  # noqa: BLE001 — a revert or no data
+        pass
+    raise ValueError(f"{address} names its own account implementation {impl}, but its "
+                     f"{signature} is unreadable — I cannot pin its account")
+
+
+def _account_version(rpc: Rpc, address: str):
+    """``(accounts[0] row, standard or None, kind)`` for *address*. A collection that names its
+    own account implementation (``accountImplementation()``) is pinned as the ERC-6551P kind
+    ONLY when ERC-165 proves it: the collection answers the kind's collection interface and the
+    implementation its account interface (``core.wallet.account_kinds``); otherwise it refuses
+    — the kind is proven, never inferred. Its market and zone (``MARKET()`` / ``ZONE()``), when
+    it names both, are pinned by their runtime code hash. Any other collection is pinned with
+    Tokenbound AccountV3. Raises ``ValueError`` when a fact cannot be read (never a silent
+    fall-back to AccountV3)."""
+    from core.wallet import account_kinds, erc6551
+    v3 = account_kinds.TOKENBOUND_V3
+    impl = _address_view(rpc, address, "accountImplementation()", strict=True)
+    if impl is None or impl == v3.builtin_implementation.lower():
+        return {"kind": v3.name, "registry": erc6551.REGISTRY,
+                "implementation": v3.builtin_implementation, "salt": 0}, None, v3
+    kind = account_kinds.ERC6551P
+    coll_ok = erc165_proves(rpc, address, kind.collection_iface)
+    acct_ok = erc165_proves(rpc, impl, kind.account_iface)
+    if not (coll_ok and acct_ok):
+        raise NotACollection(
+            f"{address} names its own account implementation {impl}, but ERC-165 does not prove "
+            f"the {kind.label} kind (the collection answers {kind.collection_iface}: "
+            f"{'yes' if coll_ok else 'no'}; the implementation answers {kind.account_iface}: "
+            f"{'yes' if acct_ok else 'no'}) — I pin no account kind I cannot prove")
+    try:
+        sha = runtime_sha256_of(rpc, impl)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"I could not read the code of its account implementation {impl} "
+                         f"({exc})") from exc
+    account = {"kind": kind.name, "registry": erc6551.REGISTRY, "implementation": impl,
+               "salt": 0, "runtime_sha256": sha}
+    rails = {"market": _rail_view(rpc, address, "MARKET()", impl),
+             "zone": _rail_view(rpc, address, "ZONE()", impl)}
+    if None in rails.values():   # a rail at the zero address: the collection names none
+        return account, None, kind
+    std: Dict[str, str] = {}
+    for key, value in rails.items():
+        try:
+            std[f"{key}_runtime_sha256"] = runtime_sha256_of(rpc, value)
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"I could not read the code of its {key} {value} ({exc})") from exc
+        std[key] = value
+    return account, {kind.name: std}, kind
+
+
+def _deploy_block(rpc: Rpc, address: str, head: int) -> int:
+    """The first block with code at *address* — :func:`core.wallet.nft_rules.first_code_block`."""
+    from core.wallet.nft_rules import first_code_block
+    return first_code_block(rpc, address, head)
+
+
+def _rpc_for(chain: str) -> Rpc:
+    from core.wallet.simulation import _default_rpc_for
+    return _default_rpc_for(chain)
+
+
+def _treasury() -> Optional[str]:
+    try:
+        from core.wallet.factory import get_agent_wallet
+        w = get_agent_wallet()
+        return w.operational_signer().address if w is not None else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def read_facts(chain: str, address: str, *, rpc: Optional[Rpc] = None,
+               max_supply: Optional[int] = None, from_block: Optional[int] = None,
+               treasury: Optional[str] = None, for_pin: bool = True) -> Dict[str, Any]:
+    """Everything a profile needs, read from the chain now. Raises ``ValueError`` with the
+    owner's remedy when a fact cannot be read. ``for_pin=False`` (124 W3, a read of an unpinned
+    collection): a collection with no readable supply cap is read as unbounded, and the chat
+    pin's supply limit does not apply."""
+    from core.wallet.addresses import normalize_for_chain
+    chain = str(chain or "").strip().lower()
+    chain_id = chain_id_of(chain)
+    if not chain_id:
+        raise ValueError(f"{chain!r} is not an EVM chain I know")
+    try:
+        address = normalize_for_chain(chain, address)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"{address!r} is not an address on {chain} ({exc})") from exc
+    rpc = rpc or _rpc_for(chain)
+    try:
+        runtime = runtime_sha256_of(rpc, address)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"I could not read the contract code at {address} on {chain} ({exc})") from exc
+    if not _is_erc721(rpc, address):
+        raise NotACollection(f"{address} on {chain} does not say it is an ERC-721 collection "
+                         f"(supportsInterface 0x{_ERC721_IID})")
+    supply = max_supply or _uint_view(rpc, address, "maxSupply()") \
+        or _uint_view(rpc, address, "MAX_SUPPLY()")
+    if not supply and not for_pin:
+        supply = UNBOUNDED_SUPPLY
+    if not supply:
+        raise ValueError(f"{address} has no maxSupply() I can read. Name it: "
+                         f"/nft trust {address} on {chain} max <n>")
+    if for_pin and int(supply) > MAX_OWNER_SUPPLY:
+        raise ValueError(f"its supply cap {supply} is above the {MAX_OWNER_SUPPLY} a chat pin "
+                         f"can carry (the guard checks every id's account). The system admin "
+                         f"can pin it in {REGISTRY_FILE}")
+    head = int(rpc("eth_blockNumber", []), 16)
+    if from_block is not None and not 0 <= int(from_block) <= head:
+        raise ValueError(f"`from {from_block}` is not a block on {chain} (the head is {head})")
+    if from_block is None:
+        try:
+            from_block = _deploy_block(rpc, address, head)
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"I could not find the block that deployed {address} ({exc}; the "
+                             f"RPC may not keep old state). Name it: "
+                             f"/nft trust {address} on {chain} from <block>") from exc
+    held = None
+    treasury = treasury if treasury is not None else _treasury()
+    if treasury:
+        from core.wallet import abi
+        try:
+            held = int(abi.decode([{"type": "uint256"}], _call(rpc, address, abi.encode_call(
+                "balanceOf", [{"type": "address"}], [treasury])))[0])
+        except Exception:  # noqa: BLE001
+            held = None
+    account, standard, kind = _account_version(rpc, address)
+    profile = {"spec": SPEC_V2, "capabilities": [],
+               "chain_id": chain_id, "address": address, "runtime_sha256": runtime,
+               "deploy_block": int(from_block), "max_supply": int(supply),
+               "accounts": [account]}
+    if standard:
+        profile["standard"] = standard
+    return {"chain": chain, "chain_id": chain_id, "address": address,
+            "name": _string_view(rpc, address, "name()"),
+            "symbol": _string_view(rpc, address, "symbol()"),
+            "runtime_sha256": runtime, "max_supply": int(supply),
+            "deploy_block": int(from_block), "held": held, "treasury": treasury,
+            "account_impl": account["implementation"], "account_kind": kind,
+            "account_runtime_sha256": account.get("runtime_sha256"),
+            "standard": (standard or {}).get(kind.name), "profile": profile}
+
+
+#: 124 W3: the id range of an unpinned collection that names no supply cap.
+UNBOUNDED_SUPPLY = 2 ** 63 - 1
+#: How long a chain profile of an unpinned collection is reused (its facts are re-read after).
+CHAIN_PROFILE_TTL_SEC = 600
+#: The most chain profiles kept: a group member may ask about any address (the room-safe
+#: ``defi_data_nft_account``), so the cache is bounded, least recently used first out.
+CHAIN_PROFILE_MAX = 256
+#: ``(chain id, address)`` -> ``(expiry, profile)``. The key is the chain fact: every caller's
+#: ``rpc`` reads the same chain, so a profile read through one serves the others.
+_CHAIN_PROFILES: "OrderedDict[Tuple[int, str], Tuple[float, Any]]" = OrderedDict()
+
+
+def chain_profile(chain: str, address: str, *, rpc: Optional[Rpc] = None):
+    """124 W3: the profile of an UNPINNED collection, read from the chain (``pinned=False``):
+    its code hash, supply cap, deploy block and account kind (proven by ERC-165, or Tokenbound
+    v3). Cached for :data:`CHAIN_PROFILE_TTL_SEC`. Raises ``ValueError`` with the reason when a
+    fact cannot be read — an account kind nobody reviewed is never assumed."""
+    import dataclasses
+    import time
+    chain_id = chain_id_of(str(chain or "").strip().lower())
+    key = (chain_id, str(address or "").lower())
+    hit = _CHAIN_PROFILES.get(key)
+    if hit is not None and hit[0] > time.monotonic():
+        _CHAIN_PROFILES.move_to_end(key)
+        return hit[1]
+    facts = read_facts(chain, address, rpc=rpc, for_pin=False, treasury="")
+    parsed = parse({"profiles": [facts["profile"]]})[0]
+    profile = dataclasses.replace(parsed, pinned=False)
+    _CHAIN_PROFILES[key] = (time.monotonic() + CHAIN_PROFILE_TTL_SEC, profile)
+    _CHAIN_PROFILES.move_to_end(key)
+    while len(_CHAIN_PROFILES) > CHAIN_PROFILE_MAX:
+        _CHAIN_PROFILES.popitem(last=False)
+    return profile
+
+
+def profile_or_chain(chain: str, address: str, *, rpc: Optional[Rpc] = None):
+    """The pinned profile of *address* on *chain*, else its :func:`chain_profile`. An
+    unreadable pin store is no pin (124 section 5.5)."""
+    try:
+        pinned = profile_for(
+            chain_id_of(str(chain or "").strip().lower()), address)
+    except Exception:  # noqa: BLE001
+        logger.warning("collection pins unreadable; reading %s from the chain", address,
+                       exc_info=True)
+        pinned = None
+    return pinned if pinned is not None else chain_profile(chain, address, rpc=rpc)

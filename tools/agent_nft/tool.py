@@ -1,28 +1,21 @@
 """The ``agent_nft`` tool — act through the token-bound account of an agent NFT this instance
 OWNS (050 §7.6; 069 v4: the simple model — no grants, bindings or operator keys).
 
-The package verbs are forwarded to the optional agent-NFT package, found by the import names
-``core.tool_capabilities.AGENT_NFT_PACKAGE_MODULES`` lists (this loader names no package).
-Chains are not a fixed list here: ``chain`` is any EVM chain of the chain table, and a chain
-with no pinned collection refuses at run time. What an account can and cannot do is the kind
+Every verb is core (123 S4: there is no package seam). Chains are not a fixed list here:
+``chain`` is any EVM chain of the chain table. What an account can and cannot do is the kind
 table's one sentence per kind (``core.wallet.account_kinds.limits_text``).
 
 ⚠️ This module deliberately does NOT ``from __future__ import annotations``: the
 Registry introspects each action's first-parameter annotation to route the
 validated param model, and stringized annotations break that.
 
-Every verb here does the SAME three things and nothing else: the flag, the turn
-origin (+ the 031 pause for a write), then runs its body. Core owns snapshot, inspect, journal
-and bind (``tools/agent_nft/core_verbs.py``, C20), revoke_all and withdraw_token
-(``tools/agent_nft/withdraw.py``, 069 v4 A4) and the collection reveal — none needs the
-package. There is NO adopt verb: holding the NFT is the whole relation (proposal 115), and the
-holdings watch records what an arrived account already holds. The agent-NFT package keeps
-``mint`` (``<package>.verbs.<verb>(tool, params, execution_context)``); the sale's claim and
-settle are core's (``tools/agent_nft/sale.py``) and adds a
-collection's own view lines through ``verbs.extend_view(view, rpc)``. ``bind`` registers the
-account's ERC-8004 identity; there is no grant verb. Every write builds a ``TxIntent`` and
-calls ``tx_guard`` — core's ONE authorizer — through :meth:`AgentNftTool.guard`. A missing
-package is a refusal with a remedy only for its own verbs.
+Every verb here does the SAME three things and nothing else: the flag, the turn origin (+ the
+031 pause for a write), then runs its body: snapshot, inspect, journal and bind
+(``tools/agent_nft/core_verbs.py``), revoke_all and withdraw_token (``withdraw.py``), the mint
+(``mint.py``), the reveal, the sale's claim and settle (``sale.py``) and the sale acts. There is
+NO adopt verb: holding the NFT is the whole relation (proposal 115). ``bind`` registers the
+account's ERC-8004 identity; there is no grant verb. Every write builds a ``TxIntent`` and calls
+``tx_guard`` — core's ONE authorizer — through :meth:`AgentNftTool.guard`.
 """
 import logging
 import types
@@ -32,6 +25,7 @@ from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Fie
 
 from core.wallet.account_kinds import limits_text as _kind_limits_text
 
+from tools.act_reason_param import ActReason
 from tools.base_tool import BaseTool
 from tools.wallet_holder import WalletHolderMixin
 
@@ -67,8 +61,8 @@ AgentNftChain = Annotated[str, BeforeValidator(
     lambda v: v.strip().lower() if isinstance(v, str) else v), AfterValidator(_evm_chain)]
 
 _CHAIN = Field(..., description=(
-    "The EVM chain where the NFT's collection is pinned, by its chain-table name. A chain with "
-    "no pinned collection refuses."))
+    "The EVM chain of the NFT's collection, by its chain-table name. No pin is needed: an "
+    "unpinned collection is read from the chain and its money acts wait for the owner's card."))
 #: The kinds' limits, one sentence per account kind (the same text the views and the skill use).
 _KINDS = _kind_limits_text()
 _NFT = Field(None, description=(
@@ -139,29 +133,30 @@ class RevokeAllParams(BaseModel):
 _PROOF_WORD = Annotated[str, Field(pattern=r"^0x[0-9a-fA-F]{64}$")]
 
 
-class MintParams(BaseModel):
-    """A mint through the pinned SALE of a collection profile with the ``mint`` capability
-    (``core/wallet/collection_registry.py``): the sale's phase picks ``mintWL(to, qty,
-    minPnlOutPerToken, allowance, proof)`` (the whitelist) or ``mint(to, qty, minPnlOutPerToken)``
-    (the auction, and after the settlement). ``allowance`` / ``proof`` are read by the package
-    verb (``<package>.verbs.mint``) by these names."""
+class MintParams(ActReason):   # why: audit 2026-11-21 L-3
+    """A mint through the collection's ``SALE()``, read from the chain (124 section 7): the
+    sale's phase picks ``mintWL(to, qty, minOutPerToken, allowance, proof)`` (the whitelist) or
+    ``mint(to, qty, minOutPerToken)`` (the public phase, and after the settlement)."""
     model_config = ConfigDict(extra="forbid")
     to: Optional[str] = Field(None, pattern=r"^0x[0-9a-fA-F]{40}$", description=(
         "Must be this instance's treasury, or omitted (the default, the same thing). Any other "
         "address is refused: the guard must see every minted token arrive in the paying wallet."))
-    qty: int = Field(1, ge=1, le=10, description="How many to mint in one call (1..10); the quote names the price.")
+    qty: int = Field(1, ge=1, le=100, description=(
+        "How many to mint in one call; the sale's own per-call cap (read from it) applies. "
+        "The quote names the price."))
     allowance: Optional[int] = Field(None, ge=1, description=(
         "Whitelist phase only: this treasury's allowance in the published whitelist (its Merkle "
         "leaf is (treasury, allowance)). Omit outside the whitelist phase."))
     proof: Optional[list[_PROOF_WORD]] = Field(None, max_length=32, description=(
         "Whitelist phase only: the Merkle proof of (treasury, allowance), each word 0x + 64 hex, "
         "at most 32. Omit outside the whitelist phase."))
-    min_pnl_out: int = Field(0, ge=0, description=(
-        "Least PNL (raw token units) each new account must receive from the mint's buy, "
-        "else the mint reverts. 0 = never revert on price (the contract still caps impact at 3%)."))
+    min_out_per_token: Optional[int] = Field(None, ge=0, description=(
+        "The sale's minOutPerToken argument: the least each new account must receive from the "
+        "sale's buy, else the mint reverts. 0 (the default) = never revert on price."))
     chain: AgentNftChain = _CHAIN
     collection: Optional[str] = Field(None, pattern=r"^0x[0-9a-fA-F]{40}$", description=(
-        "Only when more than one collection is pinned on the chain; it must be one of them."))
+        "The collection to mint (any ERC-721 whose SALE() names it back). May be left out only "
+        "when exactly one collection with a sale is pinned on the chain."))
     max_spend_usd: float = Field(..., gt=0, description=(
         "Most USD authorized: the value sent (qty × the sale's price now) plus gas."))
     dry_run: bool = _DRY
@@ -169,10 +164,15 @@ class MintParams(BaseModel):
 
 class TakeParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    to: str = Field(..., pattern=r"^0x[0-9a-fA-F]{40}$", description=(
-        "Where the NFT goes (its account goes with it): a plain wallet. Refused: a token-bound "
-        "account of a pinned collection, deployed or not yet minted (the token could own "
-        "itself), and this treasury."))
+    to: Optional[str] = Field(None, pattern=r"^0x[0-9a-fA-F]{40}$", description=(
+        "Where the NFT goes (its account goes with it): a plain wallet. Refused: an account of "
+        "its own collection, deployed or not yet minted (the token could own itself), and this "
+        "treasury. Required unless `nested` is given."))
+    nested: Optional[str] = Field(None, pattern=r"^0x[0-9a-fA-F]{40}#[0-9]+$", description=(
+        "124 N2, the sweep: <collection>#<id> of an NFT that the ACCOUNT of `nft` holds (a nested "
+        "NFT). It moves from that account to this treasury (the only destination; `to` must be "
+        "left out). Use it before acting with the nested NFT — there is no act through a second "
+        "level."))
     chain: AgentNftChain = _CHAIN
     nft: Optional[str] = _NFT
     account: Optional[str] = _ACCOUNT
@@ -184,12 +184,14 @@ class TakeParams(BaseModel):
     dry_run: bool = _DRY
 
 
-class RevealParams(BaseModel):
-    """``reveal(uint256[] ids)`` on a pinned collection profile with the ``reveal`` capability."""
+class RevealParams(ActReason):   # why: audit 2026-11-21 L-3
+    """``reveal(uint256[] ids)`` on a collection (any ERC-721; every reveal is the owner's card
+    unless a mandate covers it)."""
     model_config = ConfigDict(extra="forbid")
     chain: AgentNftChain = _CHAIN
     collection: Optional[str] = Field(None, pattern=r"^0x[0-9a-fA-F]{40}$", description=(
-        "Only when more than one collection is pinned on the chain; it must be one of them."))
+        "The collection to reveal; may be left out when exactly one collection is pinned on "
+        "the chain."))
     max_ids: Optional[int] = Field(None, ge=1, le=64, description=(
         "Most due ids revealed in one transaction, in id order: an upper bound; default = sized "
         "to the fee cap."))
@@ -281,7 +283,7 @@ class SaleAcceptParams(BaseModel):
     dry_run: bool = _DRY
 
 
-class BuyParams(BaseModel):
+class BuyParams(ActReason):   # why: audit 2026-11-21 L-3
     """``buy(listing, …)`` on a pinned collection's market (115 W9): the treasury pays the
     listing's ETH price; the buyer's conditions come from a fresh read of the NFT's account."""
     model_config = ConfigDict(extra="forbid")
@@ -315,21 +317,20 @@ class AgentNftTool(WalletHolderMixin, BaseTool):
     """An agent NFT this instance owns: act FROM its ERC-6551 token-bound account as the NFT's owner."""
 
     def __init__(self, name: str = "agent_nft", config=None, container=None, *,
-                 wallet=None, guard_fn=None, rpc_fn=None, impl=None, price_fn=None,
+                 wallet=None, guard_fn=None, rpc_fn=None, price_fn=None,
                  rail_factory=None):
         super().__init__(name=name, config=config if config is not None else _NULL_CONFIG,
                          container=container)
         self._wallet = wallet
         self._guard_fn = guard_fn
         self._rpc_fn = rpc_fn
-        self._impl_override = impl
         self._price_fn = price_fn
         self._rail_factory = rail_factory
 
     async def _initialize(self):
         return True
 
-    # -- plumbing the package uses ------------------------------------------
+    # -- plumbing ---------------------------------------------------------------
 
     def rpc_for(self, chain: str):
         """``callable(method, params)`` on the chain's pinned RPC."""
@@ -340,26 +341,14 @@ class AgentNftTool(WalletHolderMixin, BaseTool):
         return lambda method, params: _rpc(url, method, params, timeout=15.0)
 
     def guard(self, intent, tx, **kw):
-        """THE authorizer. The package never imports tx_guard itself."""
+        """THE authorizer (tx_guard.authorize)."""
         if self._guard_fn is not None:
             return self._guard_fn(intent, tx, **kw)
         from core.wallet import tx_guard
         return tx_guard.authorize(intent, tx, **kw)
 
-    def _impl(self):
-        if self._impl_override is not None:
-            return self._impl_override
-        # The import names are core.tool_capabilities.AGENT_NFT_PACKAGE_MODULES, in that order.
-        from core.tool_capabilities import AGENT_NFT_PACKAGE_MODULES
-        for name in AGENT_NFT_PACKAGE_MODULES:
-            try:   # `from <name> import verbs`, through the import hook like a plain import
-                return getattr(__import__(name, fromlist=["verbs"]), "verbs")
-            except (ImportError, AttributeError):
-                continue
-        return None
-
     def _gate(self, execution_context, verb: str, *, write: bool, dry_run: bool = True,
-              entry: bool = True, needs_package: bool = True):
+              entry: bool = True):
         if not agent_nft_enabled():
             from core.remedy import owner_flag_remedy
             return f"agent NFTs are off — {owner_flag_remedy(FLAG)}. Nothing was broadcast."
@@ -373,28 +362,9 @@ class AgentNftTool(WalletHolderMixin, BaseTool):
         if verdict.refused:
             suffix = " RESULT: NOT SENT." if verdict.step == "pause" else ""
             return verdict.reason + suffix
-        if needs_package and self._impl() is None:
-            from core.tool_capabilities import AGENT_NFT_PACKAGE_MODULES
-            return (f"the agent-NFT package is not installed — install the "
-                    f"`{AGENT_NFT_PACKAGE_MODULES[0]}` package (not on PyPI; no `polyrob[...]` "
-                    f"extra carries it). Nothing was broadcast.")
         return None
 
-    async def _run(self, verb: str, params, execution_context, *, write: bool):
-        err = self._gate(execution_context, verb, write=write,
-                         dry_run=getattr(params, "dry_run", True))
-        if err:
-            return self._ar(error=err)
-        fn = getattr(self._impl(), verb, None)
-        if fn is None:
-            return self._ar(error=f"the installed agent-NFT package has no `{verb}` — upgrade the agent-NFT package")
-        try:
-            return await fn(self, params, execution_context)
-        except Exception as exc:  # noqa: BLE001 — a verb failure is an error result, never a crash
-            logger.warning("agent_nft %s failed", verb, exc_info=True)
-            return self._ar(error=f"agent_nft {verb} failed: {exc}. Nothing was broadcast unless a tx hash is shown.")
-
-    # -- core seams the package calls (J1, C3) ---------------------------------
+    # -- core seams (J1, C3) ----------------------------------------------------
 
     def journal_history(self, params):
         """``(held, entries)``: the NFT named by *params* (chain / nft / account) and its verified
@@ -457,9 +427,9 @@ class AgentNftTool(WalletHolderMixin, BaseTool):
 
     async def _core_body(self, verb: str, params, execution_context, *, write: bool):
         """C20: snapshot / inspect / journal / bind are core-owned (``tools/agent_nft/core_verbs.py``)
-        and need no package; the package only adds a collection's own lines (``extend_view``)."""
+        and need no package."""
         err = self._gate(execution_context, verb, write=write,
-                         dry_run=getattr(params, "dry_run", True), needs_package=False)
+                         dry_run=getattr(params, "dry_run", True))
         if err:
             return self._ar(error=err)
         from tools.agent_nft import core_verbs
@@ -483,28 +453,31 @@ class AgentNftTool(WalletHolderMixin, BaseTool):
         return await self._core("revoke_all", params, execution_context, entry=False)
 
     @BaseTool.action(
-        "Mint 1-10 tokens of a pinned collection, through its pinned sale, to this instance's "
+        "Mint tokens of a collection through its SALE() (read from the chain) to this instance's "
         "treasury (the treasury then owns them and their accounts) at the sale's price now "
-        "(whitelist: the base price, with allowance + proof; auction: the step price, the excess "
-        "comes back at settlement). ALWAYS owner-approved.",
+        "(whitelist: the base price, with allowance + proof; public: the price now plus one step, "
+        "the excess comes back at settlement). Any ERC-721 whose sale names it back; a pinned "
+        "collection keeps its pin's price cap. ALWAYS owner-approved.",
         param_model=MintParams)
     async def agent_nft_collection_mint(self, params: MintParams, execution_context=None):
-        if params.collection and agent_nft_enabled():
-            from core.wallet import collection_mint
-            try:
-                pinned = collection_mint.pinned_collections(params.chain)
-            except Exception as exc:  # noqa: BLE001 — an untrusted registry pins nothing
-                return self._ar(error=f"the collection registry cannot be trusted ({exc}). "
-                                      f"Nothing was broadcast.")
-            if params.collection.lower() not in pinned:
-                return self._ar(error=(f"{params.collection} is not a pinned collection on "
-                                       f"{params.chain}. Nothing was broadcast."))
-        return await self._run("mint", params, execution_context, write=True)
+        # 123 S3 / 124 section 7: a core body; no package, no pin needed.
+        err = self._gate(execution_context, "mint", write=True, dry_run=params.dry_run,
+                         entry=True)
+        if err:
+            return self._ar(error=err)
+        from tools.agent_nft.mint import mint
+        try:
+            return await mint(self, params, execution_context)
+        except Exception as exc:  # noqa: BLE001 — a verb failure is an error result, never a crash
+            logger.warning("agent_nft mint failed", exc_info=True)
+            return self._ar(error=f"agent_nft mint failed: {exc}. Nothing was broadcast unless a "
+                                  f"tx hash is shown.")
 
     @BaseTool.action(
         "Send an agent NFT this treasury owns to an address `to` (its account goes with it). "
         "Refused while its account has ANY open approval — run agent_nft_revoke_all first. "
-        "ALWAYS owner-approved.",
+        "With `nested=<collection>#<id>`: sweep an NFT that the account holds back to this "
+        "treasury. ALWAYS owner-approved.",
         param_model=TakeParams)
     async def agent_nft_withdraw_token(self, params: TakeParams, execution_context=None):
         # Core-owned body (069 v4 A4): the owner's `/nft send <id> <to>` runs it.
@@ -512,7 +485,7 @@ class AgentNftTool(WalletHolderMixin, BaseTool):
 
     async def _core(self, verb: str, params, execution_context, *, entry: bool):
         err = self._gate(execution_context, verb, write=True, dry_run=params.dry_run,
-                         entry=entry, needs_package=False)
+                         entry=entry)
         if err:
             return self._ar(error=err)
         from tools.agent_nft import withdraw as _bodies
@@ -524,7 +497,8 @@ class AgentNftTool(WalletHolderMixin, BaseTool):
                                   f"tx hash is shown.")
 
     @BaseTool.action(
-        "Reveal every DUE id on a pinned collection: reveal(ids) from the treasury, "
+        "Reveal every DUE id of a collection: reveal(ids) from the treasury (the owner's card "
+        "unless a mandate covers it), "
         "in id order, up to max_ids per call. Spends gas only (no value, no asset; at most "
         "AGENT_NFT_REVEAL_MAX_GAS_USD of fee); the guard requires one Revealed/Recommitted per id "
         "and no other movement. Nothing due = no transaction.",
@@ -534,7 +508,7 @@ class AgentNftTool(WalletHolderMixin, BaseTool):
         # reveal opens no position, so the scoped `/pause trading` does not hold it (the
         # full owner pause does — here and again in tx_guard).
         err = self._gate(execution_context, "reveal", write=True, dry_run=params.dry_run,
-                         entry=False, needs_package=False)
+                         entry=False)
         if err:
             return self._ar(error=err)
         from tools.agent_nft import reveal
@@ -616,7 +590,7 @@ class AgentNftTool(WalletHolderMixin, BaseTool):
     async def _sale_order(self, verb: str, params, execution_context):
         # Core-owned (tools/agent_nft/sale_list.py, 111 W9a): money TOWARD the treasury.
         err = self._gate(execution_context, f"sale_{verb.rstrip('_')}", write=True,
-                         dry_run=params.dry_run, entry=False, needs_package=False)
+                         dry_run=params.dry_run, entry=False)
         if err:
             return self._ar(error=err)
         from tools.agent_nft import sale_list
@@ -630,7 +604,7 @@ class AgentNftTool(WalletHolderMixin, BaseTool):
     async def _sale_act(self, verb: str, params, execution_context):
         # Core-owned (tools/agent_nft/sale_ready.py): moves nothing and opens no position.
         err = self._gate(execution_context, f"sale_{verb}", write=True, dry_run=params.dry_run,
-                         entry=False, needs_package=False)
+                         entry=False)
         if err:
             return self._ar(error=err)
         from tools.agent_nft import sale_ready
@@ -644,7 +618,7 @@ class AgentNftTool(WalletHolderMixin, BaseTool):
     async def _sale(self, verb: str, params, execution_context):
         # Core-owned (tools/agent_nft/sale.py): money TOWARD the treasury, so not an entry.
         err = self._gate(execution_context, f"sale_{verb}", write=True, dry_run=params.dry_run,
-                         entry=False, needs_package=False)
+                         entry=False)
         if err:
             return self._ar(error=err)
         from tools.agent_nft import sale
@@ -678,7 +652,7 @@ class AgentNftTool(WalletHolderMixin, BaseTool):
         # Core-owned (tools/agent_nft/sale_buy.py, 115 W9): a buy spends (an entry); a claim
         # moves money TOWARD the treasury.
         err = self._gate(execution_context, verb, write=True, dry_run=params.dry_run,
-                         entry=entry, needs_package=False)
+                         entry=entry)
         if err:
             return self._ar(error=err)
         from tools.agent_nft import sale_buy

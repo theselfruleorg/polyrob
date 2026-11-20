@@ -20,8 +20,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from cli.update.context import UpdateContext
-from cli.update.snapshot import SnapshotInfo, create_snapshot, restore_snapshot
+from core.update_snapshot.context import UpdateContext
+from core.update_snapshot.snapshot import SnapshotInfo, create_snapshot, restore_snapshot
 
 
 @dataclass

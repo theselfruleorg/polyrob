@@ -287,3 +287,41 @@ def test_a_snapshot_written_before_the_count_still_reads(tmp_path):
         "chains": [{"chain": "base", "symbol": "ETH", "native": 1.0, "usdc": 2.0}]}))
     snap = bc.read(str(tmp_path))
     assert snap.chains[0].lp_positions is None and not snap.chains[0].lp_expected
+
+
+# --- 124 M3: the treasury, each NFT account, one total ------------------------------------------
+
+def test_the_nft_accounts_are_read_listed_and_summed_once(monkeypatch):
+    from core.wallet import balance_cache, holdings_state
+    rows = [{"chain": "robinhood", "account": "0x" + "ac" * 20, "label": "X #3", "token_id": 3}]
+    monkeypatch.setattr(holdings_state, "tracked", lambda *a, **k: rows)
+    snap = balance_cache.BalanceSnapshot(address="0x" + "11" * 20, taken_at=__import__("time").time(),
+                                         chains=[balance_cache.ChainBalance(chain="robinhood", symbol="ETH",
+                                                                            native=1.0)])
+    snap.accounts = balance_cache._account_balances(lambda addr, chain: (0.25, None))
+    assert snap.accounts[0].native == 0.25
+    assert balance_cache.total_native_by_symbol(snap) == {"ETH": 1.25}
+    lines = balance_cache.render_lines(snap)
+    assert any("account X #3" in ln and "0.25 ETH" in ln for ln in lines)
+    assert any(ln.strip().startswith("total (treasury + NFT accounts): 1.25 ETH") for ln in lines)
+
+
+def test_an_unreadable_holdings_record_is_named(monkeypatch):
+    from core.wallet import balance_cache, holdings_state
+
+    def boom(*a, **k):
+        raise ValueError("bad file")
+    monkeypatch.setattr(holdings_state, "tracked", boom)
+    assert balance_cache._account_balances(lambda a, c: (0.0, None)) is None
+    snap = balance_cache.BalanceSnapshot(address="0x1", taken_at=__import__("time").time(),
+                                         chains=[balance_cache.ChainBalance(chain="robinhood", symbol="ETH", native=1.0)],
+                                         accounts=None)
+    assert any("NFT accounts: unknown" in ln for ln in balance_cache.render_lines(snap))
+
+
+def test_the_accounts_round_trip_the_cache(tmp_path):
+    from core.wallet import balance_cache
+    snap = balance_cache.BalanceSnapshot(address="0x1", taken_at=1.0, accounts=[
+        balance_cache.AccountBalance(chain="robinhood", account="0xa", label="X", symbol="ETH", native=0.5)])
+    balance_cache.write(snap, str(tmp_path))
+    assert balance_cache.read(str(tmp_path)).accounts[0].native == 0.5

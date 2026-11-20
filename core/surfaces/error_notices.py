@@ -21,15 +21,15 @@ from core.error_classifier import FailoverReason, classify_text
 
 _REASON_PHRASES = {
     FailoverReason.CREDIT_DEATH: (
-        "The model provider reports the account is out of credits — top up or "
-        "switch provider, then send another message."
+        "The provider says the account is out of credit — top it up or "
+        "switch the model, then send another message."
     ),
     FailoverReason.AUTH_PERMANENT: (
-        "The provider API key was rejected (invalid or deactivated) — fix the "
-        "key configuration, then send another message."
+        "The provider refused its key (wrong or turned off) — fix the key, "
+        "then send another message."
     ),
     FailoverReason.PROVIDER_EXHAUSTED: (
-        "All configured model providers failed — check provider status/keys, "
+        "Every AI provider I have failed — check their status and keys, "
         "then send another message."
     ),
 }

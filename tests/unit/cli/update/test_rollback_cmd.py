@@ -6,8 +6,8 @@ from click.testing import CliRunner
 
 import cli.commands.update as up
 from cli.commands.update import EXIT_ERROR, EXIT_UP_TO_DATE, update_cmd
-from cli.update.context import UpdateContext
-from cli.update.snapshot import create_snapshot
+from core.update_snapshot.context import UpdateContext
+from core.update_snapshot.snapshot import create_snapshot
 
 
 def _seed_db(path: Path, rows: int) -> None:

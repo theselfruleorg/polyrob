@@ -339,7 +339,26 @@ async def notify_failed_run(task_agent: Any, job: Any, outcome: str, reason: str
         return False
     from core.self_evolution import push_owner_message
     return bool(await push_owner_message(getattr(task_agent, "container", None), text,
-                                         source="cron_failed"))
+                                         source="cron_failed",
+                                         buttons=_owner_actions(job)))
+
+
+def _owner_actions(job: Any) -> list:
+    from core.surfaces.nav import actions
+    return actions(str(getattr(job, "user_id", "") or ""), failed_run_buttons(job))
+
+
+def failed_run_buttons(job: Any) -> list:
+    """Show (and Retry, for a job that can run again) on a failed-run notice — built
+    from the job's id, never from its text (2026-11-20 UX review H11)."""
+    from core.surfaces.nav import NavButton
+    short = str(getattr(job, "id", "") or "")[:8]
+    if not short:
+        return []
+    out = [NavButton("Show the job", f"/job show {short}")]
+    if not getattr(job, "one_shot", False):
+        out.append(NavButton("↻ Retry", f"/job run {short}", "primary"))
+    return out
 
 
 def _event_log_for_read() -> Any:

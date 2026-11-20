@@ -4,7 +4,7 @@ contact, and the transcript with one of them.
 Two stores, read together: the conversation log (``core/surfaces/conversations.py``,
 what was said) and the correspondent registry (``core/surfaces/correspondents.py``,
 whether a reply may route: ``pending``, ``active`` or ``expired``). The owner's
-``/contacts`` (every seat, through ``surfaces/telegram/contacts_ops.py``) and the
+``/contacts`` (every seat, through ``core/surfaces/owner_reads.py``) and the
 agent's ``contact_history`` action print this text; only the hint lines differ.
 
 ⚠️ A READ never creates a store: an absent file is "nothing recorded", never an

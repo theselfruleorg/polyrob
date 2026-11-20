@@ -126,13 +126,13 @@ def build_deliverables(artifacts: list, session_id: str, user_id: Optional[str],
                         and Path(str(f["path"])).name not in written}
     workspace_dir: Optional[str] = None
     try:
-        from agents.task.path import pm
+        from core.session_paths import pm
         workspace_dir = str(pm().get_workspace_dir(session_id, user_id))
     except Exception:
         logger.debug("deliverables: workspace resolution failed", exc_info=True)
 
     try:  # injected into the core screen (layering ratchet: core never imports modules.*)
-        from modules.memory.task.threat_scan import is_suspicious as _scanner
+        from core.security.threat_scan import is_suspicious as _scanner
     except ImportError:
         _scanner = None
     from core.surfaces.attachments import (attach_max_files,

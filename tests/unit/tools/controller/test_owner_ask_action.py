@@ -50,7 +50,7 @@ def _register(tmp_path, sid="s-owner"):
 
 
 def _board(tmp_path):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from core.runtime_paths import goals_db_path
     return GoalBoard(goals_db_path(str(tmp_path)))
 
@@ -156,7 +156,7 @@ def test_autonomous_wait_refusal_shape(tmp_path):
 
 
 def test_rail_answers_render_once_for_the_rail_that_asked(tmp_path):
-    from agents.task.goals.rail_answers import consume_rail_answers, pending_rail_answers
+    from modules.goals.rail_answers import consume_rail_answers, pending_rail_answers
     board = _board(tmp_path)
     a = board.create_ask(user_id="alice", what="A or B?", extra_payload={"rail_id": "cron:exit"})
     b = board.create_ask(user_id="alice", what="Ship it or hold?", extra_payload={"rail_id": "goal:g1"})
@@ -193,7 +193,7 @@ def test_communication_contract_teaches_owner_ask():
 # --- H04 (2026-09-23 security analysis) ---------------------------------------
 
 def test_h04_owner_ask_is_high_impact_while_tainted():
-    from agents.task.agent.core.correspondent_gate import is_high_impact
+    from core.security.high_impact import is_high_impact
     assert is_high_impact("owner_ask")
 
 
@@ -237,7 +237,7 @@ def test_h04_non_owner_tenant_cannot_answer(tmp_path, monkeypatch):
 
 
 def test_h04_answer_records_provenance_and_renders_one_line(tmp_path):
-    from agents.task.goals.rail_answers import consume_rail_answers
+    from modules.goals.rail_answers import consume_rail_answers
     board = _board(tmp_path)
     board.create_ask(user_id="alice", what="A or B?", extra_payload={"rail_id": "cron:r"})
     c, fn, model = _register(tmp_path)

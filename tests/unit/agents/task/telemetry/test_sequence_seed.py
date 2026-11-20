@@ -45,7 +45,7 @@ def test_cached_generator_is_not_reseeded(tmp_path):
 
 def test_feed_writer_continues_after_disk_seq(tmp_path, monkeypatch):
     """The service passes the feed folder, so a restarted writer continues."""
-    from agents.task.path import PathManager
+    from core.session_paths import PathManager
     import agents.task.telemetry.service as svc
 
     test_pm = PathManager(data_root=str(tmp_path))

@@ -7,7 +7,7 @@ import asyncio
 
 import pytest
 
-from agents.task.goals.board import GoalBoard, STATUS_CANCELLED
+from modules.goals.board import GoalBoard, STATUS_CANCELLED
 from agents.task.goals.dispatcher import GoalDispatcher
 
 

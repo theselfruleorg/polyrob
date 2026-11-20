@@ -62,7 +62,7 @@ def disclosure_ceiling(controller):
         from core.autonomy_marker import job_task_for_session
         if job_task_for_session(sid):
             return None
-        from tools.goal_tools import allowed_self_goal_tools
+        from core.tool_grants import allowed_self_goal_tools
         from tools.descriptors import get_tool_display_name
         return frozenset(get_tool_display_name(tool) for tool in allowed_self_goal_tools())
     except Exception:
@@ -253,7 +253,7 @@ def resolve_tool_status(
         # regime is ARMED the self-goal ceiling holds the tool and goal_create
         # keeps it, so "a goal you create can NEVER carry one" would be false.
         try:
-            from tools.goal_tools import allowed_self_goal_tools
+            from core.tool_grants import allowed_self_goal_tools
             _self_grantable = display in allowed_self_goal_tools()
         except Exception:
             _self_grantable = False
@@ -266,7 +266,7 @@ def resolve_tool_status(
                           remedy_text('autonomous-ceiling'))
 
     if is_leaf:
-        from tools.controller.delegation import get_blocked_child_tools
+        from core.delegation_policy import get_blocked_child_tools
         if display in get_blocked_child_tools():
             return ToolStatus(display, "gated", "leaf-blocked", remedy_text("leaf-blocked"))
 

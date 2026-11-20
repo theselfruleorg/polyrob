@@ -17,7 +17,7 @@
           "type": "number"
         },
         "chain": {
-          "description": "Chain to send on — CHOOSE IT DELIBERATELY, because the same address is a different token on a different chain. Chains that can move value: ethereum, base, robinhood, arbitrum, polygon. Gas differs by orders of magnitude, so a cent-scale trade can cost more in gas on ethereum than it is worth, while base is a fraction of a cent. Per-chain guidance: the `chain` parameter of defi_trade.swap.",
+          "description": "Chain to send on — CHOOSE IT DELIBERATELY, because the same address is a different token on a different chain. Chains that can move value: ethereum, base, robinhood, arbitrum, polygon. Gas and per-chain guidance: the `chain` parameter of defi_trade.swap.",
           "type": "string"
         },
         "dry_run": {
@@ -47,6 +47,12 @@
         },
         "token": {
           "description": "CONTRACT ADDRESS of the token to send (0x…), or 'native' to send the chain's gas asset itself (ETH on ethereum/base/arbitrum/robinhood, POL on polygon). A token ticker is not accepted — resolve it to an address with defi_data.token_resolve first.",
+          "type": "string"
+        },
+        "why": {
+          "default": null,
+          "description": "Why this act, now (one line). Required on an autonomous run; the owner reads it.",
+          "nullable": true,
           "type": "string"
         }
       },

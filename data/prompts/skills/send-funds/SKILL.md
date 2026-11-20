@@ -50,13 +50,15 @@ Dry run first, read the `guard:` and `lane:` lines, then the same call with
 
 ## Acting from an owned NFT account
 
-`transfer` and `swap` (and `portfolio`; `reconcile` takes `account=` only) take
-`account=<0x account address>` or `nft=<collection>#<id>` (just `<id>` when one
-collection is pinned on the chain). The ERC-6551 account of an NFT this wallet
-OWNS then holds and moves the assets; this wallet signs as the NFT's owner. It
-works only for a collection the owner pinned (`/nft trust`) and with
-`AGENT_NFT_ENABLED`. The lane does not change: a send from the account still
-waits for the owner.
+`transfer`, `swap`, `lp_collect` (v4), `call`, `launchpad_claim` and `portfolio`
+(`reconcile` takes `account=` only) take `account=<0x account address>` or
+`nft=<collection>#<id>` (just `<id>` when one collection is pinned on the chain).
+The ERC-6551 account of an NFT this wallet OWNS then holds and moves the assets;
+this wallet signs as the NFT's owner. It needs `AGENT_NFT_ENABLED`, not a pin.
+The lane does not change: a send from the account waits for the owner (on an
+unpinned collection every act through the account does), unless an owner mandate
+covers it (`agent-identity`). A move between this wallet and its own NFT account
+counts only its fee against the limits, but it still waits for the owner.
 
 ## Checks before any send
 

@@ -137,7 +137,7 @@ def test_persona_bare_still_lists(tmp_path):
     from unittest import mock
     from cli.ui.commands.handlers import _h_persona
 
-    ctx = _ctx(tmp_path, [])
+    ctx = _ctx(tmp_path, ["list"])
     with mock.patch(
         "cli.ui.commands.handlers._list_persona_names",
         return_value=["researcher", "coder"],

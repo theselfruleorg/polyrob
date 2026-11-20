@@ -51,7 +51,7 @@ async def _never_returns(job):
 
 
 def _board(tmp_path):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     return GoalBoard(str(tmp_path / "goals.db"))
 
 
@@ -139,7 +139,7 @@ async def test_another_tenants_ask_never_excuses_this_job(tmp_path):
 @pytest.mark.asyncio
 async def test_a_decided_ask_no_longer_defers(tmp_path):
     """Only an OPEN ask defers — an answered one means the run had its decision."""
-    from agents.task.goals.board import ASK_OPEN
+    from modules.goals.board import ASK_OPEN
 
     s = _store(tmp_path)
     s.add(_job(id="o", one_shot=True, schedule_spec="2026-06-06T11:00:00"))

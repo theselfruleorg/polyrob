@@ -1,7 +1,7 @@
 // Money › Moves › Make a move (static/app/money-move.js): pickers fill the
 // form; a quote answers with an action card; its buttons post the tap.
 import { describe, it, expect } from "vitest";
-import { mount, quoteBody, tokenOptions } from "../static/app/money-move.js";
+import { mount, quoteBody, tokenOptions, WALLET_URL } from "../static/app/money-move.js";
 
 const PICKERS = {
   chains: ["base", "ethereum"], swap_chains: ["base"],
@@ -103,5 +103,32 @@ describe("FE7 — a failed pickers read is named", () => {
     const s = section();
     await mount(s, { fetcher: jsonOk(PICKERS) });
     expect(s.querySelector("[data-pickers-failed]")).toBeNull();
+  });
+
+  it("no wallet: the form is hidden and the console's no-wallet words show", async () => {
+    const s = section();
+    s.dataset.no_wallet = "The agent has no wallet yet.";
+    s.dataset.no_wallet_how = "To give it one, run polyrob wallet init.";
+    const seen = [];
+    const fetcher = async (url) => {
+      seen.push(url);
+      return { ok: true, status: 200, json: async () => (url === WALLET_URL
+        ? { state: "disabled" } : PICKERS) };
+    };
+    const out = await mount(s, { fetcher });
+    expect(out).toEqual({ noWallet: true });
+    expect(s.querySelector("form").hidden).toBe(true);
+    expect(s.querySelector("[data-no-wallet]").textContent).toContain("no wallet yet");
+    expect(seen).toEqual([WALLET_URL]);
+  });
+
+  it("a failed wallet read keeps the form (unknown is not 'no wallet')", async () => {
+    const s = section();
+    const fetcher = async (url) => (url === WALLET_URL
+      ? { ok: false, status: 503, json: async () => ({}) }
+      : { ok: true, status: 200, json: async () => PICKERS });
+    await mount(s, { fetcher });
+    expect(s.querySelector("form").hidden).toBe(false);
+    expect(s.querySelector("[data-no-wallet]")).toBeNull();
   });
 });

@@ -47,6 +47,7 @@ import logging
 import os
 import secrets
 import shutil
+import stat
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -295,24 +296,68 @@ def _numeric_owner(user: Optional[str]) -> Optional[Tuple[int, int]]:
         return None
 
 
-def make_socket_dir(*, owner: Optional[str] = None) -> str:
-    """Create a fresh private dir (mode 0700) for one run's socket.
+#: ``sun_path`` holds 104 bytes on macOS (108 on Linux); "/" + 16 hex + ".sock".
+_SUN_PATH_MAX = 103
+_SOCKET_NAME_LEN = 22
 
-    A SHORT path (``mkdtemp`` under the system temp dir): an ``AF_UNIX`` path is
-    limited to ~104 bytes, so a deep session workspace cannot hold it. When this
+
+def make_socket_dir(*, owner: Optional[str] = None) -> str:
+    """Create a fresh dir for one run's socket (0710: the data group may not write
+    in it; the socket itself is 0600 and every request carries the run's nonce).
+
+    A SHORT path under ``<data home>/sandbox_installs/_scratch``
+    (``core.runtime_paths.sandbox_scratch_dir``): the sandbox daemon must SEE the dir to
+    bind it, and inside the unit the system ``/tmp`` is a private mount it cannot
+    see. An ``AF_UNIX`` path holds ~104 bytes: a deep data home (a laptop project
+    dir) falls back to ``/tmp``, which a local Docker Desktop shares; under a
+    systemd unit a container run refuses instead (that ``/tmp`` is private). No
+    data home at all refuses for a container. When this
     process is root and a sandbox runs as another numeric uid (the docker
     backend's forced ``65534:65534``), the dir stays root-owned (the docker bind
-    check refuses any other owner) but becomes traverse-only (0711); the SOCKET
+    check refuses any other owner) but is traverse-only for others (0711); the SOCKET
     itself is then handed to that uid with mode 0600 (:func:`_hand_socket_to`),
     and every request must carry the run's nonce.
     """
-    base = "/tmp" if os.path.isdir("/tmp") else None
-    path = tempfile.mkdtemp(prefix="prpc-", dir=base)
-    os.chmod(path, 0o700)
+    from core.runtime_paths import ScratchUnavailable, sandbox_scratch_dir
+    try:
+        path = sandbox_scratch_dir("prpc-")
+    except ScratchUnavailable:
+        if owner:
+            raise
+        path = None
+    if path is not None and len(path) + _SOCKET_NAME_LEN > _SUN_PATH_MAX:
+        os.rmdir(path)
+        if owner and os.environ.get("INVOCATION_ID"):
+            # Under a systemd unit /tmp is private: the sandbox daemon cannot see it.
+            raise ScratchUnavailable(
+                f"the tool RPC socket path under {path} exceeds {_SUN_PATH_MAX} bytes; "
+                "shorten POLYROB_DATA_DIR (the sandbox daemon cannot see the unit's /tmp)")
+        path = None
+    if path is None:
+        base = "/tmp" if os.path.isdir("/tmp") else None
+        path = tempfile.mkdtemp(prefix="prpc-", dir=base)
     ids = _numeric_owner(owner)
-    if ids and hasattr(os, "geteuid") and os.geteuid() == 0 and ids[0] != 0:
-        os.chmod(path, 0o711)
+    forced = bool(ids and hasattr(os, "geteuid") and os.geteuid() == 0 and ids[0] != 0)
+    _narrow_socket_dir(path, 0o711 if forced else 0o710)
     return path
+
+
+def _narrow_socket_dir(path: str, mode: int) -> None:
+    """No group or other WRITE on the socket dir (audit 2026-11-21 L-26): the dir is
+    born 0770 in the setgid data home, and a group member (the console, email)
+    could replace the socket inode with its own listener. Only this process makes
+    the socket, so the group needs search at most. The narrowing clears setgid,
+    which ``RestrictSUIDSGID`` allows (only SETTING it is EPERM); the socket's own
+    group never matters (it is 0600). A dir another identity filled before the
+    narrowing is refused, never used."""
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW)
+    try:
+        if stat.S_IMODE(os.fstat(fd).st_mode) != mode:
+            os.fchmod(fd, mode)
+        if os.listdir(fd):
+            raise OSError(f"the tool RPC socket dir {path} is not empty")
+    finally:
+        os.close(fd)
 
 
 def _hand_socket_to(path: str, owner: Optional[str]) -> None:

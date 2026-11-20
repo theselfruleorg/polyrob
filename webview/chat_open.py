@@ -232,7 +232,7 @@ _REPL_STOCK_TASK = "Interactive conversation session."
 def _session_folder(session_id: str):
     """The session's folder under its OWNER's id, or ``None``. Never creates one
     (``pm().get_session_root`` would)."""
-    from agents.task.path import pm
+    from core.session_paths import pm
     paths = pm()
     clean = http_session_id(session_id, paths)
     owner = paths.get_session_user(clean)
@@ -312,7 +312,7 @@ def run_live(session_id: str) -> str:
     try:
         import os
 
-        from agents.task.path import pm
+        from core.session_paths import pm
         from webview import webgate
         clean = http_session_id(session_id, pm())
         agent = webgate.in_process_task_agent()

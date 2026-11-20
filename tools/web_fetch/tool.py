@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 from core.config import BotConfig
 from tools.base_tool import BaseTool
 from tools.controller.views import WebFetchAction
-from tools.web_fetch.fetcher import safe_fetch, WebFetchError
+from core.security.safe_fetch import safe_fetch, WebFetchError
 from tools.web_fetch.render import render_html_to_markdown, render_text, classify_content
 
 

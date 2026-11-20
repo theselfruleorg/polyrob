@@ -414,13 +414,24 @@ function refList(refs, copy) {
   return ul;
 }
 
-function localTime(ts) {
+/** A clock time as the console header says one: `HH:MM UTC` (the shell's
+ *  "paused since 14:39 UTC"). Work states its zone, never a bare browser-local
+ *  clock beside a UTC one. `""` for no time. */
+export function utcClock(ms) {
+  const t = Number(ms);
+  if (!Number.isFinite(t) || t <= 0) return "";
+  return `${new Date(t).toISOString().slice(11, 16)} UTC`;
+}
+
+/** A moment in a goal's history: the day and the UTC clock (see `utcClock`). */
+export function utcTime(ts) {
   // A missing time is no time — Number(null) is 0, which is 1 January 1970.
   const t = ts === null || ts === undefined || ts === "" ? NaN : Number(ts);
   if (!Number.isFinite(t) || t <= 0) return "";
-  return new Date(t * 1000).toLocaleString(undefined, {
-    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+  const day = new Date(t * 1000).toLocaleDateString(undefined, {
+    month: "short", day: "numeric", timeZone: "UTC",
   });
+  return `${day}, ${utcClock(t * 1000)}`;
 }
 
 /** The words for one history event, from the copy layer; an unknown kind is
@@ -431,7 +442,7 @@ export function eventWords(kind, copy) {
 
 /** One run line: when, outcome, steps, AI cost, why it stopped. */
 export function runLine(run, copy) {
-  const parts = [localTime(run.ts), run.outcome || ""];
+  const parts = [utcTime(run.ts), run.outcome || ""];
   if (Number.isFinite(Number(run.steps)) && run.steps !== null) {
     parts.push(format(copy.d_run_steps, { count: run.steps }));
   }
@@ -485,7 +496,7 @@ export function renderDetail(body, data, copy, opts = {}) {
   if ((data.attempts || []).length) {
     const ul = el("ul", "list");
     data.attempts.forEach((a) => ul.appendChild(el("li", "what",
-      `${localTime(a.ts)} · ${a.error || ""}`)));
+      `${utcTime(a.ts)} · ${a.error || ""}`)));
     body.appendChild(section(copy.d_tries, ul));
   }
 
@@ -526,7 +537,7 @@ export function renderDetail(body, data, copy, opts = {}) {
   (data.events || []).forEach((e) => {
     const li = el("li");
     li.appendChild(el("span", "what", eventWords(e.kind, copy)));
-    li.appendChild(el("span", "why", localTime(e.ts)));
+    li.appendChild(el("span", "why", utcTime(e.ts)));
     hist.appendChild(li);
   });
   body.appendChild(section(copy.d_history,
@@ -624,8 +635,7 @@ function bind() {
     if (!fresh) return;
     fresh.dataset.stale = stale ? "true" : "false";
     fresh.textContent = stale ? (copy.stale || "")
-      : (last ? format(copy.updated, { time: new Date(last).toLocaleTimeString(undefined,
-          { hour: "2-digit", minute: "2-digit" }) }) : "");
+      : (last ? format(copy.updated, { time: utcClock(last) }) : "");
   };
 
   let data = null;

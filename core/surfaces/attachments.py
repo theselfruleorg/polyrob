@@ -188,9 +188,8 @@ def screen_attachment_path(real_path: str, *, max_mb: Optional[float] = None,
     inlined API key must not ship, text OR binary head), and an optional
     prompt-injection ``scanner`` on null-free text content.
 
-    ``scanner`` is INJECTED by the caller (layering ratchet: core never imports
-    ``modules.*``) — pass ``modules.memory.task.threat_scan.is_suspicious`` from
-    agents/tools tiers. None => no injection scan. A RAISING scanner rejects
+    ``scanner`` is INJECTED by the caller — pass
+    ``core.security.threat_scan.is_suspicious``. None => no injection scan. A RAISING scanner rejects
     (fail-closed, mirroring the project-context precedent).
     """
     cap_mb = attach_max_mb() if max_mb is None else max_mb

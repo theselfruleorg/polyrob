@@ -8,7 +8,7 @@ posture-off `GOAL_SELF_WAKE_ENABLED`, so on the server completed goals told no o
 import asyncio
 
 from agents.task.goals.dispatcher import GoalDispatcher
-from agents.task.goals.board import Goal
+from modules.goals.board import Goal
 from core.config_policy import AutonomyConfig
 
 

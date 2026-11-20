@@ -8,7 +8,8 @@ performs:
 * ``open``      → ``confirmed`` (a quote's or a line card's Confirm), ``cancelled``,
   ``expired``, ``replaced`` (a refresh, a proposal's quote, a builder's last pick),
   ``done`` (a choice picked), and ``open`` itself (a builder advances one step);
-* ``confirmed`` → ``done`` | ``failed`` (``finish``; the stuck sweep closes as failed);
+* ``confirmed`` → ``done`` | ``failed`` (``finish``; the stuck sweep closes as failed),
+  and ``confirmed`` itself (a call card records each finished step, 126);
 * ``failed``    → ``done`` | ``failed`` (a late real result replaces the sweep's
   "no result", AC2);
 * ``replaced``  → ``replaced`` (``note_result`` stores what its line produced).
@@ -38,7 +39,7 @@ CARD = StateMachine(
     initial=frozenset({S_OPEN}),
     transitions={
         S_OPEN: frozenset({S_OPEN, S_CONFIRMED, S_DONE, S_CANCELLED, S_EXPIRED, S_REPLACED}),
-        S_CONFIRMED: frozenset({S_DONE, S_FAILED}),
+        S_CONFIRMED: frozenset({S_CONFIRMED, S_DONE, S_FAILED}),
         S_FAILED: frozenset({S_DONE, S_FAILED}),
         S_REPLACED: frozenset({S_REPLACED}),
     },

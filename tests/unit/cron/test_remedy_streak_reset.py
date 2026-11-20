@@ -4,7 +4,7 @@ import types
 
 import pytest
 
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from core.goal_vocab import ASK_OPEN
 from cron import remedy_streak as rs
 from cron.jobs import CronJob, CronJobStore

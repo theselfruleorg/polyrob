@@ -218,6 +218,9 @@ CORE_VERB_ROWS = {
         "defi_data_wallet_holdings": dict(correspondent_blocked=True, room_denied=True,
                                           read_job=True),
         "defi_data_wallet_activity": dict(correspondent_blocked=True, room_denied=True),
+        # 125 S12: /check as the agent read — the wallet_holdings / token_info reads of an
+        # EXPLICIT address, under the same gates.
+        "defi_data_address_report": dict(correspondent_blocked=True, room_denied=True),
         # 071 W3: the rail book — sizes, cost basis and P&L of the OPERATOR's own positions.
         "defi_data_positions": dict(correspondent_blocked=True, room_denied=True),
         # 086 W0: closes a book row of the OPERATOR's own wallet on a balance it measures
@@ -315,6 +318,12 @@ CORE_VERB_ROWS = {
         "defi_trade_deploy_token": dict(
             effect="money", lane="defi", side="spend", simulatable=True, approval_owner="hook",
             correspondent_blocked=True,
+        ),
+        # 122 W3: a launch deploys a token AND seeds a pool with real value — the owner's act
+        # always (the card, or a mandate that names it and its quote token).
+        "defi_trade_launch_token": dict(
+            effect="money", lane="owner_always", side="spend", simulatable=True,
+            approval_owner="hook", correspondent_blocked=True,
         ),
         # 042b: the Solana twin, bounded by measured rent (~0.0035 SOL) held to max_spend_usd,
         # and by the same ceiling above it.

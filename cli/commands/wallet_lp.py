@@ -21,7 +21,7 @@ v4_option = click.option('--v4', is_flag=True, help='A Uniswap v4 position (defa
 
 def run(action, values, execute=False, yes=False, v4=False):
     from cli.commands.wallet import _admin_tenant, _echo_result
-    from surfaces.telegram.lp_ops import dispatch
+    from tools.defi.owner_verbs.lp import dispatch
     if v4:
         values['protocol'] = 'v4'
     values = {k: v for k, v in values.items() if v is not None or k != 'token_id'}
@@ -29,7 +29,7 @@ def run(action, values, execute=False, yes=False, v4=False):
         if execute and not yes:
             click.confirm(f'Broadcast liquidity {action} on {values["chain"]}?', abort=True)
         values['dry_run'] = not execute
-    # D12: `lp_ops.dispatch` is async (a sync money helper blocked the surface
+    # D12: `owner_verbs.lp.dispatch` is async (a sync money helper blocked the surface
     # loop); click is sync, so bridge here — the one seat that needs it.
     from core.async_bridge import run_coroutine_sync
     # The ONE owner-tenant rule (see `wallet._owner_ctx`): a liquidity spend

@@ -2,7 +2,7 @@
 import json
 import os
 
-from cli.update.agent_state import _read_marker_file
+from core.agent_activity import _read_marker_file
 
 
 def test_legacy_marker_without_start_time_still_live(tmp_path):

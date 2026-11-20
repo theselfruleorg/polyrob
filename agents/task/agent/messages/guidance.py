@@ -76,7 +76,7 @@ def _offload_owner_message(session_id: Optional[str], text: str,
 	try:
 		import os
 		import secrets
-		from agents.task.path import pm
+		from core.session_paths import pm
 		manager = pm()
 		if getattr(manager, "is_project_root_workspace", False):
 			return None  # never write into the owner's project folder

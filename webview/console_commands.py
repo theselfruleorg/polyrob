@@ -4,10 +4,10 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-#: 043 A10/A45: these two verbs are session-creating — the console has its own
-#: UI for them (see the `/task`/`/new` short-circuit below) — so they are
-#: filtered out of the console's rendered `/help` body rather than advertised
-#: as chat-box commands nobody can actually run there.
+#: 043 A10/A45: `/task` creates a session — the console has its own UI for it
+#: (see the short-circuit below) — so it is filtered out of the console's
+#: rendered `/help` body rather than advertised as a chat-box command nobody
+#: can actually run there. (`/new` is a chat verb the chat box runs.)
 CONSOLE_HELP_EXCLUDED = ("/task",)
 
 #: Answer for `/help task` on the console.
@@ -43,7 +43,7 @@ def _console_deliver(task_agent, clean_id: str, user_id: str):
        tab that typed the verb shows the answer where it asked. Skipped on the
        cold-open path (no session, ``clean_id == ""``).
     """
-    from agents.task.path import is_reserved_session_id
+    from core.session_paths import is_reserved_session_id
     seat = bool(clean_id) and is_reserved_session_id(clean_id)
 
     async def _deliver(text: str) -> None:
@@ -76,6 +76,34 @@ def _console_deliver(task_agent, clean_id: str, user_id: str):
         except Exception:
             logger.debug("console command: live feed push skipped", exc_info=True)
     return _deliver
+
+
+class ConsoleReply(str):
+    """A chat-box answer: its text (a ``str``, so every caller that keeps or
+    compares text is unchanged) plus the buttons to draw under it."""
+
+    def __new__(cls, text: str, actions=()):
+        obj = super().__new__(cls, text or "")
+        obj.actions = list(actions or [])
+        return obj
+
+
+def reply_buttons_json(reply) -> list:
+    """The buttons of a chat-box answer as JSON: ``[{label, command, style}]``.
+    ``command`` is exactly what the owner could type; the console sends it as
+    a typed line, so every gate runs again."""
+    out = []
+    for a in getattr(reply, "actions", None) or []:
+        cmd = str(getattr(a, "command", "") or "")
+        if cmd:
+            out.append({"label": str(getattr(a, "label", "") or cmd), "command": cmd,
+                        "style": str(getattr(a, "style", "default") or "default")})
+    return out
+
+
+def command_answer(reply) -> dict:
+    """The JSON fields of a chat-box answer: its text and its buttons."""
+    return {"command_reply": str(reply), "command_actions": reply_buttons_json(reply)}
 
 
 def _chat_box_verb(clean_id: str, user_id: str, text: str, token: str) -> str:
@@ -133,10 +161,10 @@ async def maybe_handle_console_command(task_agent, clean_id: str, user_id: str, 
 
 
 def _unknown_verb_reply(token: str) -> str:
-    """The Telegram seat's own answer for an unknown verb (one source)."""
+    """The chat seats' own answer for an unknown verb (one source, in core)."""
     try:
-        from surfaces.telegram.harness import _unknown_command_text
-        return _unknown_command_text(token)
+        from core.surfaces.command_catalog import unknown_text
+        return unknown_text(token)
     except Exception:
         logger.debug("unknown-verb help unavailable", exc_info=True)
         return f"Unknown command {token}. Send /help for the full list."
@@ -156,15 +184,15 @@ async def _route_known_verb(task_agent, clean_id: str, user_id: str, text: str,
         return _CONSOLE_HELP_UNAVAILABLE
     from core.surfaces.dispatcher import RouteDecision, RouteKind
     from core.surfaces.envelopes import Identity, InboundMessage, SessionSource
-    from surfaces.telegram.harness import _handle_command
-    from surfaces.telegram.inbound import InboundResult
+    from core.surfaces.act import InboundResult
+    from surfaces._actor import handle_command
     source = SessionSource(surface_id="webview", chat_id=clean_id, chat_type="dm")
     inbound = InboundMessage(text=text, identity=Identity(user_id=str(user_id),
                                                           source=source))
     decision = RouteDecision(kind=RouteKind.COMMAND,
                              # A10: the tail must match build_session_key's real
                              # DM shape (…:dm:{chat_id}:{user_id}) — the lifecycle
-                             # gate for /cancel and /new (harness._lifecycle_permitted)
+                             # gate for /cancel and /new (core.surfaces.lifecycle_verbs)
                              # confirms a non-owner is acting on THEIR OWN session by
                              # matching this suffix; the route above already checked
                              # `current_user_id == session_owner_id` before this is
@@ -175,31 +203,35 @@ async def _route_known_verb(task_agent, clean_id: str, user_id: str, text: str,
     result = InboundResult(inbound=inbound, decision=decision)
     # 061: a DECIDING console verb (/approve, /pause, …) is a line of the
     # owner's conversation exactly as the same verb on Telegram is.
-    from surfaces.telegram.harness import _record_owner_line
-    _record_owner_line(task_agent, result, session_id=clean_id, kind="command")
+    from surfaces._actor import record_owner_line
+    record_owner_line(task_agent, result, session_id=clean_id, kind="command")
     # An EXECUTING money verb (`/send … go`, `/bridge … go`) waits up to
     # ~120 s for a receipt. Without a `deliver` the harness ran it INLINE
     # and held this HTTP request the whole time. The console passes one
-    # under the SAME rule Telegram uses (`_runs_in_background`), so the
+    # under the SAME rule Telegram uses (`core.surfaces.cards.runs_in_background`), so the
     # harness answers "started" at once and hands the result here. Only
     # then: every other verb keeps its inline answer, byte-identical.
-    from surfaces.telegram.harness import _runs_in_background
+    from core.surfaces.cards import runs_in_background
     # A card tap (`/card_<id>_ok`) may run a money line: the card seat
     # decides whether THAT line goes to the background, so it gets one too.
+    # `/approve|/reject <call card id>` is that card's tap (surfaces/card_press.py).
     from core.surfaces.cards import parse_card_token
+    from surfaces.card_press import call_card_tap
     deliver = (_console_deliver(task_agent, clean_id, str(user_id))
-               if (_runs_in_background(token, result)
-                   or parse_card_token(token)[0] is not None) else None)
-    reply = await _handle_command(task_agent, result, spawn=None,
-                                  deliver=deliver)
-    if token == "/help" and not args and isinstance(reply, str):
-        reply = _filter_console_help(reply)
-    # An action card (or a room reply) answers with a CommandReply; the
-    # console draws text, and the text keeps every tap token.
-    from core.surfaces.command_reply import CommandReply, reply_text
-    if isinstance(reply, CommandReply):
-        reply = reply_text(reply)
-    return reply
+               if (runs_in_background(token, text)
+                   or parse_card_token(token)[0] is not None
+                   or call_card_tap(str(user_id), text) is not None) else None)
+    reply = await handle_command(task_agent, result, deliver=deliver)
+    if token == "/help" and not args:
+        # The console keeps the whole list, not the chat menu of groups.
+        from core.surfaces.command_catalog import help_text
+        reply = _filter_console_help(help_text() if not isinstance(reply, str) else reply)
+    # An action card (or a nav reply) answers with a CommandReply. The console
+    # draws its text and THE SAME buttons every seat draws
+    # (core.surfaces.command_reply.reply_buttons): a card's, the reply's
+    # next-step actions, or a decision list's. Never a second rule here.
+    from core.surfaces.command_reply import reply_buttons, reply_text
+    return ConsoleReply(reply_text(reply), reply_buttons(reply, token, text))
 
 
 async def run_console_line(task_agent, clean_id: str, user_id: str, text: str) -> str:
@@ -225,10 +257,10 @@ def looks_like_console_verb(text) -> bool:
     """Is *text*'s first token a verb (known, or command-shaped) this seat
     answers inline?
 
-    Pure and cheap: the membership test only, no agent, no I/O. ``/task`` and
-    ``/new`` are excluded for the same reason as above — the console has its
-    own controls for starting work, and routing them here would make creating
-    a session impossible.
+    Pure and cheap: the membership test only, no agent, no I/O. ``/task``
+    is excluded for the same reason as above — the console has its own
+    controls for starting work, and routing it here would make creating a
+    session impossible.
     """
     token = (str(text or "").strip().split() or [""])[0].lower()
     if not token.startswith("/"):
@@ -293,7 +325,7 @@ def build_console_create_router():
             if reply is not None:
                 # No session created, and the seat says so in the one field the
                 # bound-chat path already answers with.
-                return JSONResponse({"success": True, "command_reply": reply})
+                return JSONResponse({"success": True, **command_answer(reply)})
         if (request_body or {}).get("wait_for_uploads") or (request_body or {}).get("auto_start") is False:
             # 113 W6 (C-02): an unstarted chat (the start-page attach) starts on its first
             # line; with no model here that line is refused, so refuse before a folder exists.

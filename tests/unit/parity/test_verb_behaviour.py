@@ -45,7 +45,7 @@ BEHAVIOUR_DEBT = frozenset({
     # The chat list reads the saved MCP store; the terminal reads its own live
     # MCP manager and the operator file (no store on a terminal install).
     "/mcp",
-    # The same words (``owner_ops.avatar_reply``); a chat app sends the photo,
+    # The same words (``tools.avatar_owner.avatar_reply``); a chat app sends the photo,
     # the terminal names the image file instead.
     "/avatar",
 })

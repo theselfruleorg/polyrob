@@ -217,6 +217,18 @@ TELEGRAM_BOT_TOKEN_RE = re.compile(
 #: misses when the name is just ``key``.
 GOOGLE_API_KEY_RE = re.compile(r"(?<![A-Za-z0-9_-])AIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])")
 
+#: L-21 — a chat webhook URL IS its credential (whoever holds it posts as the hook)
+#: and no key name precedes it. Discord: ``…/api[/vN]/webhooks/<id>/<token>``
+#: (discord.com, discordapp.com, ptb./canary.); Slack: ``hooks.slack.com/
+#: services|workflows|triggers/…``. The host and path prefix stay readable.
+DISCORD_WEBHOOK_RE = re.compile(
+    r"(?i)((?:https?://)?(?:ptb\.|canary\.)?discord(?:app)?\.com/api(?:/v\d{1,2})?/webhooks/)"
+    r"\d{5,25}/[A-Za-z0-9_-]{20,}"
+)
+SLACK_HOOK_RE = re.compile(
+    r"(?i)((?:https?://)?hooks\.slack\.com/(?:services|workflows|triggers)/)[A-Za-z0-9_/-]{10,}"
+)
+
 #: A RAW EVM private key (32 bytes hex, optional ``0x``) — but ONLY right after a
 #: key-context label (``Private key: 0x…``, ``signing key = …``). ``0x`` + 64 hex
 #: is ALSO a transaction hash, a block hash and a storage slot, which this
@@ -262,8 +274,8 @@ def apply_ssot_shapes(text: str, redacted: str = REDACTED) -> str:
     """Apply the ordered high-confidence shape battery to *text*.
 
     ONE home for the substitution sequence (PEM → Bearer → Telegram bot token →
-    Google key → context-anchored EVM key → RPC-path-key → KV → provider-key →
-    polyrob-key → AWS → JWT → Solana secret → opaque token) so the persisted-content scrubber
+    Google key → Discord/Slack webhook URL → context-anchored EVM key →
+    RPC-path-key → KV → provider-key → polyrob-key → AWS → JWT → Solana secret → opaque token) so the persisted-content scrubber
     (core/secret_scrub.py), the logging filter (core/security_logging_filter.py)
     and the display scrubber (cli/ui/secrets.py) can never drift again — the
     logging filter had already dropped the JWT rung, so OAuth tokens survived
@@ -280,6 +292,8 @@ def apply_ssot_shapes(text: str, redacted: str = REDACTED) -> str:
     out = COOKIE_RE.sub(redacted, out)
     out = TELEGRAM_BOT_TOKEN_RE.sub(redacted, out)
     out = GOOGLE_API_KEY_RE.sub(redacted, out)
+    out = DISCORD_WEBHOOK_RE.sub(lambda m: m.group(1) + redacted, out)
+    out = SLACK_HOOK_RE.sub(lambda m: m.group(1) + redacted, out)
     out = EVM_KEY_CONTEXT_RE.sub(lambda m: f"{m.group(1)}{redacted}", out)
     # BEFORE the KV rule: an `?api-key=` URL is KV's job, but a path-form RPC key
     # must be claimed while the whole URL is still intact (KV would otherwise

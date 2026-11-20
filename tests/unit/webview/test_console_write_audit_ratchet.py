@@ -36,15 +36,15 @@ _RECORD_NAME = "console_write"
 #: here.
 _ALLOWLIST = {
     # apps: core.app_service.owner_ops.record stamps user_id + via="webview".
-    "api_apps_approve", "api_apps_reject", "api_apps_kill", "api_apps_start", "api_apps_remove",
+    "api_apps_kill", "api_apps_start", "api_apps_remove",
     # pause/halt/resume: core.autonomy_control records AUTONOMY_PAUSED/RESUMED.
     "api_pause", "api_halt", "api_resume",
     # feed / loopback / auth rails in server.py + emit_api.py (out of W4 scope,
     # and not owner-console verbs): the agent's telemetry fast-push, the live
     # token stream, the message rail, the sign-in POST (mutates the CALLER's
-    # cookie, not console/agent state) and the session-repair rail.
+    # cookie, not console/agent state).
     "internal_emit", "receive_stream_chunk", "send_message_to_session",
-    "owner_login_submit", "api_repair",
+    "owner_login_submit",
     # Logout only revokes the caller's session in the durable token denylist.
     "logout",
     # 043 A17: the cold-open front door. It creates NOTHING of its own — it
@@ -211,7 +211,7 @@ def test_goal_verb_writes_an_audit_row_naming_the_actor(monkeypatch, tmp_path):
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH",
                        str(tmp_path / "telemetry_events.db"))
     monkeypatch.delenv("TELEMETRY_EVENT_LOG_ENABLED", raising=False)
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from core.event_kinds import CONSOLE_GOAL_VERB
     from core.event_log import get_event_log
 

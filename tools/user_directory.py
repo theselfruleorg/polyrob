@@ -99,6 +99,15 @@ class UserDirectory:
         )
         return user_id
 
+    def internal_id_for(self, raw_user_id: str, surface_id: str) -> str:
+        """The internal ``user_id`` ``resolve_internal`` returns, with NO write.
+
+        Pure (125 S32): an inbound whose access tier is not known yet (a forged
+        email ``From:``) gets its id without a directory row; the surface calls
+        ``resolve_internal`` only once the route is not DENIED.
+        """
+        return self._derive_internal_id(surface_id, str(raw_user_id).strip())
+
     def resolve_internal(self, raw_user_id: str, surface_id: str) -> str:
         """Map a raw platform id to a stable internal ``user_id`` (idempotent).
 

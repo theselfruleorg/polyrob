@@ -112,7 +112,7 @@ async def test_agent_run_may_edit_a_job(tmp_path, agent_turn):
 
 @pytest.mark.asyncio
 async def test_agent_rig_past_the_ceiling_is_refused(tmp_path, agent_turn, monkeypatch):
-    monkeypatch.setattr(gt, "allowed_self_goal_tools", lambda: gt._SELF_GOAL_ALLOWED_TOOLS)
+    monkeypatch.setattr("core.tool_grants.allowed_self_goal_tools", lambda: __import__("core.tool_grants", fromlist=["x"]).SELF_GOAL_ALLOWED_TOOLS)
     t = _tool(tmp_path)
     job = _job(t)
     res = await t.cronjob_edit(CronEditAction(job_id=job.id, rig="money_rail"),

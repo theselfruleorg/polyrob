@@ -53,7 +53,7 @@ def test_clean_value_renders_unchanged(tmp_path):
 
 def test_raising_scanner_fails_closed_to_blocked(tmp_path, monkeypatch):
     _write_prefs(tmp_path, "u1", '[style]\ntone = "friendly"\n')
-    import modules.memory.task.threat_scan as ts
+    import core.security.threat_scan as ts
 
     def _boom(_text):
         raise RuntimeError("scanner down")
@@ -67,7 +67,7 @@ def test_other_keys_are_never_scanned(tmp_path, monkeypatch):
     # style.verbosity is not in the threat-scanned set: even a raising scanner
     # must not affect it — proves the scan stays OFF the hot path.
     _write_prefs(tmp_path, "u1", '[style]\nverbosity = "terse"\n')
-    import modules.memory.task.threat_scan as ts
+    import core.security.threat_scan as ts
 
     def _boom(_text):
         raise RuntimeError("scanner down")
@@ -82,7 +82,7 @@ def test_env_sourced_value_is_not_scanned(tmp_path, monkeypatch):
     # No pref on disk; value comes from the operator env channel — never scanned
     # (operator-owned; the read guard targets the agent/hand-edited pref file).
     monkeypatch.setenv("POLYROB_PERSONA", "helpful assistant")
-    import modules.memory.task.threat_scan as ts
+    import core.security.threat_scan as ts
 
     def _boom(_text):
         raise RuntimeError("scanner down")
@@ -123,7 +123,7 @@ def test_clean_tone_renders_in_style_line(tmp_path):
 
 def test_style_line_tone_scan_error_omits_field(tmp_path, monkeypatch):
     _write_prefs(tmp_path, "u1", '[style]\ntone = "friendly"\nverbosity = "terse"\n')
-    import modules.memory.task.threat_scan as ts
+    import core.security.threat_scan as ts
 
     def _boom(_text):
         raise RuntimeError("scanner down")

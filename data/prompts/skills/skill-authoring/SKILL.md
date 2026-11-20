@@ -17,8 +17,9 @@ How to write a durable, safe skill in this system.
   load it and patch it instead of writing a second one.
 - Read the existing skill first if you are EDITING one. Patch the smallest span; do not
   rewrite a whole body from memory — a stale rewrite can lose hard-won detail.
-- A rule the owner stated is not a procedure: record it with `owner_doc_manage`, not in a
-  skill. Only the terms of a programme the owner runs as jobs live in its pinned skill.
+- An owner's decision about how you behave in all your work goes to `owner_doc_manage`.
+  The rules of one task (its steps, criteria and lists), even when the owner stated them,
+  are that task's skill; a job names the skill and never copies it.
 - A skill you create or change is live at once, a bundled skill's fix too; the prior body
   is archived and `rollback` restores it. A write from a session with a correspondent's
   message, a room or another tenant stays a `.pending` draft for the owner.

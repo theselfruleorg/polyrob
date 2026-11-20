@@ -81,7 +81,7 @@ async def guarded_call(tool, *, execution_context, verb: str, intent, inner_to: 
             tool.guard, intent, tx, holder=signer.address, gate=gate,
             execution_context=execution_context, tool_self=tool, price_fn=_price,
             forged_fn=_is_forged_or_autonomous_turn, autonomous_ok_fn=_is_autonomous_goal_turn,
-            account_rpc=rpc)
+            account_rpc=rpc, dry_run=bool(dry_run))
         usd = 'unknown' if decision.amount_usd is None else f'${decision.amount_usd:.4f}'
         header += ((f"  cost:     {usd} — the gas fee, NOT the value received\n" if fee_only
                     else f"  value:    {usd}\n")
@@ -95,8 +95,10 @@ async def guarded_call(tool, *, execution_context, verb: str, intent, inner_to: 
             except Exception as exc:  # noqa: BLE001
                 return tool._ar(error=f"refused at gas sizing: {exc} — nothing was broadcast")
         if dry_run:
-            return tool._ar(content=header + ("  RESULT: DRY RUN — the guard would allow this, but "
-                                              "nothing was broadcast. Re-run with dry_run=false to send."))
+            from tools.base_tool import dry_run_result
+            return dry_run_result(tool, header + ("  RESULT: DRY RUN — the guard would allow this, "
+                                                  "but nothing was broadcast. Re-run with "
+                                                  "dry_run=false to send."), decision.amount_usd)
         try:
             tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
         except Exception as exc:  # noqa: BLE001

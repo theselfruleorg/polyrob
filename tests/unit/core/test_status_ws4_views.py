@@ -38,7 +38,7 @@ def _jobs(d):
 
 
 def _board(d):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     return GoalBoard(os.path.join(d, "goals.db"))
 
 

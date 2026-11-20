@@ -34,6 +34,12 @@ DEFAULT_EDIT_INTERVAL_SEC = 2.5
 APPROVAL_REMINDER_SEC = 600.0
 
 
+
+def _plain(name: object) -> str:
+    """An internal name as words for the owner's bubble (2026-11-20 UX review M8):
+    ``browser_navigate`` reads ``browser navigate``."""
+    return " ".join(str(name or "").replace("_", " ").split()) or "a step"
+
 class TurnProgressTracker:
     """Feed-event → throttled progress text for ONE surface turn."""
 
@@ -107,8 +113,8 @@ class TurnProgressTracker:
                 data = {}
             if kind == "tool_started":
                 self._tools += 1
-                name = data.get("action_name") or data.get("tool_name") or "tool"
-                self._current = f"→ {name}"
+                name = data.get("action_name") or data.get("tool_name") or "a step"
+                self._current = f"→ {_plain(name)}"
             elif kind == "llm_started":
                 self._current = "thinking…"
             elif kind == "step":
@@ -127,10 +133,11 @@ class TurnProgressTracker:
             elif kind == "retry_wait":
                 delay = data.get("delay_sec")
                 tail = f" in {delay:.0f}s" if isinstance(delay, (int, float)) else ""
-                self._wait = f"↻ {data.get('reason') or 'provider'} — retrying{tail}"
+                self._wait = (f"↻ {_plain(data.get('reason') or 'the provider is busy')}"
+                              f" — retrying{tail}")
                 self._wait_kind = "retry"
             elif kind == "compaction_started":
-                self._wait = "📦 Compacting context…"
+                self._wait = "📦 Shortening my notes…"
                 self._wait_kind = "compacting"
             elif kind == "compaction_finished":
                 self._clear_wait("compacting")
@@ -161,8 +168,6 @@ class TurnProgressTracker:
             parts.append(f"step {self._step}")
         if self._current:
             parts.append(self._current)
-        if self._tools:
-            parts.append(f"{self._tools} tool{'s' if self._tools != 1 else ''}")
         parts.append(f"{elapsed:.0f}s")
         self._poll_cost()
         if self._cost > 0:
@@ -177,7 +182,7 @@ class TurnProgressTracker:
             if self.session_id is None:
                 return
             if self._usage_dir is None:
-                from agents.task.path import pm
+                from core.session_paths import pm
                 self._usage_dir = Path(pm().get_subdir(self.session_id, "data")) / "llm_usage"
             if not self._usage_dir.is_dir():
                 return
@@ -257,8 +262,8 @@ class TurnProgressTracker:
                 return
             self._reminded = True
             self._last_text = ""  # force the edit through the text-dedup
-            self._wait = ("⏸ Still waiting for your approval — the run is blocked. "
-                          "Reply /pending (or `polyrob owner pending`).")
+            self._wait = ("⏸ Still waiting for your decision — I cannot go on until you "
+                          "decide. Open /pending.")
             await self._do_edit()
         except asyncio.CancelledError:
             pass

@@ -24,7 +24,8 @@ from __future__ import annotations
 
 import click
 
-from core.prefs import load_preferences, propose_pref_change, write_preference
+from core.prefs import load_preferences, propose_pref_change
+from core.prefs_lists import add_list_entries
 from cli._admin_home import admin_data_dir, as_root_option
 from cli.commands._options import json_option
 from tools.controller.approval import effective_approval_state
@@ -118,8 +119,7 @@ def add_cmd(action, user_id, home_dir_opt):
     if action in current:
         click.echo(f"'{action}' is already in approvals.require (no change).")
         return
-    updated = sorted(set(current) | {action})
-    ok, err = write_preference(home_dir, user_id, "approvals.require", updated)
+    ok, err, _ = add_list_entries(home_dir, user_id, "approvals.require", [action])  # 125 S20
     if not ok:
         raise click.ClickException(err)
     click.echo(

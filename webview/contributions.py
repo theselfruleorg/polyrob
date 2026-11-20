@@ -27,7 +27,8 @@ _IN_TREE: Tuple[str, ...] = ("webview.pages", "webview.pages_new", "webview.toke
                              "webview.cards_routes", "webview.feed_routes",
                              "webview.workspace_routes", "webview.job_routes",
                              "webview.goal_board_routes", "webview.usage_routes",
-                             "webview.model_routes", "webview.commerce_routes")
+                             "webview.model_routes", "webview.commerce_routes",
+                             "webview.money_standing_routes")
 
 _ROUTERS: List[Tuple[str, Any, str]] = []      # (destination, router, source)
 

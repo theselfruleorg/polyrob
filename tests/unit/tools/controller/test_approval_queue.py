@@ -9,7 +9,7 @@ import asyncio
 
 import pytest
 
-from agents.task.goals.board import ASK_OPEN, GoalBoard
+from modules.goals.board import ASK_OPEN, GoalBoard
 from tools.controller.approval_queue import OwnerQueueApprover, compute_request_hash
 from agents.task.loop_types.execution_context import ActionExecutionContext
 
@@ -433,7 +433,7 @@ async def test_a_tainted_autonomous_run_is_still_denied_with_no_ask(
 @pytest.mark.asyncio
 async def test_an_ask_from_a_goal_run_names_the_goal_it_blocks(
         provider, board, autonomous_goal_turn, monkeypatch):
-    from agents.task.goals.board import STATUS_READY
+    from modules.goals.board import STATUS_READY
     goal = board.create(user_id="u1", title="bridge to robinhood", status=STATUS_READY)
     monkeypatch.setattr("core.autonomy_marker.goal_for_session",
                         lambda sid: goal.id)
@@ -448,7 +448,7 @@ async def test_approving_the_ask_flips_the_blocked_goal_back_to_ready(
         provider, board, autonomous_goal_turn, monkeypatch):
     """End to end: the owner presses /approve and the goal becomes runnable again,
     which is what makes the durable grant redeemable at all."""
-    from agents.task.goals.board import STATUS_READY
+    from modules.goals.board import STATUS_READY
     goal = board.create(user_id="u1", title="bridge to robinhood", status=STATUS_READY)
     board.record_failure(goal.id, error="agent declared BLOCKED: needs owner approval",
         claim_token=board.get(goal.id).claim_token)
@@ -508,7 +508,7 @@ async def test_re_asking_widens_the_goal_list_on_an_EXISTING_ask(
     and never reached create_ask's merge. An ask created before the goal list
     existed - or by a run that had no goal - would therefore re-arm nothing
     forever, no matter how many times it was asked again."""
-    from agents.task.goals.board import STATUS_READY
+    from modules.goals.board import STATUS_READY
     goal = board.create(user_id="u1", title="bridge", status=STATUS_READY)
 
     # First ask: no goal mapping (e.g. raised before 039, or by a cron run).
@@ -528,7 +528,7 @@ async def test_re_asking_widens_the_goal_list_on_an_EXISTING_ask(
 
 
 def test_add_ask_blocked_goals_is_idempotent_and_never_raises(tmp_path):
-    from agents.task.goals.board import GoalBoard, STATUS_READY
+    from modules.goals.board import GoalBoard, STATUS_READY
     b = GoalBoard(str(tmp_path / "g.db"))
     g = b.create(user_id="u1", title="x", status=STATUS_READY)
     ask = b.create_ask(user_id="u1", what="Approve?", why="because",
@@ -645,7 +645,7 @@ class _WakeSpy:
 @pytest.mark.asyncio
 async def test_no_self_wake_when_a_goal_is_being_re_armed(board):
     from tools.controller.approval_queue import decide_tool_approval, tap_display_id
-    from agents.task.goals.board import STATUS_READY
+    from modules.goals.board import STATUS_READY
     goal = board.create(user_id="u1", title="bridge", status=STATUS_READY)
     board.record_failure(goal.id, error="blocked on approval",
         claim_token=board.get(goal.id).claim_token)

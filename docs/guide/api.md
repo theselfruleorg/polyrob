@@ -185,7 +185,8 @@ POST /api/task/sessions
 
 `model`, `provider`, `tools`, and `max_steps` are optional and default from your config
 (`max_steps` bounds this one request, default `INTERACTIVE_MAX_STEPS` (100); goals, scheduled jobs and helpers stop at
-`AUTONOMOUS_MAX_STEPS` instead) (run
+`AUTONOMOUS_MAX_STEPS` instead; when anyone but the owner or an admin asks, a larger
+`max_steps` is lowered to that budget, without an error) (run
 `polyrob model list` to see available models). The response echoes what was actually used:
 
 ```json
@@ -310,11 +311,15 @@ polyrob implements Google's A2A protocol for AI agent interoperability. Other AI
 GET /.well-known/agent.json
 ```
 
-Returns the Agent Card — polyrob's capabilities, supported methods, and authentication options. This is the standard A2A discovery endpoint (no auth required).
+Returns the Agent Card — the agent's name (the instance's own name, the same name as its ERC-8004 registration file), capabilities, supported methods, and authentication options. This is the standard A2A discovery endpoint (no auth required).
 
 ```bash
 curl http://localhost:9000/.well-known/agent.json
 ```
+
+The card's `url` is the JSON-RPC endpoint, `/a2a/rpc`. A `GET /a2a` or `GET /a2a/rpc` says how
+to call it: a `200` naming `POST` and the card, or with x402 on a `402` whose challenge prices the
+POST (`outputSchema.input.method: "POST"`), so `x402_probe` can price it. A GET is never billed.
 
 `GET /a2a/agent-card` serves the same card at an API path. `GET /a2a/extended-card`
 serves it to an authenticated caller and may add tier-specific metadata.
@@ -508,6 +513,7 @@ claim carrying BOTH an agent id and a registry address. Otherwise it is
 GET  /eip8004/registration.json                   # this agent's registration file
 GET  /eip8004/config                              # what is configured, and what is not
 POST /eip8004/validation/{request,respond}
+GET  /eip8004/validation                          # an index of the reads below (simulated)
 GET  /eip8004/validation/{status/{hash},summary/{agent_id},pending,validators}
 ```
 
@@ -670,6 +676,9 @@ SDK parsers ignore comment frames per the SSE spec.
 IPv6 client by its `/64`, so rotating addresses inside one allocation does not reset
 the window. Sign-in nonces (`/api/auth/nonce`) are limited to 10 per minute per
 client. An A2A task list returns at most 100 rows per page (default 20), and one
-caller may hold at most 8 live A2A task streams. In production (`ENVIRONMENT=production`)
-the server refuses to boot with a weak `JWT_SECRET_KEY` or one that looks like a
-template placeholder (`change-me…`, `your-secret…` and the like).
+caller may hold at most 8 live A2A task streams. In production (any of
+`ENVIRONMENT`, `POLYROB_ENV`, `CONFIG_ENV` or `ENV` set to `production`, or
+`PRODUCTION=true`) the server refuses to boot with a weak `JWT_SECRET_KEY` or one
+that looks like a template placeholder (`change-me…`, `your-secret…` and the like).
+The access tier is checked on every box: an environment name never skips it, so a
+`free` account gets `403` on a compute route in development too.

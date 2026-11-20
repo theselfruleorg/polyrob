@@ -3,9 +3,6 @@
   "generator": "scripts/gen_policy_golden.py",
   "pinned_env": {
    "cleared": "everything except PATH, TMPDIR, SYSTEMROOT",
-   "patched": {
-    "agents.task.constants._agent_nft_package_installed": false
-   },
    "set": {
     "HOME": "<fresh temp dir>",
     "POLYROB_DATA_DIR": "<fresh temp dir>/data"
@@ -80,7 +77,7 @@
    "github_create_issue",
    "aave_supply"
   ],
-  "universe_size": 424
+  "universe_size": 427
  },
  "actions": {
   "": {
@@ -208,8 +205,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.ACTION_EFFECTS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -303,8 +300,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.ALWAYS_OWNER_APPROVED_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -374,8 +371,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.ALWAYS_OWNER_APPROVED_VERBS"
    ],
@@ -429,8 +426,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.ALWAYS_OWNER_APPROVED_VERBS"
    ],
@@ -484,8 +481,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -555,8 +552,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.NON_WRITE_ACTIONS"
+    "effects.NON_WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": true,
@@ -608,8 +605,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -682,8 +679,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -756,8 +753,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -830,8 +827,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.ALWAYS_OWNER_APPROVED_VERBS"
    ],
@@ -885,8 +882,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -959,8 +956,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -1033,8 +1030,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.ALWAYS_OWNER_APPROVED_VERBS"
    ],
@@ -1088,8 +1085,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.ALWAYS_OWNER_APPROVED_VERBS"
    ],
@@ -1143,8 +1140,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -1217,8 +1214,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -1288,8 +1285,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.NON_WRITE_ACTIONS"
+    "effects.NON_WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": true,
@@ -1341,8 +1338,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.ALWAYS_OWNER_APPROVED_VERBS"
    ],
@@ -1391,8 +1388,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.ACTION_EFFECTS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -1438,7 +1435,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -1488,8 +1485,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.WRITE_ACTIONS"
+    "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -1930,7 +1927,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -1975,8 +1972,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.ACTION_EFFECTS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -2022,7 +2019,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -3564,7 +3561,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -3609,7 +3606,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -3654,8 +3651,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.ACTION_EFFECTS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -3701,7 +3698,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -3751,8 +3748,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.WRITE_ACTIONS"
+    "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -3799,7 +3796,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -4288,8 +4285,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.ACTION_EFFECTS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -4335,7 +4332,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -4800,8 +4797,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS"
    ],
@@ -4969,6 +4966,54 @@
     "is_untrusted_tool(name, owner)": false
    }
   },
+  "defi_data_address_report": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": null,
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": null,
+    "write_row": {}
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "high_impact._HIGH_IMPACT_NAMES",
+    "room_policy.ROOM_DENIED_ACTIONS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "defi_data"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": true
+   }
+  },
   "defi_data_balances": {
    "approval": {
     "autonomous_gating_lanes(env)": "reported"
@@ -5083,7 +5128,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -5176,7 +5221,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -5290,6 +5335,51 @@
     "is_untrusted_tool(name, owner)": true
    }
   },
+  "defi_data_nft_account": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": false,
+    "is_high_impact_call(name, None)": false,
+    "is_high_impact_call(name, owner)": false,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": null,
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": null,
+    "write_row": {}
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [],
+   "money": {
+    "approval_queue._is_money_action(name)": false,
+    "authority.money_action(name)": false,
+    "authority.money_tool(owner)": false,
+    "metering_gate.MONEY_TOOLS∋owner": false,
+    "room_policy._is_money_call(name, None)": false,
+    "room_policy._is_money_call(name, owner)": false
+   },
+   "owner_tools": [
+    "defi_data"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": false,
+    "is_room_denied_call(name, owner)": false
+   },
+   "spend_exemption": {},
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": true
+   }
+  },
   "defi_data_nft_holdings": {
    "approval": {
     "autonomous_gating_lanes(env)": "reported"
@@ -5314,7 +5404,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -5497,7 +5587,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -5545,7 +5635,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -5593,7 +5683,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -5686,7 +5776,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -5734,7 +5824,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -6097,7 +6187,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -6145,7 +6235,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -6241,8 +6331,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -6315,8 +6405,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.VERB_OWNED_APPROVAL_GATES",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -6389,8 +6479,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -6463,8 +6553,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -6537,8 +6627,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -6582,6 +6672,77 @@
     "is_untrusted_tool(name, owner)": false
    }
   },
+  "defi_trade_launch_token": {
+   "approval": {
+    "autonomous_gating_lanes(env)": "reported"
+   },
+   "correspondent": {
+    "is_high_impact(name)": true,
+    "is_high_impact_call(name, None)": true,
+    "is_high_impact_call(name, owner)": true,
+    "reply_action": false
+   },
+   "effect": {
+    "classify_effect(None)": null,
+    "classify_effect(owner)": [
+     "money",
+     "action"
+    ],
+    "non_write_row_in": [],
+    "pause_kind_for(owner)": "spend",
+    "write_row": {
+     "defi_trade": "money"
+    }
+   },
+   "emitted": {
+    "direct_controller_action": false,
+    "live_default_env": true,
+    "live_twitter_enabled": true,
+    "synthetic_mcp": false
+   },
+   "listed_in": [
+    "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
+    "payment_tools.PAYMENT_APPROVAL_TOOLS",
+    "spend_lane.ALWAYS_OWNER_APPROVED_VERBS",
+    "spend_lane.DRY_RUN_VERBS"
+   ],
+   "money": {
+    "approval_queue._is_money_action(name)": true,
+    "authority.money_action(name)": true,
+    "authority.money_tool(owner)": true,
+    "metering_gate.MONEY_TOOLS∋owner": true,
+    "room_policy._is_money_call(name, None)": true,
+    "room_policy._is_money_call(name, owner)": true
+   },
+   "owner_tools": [
+    "defi_trade"
+   ],
+   "room": {
+    "is_room_denied_call(name, None)": true,
+    "is_room_denied_call(name, owner)": true
+   },
+   "spend_exemption": {
+    "default/dry_run_true": "dry run — the guard is consulted but nothing is broadcast",
+    "default/empty": "dry run — the guard is consulted but nothing is broadcast",
+    "default/x402_amount_large": "dry run — the guard is consulted but nothing is broadcast",
+    "default/x402_amount_small": "dry run — the guard is consulted but nothing is broadcast",
+    "is_simulation": [
+     "empty",
+     "dry_run_true",
+     "x402_amount_small",
+     "x402_amount_large"
+    ],
+    "tiered/dry_run_true": "dry run — the guard is consulted but nothing is broadcast",
+    "tiered/empty": "dry run — the guard is consulted but nothing is broadcast",
+    "tiered/x402_amount_large": "dry run — the guard is consulted but nothing is broadcast",
+    "tiered/x402_amount_small": "dry run — the guard is consulted but nothing is broadcast"
+   },
+   "untrusted": {
+    "is_untrusted_tool(name, None)": false,
+    "is_untrusted_tool(name, owner)": false
+   }
+  },
   "defi_trade_lp_add": {
    "approval": {
     "autonomous_gating_lanes(env)": "reported"
@@ -6611,8 +6772,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -6685,8 +6846,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS",
@@ -6763,8 +6924,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS",
@@ -6841,8 +7002,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS",
@@ -6919,8 +7080,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.ALWAYS_OWNER_APPROVED_VERBS"
    ],
@@ -6974,8 +7135,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -7048,8 +7209,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS",
@@ -7126,8 +7287,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -7200,8 +7361,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -7274,8 +7435,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -7348,8 +7509,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.ALWAYS_OWNER_APPROVED_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -7419,8 +7580,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -7493,8 +7654,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.ALWAYS_OWNER_APPROVED_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -7564,8 +7725,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -7638,8 +7799,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -7707,8 +7868,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.ACTION_EFFECTS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS",
     "untrusted_wrap.UNTRUSTED_TOOL_NAMES"
    ],
@@ -7755,8 +7916,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.ACTION_EFFECTS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -7847,7 +8008,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -7897,8 +8058,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -7948,8 +8109,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.NON_WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -8052,8 +8213,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.NON_WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -8106,8 +8267,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -8160,8 +8321,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -8211,8 +8372,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.NON_WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -8315,8 +8476,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.NON_WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -9091,7 +9252,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -9534,8 +9695,8 @@
    },
    "listed_in": [
     "approval.DEFAULT_APPROVAL_REQUIRED_TOOLS",
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.WRITE_ACTIONS"
+    "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -9631,7 +9792,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -9831,8 +9992,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.WRITE_ACTIONS"
+    "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -9934,8 +10095,8 @@
    },
    "listed_in": [
     "approval.DEFAULT_APPROVAL_REQUIRED_TOOLS",
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.WRITE_ACTIONS"
+    "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -9988,8 +10149,8 @@
    },
    "listed_in": [
     "approval.DEFAULT_APPROVAL_REQUIRED_TOOLS",
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.WRITE_ACTIONS"
+    "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -10041,8 +10202,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.WRITE_ACTIONS"
+    "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -10138,7 +10299,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -10504,7 +10665,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -10554,8 +10715,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.WRITE_ACTIONS"
+    "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -10656,8 +10817,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.WRITE_ACTIONS"
+    "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -10709,8 +10870,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -10758,7 +10919,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": true,
@@ -10805,8 +10966,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.NON_WRITE_ACTIONS"
+    "effects.NON_WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": true,
@@ -10858,8 +11019,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.ALWAYS_OWNER_APPROVED_VERBS"
    ],
@@ -10913,8 +11074,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane._RISK_REDUCING_VERBS"
    ],
@@ -10989,8 +11150,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane._RISK_REDUCING_VERBS"
    ],
@@ -11103,7 +11264,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -11150,7 +11311,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -11287,7 +11448,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -11379,7 +11540,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -11516,7 +11677,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -11610,8 +11771,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.NON_WRITE_ACTIONS"
+    "effects.NON_WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": true,
@@ -11758,8 +11919,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.NON_WRITE_ACTIONS"
+    "effects.NON_WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": true,
@@ -11857,8 +12018,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.NON_WRITE_ACTIONS"
+    "effects.NON_WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": true,
@@ -12005,8 +12166,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.NON_WRITE_ACTIONS"
+    "effects.NON_WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": true,
@@ -12107,8 +12268,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS"
    ],
    "money": {
@@ -12161,8 +12322,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS"
    ],
    "money": {
@@ -12215,8 +12376,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane._RISK_REDUCING_VERBS"
    ],
@@ -12291,8 +12452,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.ALWAYS_OWNER_APPROVED_VERBS"
    ],
@@ -12610,7 +12771,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -12657,7 +12818,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -12704,7 +12865,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -12751,7 +12912,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -12846,8 +13007,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -12920,8 +13081,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -12994,8 +13155,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -13117,8 +13278,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.DEFI_SPEND_VERBS",
     "spend_lane.DRY_RUN_VERBS"
@@ -13286,8 +13447,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.ACTION_EFFECTS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -13333,7 +13494,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -14096,8 +14257,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.ACTION_EFFECTS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -14149,9 +14310,9 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "correspondent_gate._REPLY_ACTIONS",
     "effects.ACTION_EFFECTS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS",
     "tool_load_report.ACTION_IDS_NOT_TOOLS"
    ],
@@ -14198,8 +14359,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.ACTION_EFFECTS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -14251,8 +14412,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.ACTION_EFFECTS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -14298,8 +14459,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.ACTION_EFFECTS"
+    "effects.ACTION_EFFECTS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -14350,8 +14511,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.ACTION_EFFECTS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -14442,7 +14603,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -14532,7 +14693,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "high_impact._HIGH_IMPACT_NAMES",
     "untrusted_wrap.UNTRUSTED_TOOL_NAMES"
    ],
    "money": {
@@ -14625,7 +14786,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -14670,7 +14831,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -14715,7 +14876,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": true,
@@ -14765,8 +14926,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane._RISK_REDUCING_VERBS"
    ],
@@ -14841,8 +15002,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane._RISK_REDUCING_VERBS"
    ],
@@ -15000,7 +15161,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -15362,7 +15523,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -15499,7 +15660,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -15687,8 +15848,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.NON_WRITE_ACTIONS"
+    "effects.NON_WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": true,
@@ -15737,8 +15898,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.NON_WRITE_ACTIONS"
+    "effects.NON_WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": true,
@@ -16081,8 +16242,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.NON_WRITE_ACTIONS"
+    "effects.NON_WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": true,
@@ -16131,8 +16292,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.NON_WRITE_ACTIONS"
+    "effects.NON_WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": true,
@@ -16230,8 +16391,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.NON_WRITE_ACTIONS"
+    "effects.NON_WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": true,
@@ -16378,8 +16539,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.NON_WRITE_ACTIONS"
+    "effects.NON_WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": true,
@@ -16480,8 +16641,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS"
    ],
    "money": {
@@ -16534,8 +16695,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS"
    ],
    "money": {
@@ -16638,8 +16799,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.ACTION_EFFECTS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -16685,7 +16846,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -16735,8 +16896,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.WRITE_ACTIONS"
+    "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -16788,8 +16949,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.WRITE_ACTIONS"
+    "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -16838,8 +16999,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.NON_WRITE_ACTIONS"
+    "effects.NON_WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -16888,8 +17049,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.NON_WRITE_ACTIONS"
+    "effects.NON_WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -16938,8 +17099,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.NON_WRITE_ACTIONS"
+    "effects.NON_WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -16991,8 +17152,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.WRITE_ACTIONS"
+    "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -17041,8 +17202,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.NON_WRITE_ACTIONS"
+    "effects.NON_WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -17094,8 +17255,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.WRITE_ACTIONS"
+    "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -17142,8 +17303,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.ACTION_EFFECTS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -17189,8 +17350,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.ACTION_EFFECTS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -17434,8 +17595,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.ACTION_EFFECTS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -17481,7 +17642,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -17532,8 +17693,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.ACTION_EFFECTS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -17579,8 +17740,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.ACTION_EFFECTS"
+    "effects.ACTION_EFFECTS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -17631,8 +17792,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.ACTION_EFFECTS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -17723,8 +17884,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.NON_WRITE_ACTIONS"
+    "effects.NON_WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -17778,8 +17939,8 @@
    "listed_in": [
     "approval.POSTURE2_APPROVAL_REQUIRED_TOOLS",
     "approval._ALWAYS_GATED_VERBS",
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.WRITE_ACTIONS"
+    "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -17833,8 +17994,8 @@
    "listed_in": [
     "approval.POSTURE2_APPROVAL_REQUIRED_TOOLS",
     "approval._ALWAYS_GATED_VERBS",
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.WRITE_ACTIONS"
+    "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -17883,7 +18044,7 @@
    "listed_in": [
     "approval.DEFAULT_APPROVAL_REQUIRED_TOOLS",
     "approval._ALWAYS_GATED_VERBS",
-    "correspondent_gate._HIGH_IMPACT_NAMES",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -18019,8 +18180,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.ACTION_EFFECTS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -18116,8 +18277,8 @@
    "listed_in": [
     "approval.POSTURE2_APPROVAL_REQUIRED_TOOLS",
     "approval._ALWAYS_GATED_VERBS",
-    "correspondent_gate._HIGH_IMPACT_NAMES",
-    "effects.WRITE_ACTIONS"
+    "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -18170,8 +18331,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.ACTION_EFFECTS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -18767,7 +18928,7 @@
    "listed_in": [
     "approval.DEFAULT_APPROVAL_REQUIRED_TOOLS",
     "approval._ALWAYS_GATED_VERBS",
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -18902,8 +19063,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.ACTION_EFFECTS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -18949,7 +19110,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -20217,7 +20378,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -20262,8 +20423,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.ACTION_EFFECTS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -20354,8 +20515,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -20403,8 +20564,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -20452,8 +20613,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -20501,8 +20662,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.NON_WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -20593,7 +20754,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -20728,7 +20889,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": false,
@@ -20773,7 +20934,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": true,
@@ -20820,8 +20981,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.NON_WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -20871,8 +21032,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.NON_WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "room_policy.ROOM_DENIED_ACTIONS"
    ],
    "money": {
@@ -20926,8 +21087,8 @@
    },
    "listed_in": [
     "approval.DEFAULT_APPROVAL_REQUIRED_TOOLS",
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "payment_tools.PAYMENT_RECEIVE_APPROVAL_TOOLS",
     "room_policy.ROOM_DENIED_ACTIONS"
@@ -20977,7 +21138,7 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES"
+    "high_impact._HIGH_IMPACT_NAMES"
    ],
    "money": {
     "approval_queue._is_money_action(name)": true,
@@ -21027,8 +21188,8 @@
     "synthetic_mcp": false
    },
    "listed_in": [
-    "correspondent_gate._HIGH_IMPACT_NAMES",
     "effects.WRITE_ACTIONS",
+    "high_impact._HIGH_IMPACT_NAMES",
     "payment_tools.PAYMENT_APPROVAL_TOOLS",
     "spend_lane.X402_SPEND_VERBS"
    ],
@@ -21706,28 +21867,6 @@
    "launchpad",
    "dapp_browser"
   ],
-  "goal_tools._SELF_GOAL_ALLOWED_TOOLS": [
-   "anysite",
-   "browser",
-   "coding",
-   "defi_data",
-   "email",
-   "filesystem",
-   "knowledge",
-   "mcp",
-   "message",
-   "perplexity",
-   "task",
-   "twitter",
-   "web_fetch",
-   "x402_invoice"
-  ],
-  "goal_tools._SELF_GOAL_BASELINE_TOOLS": [
-   "filesystem",
-   "task",
-   "web_fetch",
-   "knowledge"
-  ],
   "rigs.RIGS['money_rail']": [
    "defi_data",
    "defi_trade",
@@ -21867,6 +22006,28 @@
    "polymarket_data",
    "hyperliquid_data",
    "defi_data"
+  ],
+  "tool_grants.SELF_GOAL_ALLOWED_TOOLS": [
+   "anysite",
+   "browser",
+   "coding",
+   "defi_data",
+   "email",
+   "filesystem",
+   "knowledge",
+   "mcp",
+   "message",
+   "perplexity",
+   "task",
+   "twitter",
+   "web_fetch",
+   "x402_invoice"
+  ],
+  "tool_grants.SELF_GOAL_BASELINE_TOOLS": [
+   "filesystem",
+   "task",
+   "web_fetch",
+   "knowledge"
   ]
  },
  "regime_lists": {
@@ -21948,25 +22109,6 @@
     "worker_manage",
     "x402_invoice",
     "x402_pay",
-    "x_browser"
-   ],
-   "goal_tools.allowed_self_goal_tools()": [
-    "anysite",
-    "browser",
-    "coding",
-    "cronjob",
-    "defi_data",
-    "email",
-    "filesystem",
-    "goal",
-    "knowledge",
-    "mcp",
-    "message",
-    "perplexity",
-    "task",
-    "twitter",
-    "web_fetch",
-    "x402_invoice",
     "x_browser"
    ],
    "goal_tools.owner_turn_goal_tools()": [
@@ -22227,6 +22369,25 @@
    "tool_defaults.with_compute_tools(['filesystem','task'])": [
     "filesystem",
     "task"
+   ],
+   "tool_grants.allowed_self_goal_tools()": [
+    "anysite",
+    "browser",
+    "coding",
+    "cronjob",
+    "defi_data",
+    "email",
+    "filesystem",
+    "goal",
+    "knowledge",
+    "mcp",
+    "message",
+    "perplexity",
+    "task",
+    "twitter",
+    "web_fetch",
+    "x402_invoice",
+    "x_browser"
    ]
   },
   "autonomous_defi_armed": {
@@ -22319,29 +22480,6 @@
     "x402_pay",
     "x_browser"
    ],
-   "goal_tools.allowed_self_goal_tools()": [
-    "anysite",
-    "browser",
-    "coding",
-    "cronjob",
-    "dapp_browser",
-    "defi_data",
-    "defi_trade",
-    "email",
-    "filesystem",
-    "goal",
-    "knowledge",
-    "launchpad",
-    "mcp",
-    "message",
-    "perplexity",
-    "task",
-    "twitter",
-    "wallet_sign",
-    "web_fetch",
-    "x402_invoice",
-    "x_browser"
-   ],
    "goal_tools.owner_turn_goal_tools()": [
     "anysite",
     "browser",
@@ -22607,6 +22745,29 @@
    "tool_defaults.with_compute_tools(['filesystem','task'])": [
     "filesystem",
     "task"
+   ],
+   "tool_grants.allowed_self_goal_tools()": [
+    "anysite",
+    "browser",
+    "coding",
+    "cronjob",
+    "dapp_browser",
+    "defi_data",
+    "defi_trade",
+    "email",
+    "filesystem",
+    "goal",
+    "knowledge",
+    "launchpad",
+    "mcp",
+    "message",
+    "perplexity",
+    "task",
+    "twitter",
+    "wallet_sign",
+    "web_fetch",
+    "x402_invoice",
+    "x_browser"
    ]
   },
   "posture2": {
@@ -22702,22 +22863,6 @@
     "x402_invoice",
     "x402_pay",
     "x_browser"
-   ],
-   "goal_tools.allowed_self_goal_tools()": [
-    "anysite",
-    "browser",
-    "coding",
-    "defi_data",
-    "email",
-    "filesystem",
-    "knowledge",
-    "mcp",
-    "message",
-    "perplexity",
-    "task",
-    "twitter",
-    "web_fetch",
-    "x402_invoice"
    ],
    "goal_tools.owner_turn_goal_tools()": [
     "anysite",
@@ -22956,6 +23101,22 @@
     "filesystem",
     "task",
     "shell"
+   ],
+   "tool_grants.allowed_self_goal_tools()": [
+    "anysite",
+    "browser",
+    "coding",
+    "defi_data",
+    "email",
+    "filesystem",
+    "knowledge",
+    "mcp",
+    "message",
+    "perplexity",
+    "task",
+    "twitter",
+    "web_fetch",
+    "x402_invoice"
    ]
   },
   "supervised": {
@@ -23037,22 +23198,6 @@
     "x402_invoice",
     "x402_pay",
     "x_browser"
-   ],
-   "goal_tools.allowed_self_goal_tools()": [
-    "anysite",
-    "browser",
-    "coding",
-    "defi_data",
-    "email",
-    "filesystem",
-    "knowledge",
-    "mcp",
-    "message",
-    "perplexity",
-    "task",
-    "twitter",
-    "web_fetch",
-    "x402_invoice"
    ],
    "goal_tools.owner_turn_goal_tools()": [
     "anysite",
@@ -23290,6 +23435,22 @@
    "tool_defaults.with_compute_tools(['filesystem','task'])": [
     "filesystem",
     "task"
+   ],
+   "tool_grants.allowed_self_goal_tools()": [
+    "anysite",
+    "browser",
+    "coding",
+    "defi_data",
+    "email",
+    "filesystem",
+    "knowledge",
+    "mcp",
+    "message",
+    "perplexity",
+    "task",
+    "twitter",
+    "web_fetch",
+    "x402_invoice"
    ]
   }
  },
@@ -23352,7 +23513,6 @@
    "in": {
     "autonomous:constants.autonomous_mode_tools()": 6,
     "autonomous:constants.effective_autonomous_tools()": 6,
-    "autonomous:goal_tools.allowed_self_goal_tools()": 0,
     "autonomous:goal_tools.owner_turn_goal_tools()": 0,
     "autonomous:rigs.rig_tools('research')": 1,
     "autonomous:room_policy._forbidden_tool_ids()": 1,
@@ -23367,9 +23527,9 @@
     "autonomous:tool_defaults.resolve_toolset('trading_research')": 3,
     "autonomous:tool_defaults.resolve_toolset('unknown-name')": 4,
     "autonomous:tool_defaults.server_default_tools()": 6,
+    "autonomous:tool_grants.allowed_self_goal_tools()": 0,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 6,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 6,
-    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 0,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 0,
     "autonomous_defi_armed:rigs.rig_tools('research')": 1,
     "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 1,
@@ -23384,13 +23544,12 @@
     "autonomous_defi_armed:tool_defaults.resolve_toolset('trading_research')": 3,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('unknown-name')": 4,
     "autonomous_defi_armed:tool_defaults.server_default_tools()": 6,
+    "autonomous_defi_armed:tool_grants.allowed_self_goal_tools()": 0,
     "bootstrap._CLI_REGISTERABLE_TOOLS": 0,
     "bootstrap._CLI_STATIC_TOOLS": 0,
     "constants.AUTONOMOUS_MODE_TOOLS": 6,
-    "goal_tools._SELF_GOAL_ALLOWED_TOOLS": 0,
     "posture2:constants.autonomous_mode_tools()": 6,
     "posture2:constants.effective_autonomous_tools()": 6,
-    "posture2:goal_tools.allowed_self_goal_tools()": 0,
     "posture2:goal_tools.owner_turn_goal_tools()": 0,
     "posture2:rigs.rig_tools('research')": 1,
     "posture2:room_policy._forbidden_tool_ids()": 1,
@@ -23404,10 +23563,10 @@
     "posture2:tool_defaults.resolve_toolset('trading_research')": 3,
     "posture2:tool_defaults.resolve_toolset('unknown-name')": 3,
     "posture2:tool_defaults.server_default_tools()": 6,
+    "posture2:tool_grants.allowed_self_goal_tools()": 0,
     "rigs.RIGS['research']": 1,
     "supervised:constants.autonomous_mode_tools()": 6,
     "supervised:constants.effective_autonomous_tools()": 6,
-    "supervised:goal_tools.allowed_self_goal_tools()": 0,
     "supervised:goal_tools.owner_turn_goal_tools()": 0,
     "supervised:rigs.rig_tools('research')": 1,
     "supervised:room_policy._forbidden_tool_ids()": 1,
@@ -23421,11 +23580,13 @@
     "supervised:tool_defaults.resolve_toolset('trading_research')": 3,
     "supervised:tool_defaults.resolve_toolset('unknown-name')": 3,
     "supervised:tool_defaults.server_default_tools()": 6,
+    "supervised:tool_grants.allowed_self_goal_tools()": 0,
     "tool_defaults.TOOLSETS['earn']": 5,
     "tool_defaults.TOOLSETS['full']": 6,
     "tool_defaults.TOOLSETS['research']": 3,
     "tool_defaults.TOOLSETS['social']": 2,
-    "tool_defaults.TOOLSETS['trading_research']": 3
+    "tool_defaults.TOOLSETS['trading_research']": 3,
+    "tool_grants.SELF_GOAL_ALLOWED_TOOLS": 0
    },
    "is_classified": true,
    "is_untrusted_tool(None, tool)": true,
@@ -23500,7 +23661,6 @@
    "in": {
     "autonomous:constants.autonomous_mode_tools()": 8,
     "autonomous:constants.effective_autonomous_tools()": 8,
-    "autonomous:goal_tools.allowed_self_goal_tools()": 1,
     "autonomous:goal_tools.owner_turn_goal_tools()": 1,
     "autonomous:room_policy._forbidden_tool_ids()": 3,
     "autonomous:tool_availability.grantable_autonomous_tools()": 1,
@@ -23509,9 +23669,9 @@
     "autonomous:tool_defaults.resolve_toolset('development')": 3,
     "autonomous:tool_defaults.resolve_toolset('earn')": 2,
     "autonomous:tool_defaults.server_default_tools()": 8,
+    "autonomous:tool_grants.allowed_self_goal_tools()": 1,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 8,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 8,
-    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 1,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 1,
     "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 3,
     "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 1,
@@ -23520,12 +23680,11 @@
     "autonomous_defi_armed:tool_defaults.resolve_toolset('development')": 3,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('earn')": 2,
     "autonomous_defi_armed:tool_defaults.server_default_tools()": 8,
+    "autonomous_defi_armed:tool_grants.allowed_self_goal_tools()": 1,
     "bootstrap._CLI_REGISTERABLE_TOOLS": 2,
     "constants.AUTONOMOUS_MODE_TOOLS": 8,
-    "goal_tools._SELF_GOAL_ALLOWED_TOOLS": 1,
     "posture2:constants.autonomous_mode_tools()": 8,
     "posture2:constants.effective_autonomous_tools()": 8,
-    "posture2:goal_tools.allowed_self_goal_tools()": 1,
     "posture2:goal_tools.owner_turn_goal_tools()": 1,
     "posture2:room_policy._forbidden_tool_ids()": 3,
     "posture2:tool_availability.grantable_autonomous_tools()": 1,
@@ -23533,10 +23692,10 @@
     "posture2:tool_defaults.resolve_toolset('browser')": 2,
     "posture2:tool_defaults.resolve_toolset('development')": 3,
     "posture2:tool_defaults.resolve_toolset('earn')": 2,
+    "posture2:tool_grants.allowed_self_goal_tools()": 1,
     "room_policy.ROOM_FORBIDDEN_TOOL_IDS": 1,
     "supervised:constants.autonomous_mode_tools()": 8,
     "supervised:constants.effective_autonomous_tools()": 8,
-    "supervised:goal_tools.allowed_self_goal_tools()": 1,
     "supervised:goal_tools.owner_turn_goal_tools()": 1,
     "supervised:room_policy._forbidden_tool_ids()": 3,
     "supervised:tool_availability.grantable_autonomous_tools()": 1,
@@ -23544,9 +23703,11 @@
     "supervised:tool_defaults.resolve_toolset('browser')": 2,
     "supervised:tool_defaults.resolve_toolset('development')": 3,
     "supervised:tool_defaults.resolve_toolset('earn')": 2,
+    "supervised:tool_grants.allowed_self_goal_tools()": 1,
     "tool_defaults.TOOLSETS['browser']": 2,
     "tool_defaults.TOOLSETS['development']": 3,
-    "tool_defaults.TOOLSETS['earn']": 2
+    "tool_defaults.TOOLSETS['earn']": 2,
+    "tool_grants.SELF_GOAL_ALLOWED_TOOLS": 1
    },
    "is_classified": true,
    "is_untrusted_tool(None, tool)": true,
@@ -23653,7 +23814,6 @@
     "autonomous:constants.autonomous_mode_tools()": 10,
     "autonomous:constants.effective_autonomous_tools()": 10,
     "autonomous:delegation.get_blocked_child_tools()": 3,
-    "autonomous:goal_tools.allowed_self_goal_tools()": 2,
     "autonomous:goal_tools.owner_turn_goal_tools()": 2,
     "autonomous:room_policy._forbidden_tool_ids()": 5,
     "autonomous:tool_availability.grantable_autonomous_tools()": 2,
@@ -23665,10 +23825,10 @@
     "autonomous:tool_defaults.resolve_toolset('earn')": 6,
     "autonomous:tool_defaults.resolve_toolset('unknown-name')": 3,
     "autonomous:tool_defaults.server_default_tools()": 10,
+    "autonomous:tool_grants.allowed_self_goal_tools()": 2,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 10,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 10,
     "autonomous_defi_armed:delegation.get_blocked_child_tools()": 3,
-    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 2,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 2,
     "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 5,
     "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 2,
@@ -23680,34 +23840,35 @@
     "autonomous_defi_armed:tool_defaults.resolve_toolset('earn')": 6,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('unknown-name')": 3,
     "autonomous_defi_armed:tool_defaults.server_default_tools()": 10,
+    "autonomous_defi_armed:tool_grants.allowed_self_goal_tools()": 2,
     "bootstrap._CLI_OPTIONAL_TOOLS": 2,
     "bootstrap._CLI_REGISTERABLE_TOOLS": 5,
     "constants.AUTONOMOUS_MODE_TOOLS": 10,
-    "goal_tools._SELF_GOAL_ALLOWED_TOOLS": 2,
     "posture2:constants.autonomous_mode_tools()": 10,
     "posture2:constants.effective_autonomous_tools()": 10,
     "posture2:delegation.get_blocked_child_tools()": 3,
-    "posture2:goal_tools.allowed_self_goal_tools()": 2,
     "posture2:goal_tools.owner_turn_goal_tools()": 2,
     "posture2:room_policy._forbidden_tool_ids()": 5,
     "posture2:tool_availability.grantable_autonomous_tools()": 2,
     "posture2:tool_defaults.resolve_toolset('coding')": 2,
     "posture2:tool_defaults.resolve_toolset('development')": 2,
     "posture2:tool_defaults.resolve_toolset('earn')": 6,
+    "posture2:tool_grants.allowed_self_goal_tools()": 2,
     "room_policy.ROOM_FORBIDDEN_TOOL_IDS": 3,
     "supervised:constants.autonomous_mode_tools()": 10,
     "supervised:constants.effective_autonomous_tools()": 10,
     "supervised:delegation.get_blocked_child_tools()": 3,
-    "supervised:goal_tools.allowed_self_goal_tools()": 2,
     "supervised:goal_tools.owner_turn_goal_tools()": 2,
     "supervised:room_policy._forbidden_tool_ids()": 5,
     "supervised:tool_availability.grantable_autonomous_tools()": 2,
     "supervised:tool_defaults.resolve_toolset('coding')": 2,
     "supervised:tool_defaults.resolve_toolset('development')": 2,
     "supervised:tool_defaults.resolve_toolset('earn')": 6,
+    "supervised:tool_grants.allowed_self_goal_tools()": 2,
     "tool_defaults.TOOLSETS['coding']": 2,
     "tool_defaults.TOOLSETS['development']": 2,
-    "tool_defaults.TOOLSETS['earn']": 6
+    "tool_defaults.TOOLSETS['earn']": 6,
+    "tool_grants.SELF_GOAL_ALLOWED_TOOLS": 2
    },
    "is_classified": true,
    "is_untrusted_tool(None, tool)": false,
@@ -23746,21 +23907,21 @@
     "autonomous:constants.autonomous_mode_tools()": 13,
     "autonomous:constants.effective_autonomous_tools()": 13,
     "autonomous:delegation.get_blocked_child_tools()": 4,
-    "autonomous:goal_tools.allowed_self_goal_tools()": 3,
     "autonomous:goal_tools.owner_turn_goal_tools()": 3,
     "autonomous:rigs.rig_tools('ops')": 3,
     "autonomous:rigs.rig_tools('owner')": 4,
     "autonomous:room_policy._forbidden_tool_ids()": 6,
     "autonomous:tool_availability.grantable_autonomous_tools()": 3,
+    "autonomous:tool_grants.allowed_self_goal_tools()": 3,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 13,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 13,
     "autonomous_defi_armed:delegation.get_blocked_child_tools()": 4,
-    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 3,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 3,
     "autonomous_defi_armed:rigs.rig_tools('ops')": 3,
     "autonomous_defi_armed:rigs.rig_tools('owner')": 4,
     "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 6,
     "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 3,
+    "autonomous_defi_armed:tool_grants.allowed_self_goal_tools()": 3,
     "bootstrap._CLI_OPTIONAL_TOOLS": 3,
     "bootstrap._CLI_REGISTERABLE_TOOLS": 6,
     "constants.AUTONOMOUS_MODE_TOOLS": 13,
@@ -23816,10 +23977,10 @@
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 19,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 19,
     "autonomous_defi_armed:delegation.get_blocked_child_tools()": 5,
-    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 4,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 4,
     "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 7,
     "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 4,
+    "autonomous_defi_armed:tool_grants.allowed_self_goal_tools()": 4,
     "constants.DEFI_LAUNCH_AUTONOMOUS_TOOLS": 1,
     "posture2:bootstrap.cli_unavailable_tools(all)": 1,
     "posture2:delegation.get_blocked_child_tools()": 5,
@@ -23853,7 +24014,6 @@
    "effects.ceiling": null,
    "high_risk": false,
    "in": {
-    "autonomous:goal_tools.allowed_self_goal_tools()": 4,
     "autonomous:goal_tools.owner_turn_goal_tools()": 4,
     "autonomous:rigs.rig_tools('money_rail')": 0,
     "autonomous:rigs.rig_tools('research')": 6,
@@ -23864,9 +24024,9 @@
     "autonomous:tool_defaults.resolve_toolset('research')": 7,
     "autonomous:tool_defaults.resolve_toolset('trading_research')": 7,
     "autonomous:tool_defaults.resolve_toolset('unknown-name')": 5,
+    "autonomous:tool_grants.allowed_self_goal_tools()": 4,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 15,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 15,
-    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 5,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 5,
     "autonomous_defi_armed:rigs.rig_tools('money_rail')": 0,
     "autonomous_defi_armed:rigs.rig_tools('research')": 6,
@@ -23877,11 +24037,10 @@
     "autonomous_defi_armed:tool_defaults.resolve_toolset('research')": 7,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('trading_research')": 7,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('unknown-name')": 5,
+    "autonomous_defi_armed:tool_grants.allowed_self_goal_tools()": 5,
     "bootstrap._CLI_OPTIONAL_TOOLS": 4,
     "bootstrap._CLI_REGISTERABLE_TOOLS": 7,
     "constants.DEFI_AUTONOMOUS_TOOLS": 0,
-    "goal_tools._SELF_GOAL_ALLOWED_TOOLS": 3,
-    "posture2:goal_tools.allowed_self_goal_tools()": 3,
     "posture2:goal_tools.owner_turn_goal_tools()": 4,
     "posture2:rigs.rig_tools('money_rail')": 0,
     "posture2:rigs.rig_tools('research')": 6,
@@ -23892,11 +24051,11 @@
     "posture2:tool_defaults.resolve_toolset('research')": 7,
     "posture2:tool_defaults.resolve_toolset('trading_research')": 7,
     "posture2:tool_defaults.resolve_toolset('unknown-name')": 4,
+    "posture2:tool_grants.allowed_self_goal_tools()": 3,
     "rigs.RIGS['money_rail']": 0,
     "rigs.RIGS['research']": 6,
     "room_policy.DEFAULT_ROOM_TOOLS": 2,
     "room_policy.ROOM_ALLOWED_TOOL_IDS": 0,
-    "supervised:goal_tools.allowed_self_goal_tools()": 3,
     "supervised:goal_tools.owner_turn_goal_tools()": 4,
     "supervised:rigs.rig_tools('money_rail')": 0,
     "supervised:rigs.rig_tools('research')": 6,
@@ -23907,8 +24066,10 @@
     "supervised:tool_defaults.resolve_toolset('research')": 7,
     "supervised:tool_defaults.resolve_toolset('trading_research')": 7,
     "supervised:tool_defaults.resolve_toolset('unknown-name')": 4,
+    "supervised:tool_grants.allowed_self_goal_tools()": 3,
     "tool_defaults.TOOLSETS['research']": 7,
-    "tool_defaults.TOOLSETS['trading_research']": 7
+    "tool_defaults.TOOLSETS['trading_research']": 7,
+    "tool_grants.SELF_GOAL_ALLOWED_TOOLS": 3
    },
    "is_classified": true,
    "is_untrusted_tool(None, tool)": true,
@@ -23946,11 +24107,11 @@
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 16,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 16,
     "autonomous_defi_armed:delegation.get_blocked_child_tools()": 6,
-    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 6,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 6,
     "autonomous_defi_armed:rigs.rig_tools('money_rail')": 1,
     "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 8,
     "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 6,
+    "autonomous_defi_armed:tool_grants.allowed_self_goal_tools()": 6,
     "constants.DEFI_AUTONOMOUS_TOOLS": 1,
     "posture2:bootstrap.cli_unavailable_tools(all)": 2,
     "posture2:delegation.get_blocked_child_tools()": 6,
@@ -23998,44 +24159,44 @@
    "in": {
     "autonomous:constants.autonomous_mode_tools()": 5,
     "autonomous:constants.effective_autonomous_tools()": 5,
-    "autonomous:goal_tools.allowed_self_goal_tools()": 5,
     "autonomous:goal_tools.owner_turn_goal_tools()": 6,
     "autonomous:room_policy._forbidden_tool_ids()": 9,
     "autonomous:tool_availability.grantable_autonomous_tools()": 5,
     "autonomous:tool_defaults.default_session_tools()": 5,
     "autonomous:tool_defaults.resolve_toolset('full')": 4,
     "autonomous:tool_defaults.server_default_tools()": 5,
+    "autonomous:tool_grants.allowed_self_goal_tools()": 5,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 5,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 5,
-    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 7,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 7,
     "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 9,
     "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 7,
     "autonomous_defi_armed:tool_defaults.default_session_tools()": 5,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('full')": 4,
     "autonomous_defi_armed:tool_defaults.server_default_tools()": 5,
+    "autonomous_defi_armed:tool_grants.allowed_self_goal_tools()": 7,
     "bootstrap._CLI_REGISTERABLE_TOOLS": 8,
     "bootstrap._CLI_STATIC_TOOLS": 2,
     "constants.AUTONOMOUS_MODE_TOOLS": 5,
-    "goal_tools._SELF_GOAL_ALLOWED_TOOLS": 4,
     "posture2:constants.autonomous_mode_tools()": 5,
     "posture2:constants.effective_autonomous_tools()": 5,
-    "posture2:goal_tools.allowed_self_goal_tools()": 4,
     "posture2:goal_tools.owner_turn_goal_tools()": 6,
     "posture2:room_policy._forbidden_tool_ids()": 9,
     "posture2:tool_availability.grantable_autonomous_tools()": 4,
     "posture2:tool_defaults.resolve_toolset('full')": 4,
     "posture2:tool_defaults.server_default_tools()": 4,
+    "posture2:tool_grants.allowed_self_goal_tools()": 4,
     "room_policy.ROOM_FORBIDDEN_TOOL_IDS": 5,
     "supervised:constants.autonomous_mode_tools()": 5,
     "supervised:constants.effective_autonomous_tools()": 5,
-    "supervised:goal_tools.allowed_self_goal_tools()": 4,
     "supervised:goal_tools.owner_turn_goal_tools()": 6,
     "supervised:room_policy._forbidden_tool_ids()": 9,
     "supervised:tool_availability.grantable_autonomous_tools()": 4,
     "supervised:tool_defaults.resolve_toolset('full')": 4,
     "supervised:tool_defaults.server_default_tools()": 4,
-    "tool_defaults.TOOLSETS['full']": 4
+    "supervised:tool_grants.allowed_self_goal_tools()": 4,
+    "tool_defaults.TOOLSETS['full']": 4,
+    "tool_grants.SELF_GOAL_ALLOWED_TOOLS": 4
    },
    "is_classified": true,
    "is_untrusted_tool(None, tool)": true,
@@ -24056,14 +24217,15 @@
    "HIGH_IMPACT_TOOL_IDS": false,
    "TOOL_GATE_FLAGS": null,
    "VALID_TOOL_IDS": true,
-   "capabilities": [],
+   "capabilities": [
+    "owner_workspace"
+   ],
    "core.tool_gates.registered": false,
    "effects.ceiling": null,
    "high_risk": false,
    "in": {
     "autonomous:constants.autonomous_mode_tools()": 0,
     "autonomous:constants.effective_autonomous_tools()": 0,
-    "autonomous:goal_tools.allowed_self_goal_tools()": 6,
     "autonomous:goal_tools.owner_turn_goal_tools()": 7,
     "autonomous:rigs.rig_tools('money_rail')": 2,
     "autonomous:rigs.rig_tools('ops')": 0,
@@ -24088,9 +24250,9 @@
     "autonomous:tool_defaults.resolve_toolset('unknown-name')": 0,
     "autonomous:tool_defaults.server_default_tools()": 0,
     "autonomous:tool_defaults.with_compute_tools(['filesystem','task'])": 0,
+    "autonomous:tool_grants.allowed_self_goal_tools()": 6,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 0,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 0,
-    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 8,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 8,
     "autonomous_defi_armed:rigs.rig_tools('money_rail')": 2,
     "autonomous_defi_armed:rigs.rig_tools('ops')": 0,
@@ -24115,15 +24277,13 @@
     "autonomous_defi_armed:tool_defaults.resolve_toolset('unknown-name')": 0,
     "autonomous_defi_armed:tool_defaults.server_default_tools()": 0,
     "autonomous_defi_armed:tool_defaults.with_compute_tools(['filesystem','task'])": 0,
+    "autonomous_defi_armed:tool_grants.allowed_self_goal_tools()": 8,
     "bootstrap._CLI_REGISTERABLE_TOOLS": 9,
     "bootstrap._CLI_STATIC_TOOLS": 3,
     "constants.AUTONOMOUS_MODE_TOOLS": 0,
     "constants.BASE_DEFAULT_TOOLS": 0,
-    "goal_tools._SELF_GOAL_ALLOWED_TOOLS": 5,
-    "goal_tools._SELF_GOAL_BASELINE_TOOLS": 0,
     "posture2:constants.autonomous_mode_tools()": 0,
     "posture2:constants.effective_autonomous_tools()": 0,
-    "posture2:goal_tools.allowed_self_goal_tools()": 5,
     "posture2:goal_tools.owner_turn_goal_tools()": 7,
     "posture2:rigs.rig_tools('money_rail')": 2,
     "posture2:rigs.rig_tools('ops')": 0,
@@ -24148,6 +24308,7 @@
     "posture2:tool_defaults.resolve_toolset('unknown-name')": 0,
     "posture2:tool_defaults.server_default_tools()": 0,
     "posture2:tool_defaults.with_compute_tools(['filesystem','task'])": 0,
+    "posture2:tool_grants.allowed_self_goal_tools()": 5,
     "rigs.RIGS['money_rail']": 2,
     "rigs.RIGS['ops']": 0,
     "rigs.RIGS['owner']": 0,
@@ -24156,7 +24317,6 @@
     "room_policy.ROOM_FORBIDDEN_TOOL_IDS": 6,
     "supervised:constants.autonomous_mode_tools()": 0,
     "supervised:constants.effective_autonomous_tools()": 0,
-    "supervised:goal_tools.allowed_self_goal_tools()": 5,
     "supervised:goal_tools.owner_turn_goal_tools()": 7,
     "supervised:rigs.rig_tools('money_rail')": 2,
     "supervised:rigs.rig_tools('ops')": 0,
@@ -24181,6 +24341,7 @@
     "supervised:tool_defaults.resolve_toolset('unknown-name')": 0,
     "supervised:tool_defaults.server_default_tools()": 0,
     "supervised:tool_defaults.with_compute_tools(['filesystem','task'])": 0,
+    "supervised:tool_grants.allowed_self_goal_tools()": 5,
     "tool_defaults.TOOLSETS['browser']": 0,
     "tool_defaults.TOOLSETS['coding']": 0,
     "tool_defaults.TOOLSETS['default']": 0,
@@ -24191,7 +24352,9 @@
     "tool_defaults.TOOLSETS['research']": 0,
     "tool_defaults.TOOLSETS['safe']": 0,
     "tool_defaults.TOOLSETS['social']": 0,
-    "tool_defaults.TOOLSETS['trading_research']": 0
+    "tool_defaults.TOOLSETS['trading_research']": 0,
+    "tool_grants.SELF_GOAL_ALLOWED_TOOLS": 5,
+    "tool_grants.SELF_GOAL_BASELINE_TOOLS": 0
    },
    "is_classified": true,
    "is_untrusted_tool(None, tool)": true,
@@ -24305,20 +24468,20 @@
    "in": {
     "autonomous:constants.autonomous_mode_tools()": 12,
     "autonomous:constants.effective_autonomous_tools()": 12,
-    "autonomous:goal_tools.allowed_self_goal_tools()": 7,
     "autonomous:goal_tools.owner_turn_goal_tools()": 8,
     "autonomous:rigs.rig_tools('ops')": 2,
     "autonomous:rigs.rig_tools('owner')": 3,
     "autonomous:room_policy._forbidden_tool_ids()": 13,
     "autonomous:tool_availability.grantable_autonomous_tools()": 7,
+    "autonomous:tool_grants.allowed_self_goal_tools()": 7,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 12,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 12,
-    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 9,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 9,
     "autonomous_defi_armed:rigs.rig_tools('ops')": 2,
     "autonomous_defi_armed:rigs.rig_tools('owner')": 3,
     "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 13,
     "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 9,
+    "autonomous_defi_armed:tool_grants.allowed_self_goal_tools()": 9,
     "bootstrap._CLI_OPTIONAL_TOOLS": 7,
     "bootstrap._CLI_REGISTERABLE_TOOLS": 12,
     "constants.AUTONOMOUS_MODE_TOOLS": 12,
@@ -24530,38 +24693,38 @@
    "in": {
     "autonomous:constants.autonomous_mode_tools()": 3,
     "autonomous:constants.effective_autonomous_tools()": 3,
-    "autonomous:goal_tools.allowed_self_goal_tools()": 8,
     "autonomous:goal_tools.owner_turn_goal_tools()": 9,
     "autonomous:rigs.rig_tools('research')": 2,
     "autonomous:tool_availability.grantable_autonomous_tools()": 8,
     "autonomous:tool_defaults.default_session_tools()": 3,
     "autonomous:tool_defaults.server_default_tools()": 3,
+    "autonomous:tool_grants.allowed_self_goal_tools()": 8,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 3,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 3,
-    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 10,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 10,
     "autonomous_defi_armed:rigs.rig_tools('research')": 2,
     "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 10,
     "autonomous_defi_armed:tool_defaults.default_session_tools()": 3,
     "autonomous_defi_armed:tool_defaults.server_default_tools()": 3,
+    "autonomous_defi_armed:tool_grants.allowed_self_goal_tools()": 10,
     "bootstrap._CLI_OPTIONAL_TOOLS": 9,
     "bootstrap._CLI_REGISTERABLE_TOOLS": 15,
     "constants.AUTONOMOUS_MODE_TOOLS": 3,
-    "goal_tools._SELF_GOAL_ALLOWED_TOOLS": 6,
-    "goal_tools._SELF_GOAL_BASELINE_TOOLS": 3,
     "posture2:constants.autonomous_mode_tools()": 3,
     "posture2:constants.effective_autonomous_tools()": 3,
-    "posture2:goal_tools.allowed_self_goal_tools()": 6,
     "posture2:goal_tools.owner_turn_goal_tools()": 9,
     "posture2:rigs.rig_tools('research')": 2,
     "posture2:tool_availability.grantable_autonomous_tools()": 6,
+    "posture2:tool_grants.allowed_self_goal_tools()": 6,
     "rigs.RIGS['research']": 2,
     "supervised:constants.autonomous_mode_tools()": 3,
     "supervised:constants.effective_autonomous_tools()": 3,
-    "supervised:goal_tools.allowed_self_goal_tools()": 6,
     "supervised:goal_tools.owner_turn_goal_tools()": 9,
     "supervised:rigs.rig_tools('research')": 2,
-    "supervised:tool_availability.grantable_autonomous_tools()": 6
+    "supervised:tool_availability.grantable_autonomous_tools()": 6,
+    "supervised:tool_grants.allowed_self_goal_tools()": 6,
+    "tool_grants.SELF_GOAL_ALLOWED_TOOLS": 6,
+    "tool_grants.SELF_GOAL_BASELINE_TOOLS": 3
    },
    "is_classified": true,
    "is_untrusted_tool(None, tool)": false,
@@ -24599,10 +24762,10 @@
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 18,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 18,
     "autonomous_defi_armed:delegation.get_blocked_child_tools()": 12,
-    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 11,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 11,
     "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 17,
     "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 11,
+    "autonomous_defi_armed:tool_grants.allowed_self_goal_tools()": 11,
     "constants.DEFI_LAUNCH_AUTONOMOUS_TOOLS": 0,
     "posture2:bootstrap.cli_unavailable_tools(all)": 5,
     "posture2:delegation.get_blocked_child_tools()": 12,
@@ -24647,7 +24810,6 @@
     "autonomous:constants.autonomous_mode_tools()": 9,
     "autonomous:constants.effective_autonomous_tools()": 9,
     "autonomous:delegation.get_blocked_child_tools()": 13,
-    "autonomous:goal_tools.allowed_self_goal_tools()": 9,
     "autonomous:goal_tools.owner_turn_goal_tools()": 10,
     "autonomous:room_policy._forbidden_tool_ids()": 18,
     "autonomous:tool_availability.grantable_autonomous_tools()": 9,
@@ -24655,10 +24817,10 @@
     "autonomous:tool_defaults.resolve_toolset('earn')": 4,
     "autonomous:tool_defaults.resolve_toolset('full')": 5,
     "autonomous:tool_defaults.server_default_tools()": 9,
+    "autonomous:tool_grants.allowed_self_goal_tools()": 9,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 9,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 9,
     "autonomous_defi_armed:delegation.get_blocked_child_tools()": 13,
-    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 12,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 12,
     "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 18,
     "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 12,
@@ -24666,33 +24828,34 @@
     "autonomous_defi_armed:tool_defaults.resolve_toolset('earn')": 4,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('full')": 5,
     "autonomous_defi_armed:tool_defaults.server_default_tools()": 9,
+    "autonomous_defi_armed:tool_grants.allowed_self_goal_tools()": 12,
     "bootstrap._CLI_REGISTERABLE_TOOLS": 16,
     "bootstrap._CLI_STATIC_TOOLS": 5,
     "constants.AUTONOMOUS_MODE_TOOLS": 9,
-    "goal_tools._SELF_GOAL_ALLOWED_TOOLS": 7,
     "posture2:constants.autonomous_mode_tools()": 9,
     "posture2:constants.effective_autonomous_tools()": 9,
     "posture2:delegation.get_blocked_child_tools()": 13,
-    "posture2:goal_tools.allowed_self_goal_tools()": 7,
     "posture2:goal_tools.owner_turn_goal_tools()": 10,
     "posture2:room_policy._forbidden_tool_ids()": 18,
     "posture2:tool_availability.grantable_autonomous_tools()": 7,
     "posture2:tool_defaults.resolve_toolset('earn')": 4,
     "posture2:tool_defaults.resolve_toolset('full')": 5,
     "posture2:tool_defaults.server_default_tools()": 5,
+    "posture2:tool_grants.allowed_self_goal_tools()": 7,
     "room_policy.ROOM_FORBIDDEN_TOOL_IDS": 8,
     "supervised:constants.autonomous_mode_tools()": 9,
     "supervised:constants.effective_autonomous_tools()": 9,
     "supervised:delegation.get_blocked_child_tools()": 13,
-    "supervised:goal_tools.allowed_self_goal_tools()": 7,
     "supervised:goal_tools.owner_turn_goal_tools()": 10,
     "supervised:room_policy._forbidden_tool_ids()": 18,
     "supervised:tool_availability.grantable_autonomous_tools()": 7,
     "supervised:tool_defaults.resolve_toolset('earn')": 4,
     "supervised:tool_defaults.resolve_toolset('full')": 5,
     "supervised:tool_defaults.server_default_tools()": 5,
+    "supervised:tool_grants.allowed_self_goal_tools()": 7,
     "tool_defaults.TOOLSETS['earn']": 4,
-    "tool_defaults.TOOLSETS['full']": 5
+    "tool_defaults.TOOLSETS['full']": 5,
+    "tool_grants.SELF_GOAL_ALLOWED_TOOLS": 7
    },
    "is_classified": true,
    "is_untrusted_tool(None, tool)": true,
@@ -24719,7 +24882,6 @@
    "high_risk": false,
    "in": {
     "autonomous:bootstrap.cli_unavailable_tools(all)": 6,
-    "autonomous:goal_tools.allowed_self_goal_tools()": 10,
     "autonomous:goal_tools.owner_turn_goal_tools()": 11,
     "autonomous:rigs.rig_tools('money_rail')": 4,
     "autonomous:rigs.rig_tools('ops')": 4,
@@ -24727,8 +24889,8 @@
     "autonomous:rigs.rig_tools('research')": 5,
     "autonomous:rigs.rig_tools('social')": 4,
     "autonomous:tool_availability.grantable_autonomous_tools()": 10,
+    "autonomous:tool_grants.allowed_self_goal_tools()": 10,
     "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 6,
-    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 13,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 13,
     "autonomous_defi_armed:rigs.rig_tools('money_rail')": 4,
     "autonomous_defi_armed:rigs.rig_tools('ops')": 4,
@@ -24736,9 +24898,8 @@
     "autonomous_defi_armed:rigs.rig_tools('research')": 5,
     "autonomous_defi_armed:rigs.rig_tools('social')": 4,
     "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 13,
-    "goal_tools._SELF_GOAL_ALLOWED_TOOLS": 8,
+    "autonomous_defi_armed:tool_grants.allowed_self_goal_tools()": 13,
     "posture2:bootstrap.cli_unavailable_tools(all)": 6,
-    "posture2:goal_tools.allowed_self_goal_tools()": 8,
     "posture2:goal_tools.owner_turn_goal_tools()": 11,
     "posture2:rigs.rig_tools('money_rail')": 4,
     "posture2:rigs.rig_tools('ops')": 4,
@@ -24746,20 +24907,22 @@
     "posture2:rigs.rig_tools('research')": 5,
     "posture2:rigs.rig_tools('social')": 4,
     "posture2:tool_availability.grantable_autonomous_tools()": 8,
+    "posture2:tool_grants.allowed_self_goal_tools()": 8,
     "rigs.RIGS['money_rail']": 4,
     "rigs.RIGS['ops']": 4,
     "rigs.RIGS['owner']": 5,
     "rigs.RIGS['research']": 5,
     "rigs.RIGS['social']": 4,
     "supervised:bootstrap.cli_unavailable_tools(all)": 6,
-    "supervised:goal_tools.allowed_self_goal_tools()": 8,
     "supervised:goal_tools.owner_turn_goal_tools()": 11,
     "supervised:rigs.rig_tools('money_rail')": 4,
     "supervised:rigs.rig_tools('ops')": 4,
     "supervised:rigs.rig_tools('owner')": 5,
     "supervised:rigs.rig_tools('research')": 5,
     "supervised:rigs.rig_tools('social')": 4,
-    "supervised:tool_availability.grantable_autonomous_tools()": 8
+    "supervised:tool_availability.grantable_autonomous_tools()": 8,
+    "supervised:tool_grants.allowed_self_goal_tools()": 8,
+    "tool_grants.SELF_GOAL_ALLOWED_TOOLS": 8
    },
    "is_classified": false,
    "is_untrusted_tool(None, tool)": false,
@@ -24787,7 +24950,6 @@
     "autonomous:bootstrap.cli_unavailable_tools(all)": 7,
     "autonomous:constants.autonomous_mode_tools()": 7,
     "autonomous:constants.effective_autonomous_tools()": 7,
-    "autonomous:goal_tools.allowed_self_goal_tools()": 11,
     "autonomous:goal_tools.owner_turn_goal_tools()": 12,
     "autonomous:room_policy._forbidden_tool_ids()": 19,
     "autonomous:tool_availability.grantable_autonomous_tools()": 11,
@@ -24798,10 +24960,10 @@
     "autonomous:tool_defaults.resolve_toolset('social')": 3,
     "autonomous:tool_defaults.resolve_toolset('trading_research')": 2,
     "autonomous:tool_defaults.server_default_tools()": 7,
+    "autonomous:tool_grants.allowed_self_goal_tools()": 11,
     "autonomous_defi_armed:bootstrap.cli_unavailable_tools(all)": 7,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 7,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 7,
-    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 14,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 14,
     "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 19,
     "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 14,
@@ -24812,13 +24974,12 @@
     "autonomous_defi_armed:tool_defaults.resolve_toolset('social')": 3,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('trading_research')": 2,
     "autonomous_defi_armed:tool_defaults.server_default_tools()": 7,
+    "autonomous_defi_armed:tool_grants.allowed_self_goal_tools()": 14,
     "bootstrap._CLI_INCOMPATIBLE": 2,
     "constants.AUTONOMOUS_MODE_TOOLS": 7,
-    "goal_tools._SELF_GOAL_ALLOWED_TOOLS": 9,
     "posture2:bootstrap.cli_unavailable_tools(all)": 7,
     "posture2:constants.autonomous_mode_tools()": 7,
     "posture2:constants.effective_autonomous_tools()": 7,
-    "posture2:goal_tools.allowed_self_goal_tools()": 9,
     "posture2:goal_tools.owner_turn_goal_tools()": 12,
     "posture2:room_policy._forbidden_tool_ids()": 19,
     "posture2:tool_availability.grantable_autonomous_tools()": 9,
@@ -24828,10 +24989,10 @@
     "posture2:tool_defaults.resolve_toolset('social')": 3,
     "posture2:tool_defaults.resolve_toolset('trading_research')": 2,
     "posture2:tool_defaults.server_default_tools()": 3,
+    "posture2:tool_grants.allowed_self_goal_tools()": 9,
     "supervised:bootstrap.cli_unavailable_tools(all)": 7,
     "supervised:constants.autonomous_mode_tools()": 7,
     "supervised:constants.effective_autonomous_tools()": 7,
-    "supervised:goal_tools.allowed_self_goal_tools()": 9,
     "supervised:goal_tools.owner_turn_goal_tools()": 12,
     "supervised:room_policy._forbidden_tool_ids()": 19,
     "supervised:tool_availability.grantable_autonomous_tools()": 9,
@@ -24841,11 +25002,13 @@
     "supervised:tool_defaults.resolve_toolset('social')": 3,
     "supervised:tool_defaults.resolve_toolset('trading_research')": 2,
     "supervised:tool_defaults.server_default_tools()": 3,
+    "supervised:tool_grants.allowed_self_goal_tools()": 9,
     "tool_defaults.TOOLSETS['earn']": 3,
     "tool_defaults.TOOLSETS['full']": 3,
     "tool_defaults.TOOLSETS['research']": 2,
     "tool_defaults.TOOLSETS['social']": 3,
-    "tool_defaults.TOOLSETS['trading_research']": 2
+    "tool_defaults.TOOLSETS['trading_research']": 2,
+    "tool_grants.SELF_GOAL_ALLOWED_TOOLS": 9
    },
    "is_classified": true,
    "is_untrusted_tool(None, tool)": true,
@@ -25126,7 +25289,6 @@
    "in": {
     "autonomous:constants.autonomous_mode_tools()": 1,
     "autonomous:constants.effective_autonomous_tools()": 1,
-    "autonomous:goal_tools.allowed_self_goal_tools()": 12,
     "autonomous:goal_tools.owner_turn_goal_tools()": 13,
     "autonomous:rigs.rig_tools('money_rail')": 3,
     "autonomous:rigs.rig_tools('ops')": 1,
@@ -25151,9 +25313,9 @@
     "autonomous:tool_defaults.resolve_toolset('unknown-name')": 1,
     "autonomous:tool_defaults.server_default_tools()": 1,
     "autonomous:tool_defaults.with_compute_tools(['filesystem','task'])": 1,
+    "autonomous:tool_grants.allowed_self_goal_tools()": 12,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 1,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 1,
-    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 15,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 15,
     "autonomous_defi_armed:rigs.rig_tools('money_rail')": 3,
     "autonomous_defi_armed:rigs.rig_tools('ops')": 1,
@@ -25178,15 +25340,13 @@
     "autonomous_defi_armed:tool_defaults.resolve_toolset('unknown-name')": 1,
     "autonomous_defi_armed:tool_defaults.server_default_tools()": 1,
     "autonomous_defi_armed:tool_defaults.with_compute_tools(['filesystem','task'])": 1,
+    "autonomous_defi_armed:tool_grants.allowed_self_goal_tools()": 15,
     "bootstrap._CLI_REGISTERABLE_TOOLS": 21,
     "bootstrap._CLI_STATIC_TOOLS": 6,
     "constants.AUTONOMOUS_MODE_TOOLS": 1,
     "constants.BASE_DEFAULT_TOOLS": 1,
-    "goal_tools._SELF_GOAL_ALLOWED_TOOLS": 10,
-    "goal_tools._SELF_GOAL_BASELINE_TOOLS": 1,
     "posture2:constants.autonomous_mode_tools()": 1,
     "posture2:constants.effective_autonomous_tools()": 1,
-    "posture2:goal_tools.allowed_self_goal_tools()": 10,
     "posture2:goal_tools.owner_turn_goal_tools()": 13,
     "posture2:rigs.rig_tools('money_rail')": 3,
     "posture2:rigs.rig_tools('ops')": 1,
@@ -25211,6 +25371,7 @@
     "posture2:tool_defaults.resolve_toolset('unknown-name')": 1,
     "posture2:tool_defaults.server_default_tools()": 1,
     "posture2:tool_defaults.with_compute_tools(['filesystem','task'])": 1,
+    "posture2:tool_grants.allowed_self_goal_tools()": 10,
     "rigs.RIGS['money_rail']": 3,
     "rigs.RIGS['ops']": 1,
     "rigs.RIGS['owner']": 1,
@@ -25220,7 +25381,6 @@
     "room_policy.ROOM_ALLOWED_TOOL_IDS": 1,
     "supervised:constants.autonomous_mode_tools()": 1,
     "supervised:constants.effective_autonomous_tools()": 1,
-    "supervised:goal_tools.allowed_self_goal_tools()": 10,
     "supervised:goal_tools.owner_turn_goal_tools()": 13,
     "supervised:rigs.rig_tools('money_rail')": 3,
     "supervised:rigs.rig_tools('ops')": 1,
@@ -25245,6 +25405,7 @@
     "supervised:tool_defaults.resolve_toolset('unknown-name')": 1,
     "supervised:tool_defaults.server_default_tools()": 1,
     "supervised:tool_defaults.with_compute_tools(['filesystem','task'])": 1,
+    "supervised:tool_grants.allowed_self_goal_tools()": 10,
     "tool_defaults.TOOLSETS['browser']": 1,
     "tool_defaults.TOOLSETS['coding']": 1,
     "tool_defaults.TOOLSETS['default']": 1,
@@ -25255,7 +25416,9 @@
     "tool_defaults.TOOLSETS['research']": 1,
     "tool_defaults.TOOLSETS['safe']": 1,
     "tool_defaults.TOOLSETS['social']": 1,
-    "tool_defaults.TOOLSETS['trading_research']": 1
+    "tool_defaults.TOOLSETS['trading_research']": 1,
+    "tool_grants.SELF_GOAL_ALLOWED_TOOLS": 10,
+    "tool_grants.SELF_GOAL_BASELINE_TOOLS": 1
    },
    "is_classified": true,
    "is_untrusted_tool(None, tool)": false,
@@ -25334,7 +25497,6 @@
     "autonomous:constants.autonomous_mode_tools()": 4,
     "autonomous:constants.effective_autonomous_tools()": 4,
     "autonomous:delegation.get_blocked_child_tools()": 20,
-    "autonomous:goal_tools.allowed_self_goal_tools()": 13,
     "autonomous:goal_tools.owner_turn_goal_tools()": 14,
     "autonomous:rigs.rig_tools('social')": 0,
     "autonomous:room_policy._forbidden_tool_ids()": 26,
@@ -25342,10 +25504,10 @@
     "autonomous:tool_defaults.default_session_tools()": 4,
     "autonomous:tool_defaults.resolve_toolset('social')": 5,
     "autonomous:tool_defaults.server_default_tools()": 4,
+    "autonomous:tool_grants.allowed_self_goal_tools()": 13,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 4,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 4,
     "autonomous_defi_armed:delegation.get_blocked_child_tools()": 20,
-    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 16,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 16,
     "autonomous_defi_armed:rigs.rig_tools('social')": 0,
     "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 26,
@@ -25353,30 +25515,31 @@
     "autonomous_defi_armed:tool_defaults.default_session_tools()": 4,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('social')": 5,
     "autonomous_defi_armed:tool_defaults.server_default_tools()": 4,
+    "autonomous_defi_armed:tool_grants.allowed_self_goal_tools()": 16,
     "bootstrap._CLI_REGISTERABLE_TOOLS": 22,
     "bootstrap._CLI_STATIC_TOOLS": 7,
     "constants.AUTONOMOUS_MODE_TOOLS": 4,
-    "goal_tools._SELF_GOAL_ALLOWED_TOOLS": 11,
     "posture2:constants.autonomous_mode_tools()": 4,
     "posture2:constants.effective_autonomous_tools()": 4,
     "posture2:delegation.get_blocked_child_tools()": 20,
-    "posture2:goal_tools.allowed_self_goal_tools()": 11,
     "posture2:goal_tools.owner_turn_goal_tools()": 14,
     "posture2:rigs.rig_tools('social')": 0,
     "posture2:room_policy._forbidden_tool_ids()": 26,
     "posture2:tool_availability.grantable_autonomous_tools()": 11,
     "posture2:tool_defaults.resolve_toolset('social')": 5,
+    "posture2:tool_grants.allowed_self_goal_tools()": 11,
     "rigs.RIGS['social']": 0,
     "supervised:constants.autonomous_mode_tools()": 4,
     "supervised:constants.effective_autonomous_tools()": 4,
     "supervised:delegation.get_blocked_child_tools()": 20,
-    "supervised:goal_tools.allowed_self_goal_tools()": 11,
     "supervised:goal_tools.owner_turn_goal_tools()": 14,
     "supervised:rigs.rig_tools('social')": 0,
     "supervised:room_policy._forbidden_tool_ids()": 26,
     "supervised:tool_availability.grantable_autonomous_tools()": 11,
     "supervised:tool_defaults.resolve_toolset('social')": 5,
-    "tool_defaults.TOOLSETS['social']": 5
+    "supervised:tool_grants.allowed_self_goal_tools()": 11,
+    "tool_defaults.TOOLSETS['social']": 5,
+    "tool_grants.SELF_GOAL_ALLOWED_TOOLS": 11
    },
    "is_classified": true,
    "is_untrusted_tool(None, tool)": true,
@@ -25414,10 +25577,10 @@
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 17,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 17,
     "autonomous_defi_armed:delegation.get_blocked_child_tools()": 21,
-    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 17,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 17,
     "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 27,
     "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 17,
+    "autonomous_defi_armed:tool_grants.allowed_self_goal_tools()": 17,
     "constants.DEFI_AUTONOMOUS_TOOLS": 2,
     "posture2:bootstrap.cli_unavailable_tools(all)": 11,
     "posture2:delegation.get_blocked_child_tools()": 21,
@@ -25454,7 +25617,6 @@
    "in": {
     "autonomous:constants.autonomous_mode_tools()": 2,
     "autonomous:constants.effective_autonomous_tools()": 2,
-    "autonomous:goal_tools.allowed_self_goal_tools()": 14,
     "autonomous:goal_tools.owner_turn_goal_tools()": 15,
     "autonomous:rigs.rig_tools('owner')": 2,
     "autonomous:rigs.rig_tools('research')": 0,
@@ -25470,9 +25632,9 @@
     "autonomous:tool_defaults.resolve_toolset('trading_research')": 4,
     "autonomous:tool_defaults.resolve_toolset('unknown-name')": 2,
     "autonomous:tool_defaults.server_default_tools()": 2,
+    "autonomous:tool_grants.allowed_self_goal_tools()": 14,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 2,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 2,
-    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 18,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 18,
     "autonomous_defi_armed:rigs.rig_tools('owner')": 2,
     "autonomous_defi_armed:rigs.rig_tools('research')": 0,
@@ -25488,14 +25650,12 @@
     "autonomous_defi_armed:tool_defaults.resolve_toolset('trading_research')": 4,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('unknown-name')": 2,
     "autonomous_defi_armed:tool_defaults.server_default_tools()": 2,
+    "autonomous_defi_armed:tool_grants.allowed_self_goal_tools()": 18,
     "bootstrap._CLI_REGISTERABLE_TOOLS": 23,
     "bootstrap._CLI_STATIC_TOOLS": 8,
     "constants.AUTONOMOUS_MODE_TOOLS": 2,
-    "goal_tools._SELF_GOAL_ALLOWED_TOOLS": 12,
-    "goal_tools._SELF_GOAL_BASELINE_TOOLS": 2,
     "posture2:constants.autonomous_mode_tools()": 2,
     "posture2:constants.effective_autonomous_tools()": 2,
-    "posture2:goal_tools.allowed_self_goal_tools()": 12,
     "posture2:goal_tools.owner_turn_goal_tools()": 15,
     "posture2:rigs.rig_tools('owner')": 2,
     "posture2:rigs.rig_tools('research')": 0,
@@ -25510,6 +25670,7 @@
     "posture2:tool_defaults.resolve_toolset('trading_research')": 4,
     "posture2:tool_defaults.resolve_toolset('unknown-name')": 2,
     "posture2:tool_defaults.server_default_tools()": 2,
+    "posture2:tool_grants.allowed_self_goal_tools()": 12,
     "rigs.RIGS['owner']": 2,
     "rigs.RIGS['research']": 0,
     "rigs.RIGS['social']": 5,
@@ -25517,7 +25678,6 @@
     "room_policy.ROOM_ALLOWED_TOOL_IDS": 2,
     "supervised:constants.autonomous_mode_tools()": 2,
     "supervised:constants.effective_autonomous_tools()": 2,
-    "supervised:goal_tools.allowed_self_goal_tools()": 12,
     "supervised:goal_tools.owner_turn_goal_tools()": 15,
     "supervised:rigs.rig_tools('owner')": 2,
     "supervised:rigs.rig_tools('research')": 0,
@@ -25532,11 +25692,14 @@
     "supervised:tool_defaults.resolve_toolset('trading_research')": 4,
     "supervised:tool_defaults.resolve_toolset('unknown-name')": 2,
     "supervised:tool_defaults.server_default_tools()": 2,
+    "supervised:tool_grants.allowed_self_goal_tools()": 12,
     "tool_defaults.TOOLSETS['default']": 2,
     "tool_defaults.TOOLSETS['full']": 2,
     "tool_defaults.TOOLSETS['research']": 4,
     "tool_defaults.TOOLSETS['social']": 4,
-    "tool_defaults.TOOLSETS['trading_research']": 4
+    "tool_defaults.TOOLSETS['trading_research']": 4,
+    "tool_grants.SELF_GOAL_ALLOWED_TOOLS": 12,
+    "tool_grants.SELF_GOAL_BASELINE_TOOLS": 2
    },
    "is_classified": true,
    "is_untrusted_tool(None, tool)": true,
@@ -25612,39 +25775,39 @@
     "autonomous:constants.autonomous_mode_tools()": 11,
     "autonomous:constants.effective_autonomous_tools()": 11,
     "autonomous:delegation.get_blocked_child_tools()": 23,
-    "autonomous:goal_tools.allowed_self_goal_tools()": 15,
     "autonomous:goal_tools.owner_turn_goal_tools()": 16,
     "autonomous:room_policy._forbidden_tool_ids()": 29,
     "autonomous:tool_availability.grantable_autonomous_tools()": 15,
     "autonomous:tool_defaults.default_session_tools()": 11,
     "autonomous:tool_defaults.server_default_tools()": 11,
+    "autonomous:tool_grants.allowed_self_goal_tools()": 15,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 11,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 11,
     "autonomous_defi_armed:delegation.get_blocked_child_tools()": 23,
-    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 19,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 19,
     "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 29,
     "autonomous_defi_armed:tool_availability.grantable_autonomous_tools()": 19,
     "autonomous_defi_armed:tool_defaults.default_session_tools()": 11,
     "autonomous_defi_armed:tool_defaults.server_default_tools()": 11,
+    "autonomous_defi_armed:tool_grants.allowed_self_goal_tools()": 19,
     "bootstrap._CLI_OPTIONAL_TOOLS": 14,
     "bootstrap._CLI_REGISTERABLE_TOOLS": 24,
     "constants.AUTONOMOUS_MODE_TOOLS": 11,
-    "goal_tools._SELF_GOAL_ALLOWED_TOOLS": 13,
     "posture2:constants.autonomous_mode_tools()": 11,
     "posture2:constants.effective_autonomous_tools()": 11,
     "posture2:delegation.get_blocked_child_tools()": 23,
-    "posture2:goal_tools.allowed_self_goal_tools()": 13,
     "posture2:goal_tools.owner_turn_goal_tools()": 16,
     "posture2:room_policy._forbidden_tool_ids()": 29,
     "posture2:tool_availability.grantable_autonomous_tools()": 13,
+    "posture2:tool_grants.allowed_self_goal_tools()": 13,
     "supervised:constants.autonomous_mode_tools()": 11,
     "supervised:constants.effective_autonomous_tools()": 11,
     "supervised:delegation.get_blocked_child_tools()": 23,
-    "supervised:goal_tools.allowed_self_goal_tools()": 13,
     "supervised:goal_tools.owner_turn_goal_tools()": 16,
     "supervised:room_policy._forbidden_tool_ids()": 29,
-    "supervised:tool_availability.grantable_autonomous_tools()": 13
+    "supervised:tool_availability.grantable_autonomous_tools()": 13,
+    "supervised:tool_grants.allowed_self_goal_tools()": 13,
+    "tool_grants.SELF_GOAL_ALLOWED_TOOLS": 13
    },
    "is_classified": true,
    "is_untrusted_tool(None, tool)": false,
@@ -25727,7 +25890,6 @@
     "autonomous:constants.autonomous_mode_tools()": 14,
     "autonomous:constants.effective_autonomous_tools()": 14,
     "autonomous:delegation.get_blocked_child_tools()": 25,
-    "autonomous:goal_tools.allowed_self_goal_tools()": 16,
     "autonomous:goal_tools.owner_turn_goal_tools()": 17,
     "autonomous:rigs.rig_tools('social')": 1,
     "autonomous:room_policy._forbidden_tool_ids()": 31,
@@ -25735,10 +25897,10 @@
     "autonomous:tool_defaults.default_session_tools()": 12,
     "autonomous:tool_defaults.resolve_toolset('social')": 6,
     "autonomous:tool_defaults.server_default_tools()": 12,
+    "autonomous:tool_grants.allowed_self_goal_tools()": 16,
     "autonomous_defi_armed:constants.autonomous_mode_tools()": 14,
     "autonomous_defi_armed:constants.effective_autonomous_tools()": 14,
     "autonomous_defi_armed:delegation.get_blocked_child_tools()": 25,
-    "autonomous_defi_armed:goal_tools.allowed_self_goal_tools()": 20,
     "autonomous_defi_armed:goal_tools.owner_turn_goal_tools()": 20,
     "autonomous_defi_armed:rigs.rig_tools('social')": 1,
     "autonomous_defi_armed:room_policy._forbidden_tool_ids()": 31,
@@ -25746,6 +25908,7 @@
     "autonomous_defi_armed:tool_defaults.default_session_tools()": 12,
     "autonomous_defi_armed:tool_defaults.resolve_toolset('social')": 6,
     "autonomous_defi_armed:tool_defaults.server_default_tools()": 12,
+    "autonomous_defi_armed:tool_grants.allowed_self_goal_tools()": 20,
     "bootstrap._CLI_REGISTERABLE_TOOLS": 26,
     "bootstrap._CLI_STATIC_TOOLS": 9,
     "constants.AUTONOMOUS_MODE_TOOLS": 14,

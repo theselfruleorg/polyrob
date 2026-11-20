@@ -142,3 +142,24 @@ describe('an empty list setting', () => {
   expect(root.setting.changed()).toBe(false);
  });
 });
+
+// 2026-11-20 live review: an untouched setting is never "changed". A default's
+// display words (`value`) are not the control's value (`control_value`).
+describe("an untouched default", () => {
+  const COPY2 = { read_only: "0", control_save: "Save", control_confirm: "Confirm", control_cancel: "Cancel" };
+  const rows = [
+    { key: "launch.max_pool_usd", type: "float", value: "not set (the per-transaction limit binds)", control_value: null },
+    { key: "launch.pair", type: "str", value: "not set (any pair)", control_value: null },
+    { key: "approvals.provider", type: "enum", enum_values: ["auto", "telegram"], value: "`auto`", control_value: null },
+    { key: "autonomy.self_wake", type: "bool", value: false, control_value: false },
+    { key: "ui.theme", type: "enum", enum_values: ["auto", "dark"], value: "auto", control_value: "auto" },
+  ];
+  for (const spec of rows) {
+    it(`${spec.key} is not changed and shows no prose in its box`, () => {
+      const root = settingControl(spec, COPY2, { bare: true });
+      expect(root.setting.changed()).toBe(false);
+      const input = root.querySelector("input, textarea");
+      if (input) expect(input.value).toBe("");
+    });
+  }
+});

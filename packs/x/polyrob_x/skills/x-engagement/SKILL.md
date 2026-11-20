@@ -92,6 +92,10 @@ shows a poll's votes: the plain tweet read does not include the attachment.
   never the reason you skip a check.
 - One open poll per topic at a time. Do not re-ask the same question until the
   previous one closed and you acted (or explained why you did not).
+- **A poll about a money act is advice, not a decision.** Read the result, weigh
+  it with the replies and your own screen, then decide yourself. If you act, the
+  act goes through the normal guard with your own `why`, and you say publicly
+  what you did and how the vote weighed in. If you do not act, say why.
 
 ## Quality bar (every write)
 

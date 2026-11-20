@@ -8,7 +8,7 @@ import asyncio
 import pytest
 
 from agents.task.goals.dispatcher import GoalDispatcher
-from agents.task.goals.board import Goal
+from modules.goals.board import Goal
 
 
 class _FakeBoard:

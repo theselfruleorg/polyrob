@@ -1,6 +1,6 @@
 {
   "function": {
-    "description": "Call ANY contract with your own ABI-encoded calldata — the verb for a protocol nobody integrated ahead of time (an Aave supply, an NFT mint, a staking deposit). You declare BOTH directions: at most this much leaves, AT LEAST this much must come back, and the simulation decides whether that held. Declare receive_token + receive_min_raw whenever the call returns a fungible token: with no declared receipt the guard only bounds what leaves. Under a run's target_token a receipt of the target MUST be declared. dry_run defaults to TRUE.",
+    "description": "Call ANY contract with your own ABI-encoded calldata — the verb for a protocol nobody integrated ahead of time (an Aave supply, a vault deposit, a staking deposit). You declare BOTH directions: at most this much leaves, AT LEAST this much must come back, and the simulation decides whether that held. Declare receive_token + receive_min_raw whenever the call returns a fungible token: with no declared receipt the guard only bounds what leaves. Under a run's target_token a receipt of the target MUST be declared. dry_run defaults to TRUE.",
     "name": "defi_trade_call",
     "parameters": {
       "additionalProperties": false,
@@ -36,7 +36,7 @@
           "type": "string"
         },
         "chain": {
-          "description": "Chain to call on — CHOOSE IT DELIBERATELY, because the same address is a different token on a different chain. Chains that can move value: ethereum, base, robinhood, arbitrum, polygon. Gas differs by orders of magnitude, so a cent-scale trade can cost more in gas on ethereum than it is worth, while base is a fraction of a cent. Per-chain guidance: the `chain` parameter of defi_trade.swap.",
+          "description": "Chain to call on — CHOOSE IT DELIBERATELY, because the same address is a different token on a different chain. Chains that can move value: ethereum, base, robinhood, arbitrum, polygon. Gas and per-chain guidance: the `chain` parameter of defi_trade.swap.",
           "type": "string"
         },
         "dry_run": {
@@ -94,6 +94,12 @@
           "description": "NATIVE value to send with the call, in whole coin units (0.01 = 0.01 ETH, converted at 18 decimals) — NOT wei. Declare it — an undeclared native movement is refused.",
           "minimum": 0,
           "type": "number"
+        },
+        "why": {
+          "default": null,
+          "description": "Why this act, now (one line). Required on an autonomous run; the owner reads it.",
+          "nullable": true,
+          "type": "string"
         }
       },
       "required": [

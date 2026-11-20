@@ -3,6 +3,7 @@
 Session keys are CHAT-scoped: a group chat is one shared session,
 a DM is isolated by user. Identity rides on the message, never in the key.
 """
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -100,6 +101,42 @@ class Action:
             raise ValueError("an action needs a label")
 
 
+_THREAD_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,128}")
+
+
+@dataclass(frozen=True)
+class ReplyTarget:
+    """Where on a chat a PROACTIVE send lands (proposal 110 §1.3): the chat, plus
+    optionally a thread / forum topic and/or the message it answers.
+
+    ``thread_id`` rides the session key (``…:thread:<id>``), the one place every
+    surface already reads it from, so it is refused unless it is a plain token:
+    a ``:`` would inject key segments. ``reply_to`` is a platform message id; it
+    never enters a key. A target with neither is just the chat (today's send).
+    """
+    surface_id: str
+    chat_id: str
+    thread_id: Optional[str] = None
+    reply_to: Optional[str] = None
+
+    def __post_init__(self):
+        if not self.surface_id or not self.chat_id:
+            raise ValueError("a reply target needs a surface and a chat")
+        if self.thread_id is not None:
+            object.__setattr__(self, "thread_id", str(self.thread_id).strip() or None)
+        if self.thread_id is not None and not _THREAD_ID_RE.fullmatch(self.thread_id):
+            raise ValueError("thread_id must be 1-128 letters, digits, '.', '_' or '-'")
+        if self.reply_to is not None:
+            rt = str(self.reply_to).strip()
+            if len(rt) > 256 or any(ord(c) < 32 for c in rt):
+                raise ValueError("reply_to must be a message id (at most 256 printable characters)")
+            object.__setattr__(self, "reply_to", rt or None)
+
+    @property
+    def threaded(self) -> bool:
+        return bool(self.thread_id or self.reply_to)
+
+
 @dataclass
 class OutboundMessage:
     session_key: str
@@ -146,7 +183,7 @@ class SurfaceCapabilities:
     supports_interactive_ask: bool = False
     is_multi_tenant: bool = False
     max_message_bytes: int = 4096
-    markdown_flavor: str = "none"           # "none" | "markdown_v2" | "html"
+    markdown_flavor: str = "none"           # "none" | "plain" | "mrkdwn" | "markdown_v2" | "html"
     service_window_secs: int = 0            # >0 = business-initiated send window (WhatsApp 24h)
     requires_template_outside_window: bool = False  # outside the window, only templates send
     media_out: bool = False                 # can render OutboundMessage.media (photo/attachment)

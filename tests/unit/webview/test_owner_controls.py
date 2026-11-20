@@ -27,6 +27,9 @@ def _client(monkeypatch, tmp_path, user_id="u1"):
     app.include_router(pages.money_router)  # 067 P5a: Money readers
     from webview import job_routes  # 080: the job stop/pause/resume/run routes
     app.include_router(job_routes.router)
+    import webview.inbox as inbox  # the console decides through the Inbox routes
+    monkeypatch.setattr(inbox, "unbound_console", lambda: None)
+    app.include_router(inbox.router)
     # 043 phase 5: pages.router carries the /api/webgate/* endpoints; the
     # WEBVIEW_UI legacy switch and webview.legacy were removed.
     return TestClient(app), pages
@@ -106,7 +109,7 @@ def test_halt_refused_on_multitenant_posture(monkeypatch, tmp_path, _halt_env):
 # --------------------------------------------------------------------------- #
 
 def _make_goal(tmp_path, user_id="u1", title="ship the widget"):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     board = GoalBoard(str(tmp_path / "goals.db"))
     goal = board.create(user_id=user_id, title=title)
     return board, goal
@@ -220,7 +223,7 @@ def test_correspondent_reject_flips_the_row(monkeypatch, tmp_path):
     assert any(it["kind"] == "correspondent" and it["id"] == "email:a@x.com"
                for it in items)
 
-    r = client.post("/api/webgate/pending/correspondent/email:a@x.com/reject")
+    r = client.post("/api/webgate/inbox/correspondent/email:a@x.com/reject")
     assert r.status_code == 200
     body = r.json()
     assert body["ok"] is True
@@ -237,21 +240,21 @@ def test_correspondent_reject_flips_the_row(monkeypatch, tmp_path):
 def test_correspondent_reject_is_tenant_scoped(monkeypatch, tmp_path):
     registry = _seed_pending_correspondent(monkeypatch, tmp_path, user_id="u1")
     client, _ = _client(monkeypatch, tmp_path, user_id="u2")
-    r = client.post("/api/webgate/pending/correspondent/email:a@x.com/reject")
+    r = client.post("/api/webgate/inbox/correspondent/email:a@x.com/reject")
     assert r.status_code == 200 and r.json()["ok"] is False
     assert registry.list(user_id="u1")[0]["state"] == "pending"
 
 
 def test_correspondent_reject_unknown_is_ok_false(monkeypatch, tmp_path):
     client, _ = _client(monkeypatch, tmp_path, user_id="u1")
-    r = client.post("/api/webgate/pending/correspondent/email:nope@x.com/reject")
+    r = client.post("/api/webgate/inbox/correspondent/email:nope@x.com/reject")
     assert r.status_code == 200 and r.json()["ok"] is False
 
 
 def test_correspondent_approve_still_promotes(monkeypatch, tmp_path):
     registry = _seed_pending_correspondent(monkeypatch, tmp_path)
     client, _ = _client(monkeypatch, tmp_path, user_id="u1")
-    r = client.post("/api/webgate/pending/correspondent/email:a@x.com/promote")
+    r = client.post("/api/webgate/inbox/correspondent/email:a@x.com/decide")
     assert r.status_code == 200 and r.json()["ok"] is True
     assert registry.list(user_id="u1")[0]["state"] == "active"
 

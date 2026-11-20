@@ -30,7 +30,9 @@ in this order, stopping at the first refusal:
 5. **ledger** — ``SpendLedger.check`` when the caller asks and the amount is
    known.
 6. **lane** — with ``intent.params``, ``spend_lane.spend_exemption`` decides
-   act vs owner queue (its thresholds are not duplicated here).
+   act vs owner queue (its thresholds are not duplicated here). The owner's
+   standing grant (``core.wallet.standing_grant``) is NOT a kernel step: the
+   controller's owner-queue hook asks it (``tools/controller/self_transfer.py``).
 
 Every probe error refuses. The verdict carries the step that decided, so a
 caller that owes its user a rail-specific sentence can map it.

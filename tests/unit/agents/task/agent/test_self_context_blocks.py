@@ -22,7 +22,7 @@ BLOCKS = (
 	("awareness", "You act on behalf of OWNER A."),
 	("soul", "SOUL: I am Nova."),
 	("contract", ""),
-	("owner_rules", "## Owner facts\n\nNo public bug-fix reports."),
+	("owner_rules", "## Owner rules\n\nNo public bug-fix reports."),
 	("self_doc", "SELF: I learned X."),
 )
 

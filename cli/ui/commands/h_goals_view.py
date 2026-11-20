@@ -29,7 +29,7 @@ def goals_view(user_id: str) -> str:
     if not os.path.exists(path):
         return NO_GOALS_YET
     try:
-        from agents.task.goals.board import GoalBoard
+        from modules.goals.board import GoalBoard
         board = GoalBoard(path)
     except Exception as exc:  # unreadable/locked store — never a confident zero
         return (f"Goal board: unavailable ({type(exc).__name__}: {str(exc)[:120]}) "

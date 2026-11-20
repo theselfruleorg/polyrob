@@ -6,11 +6,8 @@ Kept as its own small file (rather than added to
 tests/unit/agents/task/test_correspondent_gate.py) because that file has
 unrelated in-flight edits from another session on this shared tree.
 """
-from agents.task.agent.core.correspondent_gate import (
-    HIGH_IMPACT_TOOLS,
-    is_high_impact,
-    make_correspondent_gate_hook,
-)
+from agents.task.agent.core.correspondent_gate import make_correspondent_gate_hook
+from core.security.high_impact import HIGH_IMPACT_TOOLS, is_high_impact
 
 
 def test_usage_summary_action_is_high_impact_by_name():

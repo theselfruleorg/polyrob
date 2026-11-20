@@ -399,8 +399,10 @@ a.entry:hover{ border-left-color:var(--running) }
 }
 @media (min-width:768px) and (max-width:899px){ .work-pane{ bottom:0 } }
 @media (max-width:599px){
-  .head{ flex-wrap:nowrap }
-  .head-truth{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+  /* The one status line wraps under the head on a phone (it was cut to "The agent …"). */
+  .head{ flex-wrap:wrap }
+  .head-truth{ order:10; flex:1 0 100%; overflow:hidden; display:-webkit-box;
+    -webkit-box-orient:vertical; -webkit-line-clamp:3 }
 }
 
 /* ---- the chat column (113 W6, IA-1): your chats on the left of the Chat
@@ -505,6 +507,12 @@ a.entry:hover{ border-left-color:var(--running) }
   font-family:var(--mono); font-size:var(--t-micro); color:var(--ink-3);
   border-top:1px dashed var(--rule); padding:var(--s3) var(--s4); margin-top:var(--s5);
 }
+/* Agent › Settings: the heavy/light/choice lines (agent-model.js renderTiers). */
+.model-tiers{ margin-top:var(--s4) }
+/* A chat-box verb's answer keeps its lines (/help, /status): transcript.js _commandNote. */
+.command-note{ white-space:pre-line }
+.command-note p{ margin:0 0 var(--s2) }
+.command-note pre{ white-space:pre; overflow-x:auto }
 /* A run that failed before the agent answered (transcript.js _failedLine). */
 .note.is-failed{ border-left:2px solid var(--stopped); padding-left:var(--s3) }
 /* The one link to the folder behind a chat, and its capped list (070 W0.15). */
@@ -720,3 +728,7 @@ a.entry:hover{ border-left-color:var(--running) }
 @media (max-width:899px){
   .console-shell dialog.goal-detail{ max-width:100vw !important; max-height:100dvh; height:100%; margin:0; border-radius:0 !important }
 }
+/* Work › Goals (2026-11-20 walk): a lane's count sits beside ITS title. With
+   space-between it sat at the lane's right edge, next to the NEXT lane's title
+   ("Ready … 1 Running"). */
+.lane > summary{ justify-content:flex-start }

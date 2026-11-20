@@ -24,9 +24,9 @@ from tools.model_tier import (MODEL_FIELD_DESCRIPTION, TIER_FIELD_DESCRIPTION,  
                               WHY_FIELD_DESCRIPTION, model_payload, notify_model_change,
                               tier_payload)
 from agents.task.loop_types.controller_types import ActionResult
-from cron.jobs import CronJobStore
+from core.cron_store import CronJobStore
 from core.cron_lanes import LaneStopped
-from cron.schedule import ScheduleError
+from core.schedule import ScheduleError
 from cron.service import CronService
 
 logger = logging.getLogger(__name__)
@@ -62,8 +62,8 @@ def resolve_cron_tools(payload: Optional[dict]) -> list:
     data = dict(payload or {})
     # 085 W8 A4: the job's DECLARED set, re-judged against its stored actor.
     from core.tool_grants import dispatch_recheck
-    from tools.goal_tools import _SELF_GOAL_BASELINE_TOOLS, allowed_self_goal_tools
-    ceiling = set(allowed_self_goal_tools()) | set(_SELF_GOAL_BASELINE_TOOLS)
+    from core.tool_grants import SELF_GOAL_BASELINE_TOOLS, allowed_self_goal_tools
+    ceiling = set(allowed_self_goal_tools()) | set(SELF_GOAL_BASELINE_TOOLS)
     declared = data.get("tools") or rig_tools(data.get("rig")) or []
     kept, refused = dispatch_recheck(tools, data, declared=declared, agent_ceiling=ceiling)
     if data.get("actor") == "agent" and not declared:
@@ -148,7 +148,9 @@ class CronScheduleAction(BaseModel):
                     "price, pool_share_pct) (public on-chain reads only; a web page or "
                     "any other source cannot be a read verb). A price/value watch adds "
                     "'alert': {'field': '<key of the verb result metadata>', 'below': n, "
-                    "'above': n} — the verb compares, you never do; an unreadable value alerts.")
+                    "'above': n} — the verb compares, you never do; an unreadable value alerts. "
+                    "It ONLY tells the owner: you never run and never decide. A watch you must "
+                    "ACT on (a position, an exit) is a precheck instead.")
     precheck: Optional[Dict[str, Any]] = Field(
         default=None,
         description="For a WATCH job (monitor/scout/exit/watcher): a $0 check that runs BEFORE "
@@ -157,7 +159,10 @@ class CronScheduleAction(BaseModel):
                     "'price_usd', 'max_quiet_hours': 24}. When the read is clean, no alert "
                     "fires and the field moved less than move_pct since the last model run, "
                     "the tick is skipped at $0. Otherwise the run starts with the read "
-                    "attached. Use it on every price/pool watch.")
+                    "attached. Use it on every price/pool watch. It is the wake hook: any "
+                    "read verb, a bound or a move wakes YOU to decide. Quiet ticks cost $0, so "
+                    "tick often (15m) on money that can move fast. Added to a read job by "
+                    "cronjob_edit, it turns that job into this kind.")
     kb_holdout_pct: Optional[int] = Field(
         default=None, ge=0, le=100, strict=True,
         description="OWNER TURN ONLY: the percent of this job's runs (0-100) that skip "
@@ -371,7 +376,7 @@ def _job_runs(job, n: int = 3) -> list:
     """The job's next *n* fire times from its stored next run (none when it has none)."""
     if job.next_run_at is None:
         return []
-    from cron.schedule import next_runs, parse_schedule
+    from core.schedule import next_runs, parse_schedule
     try:
         sched = parse_schedule(job.schedule_spec)
     except Exception:
@@ -400,22 +405,22 @@ def _owner_clock_note(runs, user_id) -> str:
 
 
 def _job_tools(tools: List[str]) -> list:
-    from tools.goal_tools import _SELF_GOAL_BASELINE_TOOLS
-    return sorted(set(tools) | set(_SELF_GOAL_BASELINE_TOOLS))
+    from core.tool_grants import SELF_GOAL_BASELINE_TOOLS
+    return sorted(set(tools) | set(SELF_GOAL_BASELINE_TOOLS))
 
 
 def _job_tools_refusal(tools: List[str], owner_turn: bool) -> Optional[str]:
     """Why these exact tools may not go on a job, or None. The same sets as ``goal_create``.
     A money tool stays behind the rig's owner card, or the owner's own ``/job new``."""
     from core.tool_capabilities import ids_with
-    from tools.goal_tools import (_SELF_GOAL_BASELINE_TOOLS, allowed_self_goal_tools,
-                                  owner_turn_goal_tools)
+    from core.tool_grants import SELF_GOAL_BASELINE_TOOLS, allowed_self_goal_tools
+    from tools.goal_tools import owner_turn_goal_tools
     money = sorted(ids_with("money").intersection(tools))
     if money:
         return (f"Tools {', '.join(money)} NOT granted: a money tool needs rig='money_rail' "
                 "(the owner confirms a card) or the owner's own /job new ... tools=.")
     usable = set(owner_turn_goal_tools() if owner_turn else allowed_self_goal_tools())
-    usable |= set(_SELF_GOAL_BASELINE_TOOLS)
+    usable |= set(SELF_GOAL_BASELINE_TOOLS)
     refused = sorted(set(tools) - usable)
     if refused:
         return (f"Tools {', '.join(refused)} NOT granted. This turn may name: "
@@ -435,7 +440,7 @@ def _timing_lines(svc, job, user_id) -> list:
     """What the agent must see to time a job against its siblings (routines §2):
     the next 3 fire times, a day-of-month step note, the jobs that fire the same
     minute, and the next runs of every live job that pins one of its skills."""
-    from cron.schedule import dom_step_note
+    from core.schedule import dom_step_note
     runs = _job_runs(job)
     out = ([f"next runs: {_fmt_runs(runs)}{_server_clock_note()}{_owner_clock_note(runs, user_id)}"]
            if job.next_run_at else [])
@@ -582,7 +587,10 @@ def _tools_line(payload: Optional[dict]) -> str:
     if verb:
         name = verb.get("verb") if isinstance(verb, dict) else None
         return (f"its runs carry no model and no tools: each run is the one read "
-                f"{name or '(unnamed)'} and its alert check")
+                f"{name or '(unnamed)'} and its alert check, and only the owner is told — "
+                f"you never wake on it. To decide on the move yourself, cronjob_edit "
+                f"precheck={{…}} on this job (it becomes a model job that runs only when "
+                f"the read trips)")
     try:
         ids = resolve_cron_tools(dict(payload or {})) or []
     except Exception as exc:
@@ -597,7 +605,7 @@ def _early_run_refusal(job) -> Optional[str]:
     """Review 2026-10-29 (L1): off an owner turn, ``cronjob_run_now`` may not run a
     money job early, nor run any job again inside its own schedule's gap (a daily
     job is not a once-a-minute job because a run keeps asking). None = allowed."""
-    from cron.jobs import money_job_class
+    from core.cron_store import money_job_class
     # An unreadable class is refused like money: running a money job early is the risk.
     cls = money_job_class(job)
     if cls is None:
@@ -612,7 +620,7 @@ def _early_run_refusal(job) -> Optional[str]:
         return None
     try:
         from datetime import datetime
-        from cron.schedule import parse_schedule
+        from core.schedule import parse_schedule
         from cron.service import min_recurrence_seconds
         now = datetime.now(last.tzinfo) if getattr(last, "tzinfo", None) else datetime.now()
         gap = min_recurrence_seconds(parse_schedule(job.schedule_spec), now)
@@ -715,7 +723,7 @@ class CronJobTool(BaseTool):
         payload.update(_tier)
         _model, _model_err, _model_note, _model_notice = await model_payload(   # 121: any model, price-bounded
             params.model, params.why, tier=params.tier, owner_turn=owner_turn,
-            user_id=self._user(execution_context))
+            user_id=self._user(execution_context), what="a cron job")
         if _model_err:
             return ActionResult(error=_model_err, include_in_memory=True)
         payload.update({k: v for k, v in _model.items() if v is not None})
@@ -804,6 +812,7 @@ class CronJobTool(BaseTool):
             return ActionResult(error=f"cronjob_schedule refused: {e}", include_in_memory=True)
         except ScheduleError as e:
             return ActionResult(error=f"Invalid schedule: {e}", include_in_memory=True)
+        notify_model_change(self, _model_notice)   # L-12: a create too, once the row exists
         when = job.next_run_at.isoformat() if job.next_run_at else "?"
         kind = "one-shot" if job.one_shot else "recurring"
         from core.cron_lanes import schedule_notes
@@ -1142,7 +1151,7 @@ class CronJobTool(BaseTool):
         off = scheduler_off_note()
         drift = ""
         try:
-            from cron.schedule import parse_schedule
+            from core.schedule import parse_schedule
             sched = parse_schedule(job.schedule_spec)
             if sched.kind == "interval" and sched.anchor is None:
                 every = job.schedule_spec.strip()

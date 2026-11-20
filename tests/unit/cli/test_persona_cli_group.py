@@ -106,7 +106,8 @@ def test_list_shows_both_namespaces_and_the_active_marker(home, monkeypatch):
     assert res.exit_code == 0, res.output
     assert "mybot" in res.output
     assert "coding" in res.output          # a template key
-    assert "PERSONALITY_DEFAULT_CHARACTER" in res.output
+    assert "/persona <name>" in res.output   # owner copy names the verb, never an env flag
+    assert "PERSONALITY_DEFAULT_CHARACTER" not in res.output
     assert "active" in res.output.lower()
 
 

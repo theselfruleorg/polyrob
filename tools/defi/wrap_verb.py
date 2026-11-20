@@ -86,7 +86,7 @@ async def perform_wrap(tool, params, execution_context=None):
             execution_context=execution_context, tool_self=tool,
             price_fn=tool._price,
             forged_fn=_is_forged_or_autonomous_turn,
-            autonomous_ok_fn=_is_autonomous_goal_turn)
+            autonomous_ok_fn=_is_autonomous_goal_turn, dry_run=bool(params.dry_run))
 
         header = (f"wrap {params.amount:g} {native_symbol} -> wrapped "
                   f"({wrapped}) on {params.chain}\n"
@@ -96,7 +96,11 @@ async def perform_wrap(tool, params, execution_context=None):
                   f"  lane:  {decision.lane}\n")
 
         if not decision.allowed:
-            return tool._ar(content=header + _not_sent_text(decision.lane))
+            from tools.defi.trade_tool import owner_lane_result
+            return await owner_lane_result(
+                tool, execution_context, text=header, lane=decision.lane,
+                dry_run=bool(params.dry_run), value_usd=decision.amount_usd,
+                why=decision.reason)
 
         if decision.sim_gas_used:
             try:
@@ -108,8 +112,9 @@ async def perform_wrap(tool, params, execution_context=None):
                        f"(simulation used {decision.sim_gas_used})\n")
 
         if params.dry_run:
-            return tool._ar(content=header + (
-                _DRY_RUN_HEAD + " Re-run with dry_run=false to wrap."))
+            from tools.base_tool import dry_run_result
+            return dry_run_result(tool, header + (
+                _DRY_RUN_HEAD + " Re-run with dry_run=false to wrap."), decision.amount_usd)
 
         # Measure BEFORE. The claim this verb makes at the end is "the WETH
         # arrived", and an unread baseline cannot support it. Unlike the
@@ -237,7 +242,7 @@ async def perform_unwrap(tool, params, execution_context=None):
             price_fn=tool._price,
             fallback_price_fn=tool._fallback_price,
             forged_fn=_is_forged_or_autonomous_turn,
-            autonomous_ok_fn=_is_autonomous_goal_turn)
+            autonomous_ok_fn=_is_autonomous_goal_turn, dry_run=bool(params.dry_run))
 
         header = (f"unwrap {params.amount:g} wrapped {native_symbol} -> "
                   f"{native_symbol} ({wrapped}) on {params.chain}\n"
@@ -247,7 +252,11 @@ async def perform_unwrap(tool, params, execution_context=None):
                   f"  lane:  {decision.lane}\n")
 
         if not decision.allowed:
-            return tool._ar(content=header + _not_sent_text(decision.lane))
+            from tools.defi.trade_tool import owner_lane_result
+            return await owner_lane_result(
+                tool, execution_context, text=header, lane=decision.lane,
+                dry_run=bool(params.dry_run), value_usd=decision.amount_usd,
+                why=decision.reason)
 
         if decision.sim_gas_used:
             try:
@@ -259,8 +268,9 @@ async def perform_unwrap(tool, params, execution_context=None):
                        f"(simulation used {decision.sim_gas_used})\n")
 
         if params.dry_run:
-            return tool._ar(content=header + (
-                _DRY_RUN_HEAD + " Re-run with dry_run=false to unwrap."))
+            from tools.base_tool import dry_run_result
+            return dry_run_result(tool, header + (
+                _DRY_RUN_HEAD + " Re-run with dry_run=false to unwrap."), decision.amount_usd)
 
         try:
             tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)

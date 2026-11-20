@@ -166,7 +166,7 @@ class AgentConstructionHelpersMixin:
 			_workspace_dir = None
 			if not _local or is_code_root_dir(_cwd):
 				try:
-					from agents.task.path import pm
+					from core.session_paths import pm
 					_workspace_dir = str(pm().get_workspace_dir(
 						self.orchestrator.session_id,
 						getattr(self.orchestrator, "user_id", None),
@@ -207,7 +207,7 @@ class AgentConstructionHelpersMixin:
 		if not (self.session_id and orchestrator) or getattr(self, "_is_sub_agent", False):
 			return  # a sub-agent is new each time: nothing of its own to restore
 		try:
-			from agents.task.path import pm
+			from core.session_paths import pm
 			tool_calls_file = pm().create_file_path(
 				session_id=self.session_id,
 				subdir_name="data",
@@ -225,7 +225,7 @@ class AgentConstructionHelpersMixin:
 		finalization: extracted from __init__). Sets self.save_conversation_path to a
 		pm()-resolved logs path, or None when unset."""
 		if save_conversation_path:
-			from agents.task.path import pm
+			from core.session_paths import pm
 			self.save_conversation_path = str(pm().create_file_path(
 				self.orchestrator.session_id,
 				"logs",

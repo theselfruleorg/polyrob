@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 
 #: Order the owner reads in: what is live, then what wants them, then the queue.
 _LEAD_ORDER = ("running", "blocked", "triage", "ready", "waiting")
+#: The open statuses the list shows, in its order (the seat's buttons follow it).
+LEAD_STATUSES = _LEAD_ORDER
 
 #: Enough rows to be useful on a phone without becoming a wall.
 _MAX_SHOWN = 12
@@ -135,7 +137,7 @@ def render_board(board: Any, *, user_id: Optional[str] = None) -> str:
         # E17: the remedy names a verb every seat runs, never a flag.
         return "\n".join([NO_GOALS_YET] + off)
 
-    from core.goal_legibility import bucket_line, origin_tag
+    from core.goal_legibility import ORIGIN_LEGACY, bucket_line, origin, origin_tag
     # 034 §3.2: the owner's four facts. The seven machine statuses are on each
     # row below (`[running]`), so their counts are not a second line.
     lines = [f"{total} goal(s): {bucket_line(counts)}"]
@@ -159,7 +161,9 @@ def render_board(board: Any, *, user_id: Optional[str] = None) -> str:
         gid = (getattr(goal, "id", "") or "")[:8]
         status = getattr(goal, "status", "?")
         # 034 §3.1: who asked for it, derived — never narrated.
-        lines.append(f"• {gid} [{status}] {_title(goal)}  {origin_tag(goal)}")
+        # 2026-11-20 UX review H8: the id is a copy box; "origin not recorded" is noise.
+        tag = "" if origin(goal) == ORIGIN_LEGACY else f"  {origin_tag(goal)}"
+        lines.append(f"• `{gid}` [{status}] {_title(goal)}{tag}")
         if status == "waiting":
             blockers = _blocking(board, goal)
             if isinstance(blockers, _Unreadable):

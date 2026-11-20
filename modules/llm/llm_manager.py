@@ -287,6 +287,8 @@ class LLMManager(InventoryMixin, BaseComponent):
 
             # Set primary client based on config preference or first available
             await self._set_primary_client()
+            from core.runtime_config import record_pin_outcome  # the status reads it
+            record_pin_outcome(self.clients, self.primary_client_name, initialization_results)
 
             # Log summary
             self.logger.info(f"LLM Manager initialized with {len(self.clients)} clients")

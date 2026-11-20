@@ -43,7 +43,7 @@ async def record_command_reply(task_agent, clean_id: str, line: str,
     if not text:
         return reply
     try:
-        from agents.task.path import is_reserved_session_id
+        from core.session_paths import is_reserved_session_id
         if is_reserved_session_id(clean_id):
             return reply
         manager = _session_manager(task_agent)
@@ -52,6 +52,10 @@ async def record_command_reply(task_agent, clean_id: str, line: str,
                          clean_id)
             return reply
         data = {"text": text, "line": str(line or "").strip()[:500], "inline": True}
+        from webview.console_commands import reply_buttons_json
+        buttons = reply_buttons_json(reply)
+        if buttons:   # a reload draws the same buttons (a decided card refuses its tap)
+            data["actions"] = buttons
         await asyncio.to_thread(manager.add_to_feed, clean_id, COMMAND_REPLY_EVENT, data)
     except Exception:
         logger.warning("command feed: could not keep the answer for %s", clean_id,

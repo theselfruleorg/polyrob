@@ -1,6 +1,6 @@
 import pytest
 
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 
 
 @pytest.fixture
@@ -28,8 +28,9 @@ def test_cancel_survives_record_failure_no_resurrect(board):
     g = _claimed(board)
     board.cancel(g.id)
     out = board.record_failure(g.id, error="boom", claim_token=board.get(g.id).claim_token)
-    assert out.status == "cancelled"
-    assert out.consecutive_failures == 0  # untouched
+    assert out is None
+    assert board.get(g.id).status == "cancelled"
+    assert board.get(g.id).consecutive_failures == 0  # untouched
 
 
 def test_pause_blocked_survives_record_success(board):
@@ -75,7 +76,8 @@ def test_record_failure_on_already_cancelled_goal_does_not_resurrect(board):
     g = _claimed(board)
     board.update_status(g.id, "cancelled")
     out = board.record_failure(g.id, error="boom-after-cancel", claim_token=board.get(g.id).claim_token)
-    assert out.status == "cancelled"  # not resurrected to 'ready' or 'blocked'
+    assert out is None  # 125 S16: the stale path records nothing and returns None
+    assert board.get(g.id).status == "cancelled"  # not resurrected to 'ready' or 'blocked'
     kinds = [e["kind"] for e in board.events(g.id)]
     assert "stale_completion" in kinds
     assert "failed" not in kinds and "gave_up" not in kinds

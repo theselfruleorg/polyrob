@@ -102,18 +102,38 @@ def float_from(env: Optional[Mapping], name: str, default: float) -> float:
 
 
 _PRODUCTION_NAMES = frozenset(("production", "prod"))
+_DEVELOPMENT_NAMES = frozenset(("development", "dev"))
+
+
+def _environment_names(resolved: Optional[str]) -> list:
+    return [str(n or "").strip().lower() for n in (
+        resolved, os.getenv("ENVIRONMENT"), os.getenv("POLYROB_ENV"),
+        os.getenv("CONFIG_ENV"), os.getenv("ENV"))]
 
 
 def is_production_env(resolved: Optional[str] = None) -> bool:
-    """True when ANY deployment-environment name says production.
+    """True when ANY deployment-environment name says production. Default False.
 
-    The repo has four names for one fact: ``ENVIRONMENT`` (what prod's
-    ``/etc/polyrob/polyrob.env`` sets), ``POLYROB_ENV``, ``CONFIG_ENV``/``ENV``
+    The ONE predicate for a refusal (``tests/test_production_predicate_ratchet.py``).
+    The repo has five names for one fact: ``ENVIRONMENT`` (the prod shape's name:
+    ``/etc/polyrob/webview.env`` sets it, and ``deployment/hardening/
+    install-service-identities.sh`` adds it to ``/etc/polyrob/polyrob.env``; a box
+    without that line is NOT production in the agent), ``POLYROB_ENV``, ``CONFIG_ENV``/``ENV``
     (``polyrob.app.bootstrap.load_env``'s ``resolved``), and the ``PRODUCTION`` bool.
     A boot refusal keyed on only one of them silently passes on the others.
     """
-    names = [resolved, os.getenv("ENVIRONMENT"), os.getenv("POLYROB_ENV"),
-             os.getenv("CONFIG_ENV"), os.getenv("ENV")]
-    if any(str(n or "").strip().lower() in _PRODUCTION_NAMES for n in names):
+    if any(n in _PRODUCTION_NAMES for n in _environment_names(resolved)):
         return True
     return bool_env("PRODUCTION", False)
+
+
+def is_development_env(resolved: Optional[str] = None) -> bool:
+    """True only when a name EXPLICITLY says development and none says production.
+
+    The ONE predicate for a relaxation (a non-``secure`` cookie). Default False:
+    a box with no name is NOT development, so it never relaxes. Never write
+    ``not is_production_env()`` for a relaxation — every unnamed box would pass.
+    """
+    if is_production_env(resolved):
+        return False
+    return any(n in _DEVELOPMENT_NAMES for n in _environment_names(resolved))

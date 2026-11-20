@@ -10,7 +10,7 @@ def test_every_slot_is_a_section_order_name():
     assert set(S.CONTRIBUTED_SLOTS) <= set(SECTION_ORDER)
     assert set(S.CONTRIBUTED_SLOTS) == {
         "wallet", "custody", "money", "economics", "liquidity", "collectibles",
-        "creations", "room_actions", "harness"}
+        "creations", "room_actions", "harness", "income_rule", "mandates"}
 
 
 #: 093 D1: slots a HIGHER tier fills (core may not import it).

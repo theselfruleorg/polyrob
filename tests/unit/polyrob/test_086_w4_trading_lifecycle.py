@@ -272,7 +272,7 @@ def test_a_stopped_mandate_cancels_hunt_and_review_but_keeps_exits(w):
 
 
 def test_an_owner_lane_stop_is_not_overridden(w):
-    from surfaces.telegram.job_ops import jobs_reply
+    from cron.owner_jobs import jobs_reply
     m = w.mandate()
     w.hold()
     w.run()

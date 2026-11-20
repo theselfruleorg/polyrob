@@ -121,9 +121,6 @@ def step_2_turn_origin(c: GuardContext) -> Optional[Decision]:
     # the same detector texts). What stays here is the guard's own lane: the
     # autonomous admission needs the TRADING flag too (``_autonomous_turn_allowed``)
     # and a refused forged turn may still EXIT under DEFI_MONITOR_EXITS.
-    from core.money.authorize import FORGED_TEXTS, SpendIntent, authorize_spend
-    autonomous_origin = False
-    monitor_exit = False
     # 086 W2: a run that belongs to a trading mandate (``metadata["mandate"]``) has
     # its ENTRIES checked by the kernel's mandate step: an intent that receives a
     # token and is not exit-shaped. Exits, sends and approvals are never gated.
@@ -159,11 +156,46 @@ def step_2_turn_origin(c: GuardContext) -> Optional[Decision]:
         # against the recipient that guard checked.
         c.offer_recipient = getattr(intent, "resource_recipient", None)
     c.offer_scope = offer_scope
+    refusal, autonomous_origin, monitor_exit = turn_origin_verdict(
+        execution_context, forged_fn=forged_fn, autonomous_ok_fn=autonomous_ok_fn,
+        tool_self=tool_self, exit_shaped=lambda: _tg._intent_is_exit_shaped(intent),
+        mandate=mandate_entry, chain=str(intent.chain or ""), token=intent.inflow_token,
+        usd=intent.max_spend_usd, offer_scope=offer_scope,
+        idempotency_key=getattr(intent, "idempotency_key", None),
+        order_run=offer_scope is not None, log_what=(intent.chain, intent.token))
+    if refusal:
+        return Decision(False, refusal)
+
+    principal_error = _tg._principal_refusal(execution_context)
+    if principal_error:
+        return Decision(False, f"refused: {principal_error}")
+    c.autonomous_origin = autonomous_origin
+    c.monitor_exit = monitor_exit
+    return None
+
+
+def turn_origin_verdict(execution_context, *, forged_fn, autonomous_ok_fn, tool_self,
+                        exit_shaped, chain: str, mandate: bool = False, token=None,
+                        usd=None, offer_scope=None, idempotency_key=None,
+                        order_run: bool = False, log_what=None):
+    """The kernel half of the turn-origin bar, for EVERY chain (125 S6).
+
+    ``tx_guard`` step 2 and the SVM gate (``DefiTradeTool._solana_turn_gate``) both ask
+    this one function: the money kernel's ``authorize_spend`` turn bar (a forged turn is
+    refused unless admitted as the autonomous lane, which needs the trading flag too —
+    ``_autonomous_turn_allowed``), the trading-mandate step for a non-exit entry, and the
+    DEFI_MONITOR_EXITS carve-out (a refused forged MAIN-agent turn may still CLOSE a
+    position; never an order run, never a sub-agent).
+
+    *exit_shaped* is a callable (read only when needed; a raise counts as an entry).
+    Returns ``(refusal | None, autonomous_origin, monitor_exit)``; fails closed.
+    """
+    from core.money.authorize import FORGED_TEXTS, SpendIntent, authorize_spend
+    monitor_exit = False
     verdict = authorize_spend(
-        SpendIntent.turn_origin(mandate=mandate_entry, entry=mandate_entry,
-                                chain=str(intent.chain or ""), token=intent.inflow_token,
-                                usd=intent.max_spend_usd, offer_scope=offer_scope,
-                                idempotency_key=getattr(intent, "idempotency_key", None),
+        SpendIntent.turn_origin(mandate=mandate, entry=mandate, chain=chain, token=token,
+                                usd=usd, offer_scope=offer_scope,
+                                idempotency_key=idempotency_key,
                                 # An order run's budget is only CHECKED here; it is booked
                                 # after the final allow (reserve_offer_budget).
                                 dry_run=offer_scope is not None),
@@ -174,10 +206,10 @@ def step_2_turn_origin(c: GuardContext) -> Optional[Decision]:
     if verdict.refused and verdict.step == "mandate":
         _tg._record_money_refusal("money_gate", tool_self, execution_context,
                                   detail=f"mandate: {verdict.reason}")
-        return Decision(False, verdict.reason)
+        return verdict.reason, False, False
     if verdict.refused and verdict.reason not in FORGED_TEXTS:
         # No detector, or the detector raised: the kernel's sentence, fail closed.
-        return Decision(False, verdict.reason)
+        return verdict.reason, False, False
     if verdict.refused:
         try:
             # 2026-08-26 exit untying: a forged MAIN-agent turn — the self-wake
@@ -188,15 +220,15 @@ def step_2_turn_origin(c: GuardContext) -> Optional[Decision]:
             # measured quote inflow asserted after simulation.
             # An ORDER run is admitted only through the offer step (099): it never
             # rides the monitor-exit carve-out past step 4c.
-            if (_tg.monitor_exits_enabled() and offer_scope is None
+            if (_tg.monitor_exits_enabled() and not order_run
                         and not getattr(execution_context, "is_sub_agent", False)
                         and getattr(execution_context, "role", "leaf") == "orchestrator"
-                        and _tg._intent_is_exit_shaped(intent)):
+                        and _exit_shaped(exit_shaped)):
                 monitor_exit = True
                 _tg.logger.info(
                         "tx_guard.monitor_exit chain=%s token=%s — forged turn "
                         "allowed for an EXIT-shaped operation (DEFI_MONITOR_EXITS)",
-                        intent.chain, intent.token)
+                        *(log_what or (chain, token)))
             else:
                 from core.security.refusals import record_refusal
                 record_refusal(
@@ -205,21 +237,21 @@ def step_2_turn_origin(c: GuardContext) -> Optional[Decision]:
                     user_id=getattr(execution_context, "user_id", None) or "",
                     kind=("money:forged_text" if verdict.reason == FORGED_TEXTS[0]
                           else "money:autonomous_unarmed"))
-                return Decision(False, verdict.reason)
+                return verdict.reason, False, False
         except Exception as exc:
-            return Decision(False, f"refused: could not prove the turn is genuine ({exc})")
+            return f"refused: could not prove the turn is genuine ({exc})", False, False
     # A genuine owner turn is not forged; only the unattended goal-dispatched
     # lane (or the monitor-exit lane above) reaches here forged-but-allowed.
     # Remember it so step 9 can demand an aggregate damage bound (a daily cap)
     # that an owner-driven trade doesn't need.
-    autonomous_origin = bool(verdict.autonomous or monitor_exit)
+    return None, bool(verdict.autonomous or monitor_exit), monitor_exit
 
-    principal_error = _tg._principal_refusal(execution_context)
-    if principal_error:
-        return Decision(False, f"refused: {principal_error}")
-    c.autonomous_origin = autonomous_origin
-    c.monitor_exit = monitor_exit
-    return None
+
+def _exit_shaped(fn) -> bool:
+    try:
+        return bool(fn())
+    except Exception:
+        return False
 
 
 def step_2b_token_bound_account(c: GuardContext) -> Optional[Decision]:

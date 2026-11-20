@@ -1,5 +1,5 @@
 """Task 10 — crypto tools are blocked from sub-agent children."""
-from tools.controller.delegation import get_blocked_child_tools, narrow_child_tools, LEAF
+from core.delegation_policy import get_blocked_child_tools, narrow_child_tools, LEAF
 
 
 def test_x402_pay_blocked_for_children():

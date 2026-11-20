@@ -256,8 +256,8 @@ class HoldingsReadsMixin:
         except Exception:
             logger.debug("venue addresses unreadable", exc_info=True)
         try:
-            from core.wallet import nft_holdings
-            for row in nft_holdings.tracked() or []:
+            from core.wallet import holdings_state
+            for row in holdings_state.tracked() or []:
                 if row.get("account"):
                     out.append(str(row["account"]))
         except Exception:

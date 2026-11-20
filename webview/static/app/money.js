@@ -863,7 +863,11 @@ export function renderCash(root, ledger, copy, opts = {}) {
   const t = ledger.treasury || {};
   const r = ledger.runtime || {};
   const days = ledger.window_days;
-  const note = ledger.note || (copy && copy.cash_dash_why) || "";
+  // No wallet: a figure the wallet would hold is a dash because there IS no
+  // wallet, not because the reading is untrustworthy — say which.
+  const noWallet = Boolean(opts.wallet && opts.wallet.state === "disabled");
+  const offWhy = (copy && copy.wallet_disabled) || "";
+  const note = ledger.note || (noWallet ? offWhy : (copy && copy.cash_dash_why) || "");
   const tOff = t.available === false;
   const rOff = r.available === false;
 
@@ -875,7 +879,7 @@ export function renderCash(root, ledger, copy, opts = {}) {
        document.createTextNode(String(ledger.settled_payments != null
          ? ledger.settled_payments : DASH))],
       [copy && copy.cash_waiting, moneyNode(tOff ? null : t.pending_usd, note)],
-      [copy && copy.cash_balance_now, moneyNode(t.balance_usd, note)],
+      [copy && copy.cash_balance_now, moneyNode(t.balance_usd, noWallet ? offWhy : note)],
     ]));
   books.appendChild(cashBook("is-spent", copy && copy.cash_spent_what,
     formatVars(copy && copy.cash_whose, { days }),

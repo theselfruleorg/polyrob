@@ -9,21 +9,21 @@ tier, so the two seats that must describe it read the SAME words:
 
 Why core-tier and not the CLI registry: the console MUST NOT import the CLI
 package (``tests/test_layering_ratchet.py`` — and the palette lives in the
-browser, which imports nothing Python at all). The membership set
-``core.surfaces.dispatcher._COMMANDS`` is names-only — it carries no group and
-no words — so a table that adds the two missing dimensions has to live beside
-it in ``core/``. This module imports NOTHING above it (not even the
-dispatcher) so it is cheap to load and cannot open an import cycle — the only
-import is its own in-core contributor, ``core.money_verbs`` (067 P5a), loaded
-at the end; the drift guard is a contract
-TEST (``tests/unit/core/test_verbs.py``) that pins this table against
-``_COMMANDS`` in BOTH directions.
+browser, which imports nothing Python at all). This module imports NOTHING
+above it (not even the dispatcher) so it is cheap to load and cannot open an
+import cycle — the only import is its own in-core contributor,
+``core.money_verbs`` (067 P5a), loaded at the end.
 
-Invariants (pinned by the test):
-  * every name in ``_COMMANDS`` minus ``/task`` and ``/new`` has exactly one
-    row here, and every row's name is in ``_COMMANDS`` (no stale rows);
-  * ``/task`` and ``/new`` are DELIBERATELY absent — they are the two verbs the
-    console excludes from ``/help`` (``webview/console_commands.py``);
+The table DRIVES the routing and the owner gate (proposal 125 S11):
+``core.surfaces.dispatcher._COMMANDS`` is :func:`routed_core_names` plus
+``/task``, and Telegram's ``_OWNER_ADMIN_COMMANDS`` is :func:`owner_gated_names`
+(every routed row without ``any_principal`` — a new row fails closed). A pack
+verb joins both at call time through :func:`routed_names`.
+
+Invariants (pinned by ``tests/unit/core/test_verbs.py``):
+  * every routed name except ``/task`` has exactly one row here; ``/task`` is
+    DELIBERATELY absent (REPL free text IS the task; :data:`PALETTE_EXCLUDED`);
+  * a seat-local row (``seats``) is never routed;
   * every ``group`` is one of :data:`GROUP_ORDER`;
   * every ``help`` is one non-empty line and names no config flag.
 """
@@ -100,6 +100,10 @@ class Verb:
                  reason reads ``"gap: …"``, so it stays visible and counted.
         agent_partial: With ``agent`` only: what the twin does NOT reach. A part
                  with no twin and no stated reason starts ``"gap:"``.
+        any_principal: True for the few verbs ANY principal may run (a person's
+                 own chats, ``/help``, the welcome, ``/cancel``). Every other routed
+                 row is owner-gated by default (:func:`owner_gated_names`) — a new
+                 row fails CLOSED.
     """
 
     name: str
@@ -113,6 +117,7 @@ class Verb:
     agent: str = ""
     owner_only: str = ""
     agent_partial: str = ""
+    any_principal: bool = False
 
     def runs_on(self, seat: str) -> bool:
         """True when ``seat`` can run this verb (no ``seats`` = every seat; a
@@ -163,7 +168,8 @@ _DECIDES = "the owner's decision on what the agent proposed (120 §1 rule 3)"
 #: ``agent`` / ``owner_only`` / ``agent_partial`` (120 W9): see :class:`Verb`.
 _CORE_TABLE: tuple[Verb, ...] = (
     # talk
-    Verb("/start", "talk", "A welcome and a short tour of what I can do", owner_only=SEAT),
+    Verb("/start", "talk", "A welcome and a short tour of what I can do", owner_only=SEAT,
+         any_principal=True),
     # needs you
     Verb("/inbox", "needs you",
          "Everything waiting on a decision from you, blocking first; /inbox all lists every item",
@@ -222,7 +228,7 @@ _CORE_TABLE: tuple[Verb, ...] = (
     # control
     Verb("/cancel", "control",
          "Stop the task I am running now; /cancel <card id> or /cancel cards cancels cards",
-         aliases=("/stop",), owner_only=SEAT),
+         aliases=("/stop",), owner_only=SEAT, any_principal=True),
     Verb("/pause", "control", "Stop autonomous work now, all of it or one scope",
          aliases=("/halt",), room_refused=True, agent="autonomy_control"),
     Verb("/resume", "control", "Lift the pause", room_refused=True,
@@ -342,13 +348,16 @@ _CORE_TABLE: tuple[Verb, ...] = (
     # The chat model: one main chat and the separate chats beside it, on every
     # seat (core/surfaces/chats.py). `/new` in a group restarts the room, so it
     # is the one of the five a room runs.
-    Verb("/new", "talk", "Open a separate chat beside the main one", owner_only=SEAT),
+    Verb("/new", "talk", "Open a separate chat beside the main one", owner_only=SEAT,
+         any_principal=True),
     Verb("/chats", "talk", "Your chats: the main one and each separate one",
-         aliases=("/sessions",), room_refused=True, owner_only=SEAT),
-    Verb("/chat", "talk", "Switch to another of your chats", room_refused=True, owner_only=SEAT),
-    Verb("/rename", "talk", "Name the chat you are in", room_refused=True, owner_only=SEAT),
+         aliases=("/sessions",), room_refused=True, owner_only=SEAT, any_principal=True),
+    Verb("/chat", "talk", "Switch to another of your chats", room_refused=True, owner_only=SEAT,
+         any_principal=True),
+    Verb("/rename", "talk", "Name the chat you are in", room_refused=True, owner_only=SEAT,
+         any_principal=True),
     Verb("/close", "talk", "Close a separate chat and go back to the main one",
-         room_refused=True, owner_only=SEAT),
+         room_refused=True, owner_only=SEAT, any_principal=True),
     Verb("/clear", "talk", "Clear this chat and keep my instructions",
          seats=("repl",), owner_only=SEAT),
     Verb("/compact", "talk", "Shorten this chat's history in the background",
@@ -395,7 +404,7 @@ _CORE_TABLE: tuple[Verb, ...] = (
     Verb("/auth", "set up", "The provider keys I have, and how to connect one",
          seats=("repl",),
          owner_only="provider keys: no agent action can reach them (120 §8; llm-auth.md)"),
-    Verb("/persona", "set up", "The personas, and the one new chats use", seats=("repl",),
+    Verb("/persona", "set up", "The personas, and the one new chats use", room_refused=True,
          agent="preferences",
          agent_partial="a guarded session.persona proposal the owner approves; the persona "
                        "list is not shown"),
@@ -413,7 +422,7 @@ _CORE_TABLE: tuple[Verb, ...] = (
          seats=("repl",), owner_only=SEAT),
     # leave
     Verb("/help", "leave", "This help, or the detail for one verb",
-         aliases=("/h", "/?"), owner_only=SEAT),
+         aliases=("/h", "/?"), owner_only=SEAT, any_principal=True),
 )
 
 
@@ -518,6 +527,35 @@ def register_verbs(rows, handlers_by_seat: Optional[dict] = None, *,
     _rebuild()
 
 
+def register_seat_handlers(seat: str, table: dict, *, source: str) -> None:
+    """A SEAT attaches its own handlers to rows already registered (125 S14).
+
+    ``table`` is ``{verb name: "module:attr"}``. The rows a core provider contributes
+    (``core.money_verbs``) carry no reference into a seat — core may not name a seat
+    module — so each seat registers its handlers itself, from its own tier
+    (``surfaces/telegram/seat_handlers.py``, ``cli/ui/commands/seat_handlers.py``).
+    All or nothing: an unknown seat, a name that is not a contributed row, a
+    reference not shaped ``module:attr``, or a name another reference already
+    holds on this seat is refused (``ValueError``). Re-registering the SAME
+    reference is a no-op (idempotent import)."""
+    if seat not in KNOWN_SEATS:
+        raise ValueError(f"seat handlers from {source}: unknown seat {seat!r}")
+    contributed = {row.name for _s, row in _REGISTERED}
+    table = {str(k): str(v) for k, v in dict(table).items()}
+    for name, ref in table.items():
+        if name not in contributed:
+            raise ValueError(f"seat handler {seat}:{name} from {source}: no contributed row")
+        mod, _, attr = ref.partition(":")
+        if not mod or not attr:
+            raise ValueError(f"seat handler {seat}:{name} from {source}: "
+                             f"{ref!r} is not 'module:attr'")
+        held = _HANDLERS.get((seat, name))
+        if held is not None and held != ref:
+            raise ValueError(f"seat handler {seat}:{name} from {source}: already {held!r}")
+    for name, ref in table.items():
+        _HANDLERS[(seat, name)] = ref
+
+
 def unregister_verbs(source: str) -> None:
     """Drop every row, handler and room grant ``source`` registered. The pack
     loader's rollback when a later hook of the same pack fails (a refused pack
@@ -552,6 +590,29 @@ def routed_names() -> frozenset:
     """Contributed verbs every seat routes as a COMMAND (not seat-local). The
     dispatcher unions these with its own names."""
     return frozenset(row.name for _s, row in _REGISTERED if not row.seats)
+
+
+def _routed_core_rows() -> tuple[Verb, ...]:
+    """Rows every seat routes that are NOT a pack's: the core rows plus the rows
+    the in-core providers (:data:`_IN_CORE_PROVIDERS`) contribute at import. A pack
+    row is routed and gated at call time through :func:`routed_names`, so these
+    import-time sets never depend on whether a pack loaded first."""
+    return tuple(v for v in _CORE_TABLE if not v.seats) + tuple(
+        row for s, row in _REGISTERED
+        if not row.seats and not s.startswith(PACK_SOURCE_PREFIX))
+
+
+def routed_core_names() -> frozenset:
+    """Every non-pack verb a seat routes as a COMMAND. The dispatcher's
+    ``_COMMANDS`` is this plus ``/task`` (proposal 125 S11: derived, never hand-listed)."""
+    return frozenset(v.name for v in _routed_core_rows())
+
+
+def owner_gated_names() -> frozenset:
+    """The routed non-pack verbs only the owner (or an admin) may run: every row
+    without ``any_principal``. Telegram's ``_OWNER_ADMIN_COMMANDS`` is this set, so
+    a new row is owner-gated by default (fail closed)."""
+    return frozenset(v.name for v in _routed_core_rows() if not v.any_principal)
 
 
 def room_refused(name: str) -> bool:
@@ -633,6 +694,12 @@ def seat_verbs(seat: str) -> tuple[Verb, ...]:
     return tuple(v for v in VERB_TABLE if v.runs_on(seat))
 
 
+#: The daily verbs a chat "/" menu lists FIRST (2026-11-20 Telegram UX review, M13):
+#: the menu was in table order, so `/status` was entry 54 and `/help` the last one.
+MENU_FIRST: tuple[str, ...] = ("/status", "/inbox", "/new", "/chats", "/model", "/goals",
+                               "/job", "/pause", "/resume", "/cancel", "/wallet", "/help")
+
+
 def menu_entries(seat: str, local_rows: Optional[dict] = None, *,
                  desc_max: int = 256) -> list[tuple[str, str]]:
     """A chat platform's native command menu for ``seat`` (064 F2): pure.
@@ -657,6 +724,10 @@ def menu_entries(seat: str, local_rows: Optional[dict] = None, *,
         seen.add(bare)
         out.append((bare, desc.strip()[:desc_max]))
 
+    for name in MENU_FIRST:
+        verb = _BY_NAME.get(name)
+        if verb is not None and verb.name == name and verb.runs_on(seat):
+            _add(verb.name, verb.help)
     for group in GROUP_ORDER:
         for verb in VERB_TABLE:
             if verb.group == group and verb.runs_on(seat):
@@ -706,11 +777,14 @@ __all__ = [
     "empty_group_hints",
     "handler_ref",
     "pack_verb_names",
+    "register_seat_handlers",
     "register_verbs",
     "registered_verbs",
     "room_refused",
     "background_word",
     "routed_names",
+    "routed_core_names",
+    "owner_gated_names",
     "unregister_verbs",
 ]
 

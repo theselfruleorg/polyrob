@@ -34,10 +34,10 @@ from agents.task.loop_types.execution_context import ActionExecutionContext
 def _known_session_owner(monkeypatch):
     """The controller doubles below never create session "s1" on disk, so every
     hook that resolved its session root fell into PathManager's unknown-session
-    retry (agents/task/path.py: 3 x time.sleep(0.1)) — 300 ms per verb, 70 s for
+    retry (core/session_paths.py: 3 x time.sleep(0.1)) — 300 ms per verb, 70 s for
     this file. Discovery is not under test here: answer it with the owner the
     doubles declare."""
-    from agents.task.path import PathManager
+    from core.session_paths import PathManager
     monkeypatch.setattr(PathManager, "_discover_user_for_session",
                         lambda self, session_id: "u1")
 
@@ -266,6 +266,7 @@ _SPEND_VERBS = (
     "defi_trade_wrap",
     # 042: deployment + the generic contract call, all SPEND-side.
     "defi_trade_deploy_token",
+    "defi_trade_launch_token",
     "defi_trade_deploy_contract",
     "defi_trade_call",
     "defi_trade_lp_add", "defi_trade_lp_remove", "defi_trade_lp_collect",
@@ -461,7 +462,7 @@ def test_correspondent_tainted_turn_still_cannot_create_payment_request(tmp_path
 def test_leaf_turn_denied_by_owner_queue_itself(tmp_path, monkeypatch):
     """Belt-and-suspenders: OwnerQueueApprover itself refuses a forged/leaf turn
     (tools/controller/approval_queue.py) without ever creating a durable ask."""
-    from agents.task.goals.board import ASK_OPEN, GoalBoard
+    from modules.goals.board import ASK_OPEN, GoalBoard
     from tools.controller.approval_queue import OwnerQueueApprover
     from agents.task.loop_types.execution_context import ActionExecutionContext
 
@@ -487,7 +488,7 @@ def test_leaf_turn_denied_by_owner_queue_itself(tmp_path, monkeypatch):
 # from the orchestrator's `_correspondent_tainted` flag (integration-level).
 
 def test_taint_probe_true_denies_without_creating_ask_or_notifying(tmp_path, monkeypatch):
-    from agents.task.goals.board import ASK_OPEN, GoalBoard
+    from modules.goals.board import ASK_OPEN, GoalBoard
     from tools.controller.approval_queue import OwnerQueueApprover
     from agents.task.loop_types.execution_context import ActionExecutionContext
 
@@ -514,7 +515,7 @@ def test_taint_probe_true_denies_without_creating_ask_or_notifying(tmp_path, mon
 def test_taint_probe_raising_fails_closed(tmp_path):
     """A probe that raises must be treated as tainted — we can't prove the turn is
     clean, so deny rather than fail-open into creating an ask."""
-    from agents.task.goals.board import ASK_OPEN, GoalBoard
+    from modules.goals.board import ASK_OPEN, GoalBoard
     from tools.controller.approval_queue import OwnerQueueApprover
     from agents.task.loop_types.execution_context import ActionExecutionContext
 
@@ -535,7 +536,7 @@ def test_taint_probe_raising_fails_closed(tmp_path):
 def test_taint_probe_false_creates_ask_as_before(tmp_path, monkeypatch):
     """An untainted turn is unaffected by the taint_probe wiring — a durable ask is
     still created exactly as before, and an owner decision still resolves it."""
-    from agents.task.goals.board import ASK_OPEN, GoalBoard
+    from modules.goals.board import ASK_OPEN, GoalBoard
     from tools.controller.approval_queue import OwnerQueueApprover
     from agents.task.loop_types.execution_context import ActionExecutionContext
 
@@ -581,7 +582,7 @@ def test_owner_queue_wiring_denies_when_orchestrator_tainted(tmp_path, monkeypat
     monkeypatch.setattr(
         "tools.controller.approval_queue._push_owner_notification", _fake_notify)
 
-    from agents.task.goals.board import ASK_OPEN, GoalBoard
+    from modules.goals.board import ASK_OPEN, GoalBoard
     from agents.task.loop_types.execution_context import ActionExecutionContext
 
     c = _make_controller(tmp_path, tainted=True)

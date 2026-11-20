@@ -161,6 +161,11 @@ class BroadcastOutcomeUnknown(RuntimeError):
 _UNKNOWN_MARKERS = ("reconcile before retrying", "outcome unknown")
 
 
+_NO_AUTHORIZATION = (
+    "no tx_guard authorization is recorded for this transaction in this process — "
+    "the wallet signs only an authorized intent; nothing was sent")
+
+
 def outcome_unknown(exc: BaseException) -> bool:
     """True when a send error does NOT prove that nothing was sent."""
     if isinstance(exc, BroadcastOutcomeUnknown):
@@ -435,7 +440,60 @@ class EvmRail:
         return int(got)
 
     # -- send / confirm ---------------------------------------------------
+    def _check_fee_shape(self, tx: dict) -> None:
+        """Audit 2026-11-21 L-6: the fee bound at the signing point, no RPC.
+
+        Only an EIP-1559 (type 2) transaction is signed — the one shape
+        :meth:`_finish_tx` builds; a missing ``type`` is read as 2 only when no
+        ``gasPrice`` makes it legacy. ``gas`` must be a positive integer, and
+        ``gas * max(maxFeePerGas, gasPrice)`` must stay within this chain's
+        max fee per transaction.
+        """
+        raw_type = tx.get("type")
+        try:
+            tx_type = (int(raw_type, 16) if isinstance(raw_type, str)
+                       else (None if raw_type is None else int(raw_type)))
+        except (TypeError, ValueError):
+            tx_type = -1
+        if tx_type is None and tx.get("gasPrice") is None:
+            tx_type = 2
+        if tx_type != 2:
+            raise BroadcastError(
+                f"transaction type {raw_type!r} is not EIP-1559 (type 2) — only the "
+                f"shape the rail builds is signed; refusing")
+        try:
+            gas = int(tx.get("gas") or 0)
+            fee_per_gas = max(int(tx.get("maxFeePerGas") or 0),
+                              int(tx.get("gasPrice") or 0))
+        except (TypeError, ValueError):
+            raise BroadcastError("transaction gas or fee field is not an integer — refusing")
+        if gas <= 0:
+            raise BroadcastError("transaction has no gas limit — refusing to sign")
+        total_fee = gas * fee_per_gas
+        if total_fee > self._max_fee_wei:
+            raise BroadcastError(
+                f"gas {gas} at {fee_per_gas} wei per gas implies a max fee of "
+                f"{total_fee} wei, above the {self.chain} ceiling {self._max_fee_wei} "
+                f"wei — refusing to sign; nothing was sent")
+
     def sign_and_send(self, tx: dict) -> str:
+        """Sign and broadcast *tx* — only when ``tx_guard.authorize`` recorded it.
+
+        125 S3 (D3): every signer mode needs the record in :mod:`core.signer.attest`.
+        A transaction with none never passed the guard in this process, and is refused
+        before any RPC or signature. The record is taken AFTER signing (the shadow
+        signer's comparison takes it inside ``sign_transaction``), once per send.
+
+        The record binds what the transaction DOES (chainId, to, value, data, nonce —
+        ``core.signer.protocol.tx_digest``), not its gas, fee fields or type, because
+        :meth:`size_gas` rewrites ``gas`` after the guard. So the fee bound is
+        re-checked here, at the signing point (:meth:`_check_fee_shape`).
+        """
+        remote = getattr(self._signer, "remote_send", False)
+        from core.signer import attest
+        if not remote and attest.peek(tx) is None:
+            raise BroadcastError(_NO_AUTHORIZATION)
+        self._check_fee_shape(tx)
         ok, why = self.preflight()
         if not ok:
             raise BroadcastError(why)
@@ -443,12 +501,13 @@ class EvmRail:
             raise BroadcastError(
                 f"transaction chainId {tx.get('chainId')} != rail chain "
                 f"{self.chain_id} — refusing")
-        if getattr(self._signer, "remote_send", False):
+        if remote:
             return self._remote_sign_and_send(tx)
         from eth_utils import keccak
         from core.wallet import submission_journal
         reference = submission_journal.reserve_signing(self.chain, self._signer.address, tx.get('nonce'))
         raw = self._signer.sign_transaction(tx)
+        attest.take(tx)
         tx_hash = '0x' + keccak(bytes(raw)).hex()
         submission_journal.bind_signed_hash(reference, tx_hash)
         try:
@@ -482,7 +541,8 @@ class EvmRail:
         """066 P2 ``WALLET_SIGNER=remote``: polyrob-signer guards, signs and sends.
 
         The intent comes from :mod:`core.signer.attest` — ``tx_guard.authorize``
-        recorded it for this exact transaction. None recorded = this transaction
+        recorded it for this transaction's digest (what it does, not its gas or
+        fee fields — see :meth:`sign_and_send`). None recorded = this transaction
         never passed the guard here, and nothing is sent.
 
         The agent's own interlock still applies: an unresolved submission refuses
@@ -496,9 +556,7 @@ class EvmRail:
         from core.wallet import submission_journal
         intent = attest.take(tx)
         if intent is None:
-            raise BroadcastError(
-                "no tx_guard authorization is recorded for this transaction in this "
-                "process — polyrob-signer signs only an authorized intent; nothing was sent")
+            raise BroadcastError(_NO_AUTHORIZATION)
         if submission_journal.unresolved():
             raise BroadcastError(
                 "unaccounted wallet submission; no send until the operator settles it "

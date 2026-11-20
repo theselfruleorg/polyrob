@@ -110,7 +110,7 @@ def test_gap_note_is_empty_without_gaps():
 # --- 2026-09-18 (prod tick 88): an ACTION id is not a missing TOOL ---------------
 #
 # The goal vocabulary (tools/goal_tools.py, proposal 009) grants `message` for
-# telegram posting, and `_infer_tools_from_text` adds it whenever a goal's text
+# telegram posting, and `core.tool_grants.infer_tools_from_text` adds it whenever a goal's text
 # says "telegram". But `message` is a controller ACTION registered by
 # `_register_message_action` (MESSAGE_TOOL_ENABLED), not a container tool — so
 # every such goal loaded with `✗ Tool 'message' not loaded — gated:unknown-tool`

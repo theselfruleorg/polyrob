@@ -1079,7 +1079,7 @@ class A2ATaskHandler:
         Returns:
             List of A2AArtifacts from workspace
         """
-        from agents.task.path import pm
+        from core.session_paths import pm
         import mimetypes
 
         artifacts = []
@@ -1130,7 +1130,7 @@ class A2ATaskHandler:
         Returns:
             List of A2AMessages
         """
-        from agents.task.path import pm
+        from core.session_paths import pm
 
         messages = []
         user_id = session_info.get("user_id")

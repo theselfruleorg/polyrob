@@ -220,6 +220,26 @@ def get_model_config_exact(model_name: str):
     return registry._models.get(canonical)
 
 
+def provider_price_ceiling(provider: Optional[str]) -> Optional[ModelPricing]:
+    """The highest known input and output price among *provider*'s catalog rows (deprecated
+    rows count), with no cached or cache-write discount. The meter charges a model with no
+    exact row at it: a conservative ceiling, never a family guess or $0. None when the
+    catalog holds no priced row of *provider*."""
+    name = str(provider or "").strip().lower()
+    if not name:
+        return None
+    rows = [m for m in get_registry().list_models(include_deprecated=True)
+            if m.pricing and name in (canonical_provider_name(m.provider, "").lower(),
+                                      str(getattr(m.provider, "value", m.provider)).lower())]
+    if not rows:
+        return None
+    top_in = max(m.pricing.input_price or 0.0 for m in rows)
+    top_out = max(m.pricing.output_price or 0.0 for m in rows)
+    if top_in <= 0 and top_out <= 0:
+        return None
+    return ModelPricing(input_price=top_in, output_price=top_out)
+
+
 def provider_supports_streaming(name: str) -> bool:
     """True when the provider's client streams: every spec row, built-in or user-declared,
     except the RESPONSES transport, whose client has no stream path."""

@@ -22,6 +22,7 @@
  * dressed up as fresh.
  */
 
+import { getJson } from './http.js';
 import { loadSocketIo } from './socket-client.js';
 
 const TICK_MS = 30000;
@@ -35,6 +36,7 @@ export function applyHead(body, root) {
   const truth = doc.querySelector('.head-truth');
   if (truth && typeof body.headline === 'string' && typeof body.waiting_line === 'string') {
     truth.textContent = `${body.headline} ${body.waiting_line}`.trim();
+    truth.title = truth.textContent;   // the whole line where a narrow head clamps it
   }
   const inbox = doc.querySelector('.nav-item[href="/inbox"]');
   if (!inbox) return;
@@ -57,9 +59,8 @@ export function applyHead(body, root) {
 
 async function refreshHead(fetcher) {
   try {
-    const resp = await (fetcher || fetch)('/api/webgate/head', { credentials: 'include' });
-    if (!resp.ok) return;
-    applyHead(await resp.json());
+    const res = await getJson('/api/webgate/head', { fetcher });
+    if (res.ok) applyHead(res.body);
   } catch (err) {
     // The server-rendered line stays; a failed refresh must not blank it.
   }
@@ -158,6 +159,16 @@ async function connect(state) {
   wireSocket(socket, state);
 }
 
+/** May this seat join the `activity` room? The server refuses a multitenant
+ *  tenant (`join_activity` is owner/admin-gated), so the shell marks the body
+ *  `data-live-activity="false"` there and live.js does not ask: the tenant
+ *  keeps the fallback tick instead of a permanent "Live updates are off here".
+ *  Exported for tests. */
+export function mayJoinActivity(doc) {
+  const body = (doc || document).body;
+  return !body || body.dataset.liveActivity !== 'false';
+}
+
 function bind() {
   if (!document.querySelector('.head-truth')) return; // not the shell
   let pending = null;
@@ -168,7 +179,7 @@ function bind() {
   document.addEventListener('polyrob:activity', headSoon);
   const state = liveState();
   setInterval(() => beat(state), TICK_MS);
-  connect(state);
+  if (mayJoinActivity(document)) connect(state);
 }
 
 if (typeof document !== 'undefined') {

@@ -3,7 +3,7 @@
 Just the effective-posture card + how to change it (read-only). ``/status``
 already embeds the card inside a long snapshot; ``/mode`` answers the single
 question "what may this instance do right now, and why" with nothing else
-around it. Thin over the SAME ``surfaces.telegram.harness._mode_reply`` — which
+around it. Thin over the SAME ``core.surfaces.owner_reads.mode_reply`` — which
 renders ``core.config_policy.posture_card`` — so the card reads identically on
 every seat. Writes stay on the CLI seat (mode/posture are env flags).
 """
@@ -39,12 +39,12 @@ def _wrap(text: str) -> str:
 def h_mode(ctx) -> None:
     """The four answers (104 §2); `/mode all` adds every setting behind them."""
     from core.permission_levels import LEVELS, level_reply
-    from surfaces.telegram.harness import _mode_reply
+    from core.surfaces.owner_reads import mode_reply
     if ctx.args and ctx.args[0] in LEVELS:
         ctx.emit(_wrap(level_reply(ctx.args[0], surface="local")), title="mode")
         return
     full = "all" in (ctx.args or ())
-    ctx.emit(_wrap(_mode_reply("terminal", full=full)), title="mode")
+    ctx.emit(_wrap(mode_reply("terminal", full=full)), title="mode")
 
 
 HELP_MODE = (

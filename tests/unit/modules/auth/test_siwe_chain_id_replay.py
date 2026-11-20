@@ -31,18 +31,22 @@ async def test_nonce_row_persists_the_issuing_chain_id(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_verify_nonce_rejects_chain_id_mismatch(tmp_path):
+async def test_consume_nonce_rejects_chain_id_mismatch(tmp_path):
     auth, _db = await _authenticator(tmp_path)
     nonce = await auth.generate_nonce(WALLET, chain_id=1)  # issued for Ethereum mainnet
     # Attacker resubmits the SAME nonce but a message claiming a different chain.
-    assert await auth._verify_nonce(WALLET, nonce, chain_id=137) is False
+    assert await auth._consume_nonce_atomic(WALLET, nonce, chain_id=137) is False
+    # The refused attempt does not spend it: the issuing chain still signs in once.
+    assert await auth._consume_nonce_atomic(WALLET, nonce, chain_id=1) is True
 
 
 @pytest.mark.asyncio
-async def test_verify_nonce_accepts_matching_chain_id(tmp_path):
+async def test_consume_nonce_accepts_matching_chain_id(tmp_path):
     auth, _db = await _authenticator(tmp_path)
     nonce = await auth.generate_nonce(WALLET, chain_id=1)
-    assert await auth._verify_nonce(WALLET, nonce, chain_id=1) is True
+    assert await auth._consume_nonce_atomic(WALLET, nonce, chain_id=1) is True
+    # One-time use: the same nonce never signs in twice.
+    assert await auth._consume_nonce_atomic(WALLET, nonce, chain_id=1) is False
 
 
 def test_extract_chain_id_parses_the_siwe_message_line():
@@ -55,7 +59,7 @@ def test_extract_chain_id_returns_none_when_absent():
 
 
 @pytest.mark.asyncio
-async def test_verify_nonce_rejects_omitted_chain_id_line(tmp_path):
+async def test_consume_nonce_rejects_omitted_chain_id_line(tmp_path):
     """Fail-closed regression: a chain-bound nonce (row chain_id=1) must be
     REJECTED when the submitted message simply omits the `Chain ID:` line
     (parses to chain_id=None). Pre-fix, `if chain_id is not None` short-
@@ -72,23 +76,23 @@ async def test_verify_nonce_rejects_omitted_chain_id_line(tmp_path):
     submitted_chain_id = SIWEAuthenticator._extract_chain_id(message_without_chain_line)
     assert submitted_chain_id is None  # sanity: the line really is absent
 
-    assert await auth._verify_nonce(WALLET, nonce, chain_id=submitted_chain_id) is False
+    assert await auth._consume_nonce_atomic(WALLET, nonce, chain_id=submitted_chain_id) is False
 
 
 @pytest.mark.asyncio
-async def test_verify_nonce_allows_legacy_null_chain_row(tmp_path):
+async def test_consume_nonce_allows_legacy_null_chain_row(tmp_path):
     """Grace period: a nonce row persisted before the chain_id migration
     (chain_id IS NULL) must still validate regardless of what chain, if any,
     the submitted message declares — there is nothing to bind against."""
     auth, db = await _authenticator(tmp_path)
-    nonce = "legacy-nonce-with-no-chain-binding"
-    await db.execute(
-        """
-        INSERT INTO auth_nonces (wallet_address, nonce, chain_id, expires_at)
-        VALUES (?, ?, NULL, datetime('now', '+5 minutes'))
-        """,
-        (WALLET.lower(), nonce),
-    )
+    for nonce in ("legacy-nonce-no-chain-a", "legacy-nonce-no-chain-b"):
+        await db.execute(
+            """
+            INSERT INTO auth_nonces (wallet_address, nonce, chain_id, expires_at)
+            VALUES (?, ?, NULL, datetime('now', '+5 minutes'))
+            """,
+            (WALLET.lower(), nonce),
+        )
 
-    assert await auth._verify_nonce(WALLET, nonce, chain_id=None) is True
-    assert await auth._verify_nonce(WALLET, nonce, chain_id=137) is True
+    assert await auth._consume_nonce_atomic(WALLET, "legacy-nonce-no-chain-a", chain_id=None) is True
+    assert await auth._consume_nonce_atomic(WALLET, "legacy-nonce-no-chain-b", chain_id=137) is True

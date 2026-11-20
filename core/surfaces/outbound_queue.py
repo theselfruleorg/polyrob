@@ -98,6 +98,37 @@ def message_key(scope: str, text: str) -> str:
     digest = hashlib.sha256((text or "").encode("utf-8", "replace")).hexdigest()[:16]
     return f"{scope}#{uuid.uuid4().hex}#{digest}"
 
+def encode_actions(actions: Optional[list]) -> Optional[str]:
+    """``Action`` choices -> the row's JSON (``None`` when there are none)."""
+    if not actions:
+        return None
+    import json
+    return json.dumps([{"label": a.label, "command": a.command, "style": a.style}
+                       for a in actions])
+
+
+def decode_actions(raw: Optional[str]) -> list:
+    """The row's JSON -> ``Action`` objects. Each is re-validated by ``Action`` itself
+    (a button may only say what a typed message could); an unreadable or invalid
+    entry is dropped, since the TEXT still carries the same commands."""
+    if not raw:
+        return []
+    import json
+    from core.surfaces.envelopes import Action
+    try:
+        items = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    out = []
+    for it in items if isinstance(items, list) else []:
+        try:
+            out.append(Action(label=str(it["label"]), command=str(it["command"]),
+                              style=str(it.get("style") or "default")))
+        except Exception:
+            continue
+    return out
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS outbound_queue (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -132,14 +163,18 @@ class OutboundDeliveryQueue:
             # open. CREATE IF NOT EXISTS never alters an existing table.
             # OB6: claim_token is the delivery lease.
             from core.sqlite_util import ensure_columns
-            ensure_columns(conn, "outbound_queue", (("media", "TEXT"), ("claim_token", "TEXT")))
+            ensure_columns(conn, "outbound_queue", (("media", "TEXT"), ("claim_token", "TEXT"),
+                                                 # 110 W3: the reply anchor and the tappable
+                                                 # choices ride the row; an old row reads NULL
+                                                 ("reply_to", "TEXT"), ("actions", "TEXT")))
             conn.commit()
         finally:
             conn.close()
 
     def enqueue(self, *, idempotency_key: str, session_key: str, surface_id: str,
                 dest: Optional[str], payload: str, kind: str = "agent_text",
-                media: Optional[list] = None) -> bool:
+                media: Optional[list] = None, reply_to: Optional[str] = None,
+                actions: Optional[list] = None) -> bool:
         media_json: Optional[str] = None
         if media:
             import json
@@ -154,12 +189,15 @@ class OutboundDeliveryQueue:
                 # message without its attachment while reporting success. Refuse
                 # the row; the router falls back to a direct (in-process) send.
                 raise ValueError(f"outbound enqueue: media not JSON-serializable: {exc}")
+        actions_json = encode_actions(actions)
         inserted = execute_retry(
             self.db_path,
             """INSERT OR IGNORE INTO outbound_queue
-                 (idempotency_key, session_key, surface_id, dest, payload, media, kind, next_attempt_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 0)""",
-            (idempotency_key, session_key, surface_id, dest, payload, media_json, kind),
+                 (idempotency_key, session_key, surface_id, dest, payload, media, kind,
+                  next_attempt_at, reply_to, actions)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)""",
+            (idempotency_key, session_key, surface_id, dest, payload, media_json, kind,
+             str(reply_to) if reply_to else None, actions_json),
         )
         return inserted == 1
 

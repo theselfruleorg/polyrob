@@ -267,13 +267,13 @@ a goal or a job states the same words in its record (`/goal show <id>`,
 
 `cancelled` (no notice in chat). The run was cancelled, for example by `/cancel`. Next: send the task again.
 
-#### cut by the wall-clock cap
+#### stopped at its time limit
 
 `wall_clock`. The run reached its time limit. Next: for a goal, `/goal retry <id>`.
 
-#### stopped because it repeated the same tool call
+#### stopped because it repeated the same step
 
-`loop`. The same tool call repeated, so the harness stopped the run. Next: say continue with a hint, or `/why`.
+`loop`. The same step repeated, so the run stopped. Next: say continue with a hint, or `/why`.
 
 ### Refusals
 

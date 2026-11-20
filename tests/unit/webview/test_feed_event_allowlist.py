@@ -72,7 +72,7 @@ def test_tool_result_formatter_shape():
 
 def _make_feed(tmp_path, monkeypatch, sid):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    import agents.task.path as pth
+    import core.session_paths as pth
     pth.reset_path_manager()
     from core.identity import ANON_USER_ID
 

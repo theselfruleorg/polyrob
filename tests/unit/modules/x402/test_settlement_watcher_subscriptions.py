@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from modules.database.connection import DatabaseConnection
 from modules.database.user_profiles import UserProfiles
 from modules.database.x402_tables import X402Tables
@@ -180,7 +180,7 @@ async def test_approve_mode_queues_ask_not_invoice(tmp_path, monkeypatch):
         rows = await invoicing.list_payment_requests(user_id="alice", db=db)
         assert rows == []  # no money moved yet
 
-        from agents.task.goals.board import ASK_OPEN
+        from modules.goals.board import ASK_OPEN
         open_asks = board.asks(user_id="alice", status=ASK_OPEN)
         assert len(open_asks) == 1
         payload = open_asks[0].payload
@@ -209,7 +209,7 @@ async def test_approve_mode_approved_ask_invoices_on_next_tick(tmp_path, monkeyp
         watcher = SettlementWatcher(agent, db=db, goal_board=board)
         await watcher.tick_once()
 
-        from agents.task.goals.board import ASK_OPEN
+        from modules.goals.board import ASK_OPEN
         ask = board.asks(user_id="alice", status=ASK_OPEN)[0]
         ok, _ = board.decide_ask(ask.id, user_id="alice", approved=True)
         assert ok is True
@@ -242,7 +242,7 @@ async def test_approve_mode_rejected_ask_backs_off(tmp_path, monkeypatch):
         watcher = SettlementWatcher(agent, db=db, goal_board=board)
         await watcher.tick_once()
 
-        from agents.task.goals.board import ASK_OPEN
+        from modules.goals.board import ASK_OPEN
         ask = board.asks(user_id="alice", status=ASK_OPEN)[0]
         ok, _ = board.decide_ask(ask.id, user_id="alice", approved=False)
         assert ok is True
@@ -329,7 +329,7 @@ async def test_approve_mode_halt_does_not_burn_approved_grant(tmp_path, monkeypa
 
         # Tick 1 queues the ask; the owner approves it.
         await watcher.tick_once()
-        from agents.task.goals.board import ASK_OPEN
+        from modules.goals.board import ASK_OPEN
         ask = board.asks(user_id="alice", status=ASK_OPEN)[0]
         ok, _ = board.decide_ask(ask.id, user_id="alice", approved=True)
         assert ok is True

@@ -109,7 +109,7 @@ def _check_url_ssrf(url: str) -> Optional[str]:
 	# metadata (169.254.169.254 is not loopback); the set is empty unless the sandbox
 	# published a port (posture >= 1). Everything else still runs the strict validator.
 	try:
-		from tools.shell.loopback_allow import is_loopback_allowed
+		from core.security.loopback_allow import is_loopback_allowed
 		if is_loopback_allowed(url):
 			return None
 	except Exception:

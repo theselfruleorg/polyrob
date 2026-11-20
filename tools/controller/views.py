@@ -81,7 +81,14 @@ class MessageTargetAction(BaseModel):
 		             "(my OWN post, owner's instruction only, telegram <48h: give post=<row>, "
 		             "or message_id + target, or last=N + target) | targets (who I may "
 		             "message: the owner, the policy, the allowlist)"))
-	reply_to: Optional[str] = Field(default=None, description="Message id to reply to")
+	reply_to: Optional[str] = Field(
+		default=None,
+		description=("Message id in target's chat to answer: the send lands as a reply to it "
+		             "(a surface that cannot thread posts it plainly)"))
+	thread_id: Optional[str] = Field(
+		default=None,
+		description=("Thread or forum-topic id in target's chat to post into (e.g. a Telegram "
+		             "topic's message_thread_id). Omit to post at the top of the chat"))
 	message_id: Optional[str] = Field(default=None, description="delete: the message id in target's chat")
 	post: Optional[int] = Field(default=None, description="delete: the post-ledger row a send receipt named")
 	last: Optional[int] = Field(default=None, description="delete/posts: the N most recent posts to target")

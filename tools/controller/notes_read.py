@@ -20,7 +20,7 @@ def fmt_day(ts: Any) -> str:
 
 
 def _read_failed(exc: BaseException) -> ActionResult:
-	from agents.task.agent.core.memory_prefetch import memory_read_error
+	from agents.task.public import memory_read_error
 	return ActionResult(error=memory_read_error(exc, "Notes"), include_in_memory=False)
 
 

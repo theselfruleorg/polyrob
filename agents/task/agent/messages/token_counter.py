@@ -84,8 +84,10 @@ def _foundation_tokens(manager) -> int:
 	"""060 WS-2: the pinned foundation's token cost, summed over the ONE layer
 	table (``foundation_layers.FOUNDATION_LAYERS``) instead of a hand-kept list
 	that a new block could be missing from."""
-	from agents.task.agent.messages.foundation_layers import FOUNDATION_LAYERS
-	return sum(int(getattr(manager, layer.tokens_attr, 0) or 0) for layer in FOUNDATION_LAYERS)
+	from agents.task.agent.messages.foundation_layers import FOUNDATION_LAYERS, layer_visible
+	# A row the live guard hides is not sent, so it does not count.
+	return sum(int(getattr(manager, layer.tokens_attr, 0) or 0) for layer in FOUNDATION_LAYERS
+	           if layer_visible(manager, layer))
 
 class TokenCounterMixin:
 	# F29: empty slots so the composed MessageManager keeps its own __slots__ and
@@ -485,7 +487,8 @@ class TokenCounterMixin:
 
 		# Count H-MEM tokens if available (P7: real counter, memoized per string)
 		hmem_tokens = 0
-		if self.task_context_manager and self.session_id:
+		from agents.task.agent.messages.foundation_layers import owner_chat_tainted
+		if self.task_context_manager and self.session_id and not owner_chat_tainted(self):
 			try:
 				context = self.task_context_manager.get_context_injection(self.session_id)
 				if context:

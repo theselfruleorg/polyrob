@@ -24,3 +24,34 @@ def display_effective(key: str, user_id: Optional[str], home_dir: Path | str,
             and value.strip().lower() in _EMPTY_WORDS):
         return [], source
     return value, source
+
+
+def control_value(key: str, value: object, source: str) -> object:
+    """The value a Settings CONTROL starts with — not the display words.
+
+    An unset setting's built-in default is display text (``"not set (any
+    pair)"``, ``"server clock"``, ```auto```). A control that takes it as its
+    value shows prose in a text box, cannot hold it in a number box or a
+    select, and so counts as "changed" — and Save then writes a setting the
+    owner never touched. A value the owner or the operator set is the value; a
+    default is the control's value only when it is a valid value of the
+    setting, and a text setting's default is never one (it is a description).
+    """
+    src = str(source or "")
+    if src.startswith("pref") or src.startswith("env"):
+        return value
+    spec = PREF_SCHEMA.get(key)
+    if spec is None or value is None or spec.type == "str":
+        return None
+    from core.prefs import validate_pref
+    ok, parsed, _err = validate_pref(key, value)
+    return parsed if ok else None
+
+
+def source_words(source: str) -> str:
+    """``default(default (no bundle))`` → ``default (no bundle)``: the catalog's
+    resolver label, without its wrapper."""
+    src = str(source or "")
+    if src.startswith("default(") and src.endswith(")"):
+        return src[len("default("):-1]
+    return src

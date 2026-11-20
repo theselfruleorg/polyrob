@@ -33,7 +33,7 @@ def subagents_info(as_json: bool):
     # may use everything". Unknown is not empty.
     blocked_error = None
     try:
-        from tools.controller.delegation import get_blocked_child_tools
+        from core.delegation_policy import get_blocked_child_tools
         blocked_tools = sorted(get_blocked_child_tools())
     except Exception as exc:
         blocked_tools, blocked_error = None, f"{type(exc).__name__}: {exc}"

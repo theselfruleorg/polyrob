@@ -99,3 +99,92 @@ async def test_probe_failure_refuses(monkeypatch):
     res = await tool.approve_token(_approve(ATTACKER), SimpleNamespace(role="orchestrator"))
     assert res.error and "could not be proven" in res.error
     assert not gate.recorded
+
+
+@pytest.mark.asyncio
+async def test_the_owners_agent_turn_gets_the_exact_grant_as_one_card(monkeypatch):
+    """126: the owner tenant on a turn that cannot grant (an agent or autonomous
+    turn) gets ONE call card holding the exact grant; nothing is broadcast."""
+    import core.wallet.authority as auth
+    import tools.controller.action_registration as ar
+    from core.surfaces import cards
+    monkeypatch.setattr(auth, "turn_refusal", lambda c: None)
+    monkeypatch.setattr(ar, "_is_forged_or_autonomous_turn", lambda c, s: True)
+    monkeypatch.setattr("core.instance.is_owner_uid", lambda uid, **kw: uid == "owner")
+    monkeypatch.setattr(cards, "_STORE", None)
+    pushed = []
+
+    async def push(container, user_id, card, session_id=None):
+        pushed.append(card)
+        return "sent"
+    monkeypatch.setattr(cards, "push", push)
+    tool, gate = _tool()
+    ctx = SimpleNamespace(role="orchestrator", is_sub_agent=False, metadata={},
+                          user_id="owner")
+    res = await tool.approve_token(_approve(ATTACKER), ctx)
+    assert res.error is None and res.metadata["owner_act"]["card_id"] == pushed[0].card_id
+    step, = pushed[0].draft["call"]["steps"]
+    assert step["do"] == "defi_trade_approve_token"
+    assert step["args"]["spender"] == ATTACKER and step["args"]["dry_run"] is False
+    assert "standing claim" in pushed[0].body and not gate.recorded
+
+
+def _owner_card_world(monkeypatch):
+    import core.wallet.authority as auth
+    import tools.controller.action_registration as ar
+    from core.surfaces import cards
+    monkeypatch.setattr(auth, "turn_refusal", lambda c: None)
+    monkeypatch.setattr(ar, "_is_forged_or_autonomous_turn", lambda c, s: True)
+    monkeypatch.setattr("core.instance.is_owner_uid", lambda uid, **kw: uid == "owner")
+    monkeypatch.setattr(cards, "_STORE", None)
+    pushed = []
+
+    async def push(container, user_id, card, session_id=None):
+        pushed.append(card)
+        return "sent"
+    monkeypatch.setattr(cards, "push", push)
+    return pushed
+
+
+@pytest.mark.asyncio
+async def test_an_autonomous_run_gets_the_flat_refusal_not_a_card(monkeypatch):
+    """Audit 2026-11-21 L-1: a goal/cron run of the owner tenant asks no one-tap card for
+    a standing claim to an unpinned spender; it gets the flat CR-H02 refusal."""
+    from core import autonomy_marker
+    pushed = _owner_card_world(monkeypatch)
+    monkeypatch.setattr(autonomy_marker, "_SESSIONS", type(autonomy_marker._SESSIONS)())
+    autonomy_marker.mark_autonomous("goal-run-1", "g_1")
+    tool, gate = _tool()
+    ctx = SimpleNamespace(role="orchestrator", is_sub_agent=False, metadata={},
+                          user_id="owner", session_id="goal-run-1")
+    res = await tool.approve_token(_approve(ATTACKER), ctx)
+    assert res.error and "pins" in res.error
+    assert not pushed and not gate.recorded
+
+
+@pytest.mark.asyncio
+async def test_an_autonomy_probe_fault_makes_no_card(monkeypatch):
+    import core.security.owner_turn as ot
+    pushed = _owner_card_world(monkeypatch)
+
+    def boom(*a, **k):
+        raise RuntimeError("marker down")
+    monkeypatch.setattr(ot, "is_autonomous_session", boom)
+    tool, gate = _tool()
+    ctx = SimpleNamespace(role="orchestrator", is_sub_agent=False, metadata={},
+                          user_id="owner", session_id="s1")
+    res = await tool.approve_token(_approve(ATTACKER), ctx)
+    assert res.error and not pushed and not gate.recorded
+
+
+@pytest.mark.asyncio
+async def test_the_owner_agent_turn_card_names_the_turn_origin_and_session(monkeypatch):
+    pushed = _owner_card_world(monkeypatch)
+    tool, gate = _tool()
+    ctx = SimpleNamespace(role="orchestrator", is_sub_agent=False,
+                          metadata={"turn_kind": "self_wake"}, user_id="owner",
+                          session_id="chat-42")
+    res = await tool.approve_token(_approve(ATTACKER), ctx)
+    assert res.error is None, res.error
+    body = pushed[0].body
+    assert "self-wake re-entry" in body and "session chat-42" in body

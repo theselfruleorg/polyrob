@@ -1,17 +1,24 @@
 """The in-process hand-off from ``tx_guard.authorize`` to the signing point.
 
 Every EVM money verb in this tree runs ``tx_guard.authorize(intent, tx)`` and
-then ``EvmRail.sign_and_send(tx)`` — the rail never sees the intent. The signer
-must re-run the guard on the SAME intent, so ``authorize`` records here which
-intent it allowed each transaction under, and the signing point (the shadow or
-remote signer) takes it back by the transaction's digest.
+then ``EvmRail.sign_and_send(tx)`` — the rail never sees the intent. So
+``authorize`` records here which intent it allowed each transaction under, and
+the signing point takes it back by the transaction's digest: the rail itself in
+``local`` mode, the shadow comparison, or the remote signer (which re-runs the
+guard on the SAME intent).
 
-Recorded only when ``WALLET_SIGNER`` is not ``local`` (zero change there), and
-only for an ALLOWED decision or the owner-approval lane (``owner_queue``: the
-verb asks the owner and re-authorizes; the signer applies its own hard cap).
+Recorded in EVERY ``WALLET_SIGNER`` mode (125 S3) for an ALLOWED decision, and
+never for a dry run (``authorize(..., dry_run=True)``). The owner-approval lane
+(``owner_queue``) is an ask, not an authorization (audit 2026-11-21 L-7):
+``authorize`` records it only under ``remote``, where the signer re-runs the guard
+and asks the owner on its own box. In ``local``/``shadow`` mode the verb records
+it with :func:`record_owner_cleared` — only where it has proven the owner's
+approval, for that exact transaction, right before ``sign_and_send``. The signer's deposit sweep records an
+explicit marker intent (``server.DEPOSIT_SWEEP_INTENT``) for its own rail.
 
-A transaction with no recorded intent is refused by the remote signer: it
-reached the signing point without passing ``tx_guard`` in this process.
+A transaction with no recorded intent is refused by ``EvmRail.sign_and_send``
+in every mode, before any RPC or signature: it reached the signing point
+without passing ``tx_guard`` in this process.
 
 Bounded (64 entries, 15 minutes) and taken ONCE — a signed transaction cannot
 be replayed through the same authorization.
@@ -43,6 +50,16 @@ def record(intent: Any, tx: Dict[str, Any], *, clock=time.monotonic) -> None:
         _items.move_to_end(key)
         while len(_items) > _MAX:
             _items.popitem(last=False)
+
+
+def record_owner_cleared(intent: Any, tx: Dict[str, Any]) -> None:
+    """The ONE step a verb takes after it proved the owner approved an
+    ``owner_queue`` decision: record *intent* for this exact *tx* (its digest), so
+    the rail signs it once. Call it after ``size_gas``, right before
+    ``sign_and_send``, and never on a path the owner did not clear."""
+    if intent is None:
+        raise ValueError("an owner-cleared transaction needs the intent it was asked under")
+    record(intent, tx)
 
 
 def peek(tx: Dict[str, Any], *, clock=time.monotonic) -> Optional[Any]:

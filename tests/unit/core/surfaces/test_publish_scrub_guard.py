@@ -13,7 +13,7 @@ from core.surfaces.message_router import MessageRouter
 from core.surfaces.session_chat_registry import SessionChatRegistry
 from core.surfaces.envelopes import OutboundMessage, SendResult, SurfaceCapabilities
 from core.surfaces.surface import Surface
-from modules.llm.brain_scrubber import scrub_brain_blocks
+from core.brain_scrubber import scrub_brain_blocks
 
 
 class _RecordingSurface(Surface):

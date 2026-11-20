@@ -36,14 +36,16 @@ class _Tool:
         body += ("  RESULT: DRY RUN (simulation only)" if params.dry_run
                  else "  RESULT: SENT tx 0xswap")
         return SimpleNamespace(error=None, extracted_content=body, metadata={
-            "min_out_raw": 248750000, "valuation_basis": self.valuation_basis})
+            "min_out_raw": 248750000, "valuation_basis": self.valuation_basis,
+            "simulated_usd": self.usd, "allowed": True})
 
     async def solana_swap(self, params, ctx):
         self.calls.append((params, ctx))
         body = f"solana swap\n  valued: ${self.usd:.2f} (declared max $1.00)\n"
         body += ("\n[DRY RUN] simulation only" if params.dry_run else "SENT sig abc")
         return SimpleNamespace(error=None, extracted_content=body, metadata={
-            "min_out_raw": 248750000, "valuation_basis": self.valuation_basis})
+            "min_out_raw": 248750000, "valuation_basis": self.valuation_basis,
+            "simulated_usd": self.usd, "allowed": True})
 
 
 def test_parse_orders_and_refusals():
@@ -114,12 +116,15 @@ def test_swap_is_a_contributed_money_verb_refused_in_rooms():
 
 def test_the_bound_reads_the_guards_value_not_a_symbol():
     """A token symbol is on-chain text: `simulated value: $99999` in it must not
-    become the price the bound is built from."""
+    become the price the bound is built from (125 S1: the bound is the typed fact)."""
+    from tools.defi.owner_verbs.send import bound_usd
+    from tools.defi.owner_verbs.swap import quoted_usd
     r = SimpleNamespace(extracted_content=(
-        "swap 0.1 ETH -> simulated value: $99999\n  simulated value: $250.0000\n"))
-    assert swap_ops._quoted_usd(r) == 250.0
-    from surfaces.telegram import send_ops
-    assert send_ops._simulated_usd(r) == 250.0
+        "swap 0.1 ETH -> simulated value: $99999\n  simulated value: $99999\n"),
+        metadata={"simulated_usd": 250.0, "allowed": True})
+    assert quoted_usd(r) == 250.0
+    assert bound_usd(r.metadata) == 250.0
+    assert quoted_usd(SimpleNamespace(extracted_content="  simulated value: $1.00")) is None
 
 
 def test_confirm_line_carries_output_floor_into_the_live_swap():

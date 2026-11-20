@@ -117,7 +117,7 @@ class SIWEAuthenticator:
 
         Nonces prevent replay attacks. The nonce is bound to the chain_id it
         was issued for, so a signed message declaring a different chain can
-        never be validated against it (see _verify_nonce).
+        never be validated against it (see _consume_nonce_atomic).
 
         Args:
             wallet_address: Ethereum wallet address
@@ -286,41 +286,6 @@ Expiration Time: {expiration}"""
             "expiration": expiration
         }
 
-    async def _verify_nonce(self, wallet_address: str, nonce: str, chain_id: Optional[int] = None) -> bool:
-        """Verify nonce is valid, not expired, and — when the stored row is
-        bound to a chain — was issued for that same chain.
-
-        Fail CLOSED, keyed off the STORED row's chain_id (not the submitted
-        chain_id): if the row has a concrete chain_id, the submitted message
-        MUST declare the matching chain, INCLUDING the case where the
-        submitted chain_id is None (the attacker simply omitted the
-        `Chain ID:` line, or it failed to parse). Omitting the line is not a
-        way to skip the check — it is trivially attacker-controlled request
-        data. A legacy row with chain_id IS NULL (pre-migration) still skips
-        the check, preserving the grace period; every row written by
-        generate_nonce today always carries a concrete chain_id.
-        """
-
-        result = await self.db.fetch_one("""
-            SELECT nonce, chain_id FROM auth_nonces
-            WHERE wallet_address = ?
-                AND nonce = ?
-                AND expires_at > datetime('now')
-                AND used = 0
-        """, (wallet_address.lower(), nonce))
-
-        if result is None:
-            return False
-
-        if result["chain_id"] is not None and result["chain_id"] != chain_id:
-            self.logger.warning(
-                f"Chain ID mismatch for {wallet_address[:8]}...: "
-                f"issued for {result['chain_id']}, submitted {chain_id}"
-            )
-            return False
-
-        return True
-
     @staticmethod
     def _extract_chain_id(message: str) -> Optional[int]:
         """Parse the `Chain ID:` line out of a SIWE message body."""
@@ -337,8 +302,8 @@ Expiration Time: {expiration}"""
         """Check AND spend a nonce in one statement. True when it was live.
 
         Live = not used, not expired, and issued for ``chain_id`` (a legacy row
-        with ``chain_id IS NULL`` keeps its grace period, as in
-        :meth:`_verify_nonce`).
+        with ``chain_id IS NULL`` keeps its grace period). A row bound to a chain
+        refuses a message that declares another chain or omits the line.
         """
         result = await self.db.execute("""
             UPDATE auth_nonces
@@ -350,15 +315,6 @@ Expiration Time: {expiration}"""
                 AND (chain_id IS NULL OR chain_id = ?)
         """, (wallet_address.lower(), nonce, chain_id))
         return getattr(result, "rowcount", 0) == 1
-
-    async def _consume_nonce(self, wallet_address: str, nonce: str):
-        """Mark nonce as used (one-time use)."""
-
-        await self.db.execute("""
-            UPDATE auth_nonces
-            SET used = 1
-            WHERE wallet_address = ? AND nonce = ?
-        """, (wallet_address.lower(), nonce))
 
     def _check_message_freshness(self, message: str, max_age: int = 300) -> bool:
         """

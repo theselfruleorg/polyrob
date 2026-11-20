@@ -34,7 +34,7 @@ def test_the_retired_goal_default_names_its_replacement():
 @pytest.mark.asyncio
 async def test_a_goal_run_ignores_a_stored_step_budget(tmp_path, monkeypatch):
     from agents.task.goals import dispatcher as disp_mod
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from agents.task.goals.dispatcher import GoalDispatcher
     monkeypatch.setenv("GOALS_ENABLED", "true")
     monkeypatch.setenv("AUTONOMOUS_MAX_STEPS", "77")

@@ -108,6 +108,30 @@ class UsageRecord:
 _LAST_STEP_CALLS_MAX = 1000
 
 
+
+def _provider_ceiling_cost(model: str, tokens: TokenUsage,
+                           provider: Optional[str]) -> Optional[float]:
+    """Audit 2026-11-21 M-6: the cost of a call on a model with NO exact catalog row, at the
+    highest known price of its provider (every input token at the input price, no cache
+    discount). None = the model has its own row, the provider is a flat-rate plan, or the
+    catalog knows no price of the provider (``compute_llm_cost`` then answers). A family row
+    or $0 would let the run spend cap see a fraction of the real spend; a provider that
+    reports what it billed still wins (``_apply_billed_cost``)."""
+    if not provider or not model:
+        return None
+    try:
+        from modules.llm.model_registry import get_model_config_exact, provider_price_ceiling
+        from modules.llm.provider_spec import is_flat_rate
+        if get_model_config_exact(model) is not None or is_flat_rate(provider):
+            return None
+        ceiling = provider_price_ceiling(provider)
+    except Exception:
+        return None
+    if ceiling is None:
+        return None
+    return (tokens.prompt_tokens / 1_000_000) * ceiling.input_price + \
+        (tokens.completion_tokens / 1_000_000) * ceiling.output_price
+
 class LLMUsageTracker:
     """
     Unified service for tracking ALL LLM usage.
@@ -326,6 +350,8 @@ class LLMUsageTracker:
             estimated_costs = costs
             costs = self._apply_billed_cost(costs, billed_cost_usd)
             billed_used = costs is not estimated_costs
+            if not billed_used and _provider_ceiling_cost(model, tokens, provider) is not None:
+                metadata = {**(metadata or {}), "price_source": "provider_ceiling"}
             if billed_used or cache_discount_usd is not None:
                 metadata = dict(metadata or {})
                 metadata["estimated_cost_usd"] = estimated_cost_usd
@@ -488,6 +514,9 @@ class LLMUsageTracker:
         """
         # Calculate API cost via the single billing entry point (G-24).
         api_cost_usd = compute_llm_cost(model, tokens, provider)
+        ceiling_cost = _provider_ceiling_cost(model, tokens, provider)
+        if ceiling_cost is not None:
+            api_cost_usd = ceiling_cost
 
         # The one conversion (decimal, rounds up, never below the minimum charge).
         credits_charged, credits_raw, user_cost_usd = _pricing_config.credits_for_api_cost(

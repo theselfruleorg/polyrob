@@ -138,7 +138,16 @@ def is_tappable_token(token: str) -> bool:
     # Action cards (2026-09-27): ``/card_<id>_<act>`` names a stored card and
     # an act; what it does is read from the card row, never from the token.
     from core.surfaces.cards import parse_card_token
-    return parse_card_token(token)[0] is not None
+    if parse_card_token(token)[0] is not None:
+        return True
+    # 2026-11-20: ``/nav_<id>`` names a stored command line (``core.surfaces.nav``);
+    # the line is read from the store for the tapping tenant, never from the token.
+    return bool(NAV_TOKEN_RE.match((token or "").strip().lower()))
+
+
+#: A reply button's token: ``/nav_<12 hex>`` (``core.surfaces.nav`` owns the store).
+NAV_TOKEN_PREFIX = "/nav_"
+NAV_TOKEN_RE = re.compile(r"^/nav_[0-9a-f]{12}$")
 
 
 #: 096 E4: what an email reader is told when a notice carries chat taps. Email

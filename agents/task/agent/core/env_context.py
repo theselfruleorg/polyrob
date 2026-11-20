@@ -86,7 +86,7 @@ def build_workspace_note(session_id: str, user_id: Optional[str]) -> Optional[st
     try:
         if not _enabled():
             return None
-        from agents.task.path import pm
+        from core.session_paths import pm
         workspace = str(pm().get_workspace_dir(pm().clean_session_id(session_id), user_id))
         return f"<session-workspace>\nWorkspace (absolute): {workspace}\n</session-workspace>"
     except Exception:

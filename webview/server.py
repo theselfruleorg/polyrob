@@ -31,7 +31,6 @@ from webview.session_identity import require_session_identity
 import logging
 from typing import Any, Dict, List, Optional
 import os
-from datetime import datetime
 import time
 import hashlib
 import hmac
@@ -60,7 +59,7 @@ import sys
 # Import from WorkingDirectory/PYTHONPATH, never a hardcoded install path.
 
 # Import PathManager for session paths
-from agents.task.path import pm
+from core.session_paths import pm
 
 from core.logging import entrypoint_logger  # D6: this module is the console entry
 from core.version import get_version
@@ -276,7 +275,7 @@ async def startup_event():
     # never be silent again either.
     try:
         from core.runtime_paths import resolve_session_data_root
-        from agents.task.path import get_path_manager, set_path_manager
+        from core.session_paths import get_path_manager, set_path_manager
         _session_root = resolve_session_data_root()
         _ws_mode = _workspace_mode_kwargs()
         set_path_manager(get_path_manager(data_root=str(_session_root), **_ws_mode))
@@ -789,19 +788,8 @@ except Exception as e:
     KNOWLEDGE_ROUTER_MOUNTED = False
     _record_unmounted("knowledge", e)
 
-# Global activity stream (/activity page + /api/activity/*). Mounted in ALL
-# postures; access is enforced at request time inside webview/activity.py
-# (_require_activity_access): local/own_ops require owner authentication
-# (auth middleware — /activity is deliberately NOT a public path), multitenant
-# admin/instance-owner only. Fail-open mount: a failure never breaks boot.
-try:
-    from webview.activity import router as activity_router
-    _fastapi.include_router(activity_router)
-    ACTIVITY_ROUTER_MOUNTED = True
-    logger.info("✅ Activity stream mounted (/activity)")
-except Exception as e:
-    ACTIVITY_ROUTER_MOUNTED = False
-    _record_unmounted("activity", e)
+# The activity stream has no HTTP route (the /activity page is gone): it is the
+# `activity` Socket.IO room below, gated in `join_activity`.
 
 def _login_redirect_path() -> str:
     """Where an unauthenticated browser request should be sent to authenticate.
@@ -1184,7 +1172,7 @@ async def index(request: Request) -> Response:
 
 @_fastapi.get("/new", response_class=HTMLResponse)
 async def new_session(request: Request) -> Response:
-    """Alias for main chat page (backwards compatibility)."""
+    """The Work › Apps empty state links here (`work-apps.js::emptyState`)."""
     return RedirectResponse(url="/", status_code=302)
 
 
@@ -1198,108 +1186,6 @@ async def session_page(request: Request, session_id: str) -> Response:
     """
     clean_id = _canonical_session_id(session_id)
     return RedirectResponse(url=f"/c/{clean_id}", status_code=301)
-
-
-@_fastapi.get("/api/session/{session_id}/feed", response_class=JSONResponse)
-async def api_feed(clean_id: str = Depends(get_clean_session_id)) -> Response:
-    """DEPRECATED: Use /api/session/{id}/feed/events instead.
-    
-    This endpoint redirects to the newer, more flexible endpoint.
-    Will be removed in a future version.
-    """
-    logger.warning(f"DEPRECATED endpoint /api/session/{clean_id}/feed called - use /feed/events instead")
-    
-    # Redirect to new endpoint with sensible defaults
-    return RedirectResponse(
-        url=f"/api/session/{clean_id}/feed/events?limit=500",
-        status_code=307  # Temporary redirect, preserves method
-    )
-
-
-@_fastapi.get("/api/session/{session_id}/workspace/status", response_class=JSONResponse)
-async def api_workspace_status(request: Request, clean_id: str = Depends(get_clean_session_id)) -> Response:
-    """Diagnostic endpoint to check workspace directory status.
-
-    Note: Uses session owner's user_id to allow public viewing of shared sessions.
-    """
-    try:
-        # Use session owner's user_id (not requesting user's) to allow public viewing
-        from utils.auth_utils import get_authenticated_user_id
-        current_user_id = get_authenticated_user_id(request)
-        session_owner_id = pm().get_session_user(clean_id)
-        user_id = session_owner_id if session_owner_id else current_user_id
-
-        # Get workspace directory
-        ws_dir = pm().get_workspace_dir(clean_id, user_id=user_id)
-        
-        # Check if directory exists
-        exists = ws_dir.exists()
-        
-        # Get directory stats if it exists
-        stats = {}
-        files = []
-        if exists:
-            try:
-                # List top-level files/dirs
-                top_items = list(ws_dir.iterdir())
-                stats["item_count"] = len(top_items)
-                stats["dirs"] = sum(1 for item in top_items if item.is_dir())
-                stats["files"] = sum(1 for item in top_items if item.is_file())
-                
-                # List top 10 files for debugging
-                for item in sorted(top_items)[:10]:
-                    if item.is_file():
-                        files.append({
-                            "name": item.name,
-                            "size": item.stat().st_size,
-                            "modified": datetime.fromtimestamp(item.stat().st_mtime).isoformat()
-                        })
-                    elif item.is_dir():
-                        # Count items in subdirectory
-                        try:
-                            subdir_items = list(item.iterdir())
-                            files.append({
-                                "name": f"{item.name}/",
-                                "type": "directory",
-                                "item_count": len(subdir_items)
-                            })
-                        except Exception as e:
-                            files.append({
-                                "name": f"{item.name}/",
-                                "type": "directory",
-                                "error": str(e)
-                            })
-            except Exception as e:
-                stats["error"] = str(e)
-        
-        # Get full path
-        full_path = str(ws_dir.resolve())
-        
-        # Check permissions
-        permissions = {}
-        try:
-            permissions["readable"] = os.access(str(ws_dir), os.R_OK)
-            permissions["writable"] = os.access(str(ws_dir), os.W_OK)
-            permissions["executable"] = os.access(str(ws_dir), os.X_OK)
-        except Exception as e:
-            permissions["error"] = str(e)
-            
-        # Return detailed status
-        return JSONResponse({
-            "session_id": clean_id,
-            "workspace_dir": str(ws_dir),
-            "full_path": full_path,
-            "exists": exists,
-            "stats": stats,
-            "permissions": permissions,
-            "files": files
-        })
-    except Exception as e:
-        logger.error(f"Error checking workspace status for {clean_id}: {e}", exc_info=True)
-        return JSONResponse({
-            "session_id": clean_id,
-            "error": str(e)
-        }, status_code=500)
 
 
 def _workspace_target(clean_id: str, user_id, path: str) -> Path:
@@ -1448,38 +1334,8 @@ async def api_workspace_serve(request: Request, path: str, clean_id: str = Depen
 # refreshed nothing; its one caller went with `/api/sessions` in the same audit.
 
 
-@_fastapi.post("/api/repair/{session_id}", response_class=JSONResponse,
-               dependencies=webgate.MUTATION_DEPS)
-async def api_repair(request: Request, clean_id: str = Depends(get_clean_session_id)) -> Response:
-    """Repair a session's telemetry (dedup + token estimation + validation).
-
-    Wired to the REAL ``webview.repair_sessions.repair_session_telemetry``
-    (this endpoint used to return fake success without doing anything).
-
-    A POST since 043 W2. It rewrites the session's feed and llm_usage files, so
-    as a GET it was a mutation any link, prefetch or crawler could trigger — and
-    it sat outside both of this console's rules: the read-only guard passes GETs
-    (a read-only console is still a console) and the CSRF check could not see it
-    either. It now carries ``MUTATION_DEPS`` like every other mutation, on top of
-    session ownership (SECURITY: previously unguarded — any authenticated tenant
-    could mutate another tenant's telemetry).
-    """
-    is_owner, _current, _owner = _check_session_ownership(request, clean_id)
-    if not is_owner:
-        return JSONResponse(
-            {"status": "error", "message": "Forbidden: not the session owner"},
-            status_code=403,
-        )
-    try:
-        from webview.repair_sessions import repair_session_telemetry
-        session_dir = await asyncio.to_thread(pm().find_session_root, clean_id)
-        if session_dir is None:
-            return JSONResponse({"status": "error", "message": "Session not found"}, status_code=404)
-        results = await asyncio.to_thread(repair_session_telemetry, session_dir)
-        return JSONResponse({"status": "ok", "repair": results})
-    except Exception as exc:
-        logger.error("Failed to repair session %s: %s", clean_id, exc, exc_info=True)
-        return JSONResponse({"status": "error", "message": str(exc)}, status_code=500)
+# 2026-11-20: `POST /api/repair/{id}` is DELETED with its one caller, the error
+# page's Repair button, which no error page ever drew (no session id reached it).
 
 
 @_fastapi.get("/api/session/{session_id}/screenshot", response_class=JSONResponse)
@@ -1600,7 +1456,7 @@ async def api_screenshot(request: Request, clean_id: str = Depends(get_clean_ses
         logger.error("Failed to get screenshot for %s: %s", clean_id, exc, exc_info=True)
         return JSONResponse({
             "status": "error", 
-            "message": str(exc),
+            "message": type(exc).__name__,
             "url": "/static/img/favicon.ico",
             "is_placeholder": True
         }, status_code=500)
@@ -1652,7 +1508,7 @@ async def api_screenshot_file(request: Request, clean_id: str = Depends(get_clea
         raise
     except Exception as exc:
         logger.error("Failed to serve screenshot for %s: %s", clean_id, exc, exc_info=True)
-        raise HTTPException(500, f"Error serving screenshot: {str(exc)}")
+        raise HTTPException(500, f"Error serving screenshot ({type(exc).__name__})")
 
 
 # 043 A30: `GET /api/session/{id}/stats` is DELETED with its only caller
@@ -1660,138 +1516,11 @@ async def api_screenshot_file(request: Request, clean_id: str = Depends(get_clea
 # reduced to the cost helper `_enrich_llm_event_with_cost` still uses.
 # 113 W5 (C-14): `GET /api/session/{id}/{agents,services,task,skills}` are DELETED:
 # no console screen called them. The readers stay in agents/task/telemetry.
+# 2026-11-20: `GET /api/session/{id}/{status,feed,workspace/status}` are DELETED
+# for the same reason (the feed is `/feed/events`).
 
 
 # GET /api/session/{session_id}/feed/events lives in webview/feed_routes.py (070 W0.10).
-
-
-@_fastapi.get("/api/session/{session_id}/status", response_class=JSONResponse)
-async def api_session_status(request: Request, session_id: str) -> Response:
-    """Return the status of a session.
-
-    Note: Uses session owner's user_id to allow public viewing of shared sessions.
-    """
-    # Clean the session ID to handle agent prefixes
-    clean_id = _canonical_session_id(session_id)
-    logger.debug(f"API status request for session {session_id} (cleaned: {clean_id})")
-
-    try:
-        # Use session owner's user_id (not requesting user's) to allow public viewing
-        from utils.auth_utils import get_authenticated_user_id
-        current_user_id = get_authenticated_user_id(request)
-        session_owner_id = pm().get_session_user(clean_id)
-        user_id = session_owner_id if session_owner_id else current_user_id
-
-        feed_dir = await asyncio.to_thread(pm().find_feed_dir, clean_id, user_id)
-        session_dir = feed_dir.parent if feed_dir is not None else None
-
-        if feed_dir is None:
-            return JSONResponse(
-                {"status": "unknown", "message": "Session not found"},
-                status_code=404,
-                headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
-            )
-        
-        # Look for a status file
-        status_file = session_dir / "status.json"
-        status = "unknown"
-        created_at = None
-        
-        # First check if we have created time from session directory
-        try:
-            # Try to get creation time from the session directory
-            session_created_time = session_dir.stat().st_mtime
-            created_at = session_created_time
-        except Exception as e:
-            logger.debug(f"Error getting session creation time: {e}")
-        
-        # Check for status.json
-        if status_file.exists():
-            try:
-                with status_file.open("r") as f:
-                    status_data = json.load(f)
-                    status = status_data.get("status", "unknown")
-                    # Use created_at from file if available
-                    if "created_at" in status_data and not created_at:
-                        created_at = status_data["created_at"]
-            except Exception as e:
-                logger.debug(f"Error reading status file: {e}")
-        
-        # If we don't have status yet, check for status in feed events
-        if status == "unknown":
-            # Look for status events in the feed
-            status_files = sorted(feed_dir.glob("status_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-            if status_files:
-                try:
-                    with status_files[0].open("r") as f:
-                        status_event = json.load(f)
-                        if "data" in status_event and "status" in status_event["data"]:
-                            status = status_event["data"]["status"]
-                except Exception as e:
-                    logger.debug(f"Error reading status event: {e}")
-        
-        # If we still don't have creation time, check for the oldest file
-        if not created_at:
-            try:
-                all_files = list(feed_dir.glob("*.json"))
-                if all_files:
-                    oldest_file = min(all_files, key=lambda p: p.stat().st_mtime)
-                    created_at = oldest_file.stat().st_mtime
-            except Exception as e:
-                logger.debug(f"Error getting oldest file: {e}")
-                # Default to current time if we can't determine creation time
-                created_at = time.time()
-        
-        # Determine status based on recent activity if we still don't have a clear status
-        if status == "unknown":
-            # Check if there are any recent files (in the last 5 minutes)
-            now = time.time()
-            recent_activity = False
-            
-            try:
-                for file in feed_dir.glob("*.json"):
-                    file_mtime = file.stat().st_mtime
-                    if now - file_mtime < 300:  # 5 minutes
-                        recent_activity = True
-                        break
-                
-                # If there's recent activity, consider the session running
-                if recent_activity:
-                    status = "running"
-                else:
-                    # Check if there's any completion or error signals
-                    for file in feed_dir.glob("*.json"):
-                        try:
-                            with file.open("r") as f:
-                                entry = json.load(f)
-                                if entry.get("type") == "status":
-                                    data_status = entry.get("data", {}).get("status", "")
-                                    if data_status in ["completed", "finished", "done"]:
-                                        status = "completed"
-                                        break
-                                    elif data_status in ["failed", "error"]:
-                                        status = "failed"
-                                        break
-                        except (json.JSONDecodeError, KeyError, TypeError):
-                            pass  # Expected for non-JSON or malformed telemetry files
-            except Exception as e:
-                logger.debug(f"Error determining status based on activity: {e}")
-                
-        return JSONResponse(
-            {
-                "status": status,
-                "created_at": created_at,
-                "session_id": clean_id
-            },
-            headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
-        )
-    except Exception as exc:
-        logger.error("Failed to get session status for %s: %s", clean_id, exc, exc_info=True)
-        return JSONResponse(
-            {"status": "error", "message": str(exc)},
-            status_code=500,
-            headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
-        )
 
 
 @_fastapi.get("/api/session/{session_id}/debug", response_class=JSONResponse)
@@ -1920,7 +1649,7 @@ async def api_telemetry_health() -> Response:
     except Exception as exc:
         logger.error(f"Failed to get telemetry health: {exc}")
         return JSONResponse(
-            {"status": "error", "message": str(exc)},
+            {"status": "error", "message": type(exc).__name__},
             status_code=500,
             headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
         )
@@ -2006,7 +1735,7 @@ async def _handle_stream_chunk(session_id: str, request: Request) -> Response:
     except Exception as e:
         logger.error(f"Error receiving stream chunk: {e}")
         return JSONResponse(
-            {"success": False, "error": str(e)},
+            {"success": False, "error": type(e).__name__},
             status_code=500
         )
 
@@ -2095,6 +1824,23 @@ async def _maybe_handle_console_command(clean_id: str, user_id: str, text: str):
     return await record_command_reply(agent, clean_id, text, reply)
 
 
+def _upstream_refusal(response) -> Optional[Response]:
+    """A 4xx or 503 from the :9000 API whose body carries a dict ``detail``
+    (``owner_pid`` on a 409, ``code: no_model`` on a 503) reaches the console
+    UNCHANGED, so transcript.js draws the real note; such a 503 is never retried."""
+    if not (400 <= response.status_code < 500 or response.status_code == 503):
+        return None
+    try:
+        body = response.json()
+    except Exception:
+        return None
+    if not isinstance(body, dict) or not isinstance(body.get("detail"), dict):
+        return None
+    retry = response.headers.get("Retry-After")
+    return JSONResponse(body, status_code=response.status_code,
+                        headers={"Retry-After": retry} if retry else None)
+
+
 @_fastapi.post("/api/session/{session_id}/messages",
                response_class=JSONResponse, dependencies=webgate.MUTATION_DEPS)
 async def send_message_to_session(session_id: str, request: Request) -> Response:
@@ -2144,8 +1890,8 @@ async def send_message_to_session(session_id: str, request: Request) -> Response
         # agent unchanged.
         cmd_reply = await _maybe_handle_console_command(clean_id, current_user_id, text)
         if cmd_reply is not None:
-            return JSONResponse({"success": True, "message": "Command handled",
-                                 "command_reply": cmd_reply})
+            from webview.console_commands import command_answer
+            return JSONResponse({"success": True, "message": "Command handled", **command_answer(cmd_reply)})
 
         # WS-3.1: deliver in-process; the :9000 proxy below is the two-service fallback.
         from webview.chat_open import terminal_chat_refusal  # 104 D1
@@ -2196,13 +1942,15 @@ async def send_message_to_session(session_id: str, request: Request) -> Response
                             {"success": False, "error": "Session not found or not active"},
                             status_code=404
                         )
+                    elif (passed := _upstream_refusal(response)) is not None:
+                        return passed
                     elif response.status_code >= 500:
                         # Server error - retry
                         logger.warning(f"Main API error {response.status_code} for session {clean_id}, attempt {attempt+1}/{max_retries}")
                         last_error = f"Server error: {response.status_code}"
                         if attempt < max_retries - 1:
                             await asyncio.sleep(retry_delay * (attempt + 1))
-                            continue
+                        continue  # the last 5xx is NOT "Message sent"
                     elif response.status_code >= 400:
                         # Client error - don't retry
                         logger.error(f"Client error {response.status_code} for session {clean_id}: {response.text}")
@@ -2228,7 +1976,7 @@ async def send_message_to_session(session_id: str, request: Request) -> Response
             except httpx.ConnectError as e:
                 # Connection error - retry
                 logger.error(f"Cannot connect to main API for session {clean_id}, attempt {attempt+1}/{max_retries}: {e}")
-                last_error = f"Connection error: {str(e)}"
+                last_error = "Connection error"
                 if attempt < max_retries - 1:
                     await asyncio.sleep(retry_delay * (attempt + 1))
                     continue
@@ -2255,7 +2003,7 @@ async def send_message_to_session(session_id: str, request: Request) -> Response
     except Exception as e:
         logger.error(f"Unexpected error sending message to session {clean_id}: {e}", exc_info=True)
         return JSONResponse(
-            {"success": False, "error": f"Internal error: {str(e)}"},
+            {"success": False, "error": f"Internal error ({type(e).__name__})"},
             status_code=500
         )
 
@@ -2581,7 +2329,7 @@ async def join_session(sid, data):
         # the whole feed directory, JSON-parse every file and emit it as
         # `initial_feed` (or a run of `initial_feed_chunk`s) — and NOTHING has
         # listened for either event since the 043 console landed. `transcript.js`
-        # backfills over HTTP (`/api/session/{id}/feed`) and then subscribes to
+        # backfills over HTTP (`/api/session/{id}/feed/events`) and then subscribes to
         # `feed_update`, which is the one server→client feed event with a
         # consumer. So the join now does what a join is for: the room, and the
         # watcher that fills it.
@@ -2601,7 +2349,7 @@ async def join_activity(sid, data=None):
     join_session: every posture requires an authenticated identity with
     the instance owner or an administrative role ONLY. On the first watcher the
     ActivityHub lazily starts its feed watcher + DB tails; it stops when the
-    room empties (leave_activity/disconnect).
+    room empties (on disconnect; no client leaves the room any other way).
     """
     try:
         if not join_allowed(sid, lambda: check_rate_limit(limit_key(sid, _sio.get_environ(sid), _socket_user))):
@@ -2643,17 +2391,6 @@ async def join_activity(sid, data=None):
     except Exception as exc:
         logger.error(f"join_activity error: {exc}", exc_info=True)
         await _sio.emit("error", refusal("join_failed"), room=sid)
-
-
-@_sio.event
-async def leave_activity(sid):
-    """Leave the global activity room; stop the hub when it empties."""
-    try:
-        await _sio.leave_room(sid, "activity")
-    except Exception:
-        pass
-    _activity_clients.discard(sid)
-    await _stop_hub_if_activity_empty()
 
 
 def _ensure_watcher(clean_id: str) -> None:

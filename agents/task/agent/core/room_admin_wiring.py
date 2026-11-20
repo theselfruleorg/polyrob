@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 def _files_ok(orchestrator: Any) -> bool:
     """False when the session workspace is a shared project folder."""
-    from agents.task.path import pm
+    from core.session_paths import pm
     return not getattr(pm(), "_workspace_is_project_root", True)
 
 

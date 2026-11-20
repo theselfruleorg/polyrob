@@ -21,7 +21,7 @@ import asyncio
 
 import pytest
 
-from agents.task.goals.board import (
+from modules.goals.board import (
     ASK_FULFILLED, ASK_REJECTED, STATUS_READY, GoalBoard)
 from agents.task.session_route import LOCAL, MISSING, REMOTE, SessionRoute
 from tools.controller.approval_queue import (

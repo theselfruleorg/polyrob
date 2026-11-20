@@ -30,6 +30,7 @@ import hashlib
 import asyncio
 import json
 import logging
+import math
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -60,6 +61,15 @@ USER_REJECTED = 4001
 UNAUTHORIZED = 4100
 UNSUPPORTED_METHOD = 4200
 CHAIN_NOT_ADDED = 4902
+
+
+def _finite_usd(value) -> Optional[float]:
+    """A guard figure as a finite, non-negative float, or None (125 B-M6)."""
+    try:
+        usd = float(value)
+    except (TypeError, ValueError):
+        return None
+    return usd if math.isfinite(usd) and usd >= 0 else None
 
 
 @dataclass
@@ -534,7 +544,7 @@ class WalletBridge:
         if reply is not None:
             return reply
 
-        approved_usd = float(pending.amount_usd or 0.0)
+        approved_usd = float(pending.amount_usd)   # finite: `_attempt` refuses otherwise
         if not await self._await_owner(to, data, pending, value_wei=value_wei):
             return self._refuse(USER_REJECTED, "owner-declined", (
                 f"{pending.reason} — and the owner did not approve it within "
@@ -549,7 +559,7 @@ class WalletBridge:
         # figure is outside what the owner agreed to.
         return self._refuse(USER_REJECTED, "reprice-after-approval", (
             f"the owner approved ${approved_usd:.4f}, but the same transaction "
-            f"now prices at ${float(pending.amount_usd or 0.0):.4f} — that is "
+            f"now prices at ${float(pending.amount_usd):.4f} — that is "
             f"not what he approved. Ask again."))
 
     def _live_context(self):
@@ -662,15 +672,21 @@ class WalletBridge:
                                  forged_fn=_is_forged_or_autonomous_turn,
                                  autonomous_ok_fn=_is_autonomous_goal_turn)
 
+            if not decision.allowed and decision.lane != "owner_queue":
+                return self._refuse(USER_REJECTED, "guard", decision.reason), None
+            # 125 B-M6: an allowed or owner-queue verdict must carry a finite
+            # USD figure. Never book, budget or ask the owner at a made-up $0.
+            priced_usd = _finite_usd(decision.amount_usd)
+            if priced_usd is None:
+                return self._refuse(USER_REJECTED, "guard", (
+                    "refused: the guard returned no USD value for this "
+                    "transaction, so it cannot be budgeted or booked")), None
             if not decision.allowed:
-                if decision.lane != "owner_queue":
-                    return self._refuse(USER_REJECTED, "guard",
-                                        decision.reason), None
                 if owner_approved_usd is None:
                     return None, decision          # go ask, holding nothing
                 # The owner lifted the ceiling — for a PRICE. A re-simulation
                 # that costs materially more is not the transaction he approved.
-                now_usd = float(decision.amount_usd or 0.0)
+                now_usd = priced_usd
                 if now_usd > owner_approved_usd + max(0.01, owner_approved_usd * 0.10):
                     return None, decision
                 logger.info(
@@ -684,7 +700,7 @@ class WalletBridge:
                     return self._refuse(USER_REJECTED, "gas",
                                         f"refused at gas sizing: {exc}"), None
 
-            spent = float(decision.amount_usd or 0.0)
+            spent = priced_usd
             if spent > remaining:
                 return self._refuse(USER_REJECTED, "budget-exhausted", (
                     f"this transaction prices at ${spent:.4f} and only "
@@ -697,6 +713,11 @@ class WalletBridge:
                 return self._refuse(USER_REJECTED, "budget-store", (
                     "dapp budget could not be saved; wallet revoked before signing")), None
             try:
+                if not decision.allowed:
+                    # owner_queue, and the owner's approved price held above: record
+                    # this exact, gas-sized tx as owner-cleared (audit 2026-11-21 L-7).
+                    from core.signer import attest
+                    attest.record_owner_cleared(intent, tx)
                 tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
             except Exception as exc:
                 from core.wallet.broadcast.evm import broadcast_failure_text

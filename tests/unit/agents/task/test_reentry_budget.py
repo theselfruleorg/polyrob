@@ -59,3 +59,70 @@ def test_user_id_is_persisted(store):
     row = execute_retry(store.db_path, "SELECT user_id FROM reentry_budget WHERE session_id='s'",
                         (), fetch="one")
     assert row["user_id"] == "alice"
+
+
+# --- proposal 125 S30 (D9): an unreadable store fails CLOSED ----------------
+
+
+class _RaisingStore:
+    """A store whose every read and write raises (a corrupt or locked db)."""
+
+    def get_budget(self, session_id):
+        raise RuntimeError("db unreadable")
+
+    def consume_budget(self, *a, **k):
+        raise RuntimeError("db unreadable")
+
+    def put_budget(self, *a, **k):
+        raise RuntimeError("db unreadable")
+
+    def delete_budget(self, *a, **k):
+        raise RuntimeError("db unreadable")
+
+
+def test_try_consume_raises_when_store_unreadable():
+    from agents.task.agent.core.self_wake import BudgetStoreUnreadable
+    b = ReentryBudget(3, 0, clock=time.time, store=_RaisingStore())
+    with pytest.raises(BudgetStoreUnreadable) as err:
+        b.try_consume("s", "u")
+    assert "db unreadable" in str(err.value.__cause__)   # the store's own error rides on
+
+
+def test_record_counts_in_memory_when_store_unreadable():
+    b = ReentryBudget(3, 0, clock=time.time, store=_RaisingStore())
+    b.record("s", "u")                                     # never raises
+    assert b._by_session["s"].count == 1
+
+
+def test_allow_false_when_store_unreadable():
+    b = ReentryBudget(3, 0, clock=time.time, store=_RaisingStore())
+    assert b.allow("s") is False
+
+
+def test_remaining_zero_when_store_unreadable():
+    b = ReentryBudget(3, 0, clock=time.time, store=_RaisingStore())
+    assert b.remaining("s") == 0
+
+
+def test_no_store_path_unchanged():
+    b = ReentryBudget(2, 0)
+    assert b.allow("s") is True
+    assert b.try_consume("s") is True
+    assert b.remaining("s") == 1
+
+
+@pytest.mark.asyncio
+async def test_deliver_self_wake_skips_when_budget_unreadable(monkeypatch):
+    import agents.task.agent.core.self_wake as sw
+    import core.autonomy_control as ac
+    import core.event_log as event_log
+    events = []
+    monkeypatch.setattr(event_log, "emit", lambda *a, **k: events.append(k.get("attrs")))
+    monkeypatch.setattr(sw, "get_reentry_budget",
+                        lambda: ReentryBudget(3, 0, clock=time.time, store=_RaisingStore()))
+    monkeypatch.setattr(sw, "effective_self_wake_enabled", lambda *a, **k: True)
+    monkeypatch.setattr(ac, "allows", lambda *a, **k: type("D", (), {"allowed": True})())
+    from agents.task_agent_lite import TaskAgent
+    agent = object.__new__(TaskAgent)
+    assert await agent.deliver_self_wake("sess", "u-1", "wake up") is False
+    assert {"outcome": "skipped", "reason": "budget_unreadable"} in events

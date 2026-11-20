@@ -4,7 +4,7 @@ loading read it. Money tools stay explicit-grant-only."""
 import asyncio
 
 from core import autonomy_marker as am
-from agents.task.goals.board import Goal
+from modules.goals.board import Goal
 from agents.task.goals.dispatcher import GoalDispatcher
 
 from tests.unit.agents.task.goals.test_dispatcher_run_outcome import (
@@ -52,7 +52,7 @@ def test_a_recorded_goal_session_loads_beyond_the_ceiling(monkeypatch):
     from tools.tool_disclosure import disclosure_ceiling
     from types import SimpleNamespace
     monkeypatch.setattr(session_class, "is_autonomous_session", lambda sid: True)
-    monkeypatch.setattr(goal_tools, "allowed_self_goal_tools", lambda: frozenset({"web_fetch"}))
+    monkeypatch.setattr("core.tool_grants.allowed_self_goal_tools", lambda: frozenset({"web_fetch"}))
     am.mark_autonomous("goal-run", "g-o")
     am.note_goal("g-o", "Ship the weekly release")
     am.mark_autonomous("planner-run", None)

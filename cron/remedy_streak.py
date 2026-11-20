@@ -9,7 +9,7 @@ OUTREACH reported the same block on 11 consecutive daily runs (2026-09-18 →
 When the SAME declared need repeats on ``STREAK_THRESHOLD`` consecutive runs of
 one job, this raises ONE owner ask on that rail (A: I will do it · B: retire
 this job). The answer rides the rail's next run
-(``agents/task/goals/rail_answers.py``). A run that is not blocked, or a
+(``modules/goals/rail_answers.py``). A run that is not blocked, or a
 different need, resets the count, and a streak asks at most once. The model's
 free text is never parsed here: only the run outcome's ``blocked_need`` field.
 
@@ -92,20 +92,6 @@ def _ask_closed(board: Any, ask_id: str) -> bool:
     return row is None or getattr(row, "status", "open") != "open"
 
 
-def drop_streaks(db_path: str, *, job_id: Optional[str] = None) -> None:
-    """MO-12: a cancelled/pruned job takes its streak row with it
-    (``job_id=None``: every row whose job is gone). A missing table is a no-op."""
-    import sqlite3
-    try:
-        if job_id is not None:
-            execute_retry(db_path, "DELETE FROM remedy_streak WHERE job_id=?", (job_id,))
-        else:
-            execute_retry(db_path, "DELETE FROM remedy_streak WHERE job_id NOT IN "
-                                   "(SELECT id FROM cron_jobs)")
-    except sqlite3.OperationalError as e:
-        if "no such table" not in str(e).lower():
-            raise
-
 
 def _question(job: Any, remedy: str, count: int) -> str:
     name = " ".join(str(getattr(job, "task", "") or "").split())[:60] or str(job.id)
@@ -132,7 +118,7 @@ def observe(job: Any, blocked_need: Optional[str], *, data_dir: str,
         ask_id = prev.get("ask_id") if same else None
         asked_at = (prev or {}).get("asked_at")
         if board is None and (ask_id or count >= STREAK_THRESHOLD):
-            from agents.task.goals.board import GoalBoard
+            from modules.goals.board import GoalBoard
             board = GoalBoard(goals_db_path(data_dir))
         if ask_id and _ask_closed(board, ask_id):
             # MO-12: the ask was answered, expired or dismissed and the need is

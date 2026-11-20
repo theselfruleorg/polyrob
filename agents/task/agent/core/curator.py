@@ -573,7 +573,7 @@ class CuratorTicker:
         if not self.curator.should_run():
             return
         if self.lock_path:
-            from cron.scheduler import TickLock
+            from core.file_lock import TickLock
             lock = TickLock(self.lock_path)
             if not lock.acquire():
                 return  # another worker holds the tick this cycle; skip

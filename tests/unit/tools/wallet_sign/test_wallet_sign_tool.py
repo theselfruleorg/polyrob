@@ -299,7 +299,7 @@ def test_the_real_fetch_never_follows_a_redirect(monkeypatch):
     async def fake_safe_fetch(url, **kw):
         seen.update(kw)
         return SimpleNamespace(status=200, body=b"{}")
-    import tools.web_fetch.fetcher as fetcher
+    import core.security.safe_fetch as fetcher
     monkeypatch.setattr(fetcher, "safe_fetch", fake_safe_fetch)
     t = WalletSignTool(wallet=_Wallet(), store=object())
     _run(t._post("https://mob.example/x", None, method="GET", headers={"Authorization": "k"}))

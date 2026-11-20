@@ -7,7 +7,7 @@ from cron.jobs import CronJobStore
 from cron.service import CronService
 from tools.cronjob_tools import (CronEditAction, CronJobTool, CronScheduleAction,
                                  resolve_cron_tools)
-from tools.goal_tools import _SELF_GOAL_BASELINE_TOOLS
+from core.tool_grants import SELF_GOAL_BASELINE_TOOLS as _SELF_GOAL_BASELINE_TOOLS
 
 
 def _tool(tmp_path):

@@ -87,7 +87,7 @@ class _FakeAgent:
 
 @pytest.mark.asyncio
 async def test_reclaim_stale_called_even_when_goals_disabled(tmp_path, monkeypatch):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from agents.task.goals.dispatcher import GoalDispatcher
 
     monkeypatch.setenv("GOALS_ENABLED", "false")

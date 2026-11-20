@@ -56,6 +56,13 @@ class AccountRpc:
             raise RuntimeError("rpc down")
         if method == "eth_call":
             self.calls.append(params[0]["data"][:10])
+        # 124 D1: an NFT leaving an account also scans the approvals of its own account.
+        if method == "eth_blockNumber":
+            return hex(0x100)
+        if method == "eth_getLogs":
+            return []
+        if method == "eth_getBalance":
+            return "0x0"
         if method == "eth_getCode":
             addr = params[0].lower()
             if addr in (ACCOUNT.lower(), ACCOUNT_RH.lower()):
@@ -74,6 +81,7 @@ class AccountRpc:
                 self.forwarder_reads.append((params[0]["to"].lower(), who))
                 return word(int(who in self.forwarders))
             return {
+                abi.selector("accountImplementation()"): word(0),
                 abi.selector("isLocked()"): word(int(self.locked)),
                 abi.selector("owner()"): word(int(self.owner, 16)),
                 abi.selector("state()"): word(self.state),
@@ -234,8 +242,9 @@ def test_an_undeclared_account_call_refuses(data):
     (AccountRpc(impl="0x" + "99" * 20), "not an account implementation pinned"),
     (AccountRpc(pins_ok=False), "un-reviewed"),
     (AccountRpc(broken=True), "failing closed"),
-    # C4: the account's token() must name a PINNED collection whose live code is the pinned code
-    (AccountRpc(token=(BASE_ID, NFT, TOKEN_ID)), "is not a pinned collection"),
+    # C4: a pinned collection's live code is its pinned code; any other collection must read as
+    # a reviewed account kind (124 W4) — this fake answers no ERC-165, so it is read-only
+    (AccountRpc(token=(BASE_ID, NFT, TOKEN_ID)), "reviewed account kind"),
     (AccountRpc(collection_code="0x01"), "not the pinned"),
     (AccountRpc(collection_code="0x"), "could not be read"),
     (AccountRpc(token=(RH_ID, COLLECTION, TOKEN_ID)), "bound to a token on chain 4663"),
@@ -246,19 +255,34 @@ def test_preflight_refusals(rpc, needle):
     assert d.allowed is False and needle in d.reason, d.reason
 
 
-def test_c4_an_empty_registry_refuses_every_account(monkeypatch):
-    """The signer re-runs this guard: with no pinned collection, no account call passes."""
+def test_c4_no_pin_reads_the_collection_and_refuses_what_it_cannot_prove(monkeypatch):
+    """The signer re-runs this guard: with no pin, the collection is read from the chain; a
+    collection the chain does not prove a reviewed kind for is read-only."""
     monkeypatch.setattr(collection_registry, "profiles", lambda: ())
     d = _run(_via(_erc20_intent()), _erc20_deltas(), _outer(_erc20_inner()), holder=TREASURY)
-    assert d.allowed is False and "is not a pinned collection" in d.reason
+    assert d.allowed is False and "reviewed account kind" in d.reason, d.reason
 
 
-def test_c4_an_untrusted_registry_refuses(monkeypatch):
+def test_c4_an_unreadable_registry_is_no_pin(monkeypatch):
     def boom():
         raise collection_registry.CollectionRegistryError("the file is writable")
     monkeypatch.setattr(collection_registry, "profiles", boom)
     d = _run(_via(_erc20_intent()), _erc20_deltas(), _outer(_erc20_inner()), holder=TREASURY)
-    assert d.allowed is False and "cannot be trusted" in d.reason
+    assert d.allowed is False and "reviewed account kind" in d.reason, d.reason
+
+
+def test_an_act_through_an_unpinned_collections_account_is_the_owners_card(monkeypatch):
+    """124 section 5.1: a reviewed kind (Tokenbound v3) on an unpinned collection — the act
+    goes to the owner's card; the owner's own turn runs it."""
+    import dataclasses
+    monkeypatch.setattr(collection_registry, "profiles", lambda: ())
+    monkeypatch.setattr(collection_registry, "chain_profile",
+                        lambda chain, address, rpc=None: dataclasses.replace(_profile(), pinned=False))
+    d = _run(_via(_erc20_intent()), _erc20_deltas(), _outer(_erc20_inner()), holder=TREASURY)
+    assert d.allowed is False and d.lane == "owner_queue" and "UNPINNED" in d.reason, d.reason
+    monkeypatch.setattr(tx_guard, "owner_authority", lambda *a, **k: (True, False))
+    d = _run(_via(_erc20_intent()), _erc20_deltas(), _outer(_erc20_inner()), holder=TREASURY)
+    assert d.allowed is True and "is not pinned" in d.reason, d.reason      # a note, not a card
 
 
 def test_the_treasury_owns_the_nft_and_needs_no_grant():
@@ -654,3 +678,34 @@ def test_wl10_the_forwarder_read_covers_every_leg_of_a_batch():
     trusted = AccountRpc(forwarders=(USDC,))
     d = _run(_batch_intent(), _batch_deltas(), _batch_tx(_good_legs()), holder=TREASURY, rpc=trusted)
     assert d.allowed is False and "ERC-2771 forwarder" in d.reason and USDC.lower() in d.reason
+
+
+# --- 124 N2: the sweep of a nested NFT from the account to the treasury -------------------------
+
+def _sweep_case(dest=TREASURY):
+    word = lambda a: "0x" + "0" * 24 + a[2:].lower()  # noqa: E731
+    intent = _via(tx_guard.TxIntent(chain="base", token=None, to=TREASURY, amount_raw=0,
+                                    max_spend_usd=5.0, idempotency_key="sw", is_nft_op=True,
+                                    nft_out=((NFT, "erc721", 7, 1),)))
+    inner = {"to": NFT, "value": 0, "data": abi.encode_call(
+        "safeTransferFrom", [{"type": "address"}, {"type": "address"}, {"type": "uint256"}],
+        [ACCOUNT, dest, 7])}
+    deltas = Deltas(ok=True, native_delta=0, gas_used=90_000,
+                    holder_nft_out=((NFT.lower(), "erc721", dest.lower(), 7, 1),),
+                    sender_moved=(NFT.lower(),),
+                    logs=({"address": NFT, "topics": [
+                        "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+                        word(ACCOUNT), word(dest), "0x" + f"{7:064x}"], "data": "0x"},))
+    return intent, deltas, _outer(inner)
+
+
+def test_a_sweep_of_a_nested_nft_to_the_treasury_passes_the_guard():
+    intent, deltas, tx = _sweep_case()
+    d = _run(intent, deltas, tx, holder=TREASURY, rpc=AccountRpc())
+    assert d.allowed is True, d.reason
+
+
+def test_a_sweep_to_anyone_else_is_no_sweep():
+    intent, deltas, tx = _sweep_case(dest="0x" + "77" * 20)
+    d = _run(intent, deltas, tx, holder=TREASURY, rpc=AccountRpc())
+    assert d.allowed is False, d.reason

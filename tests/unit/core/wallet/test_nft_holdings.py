@@ -5,7 +5,7 @@ import asyncio
 
 import pytest
 
-from core.wallet import abi, erc6551, nft_holdings
+from core.wallet import abi, erc6551, holdings_state, nft_holdings
 from core.wallet.nft_account import NftAccountError
 from tests.collection_pins import CODE, pin, profile
 
@@ -66,7 +66,7 @@ def _scan(rpc, state):
 def test_an_arrival_is_found_by_its_transfer_and_confirmed_by_owner_of(chain):
     chain.transfers = [(0x50, 3, TREASURY), (0x60, 5, TREASURY)]
     chain.owners = {3: TREASURY, 5: STRANGER}          # 5 came and went again
-    state = nft_holdings.load_state(nft_holdings.state_path())
+    state = holdings_state.load_state(holdings_state.state_path())
     res = _scan(chain, state)
     assert [r["token_id"] for r in res.arrived] == [3] and res.lost == []
     row = res.arrived[0]
@@ -83,7 +83,7 @@ def test_an_arrival_is_found_by_its_transfer_and_confirmed_by_owner_of(chain):
 def test_a_loss_is_reported_once_and_dropped(chain):
     chain.transfers = [(0x50, 3, TREASURY)]
     chain.owners = {3: TREASURY}
-    state = nft_holdings.load_state(nft_holdings.state_path())
+    state = holdings_state.load_state(holdings_state.state_path())
     _scan(chain, state)
     chain.owners = {3: STRANGER}
     res = _scan(chain, state)
@@ -96,7 +96,7 @@ def test_a_loss_is_reported_once_and_dropped(chain):
 def test_an_unreadable_owner_is_unknown_not_lost(chain):
     chain.transfers = [(0x50, 3, TREASURY)]
     chain.owners = {3: TREASURY}
-    state = nft_holdings.load_state(nft_holdings.state_path())
+    state = holdings_state.load_state(holdings_state.state_path())
     _scan(chain, state)
     chain.broken_owner = {3}
     chain.head = 0x200
@@ -137,7 +137,7 @@ def test_tick_tells_the_owner_once_per_change(chain):
 
 
 def test_an_unreadable_state_file_is_not_rebuilt(chain):
-    path = nft_holdings.state_path()
+    path = holdings_state.state_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("{not json", encoding="utf-8")
     told = []
@@ -233,7 +233,7 @@ def test_c8_the_owner_is_told_once_when_the_watch_is_blind_and_once_when_it_reco
 
 
 def test_c8_an_unreadable_state_counts_as_a_failed_pass(chain):
-    path = nft_holdings.state_path()
+    path = holdings_state.state_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("{not json", encoding="utf-8")
     told = []

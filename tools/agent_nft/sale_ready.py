@@ -34,7 +34,8 @@ class SaleActError(RuntimeError):
 
 def _kind_of(held):
     from core.wallet import collection_registry
-    profile = collection_registry.profile_for(held.chain_id, held.collection)
+    from core.wallet.nft_account import profile_of
+    profile = profile_of(held)
     version = profile.version_for_account(held.token_id, held.account) if profile else None
     if version is None or not version.kind.sale_ready_view:
         label = version.kind.label if version is not None else "an unknown account kind"
@@ -139,8 +140,14 @@ def pinned_market(chain: str, requested: Optional[str] = None):
         r = requested.lower()
         hit = next((p for p in profiles if r in (p.address, p.erc6551p.market)), None)
         if hit is None:
-            raise SaleActError(f"{requested} is not a pinned collection (or its market) with a "
-                               f"pinned market on {chain}")
+            # 124 W4: any ERC-6551P collection — its MARKET() read from the chain; the act is
+            # the owner's card in the guard (an unpinned market).
+            try:
+                hit = registry.chain_profile(chain, r)
+            except Exception as exc:  # noqa: BLE001
+                raise SaleActError(f"{requested} on {chain}: {exc}") from exc
+            if hit.erc6551p is None:
+                raise SaleActError(f"{requested} names no market (MARKET()) on {chain}")
         return hit
     if not profiles:
         raise SaleActError(f"no collection with a pinned market is on {chain} (the profile's "

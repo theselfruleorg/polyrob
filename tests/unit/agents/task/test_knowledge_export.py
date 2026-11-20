@@ -121,3 +121,46 @@ def test_export_respects_since(tmp_path, provider):
         str(out), user_id=USER, data_dir=str(tmp_path), provider=provider,
         since_ts=int(time.time()) - 7 * 86400))
     assert manifest["episodes"] == 1  # the old one is outside the window
+
+
+# --- 125 S16 (B-H10): a section that cannot be read is "unreadable", never 0 ----
+
+def test_an_unreadable_goal_board_is_named_not_zero(tmp_path, monkeypatch):
+    import modules.goals.board as board_mod
+    (tmp_path / "goals.db").write_text("")  # exists, so the reader is constructed
+
+    class _Broken:
+        def __init__(self, *a, **k):
+            raise RuntimeError("disk I/O error")
+    monkeypatch.setattr(board_mod, "GoalBoard", _Broken)
+    monkeypatch.setattr("agents.task.knowledge_export.goals_db_path",
+                        lambda d: str(tmp_path / "goals.db"))
+    out = tmp_path / "vault"
+    manifest = asyncio.run(build_vault(str(out), user_id=USER, data_dir=str(tmp_path)))
+    assert manifest["goals"] == "unreadable"
+    assert "goals: unreadable" in (out / "index.md").read_text()
+
+
+def test_unreadable_skills_are_named_not_zero(tmp_path, monkeypatch):
+    import agents.task.agent.skill_manager as sm_mod
+
+    def _broken():
+        raise RuntimeError("catalog unreadable")
+    monkeypatch.setattr(sm_mod, "get_skill_manager", _broken)
+    out = tmp_path / "vault"
+    manifest = asyncio.run(build_vault(str(out), user_id=USER, data_dir=str(tmp_path)))
+    assert manifest["skills"] == "unreadable"
+    assert "skills: unreadable" in (out / "index.md").read_text()
+
+
+def test_a_missing_goal_board_is_zero_and_creates_nothing(tmp_path, monkeypatch):
+    import modules.goals.board as board_mod
+    built = []
+    monkeypatch.setattr(board_mod, "GoalBoard", lambda *a, **k: built.append(a))
+    monkeypatch.setattr("agents.task.knowledge_export.goals_db_path",
+                        lambda d: str(tmp_path / "nope" / "goals.db"))
+    manifest = asyncio.run(build_vault(str(tmp_path / "vault"), user_id=USER,
+                                       data_dir=str(tmp_path)))
+    assert manifest["goals"] == 0
+    assert built == []
+    assert not (tmp_path / "nope").exists()

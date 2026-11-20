@@ -13,7 +13,10 @@ async def test_in_flight_key_released_when_cancelled_before_start(monkeypatch):
     br.schedule_review_after_run(object(), user_id="u1", rail_id="cron:j", regime="x")
     assert "u1" in br._REVIEWS_IN_FLIGHT
     from core.async_bridge import _RETAINED
-    for t in list(_RETAINED):
+    loop = asyncio.get_running_loop()
+    # Only this test's task: another test's task left on its own (closed) loop
+    # raises on cancel(), which made this test fail by order in the full suite.
+    for t in [t for t in list(_RETAINED) if t.get_loop() is loop and not t.done()]:
         t.cancel()                        # e.g. the runtime stops before the task runs
     await asyncio.sleep(0)
     await asyncio.sleep(0)

@@ -150,7 +150,7 @@ async def get_shell_backend(session_id: str):
             # a blanket BROWSER_ALLOW_PRIVATE_URLS opening. Fail-open (no publish → no
             # allow); never block backend resolution on this.
             try:
-                from tools.shell.loopback_allow import allow_loopback_ports
+                from core.security.loopback_allow import allow_loopback_ports
                 published = await backend.published_ports()
                 if published:
                     allow_loopback_ports(published.values())
@@ -229,7 +229,7 @@ async def _teardown_locked(sid: str) -> None:
         try:
             published = await backend.published_ports()
             if published:
-                from tools.shell.loopback_allow import revoke_loopback_ports
+                from core.security.loopback_allow import revoke_loopback_ports
                 revoke_loopback_ports(published.values())
         except Exception:
             pass
@@ -280,7 +280,7 @@ def _host_executor(execution_context):
     if ex is not None:
         return ex
     from pathlib import Path
-    from agents.task.path import pm
+    from core.session_paths import pm
     from tools.shell.host_executor import HostShellExecutor
     uid = getattr(execution_context, "user_id", None)
     workspace = getattr(execution_context, "workspace_dir", None)
@@ -309,7 +309,7 @@ def host_selected(execution_context) -> bool:
 
 
 def _session_dir(execution_context, sid: str) -> str:
-    from agents.task.path import pm
+    from core.session_paths import pm
     return str(pm().get_logs_dir(sid, getattr(execution_context, "user_id", None)))
 
 
@@ -317,7 +317,7 @@ def _workspace_dir(execution_context, sid: str) -> str:
     workspace = getattr(execution_context, "workspace_dir", None)
     if workspace:
         return str(workspace)
-    from agents.task.path import pm
+    from core.session_paths import pm
     return str(pm().get_workspace_dir(sid, getattr(execution_context, "user_id", None)))
 
 

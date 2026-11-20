@@ -3,8 +3,8 @@ import json
 
 import pytest
 
-from agents.task.goals.board import GoalBoard
-from agents.task.goals.payload_keys import append_capped
+from modules.goals.board import GoalBoard
+from modules.goals.payload_keys import append_capped
 from core.goal_vocab import ASK_FULFILLED, ASK_OPEN
 from core.sqlite_util import execute_retry
 
@@ -67,7 +67,7 @@ def test_attempt_ledger_append_is_atomic(board):
 
 def test_attempt_append_retries_when_the_key_moved(board, monkeypatch):
     g = board.create(user_id="u", title="work")
-    import agents.task.goals.payload_keys as pk
+    import modules.goals.payload_keys as pk
     real = pk.execute_retry
     state = {"raced": False}
 

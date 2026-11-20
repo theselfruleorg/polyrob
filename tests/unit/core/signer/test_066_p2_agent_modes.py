@@ -1,6 +1,7 @@
 """066 P2 — the agent side: ``WALLET_SIGNER`` = local | shadow | remote.
 
-* local  — nothing changes (no attestation, the plain AgentWallet).
+* local  — the plain AgentWallet; ``tx_guard`` still records the attestation the
+  rail requires (125 S3).
 * shadow — the local key signs as today; the signer's verdict is logged; a
   disagreement or a dead signer NEVER blocks.
 * remote — no key material in the agent process; every EVM send goes
@@ -45,11 +46,12 @@ class _RailNoRpc:
 
 # -- local: zero change ------------------------------------------------------------
 
-def test_local_mode_records_no_attestation(signer_home):
+def test_local_mode_records_the_attestation(signer_home):
+    """125 S3 (D3): the rail signs only a recorded authorization, in every mode."""
     from core.signer import attest
     tx = native_tx()
     assert _authorize(native_intent(), tx, _gate()).allowed
-    assert attest.peek(tx) is None
+    assert attest.peek(tx) is not None
 
 
 def test_local_mode_builds_the_plain_wallet(signer_home, monkeypatch):

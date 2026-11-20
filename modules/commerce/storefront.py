@@ -6,7 +6,8 @@ answered by code from the confirmed manifests and the order rows:
 * ``/offers`` (or Telegram's ``/start``) — the catalog of live offers listed on
   this surface;
 * ``/buy <offer> field=value …`` — an order and its exact payment request;
-* ``/order <id> [cancel | dispute <reason>]`` — the buyer's own order only.
+* ``/order <id> [cancel | accept | dispute <reason>]`` — the buyer's own order only
+  (``modules.commerce.service.buyer_act``, the one buyer act HTTP uses too).
 
 Rules:
 
@@ -153,18 +154,10 @@ async def _order(surface: str, buyer: str, words: List[str], container=None,
     if o is None or o.channel != surface or o.buyer != buyer:
         return "No such order of yours."
     act = words[1].lower() if len(words) > 1 else ""
-    if act == "cancel":
-        from modules.commerce.service import cancel_order
-        return (await cancel_order(o, db=db))[1]
-    if act == "dispute":
-        reason = " ".join(words[2:]).strip()[:400] or "(no reason given)"
-        if not ords.dispute(o.id, reason):
-            return f"Order {o.id} is {o.status}; only a delivered order can be disputed."
-        from modules.commerce.service import owner_notice
-        await owner_notice(container, o.user_id,
-                           f"⚠️ Order {o.id} DISPUTED by the buyer: {reason}\n"
-                           f"Resolve: /offer resolve {o.id} accept|refund")
-        return f"Order {o.id} is disputed; the owner has been told."
+    from modules.commerce.service import BUYER_ACTS, buyer_act
+    if act in BUYER_ACTS:
+        return (await buyer_act(o, act, reason=" ".join(words[2:]), container=container,
+                                db=db))[1]
     st = public_status(o)
     lines = [f"Order {o.id}: {st['status']}", f"Offer: {o.offer_id}"]
     if o.amount_usd:

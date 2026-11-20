@@ -130,7 +130,7 @@ STATUS_ALLOW = {
     # state NOT IN ('booked', 'rejected')
     'core/wallet/submission_journal.py::submissions': 2,
     # false positive: f"WHERE {where}" and `where` holds status='scheduled'
-    'cron/jobs.py::cron_jobs': 1,
+    'core/cron_store.py::cron_jobs': 1,
     # false positive x3: WHERE … COALESCE(status, 'active') IN (…) / = 'active'
     'modules/memory/sqlite_curated_store.py::curated_memory': 3,
 }

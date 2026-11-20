@@ -23,7 +23,7 @@ _WORDS = ("alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf",
 
 
 def _seed(home, n, *, user_id="u1"):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     board = GoalBoard(str(home / "goals.db"))
     for i in range(n):
         board.create(title=_WORDS[i], user_id=user_id, priority=1 if i else 5)

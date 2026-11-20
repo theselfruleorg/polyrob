@@ -21,7 +21,7 @@ def test_send_telemetry_calls_capture_without_user_id(monkeypatch):
         def clean_session_id(self, s):
             return s
 
-    monkeypatch.setattr("agents.task.path.pm", lambda: _FakePM())
+    monkeypatch.setattr("core.session_paths.pm", lambda: _FakePM())
     monkeypatch.setenv("ANONYMIZED_TELEMETRY", "true")
 
     ok = utils.send_telemetry(types.SimpleNamespace(name="x"), session_id="s1", user_id="u1")

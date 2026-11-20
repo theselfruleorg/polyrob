@@ -11,7 +11,7 @@
           "type": "boolean"
         },
         "chain": {
-          "description": "Chain to manage the Uniswap v3 position on — CHOOSE IT DELIBERATELY, because the same address is a different token on a different chain. Chains that can move value: ethereum, base, robinhood, arbitrum, polygon. Gas differs by orders of magnitude, so a cent-scale trade can cost more in gas on ethereum than it is worth, while base is a fraction of a cent. Per-chain guidance: the `chain` parameter of defi_trade.swap.",
+          "description": "Chain to manage the Uniswap v3 position on — CHOOSE IT DELIBERATELY, because the same address is a different token on a different chain. Chains that can move value: ethereum, base, robinhood, arbitrum, polygon. Gas and per-chain guidance: the `chain` parameter of defi_trade.swap.",
           "type": "string"
         },
         "dry_run": {
@@ -48,6 +48,12 @@
           "description": "Your position NFT id.",
           "minimum": 0,
           "type": "integer"
+        },
+        "why": {
+          "default": null,
+          "description": "Why this act, now (one line). Required on an autonomous run; the owner reads it.",
+          "nullable": true,
+          "type": "string"
         }
       },
       "required": [

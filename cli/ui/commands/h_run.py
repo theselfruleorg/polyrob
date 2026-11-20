@@ -8,7 +8,7 @@ from __future__ import annotations
 
 async def h_run(ctx) -> None:
     """`/run [pause|resume|stop <n>]` — one background run."""
-    from agents.task.path import pm
+    from core.session_paths import pm
     from cli.ui.commands.h_owner import _admin_data_dir, _tenant
     from core.run_control import run_reply
     ctx.emit(await run_reply(_tenant(ctx), _admin_data_dir(write=False), str(pm().data_root),

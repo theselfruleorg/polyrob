@@ -51,7 +51,7 @@ def _resolve_session_workspace(session_id: Optional[str], user_id: Optional[str]
     if not session_id:
         return None
     try:
-        from agents.task.path import pm
+        from core.session_paths import pm
         return str(pm().get_workspace_dir(session_id, user_id))
     except Exception:
         return None
@@ -273,7 +273,7 @@ async def perform_message_action(*, action="send", text="", media_paths=None,
 
 async def perform_message_send(*, router, allowlist, owner_targets, user_id,
                                surface, target, text, action="send", reply_to=None,
-                               message_id=None, media_paths=None, session_id=None,
+                               thread_id=None, message_id=None, media_paths=None, session_id=None,
                                container=None, execution_context=None,
                                controller=None) -> dict:
     from core.surfaces.outbound_policy import resolve_outbound_daily_cap, resolve_outbound_policy
@@ -462,7 +462,7 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
         # module never imports modules.*, layering ratchet). Rejects loudly so
         # the agent can react (vs the completion producer's listed-not-attached).
         try:
-            from modules.memory.task.threat_scan import is_suspicious as _scanner
+            from core.security.threat_scan import is_suspicious as _scanner
         except ImportError:
             _scanner = None
         for real in validated:
@@ -487,17 +487,33 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
             note = (f"surface {surface} does not support media; sent text only "
                     "— media not delivered")
 
+    # 110 W3: where on the chat the send lands. Only built when asked for, so a
+    # plain send calls the router exactly as before.
+    route_kw = {}
+    if reply_to or thread_id:
+        from core.surfaces.envelopes import ReplyTarget
+        if surface == "telegram" and thread_id and not str(thread_id).strip().isdigit():
+            return {"success": False, "tier": tier, "surface": surface, "target": target,
+                    "error": "reply target rejected: a Telegram thread_id is the topic's "
+                             "numeric message_thread_id"}
+        try:
+            route_kw["target"] = ReplyTarget(surface_id=surface, chat_id=str(send_target),
+                                             thread_id=thread_id, reply_to=reply_to)
+        except ValueError as e:
+            return {"success": False, "tier": tier, "surface": surface, "target": target,
+                    "error": f"reply target rejected: {e}"}
+
     receipt = None
     try:
         # 0008: the receipt carries the surface's message ids + the post-ledger
         # row. Looked up on the CLASS so a Mock/duck router keeps the bool shim.
         if callable(getattr(type(router), "send_message_receipt", None)):
             receipt = await router.send_message_receipt(
-                send_target, text, surface_id=surface, media=media)
+                send_target, text, surface_id=surface, media=media, **route_kw)
             ok = receipt.status != "failed"
         else:
             ok = await router.send_message(chat_id=send_target, text=text,
-                                           surface_id=surface, media=media)
+                                           surface_id=surface, media=media, **route_kw)
     except Exception as e:  # fail-open: never crash the loop on a send fault
         logger.error("message send failed: %s", e, exc_info=True)
         return {"success": False, "tier": tier, "surface": surface, "target": target, "error": str(e)}

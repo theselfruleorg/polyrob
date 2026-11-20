@@ -7,7 +7,7 @@ server. Everything else (other loopback ports, RFC1918, cloud metadata) stays bl
 """
 import pytest
 
-from tools.shell.loopback_allow import allow_loopback_ports, clear_loopback_ports
+from core.security.loopback_allow import allow_loopback_ports, clear_loopback_ports
 
 
 @pytest.fixture(autouse=True)

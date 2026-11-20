@@ -24,7 +24,7 @@
  * The POST itself is `http.js` — see it for what `webgate.csrf_guard` actually
  * checks, which is a same-origin `Origin` header and NOT a token.
  */
-import { detailText, postJson } from './http.js';
+import { detailText, getJson, postJson } from './http.js';
 
 /** The route for one decision. Both segments are encoded: an id can carry a
  *  colon (`telegram:12345`) or a slash. */
@@ -116,9 +116,8 @@ export function reviewUrl(kind, id) {
  */
 export async function readReview(kind, id, { fetcher, fallback } = {}) {
   try {
-    const res = await (fetcher || fetch)(reviewUrl(kind, id),
-                                         { credentials: 'same-origin' });
-    const body = await res.json();
+    const { body } = await getJson(reviewUrl(kind, id), { fetcher });
+    if (!body) return { ok: false, body: fallback || '' };  // not JSON: never a blank review
     return { ok: Boolean(body && body.ok), body: String((body && body.body) || '') };
   } catch (err) {
     console.error('[inbox] the review did not reach the console', err);

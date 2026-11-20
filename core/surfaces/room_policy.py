@@ -201,7 +201,7 @@ def is_room_denied_call(action_name: Optional[str], tool_id: Optional[str]) -> b
     # which is exactly the case this second line of defence exists for).
     if _is_money_call(name, tool_id):
         return True
-    from agents.task.agent.core.correspondent_gate import is_high_impact_call
+    from core.security.high_impact import is_high_impact_call
     if is_high_impact_call(name, tool_id):
         # web_fetch is high-impact by capability table but is the room's read tool.
         return not (tool_id == "web_fetch" or name.startswith("web_fetch"))

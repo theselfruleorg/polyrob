@@ -205,7 +205,7 @@ def test_a_failed_dump_leaves_the_old_history_readable(tmp_path, monkeypatch):
         def create_file_path(self, **kw):
             return target
 
-    monkeypatch.setattr("agents.task.path.pm", lambda: _PM())
+    monkeypatch.setattr("core.session_paths.pm", lambda: _PM())
     monkeypatch.setattr("agents.task.agent.messages.foundation_replay.capture_foundation",
                         lambda host: {})
     from agents.task.agent.message_manager.views import MessageHistory

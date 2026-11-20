@@ -44,7 +44,7 @@ def test_nothing_to_keep_writes_nothing(clean_id, reply):
 
 
 def test_a_console_seat_is_not_a_chat(monkeypatch):
-    import agents.task.path as pth
+    import core.session_paths as pth
     monkeypatch.setattr(pth, "is_reserved_session_id", lambda sid: True)
     m = _Manager()
     asyncio.run(record_command_reply(_Agent(m), "money", "/book", "Book."))

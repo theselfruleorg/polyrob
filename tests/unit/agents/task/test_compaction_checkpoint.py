@@ -47,7 +47,7 @@ def test_checkpoint_write_is_atomic(tmp_path, monkeypatch):
 
 
 def test_child_checkpoint_dir_is_a_subdir(tmp_path, monkeypatch):
-    import agents.task.path as path_mod
+    import core.session_paths as path_mod
     monkeypatch.setattr(path_mod, "pm", lambda: SimpleNamespace(get_history_dir=lambda sid: tmp_path))
     d = compactor.child_checkpoint_dir("sess", "sub_agent/1")
     assert d == os.path.join(str(tmp_path), "sub_agent_1")

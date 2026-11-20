@@ -35,14 +35,28 @@ Four honest-state rules this endpoint keeps:
 
 ``class`` filters to one member of :data:`core.activity_class.CLIENT_CLASSES`;
 an unknown value is ignored (the whole list), never a 400 on a read.
+
+Two more things each row carries, both read from the event's OWN record:
+
+- **Owner words.** A kind the owner would read as a machine name
+  (``console_goal_verb``, ``cron_cancelled``, ``owner_command``,
+  ``goal_status_paused``) gets one sentence from the copy layer
+  (``work.log.kind.<kind>``, :func:`owner_words`); a job is named by its name,
+  never its id. A kind with no words keeps the stream's summary.
+- **The act's reason** (proposal 122 W1). An ``external_write`` act record
+  carries the ``why`` the agent bound for it (``core.act_reason``) — the same
+  field ``core.act_report`` reports. It rides as ``why`` on the rows that have
+  one; a row with none has no ``why`` key (no invented reason).
 """
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from core.activity_class import CLIENT_CLASSES, classify, is_diagnostic
+from core.event_kinds import EXTERNAL_WRITE, OWNER_COMMAND
+from webview.copy import has, t
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +88,110 @@ def _recent_events(limit: int) -> List[Dict[str, Any]]:
         merged[key] = event  # the live copy wins over the cold one
     events = sorted(merged.values(), key=lambda ev: ev.get("ts") or 0.0)
     return events[-limit:]
+
+
+#: The job kinds whose words name a job (they carry ``job_id``).
+_JOB_KINDS = frozenset({
+    "console_cron_cancel", "console_cron_create", "console_cron_verb",
+    "cron_scheduled", "cron_cancelled", "cron_edited", "cron_paused",
+    "cron_resumed", "cron_run_now",
+})
+#: A job verb's button, in the words the Scheduled jobs tab shows on it.
+_CRON_BUTTONS = {"pause": "work.schedule.pause", "resume": "work.schedule.resume",
+                 "run": "work.schedule.run", "cancel": "work.schedule.cancel"}
+#: A goal verb's button, in the words Work › Goals shows on it.
+_GOAL_BUTTONS = {"pause": "work.now.pause", "resume": "work.now.resume",
+                 "retry": "work.now.retry", "stop": "work.now.stop",
+                 "drop": "work.now.drop"}
+_GOAL_STATUS_PREFIX = "goal_status_"
+
+
+def _quoted(text: str) -> str:
+    return f"“{text}”"
+
+
+def _job_names(user_id: str) -> Dict[str, str]:
+    """``job_id -> name`` for the caller's jobs, by the scheduler's own name rule
+    (``cron.scheduler._job_name``: the payload name, else the task). ``{}`` when
+    the store cannot be read: a row then says "a scheduled job", never the id."""
+    try:
+        from core.runtime_paths import cron_db_path
+        from cron.jobs import CronJobStore
+        from cron.scheduler import _job_name
+        from webview import pages
+        store = CronJobStore(cron_db_path(pages._data_dir()))
+        return {j.id: _job_name(j) for j in store.list(user_id=user_id)}
+    except Exception:
+        logger.debug("work log: job names unreadable", exc_info=True)
+        return {}
+
+
+def _goal_title(payload: Dict[str, Any]) -> str:
+    title = str(payload.get("title") or "").strip()
+    if not title and payload.get("goal_id"):
+        try:
+            from webview import activity
+            title = str(activity._goal_title(payload.get("goal_id")) or "").strip()
+        except Exception:
+            title = ""
+    return _quoted(title[:70]) if title else t("work.log.a_goal")
+
+
+def owner_words(kind: str, payload: Any, job_names: Optional[Dict[str, str]] = None) -> str:
+    """The owner sentence for one event, or ``""`` when the kind has no words.
+
+    Pure over its inputs (the job names are handed in), so a test needs no store.
+    Every word is copy; the fields come from the event's own record."""
+    p = payload if isinstance(payload, dict) else {}
+    if kind.startswith(_GOAL_STATUS_PREFIX):
+        state = kind[len(_GOAL_STATUS_PREFIX):]
+        key = f"work.log.goal_state.{state}"
+        return t("work.log.kind.goal_status", title=_goal_title(p),
+                 state=t(key) if has(key) else t("work.log.goal_state.other"))
+    key = f"work.log.kind.{kind}"
+    if not has(key):
+        return ""
+    fields: Dict[str, str] = {}
+    if kind in _JOB_KINDS:
+        jid = str(p.get("job_id") or "")
+        name = str(p.get("name") or (job_names or {}).get(jid) or "").strip()
+        fields["job"] = _quoted(name) if name else t("work.log.a_job")
+        if kind.startswith("cron_"):
+            # The service records the seat that drove it; ``agent`` is the agent.
+            agent = str(p.get("via") or "").strip().lower() == "agent"
+            fields["who"] = t("work.log.who_agent" if agent else "work.log.who_you")
+        if kind == "console_cron_verb":
+            verb = str(p.get("verb") or "")
+            fields["button"] = _quoted(t(_CRON_BUTTONS[verb]) if verb in _CRON_BUTTONS
+                                       else verb)
+    if kind in ("console_goal_verb", "console_goal_create"):
+        fields["title"] = _goal_title(p)
+        verb = str(p.get("verb") or "")
+        if kind == "console_goal_verb":
+            fields["button"] = _quoted(t(_GOAL_BUTTONS[verb]) if verb in _GOAL_BUTTONS
+                                       else verb)
+    if kind in ("console_config_write", "console_pref_write"):
+        setting = str(p.get("key") or "")
+        label = f"pref.{setting}.label"
+        fields["setting"] = _quoted(t(label) if has(label) else setting)
+    if kind == OWNER_COMMAND:
+        seat = str(p.get("seat") or "").strip().lower()
+        seat_key = f"work.log.seat.{seat}"
+        fields["verb"] = str(p.get("verb") or "?")
+        fields["seat"] = t(seat_key) if has(seat_key) else (seat or "?")
+    try:
+        return t(key, **fields)
+    except Exception:
+        logger.debug("work log: words for %s did not format", kind, exc_info=True)
+        return ""
+
+
+def act_why(kind: str, payload: Any) -> str:
+    """The reason an act record carries (122 W1), or ``""``. Only the act record
+    (``external_write``) has one; ``core.act_report`` reads the same field."""
+    if kind != EXTERNAL_WRITE or not isinstance(payload, dict):
+        return ""
+    return " ".join(str(payload.get("why") or "").split())
 
 
 def _own_untenanted_rows(user_id: str) -> bool:
@@ -125,6 +243,7 @@ async def api_log(
         })
 
     entries: List[Dict[str, Any]] = []
+    job_names: Optional[Dict[str, str]] = None  # read once, only if a row needs it
     #: Rows this reader REMOVED that a person might otherwise expect to see —
     #: another tenant's events plus the diagnostics the switch is hiding. The
     #: count is what turns "a quiet day" into "a filtered view".
@@ -149,16 +268,23 @@ async def api_log(
         if class_filter and client_class != class_filter:
             filtered_out += 1
             continue
+        payload = event.get("payload")
+        if kind in _JOB_KINDS and job_names is None:
+            job_names = _job_names(user_id)
+        words = owner_words(kind, payload, job_names)
         entry: Dict[str, Any] = {
             "id": event.get("id"),
             "ts": event.get("ts"),
             "kind": kind,
             "cls": client_class,
             "diagnostic": diagnostic,
-            "summary": str(event.get("summary") or ""),
+            "summary": words or str(event.get("summary") or ""),
         }
+        why = act_why(kind, payload)
+        if why:
+            entry["why"] = why
         if want_raw:
-            entry["payload"] = event.get("payload")
+            entry["payload"] = payload
         entries.append(entry)
 
     entries.sort(key=lambda item: item.get("ts") or 0.0, reverse=True)

@@ -59,7 +59,7 @@ def _gate(per_tx=5.0, daily=25.0):
 
 
 def _sell_intent(**kw):
-    base = dict(chain="base", token=MEME, to=SPENDER, amount_raw=10 ** 18,
+    base = dict(chain="base", token=MEME, to=SPENDER, amount_raw=10 ** 18, why="exit rule",
                 max_spend_usd=2.0, watch_spenders=(SPENDER,),
                 idempotency_key="k1", held_balance_raw=10 ** 18,
                 inflow_token=USDC)
@@ -143,7 +143,7 @@ def test_a_sell_beyond_held_balance_is_not_an_exit():
 # --------------------------------------------------------------------------
 
 def _approve_intent(**kw):
-    base = dict(chain="base", token=MEME, to=ROUTER, amount_raw=0,
+    base = dict(chain="base", token=MEME, to=ROUTER, amount_raw=0, why="exit rule",
                 max_spend_usd=2.0,
                 expected_allowance_grants=((MEME, ROUTER, 10 ** 18),),
                 is_allowance_op=True, idempotency_key="k2",

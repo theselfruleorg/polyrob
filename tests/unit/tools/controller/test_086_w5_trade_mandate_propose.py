@@ -100,5 +100,5 @@ def test_refused_in_a_room_and_for_a_leaf(public, role, needle):
 
 
 def test_never_handed_to_a_sub_agent():
-    from tools.controller.delegation import DELEGATION_ACTION_NAMES
+    from core.delegation_policy import DELEGATION_ACTION_NAMES
     assert "trade_mandate_propose" in DELEGATION_ACTION_NAMES

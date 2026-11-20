@@ -198,7 +198,7 @@ async def _self_lines(agent, execution_context) -> list:
 	try:
 		pair = getattr(agent, "_run_spend_seen", None) if agent is not None else None
 		if pair is None and agent is not None:
-			from agents.task.agent.core.run_budget import run_spend_vs_cap
+			from agents.task.public import run_spend_vs_cap
 			pair = await run_spend_vs_cap(agent)
 		if pair:
 			spent, cap = float(pair[0]), float(pair[1])
@@ -485,7 +485,7 @@ def register_agent_status_action(controller) -> None:
 		except Exception as e:
 			lines.append(_unavail("status snapshot", e))
 		# 094: which model a new owner chat, an autonomous and a money-class run use.
-		from agents.task.agent.core.live_health import model_routing_line
+		from agents.task.public import model_routing_line
 		_models = model_routing_line(str(user_id or ""))
 		if _models:
 			lines.append(f"- {_models}")

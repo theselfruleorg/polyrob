@@ -65,7 +65,6 @@ class DependencyContainer:
             
         self._config = config
         self._services: Dict[str, ServiceRegistration] = {}
-        self._managers: Dict[str, Any] = {}
         self._agents: Dict[str, Any] = {}
         self._initialized_services: Set[str] = set()
         
@@ -85,11 +84,6 @@ class DependencyContainer:
     def services(self) -> Dict[str, Any]:
         """Get all registered services."""
         return self._services
-
-    @property
-    def managers(self) -> Dict[str, Any]:
-        """Get all registered managers."""
-        return self._managers
 
     @property
     def agents(self) -> Dict[str, Any]:
@@ -179,34 +173,11 @@ class DependencyContainer:
         for agent in self._agents.values():
             await agent.cleanup()
             
-        for manager in self._managers.values():
-            await manager.cleanup()
             
         for service in self._services.values():
             await service.instance.cleanup()
         
         self.logger.info("Container cleanup completed")
-
-    def register_manager(self, name: str, manager: Any) -> None:
-        """Register a manager instance.
-
-        Every manager is non-optional (no manager declares otherwise). This used to
-        read an always-empty ``MANAGER_METADATA`` from the composition root, which
-        made the DI kernel import the whole wiring layer.
-        """
-        is_optional = False
-
-        if name in self._managers:
-            self.logger.warning(f"Overwriting existing manager: {name}")
-        
-        self._managers[name] = manager
-        # Register service with optional flag
-        self.register_service(
-            name=name,
-            instance=manager,
-            scope=ServiceScope.SINGLETON,
-            is_optional=is_optional
-        )
 
     def register_agent(self, name: str, agent: Any) -> None:
         """Register an agent."""

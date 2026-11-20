@@ -172,7 +172,7 @@ def test_owner_paused_job_is_not_released_by_the_scope(tmp_path):
 # --- the owner verbs: /job stop --forever, /job allow, /jobs ------------------
 
 def test_job_stop_forever_then_allow_round_trip(tmp_path):
-    from surfaces.telegram.job_ops import jobs_reply
+    from cron.owner_jobs import jobs_reply
     svc = _svc(tmp_path)
     job = svc.schedule(task="buy back", schedule_spec="1h", user_id="u1",
                        payload={"skills": ["rebuy"]})
@@ -191,7 +191,7 @@ def test_job_stop_forever_then_allow_round_trip(tmp_path):
 
 
 def test_job_show_names_the_lane_and_its_stop(tmp_path):
-    from surfaces.telegram.job_ops import jobs_reply
+    from cron.owner_jobs import jobs_reply
     svc = _svc(tmp_path)
     job = svc.schedule(task="buy back", schedule_spec="1h", user_id="u1",
                        payload={"skills": ["rebuy"]})
@@ -206,7 +206,7 @@ def test_job_show_names_the_lane_and_its_stop(tmp_path):
 
 
 def test_job_stop_once_keeps_the_lane_open(tmp_path):
-    from surfaces.telegram.job_ops import jobs_reply
+    from cron.owner_jobs import jobs_reply
     svc = _svc(tmp_path)
     job = svc.schedule(task="buy back", schedule_spec="1h", user_id="u1",
                        payload={"skills": ["rebuy"]})
@@ -241,7 +241,7 @@ def test_prune_never_touches_the_stop(tmp_path):
 
 
 def test_goal_views_do_not_list_lane_stops(tmp_path):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     board = GoalBoard(str(tmp_path / "goals.db"))
     _stop_lane(tmp_path)
     suppress(board.db_path, user_id="u1", scope=SCOPE_TITLE, value="Post daily")

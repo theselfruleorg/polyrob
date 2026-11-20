@@ -9,7 +9,7 @@ import types
 
 import pytest
 
-from agents.task.goals.board import GoalBoard, SuppressedGoalError
+from modules.goals.board import GoalBoard, SuppressedGoalError
 from core import goal_suppressions as gs
 
 
@@ -81,10 +81,10 @@ def test_create_refuses_a_suppressed_title_even_with_force(home):
 # --- the owner verbs (Telegram + REPL share goal_reply) -----------------------
 
 def test_goal_stop_forever_means_never_again(home):
-    from surfaces.telegram import owner_ops
+    from cron import owner_goals
     b = _board(home)
     g = b.create(user_id="alice", title="Publish the track record")
-    out = owner_ops.goal_reply("alice", str(home), ["stop", g.id[:8], "--forever", "not", "again"])
+    out = owner_goals.goal_reply("alice", str(home), ["stop", g.id[:8], "--forever", "not", "again"])
     assert "switched OFF" in out and "/goal allow" in out
     assert _board(home).get(g.id).status == "cancelled"
     [s] = _board(home).suppressions(user_id="alice")
@@ -96,45 +96,45 @@ def test_goal_stop_forever_means_never_again(home):
 @pytest.mark.parametrize("flag", ["\u2014forever", "\u2013forever"])
 def test_goal_stop_forever_accepts_the_phone_dash(home, flag):
     """A phone keyboard turns `--` into a dash; /job stop already took it."""
-    from surfaces.telegram import owner_ops
+    from cron import owner_goals
     b = _board(home)
     g = b.create(user_id="alice", title="Publish the track record")
-    out = owner_ops.goal_reply("alice", str(home), ["stop", g.id[:8], flag])
+    out = owner_goals.goal_reply("alice", str(home), ["stop", g.id[:8], flag])
     assert "switched OFF" in out
     [s] = _board(home).suppressions(user_id="alice")
     assert "forever" not in (s.reason or "")
 
 
 def test_goal_stop_is_once_by_default(home):
-    from surfaces.telegram import owner_ops
+    from cron import owner_goals
     b = _board(home)
     g = b.create(user_id="alice", title="Publish the track record")
-    out = owner_ops.goal_reply("alice", str(home), ["stop", g.id[:8]])
+    out = owner_goals.goal_reply("alice", str(home), ["stop", g.id[:8]])
     assert "stopped" in out and "switched OFF" not in out and "--forever" in out
     assert _board(home).get(g.id).status == "cancelled"
     assert _board(home).suppressions(user_id="alice") == []
 
 
 def test_goal_allow_by_id_and_by_title(home):
-    from surfaces.telegram import owner_ops
+    from cron import owner_goals
     b = _board(home)
     g = b.create(user_id="alice", title="Publish the track record")
-    owner_ops.goal_reply("alice", str(home), ["stop", g.id[:8], "--forever"])
-    out = owner_ops.goal_reply("alice", str(home), ["allow", g.id[:8]])
+    owner_goals.goal_reply("alice", str(home), ["stop", g.id[:8], "--forever"])
+    out = owner_goals.goal_reply("alice", str(home), ["allow", g.id[:8]])
     assert "Back ON" in out and _board(home).suppressions(user_id="alice") == []
     g2 = _board(home).create(user_id="alice", title="Refresh the watchlist")
-    owner_ops.goal_reply("alice", str(home), ["stop", g2.id[:8], "--forever"])
-    out = owner_ops.goal_reply("alice", str(home), ["allow", "refresh", "the", "watch"])
+    owner_goals.goal_reply("alice", str(home), ["stop", g2.id[:8], "--forever"])
+    out = owner_goals.goal_reply("alice", str(home), ["allow", "refresh", "the", "watch"])
     assert "Back ON" in out
-    assert "Nothing switched off" in owner_ops.goal_reply("alice", str(home), ["allow", "zzz"])
+    assert "Nothing switched off" in owner_goals.goal_reply("alice", str(home), ["allow", "zzz"])
 
 
 def test_stopping_an_already_cancelled_goal_forever_still_switches_it_off(home):
-    from surfaces.telegram import owner_ops
+    from cron import owner_goals
     b = _board(home)
     g = b.create(user_id="alice", title="Old thing")
     b.cancel(g.id, user_id="alice")
-    out = owner_ops.goal_reply("alice", str(home), ["stop", g.id[:8], "--forever"])
+    out = owner_goals.goal_reply("alice", str(home), ["stop", g.id[:8], "--forever"])
     assert "switched OFF" in out
     assert len(_board(home).suppressions(user_id="alice")) == 1
 

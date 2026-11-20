@@ -80,6 +80,9 @@ class PreparedLeg:
     amount_usd: Optional[float] = None
     needs_owner_approval: bool = False
     header: str = ""
+    #: The guard intent of ``tx`` — what ``attest.record_owner_cleared`` records
+    #: once the owner cleared an ``owner_queue`` leg (audit 2026-11-21 L-7).
+    intent: Any = None
 
 
 @dataclass(frozen=True)
@@ -234,11 +237,22 @@ class EvmOriginLeg:
         return PreparedLeg(
             True, decision.reason, rail=rail, tx=tx,
             amount_usd=decision.amount_usd,
-            needs_owner_approval=not decision.allowed, header=header)
+            needs_owner_approval=not decision.allowed, header=header, intent=intent)
 
     @staticmethod
-    def send(prepared: PreparedLeg) -> SentLeg:
+    def send(prepared: PreparedLeg, *, owner_cleared: bool = False) -> SentLeg:
+        """Sign and send the prepared leg. An ``owner_queue`` leg
+        (``needs_owner_approval``) is sent only with ``owner_cleared`` — the verb's
+        owner ask returned approved, or the owner's own turn — and only then is that
+        exact transaction recorded as owner-cleared (L-7). Without it nothing is
+        signed: the caller's control flow is not the proof (the token leg's rule)."""
+        if prepared.needs_owner_approval and not owner_cleared:
+            return SentLeg("error", "refused: this leg needs the owner's approval and "
+                                    "none is proven for it. Nothing was signed")
         try:
+            if prepared.needs_owner_approval:
+                from core.signer import attest
+                attest.record_owner_cleared(prepared.intent, prepared.tx)
             tx_hash = prepared.rail.sign_and_send(prepared.tx)
         except Exception as exc:
             from core.wallet.broadcast.evm import (
@@ -362,7 +376,8 @@ class EvmTokenOriginLeg:
                          tool=tool, idempotency_key=idempotency_key)
         return PreparedLeg(True, decision.reason, rail=rail, tx=approve_tx,
                            amount_usd=decision.amount_usd,
-                           needs_owner_approval=not decision.allowed, header=header)
+                           needs_owner_approval=not decision.allowed, header=header,
+                           intent=intent)
 
     def _revoke(self, rail) -> str:
         """approve(depository, 0), through tx_guard like every revoke verb."""
@@ -393,8 +408,16 @@ class EvmTokenOriginLeg:
     def send(self, prepared: PreparedLeg) -> SentLeg:
         from core.wallet import tx_guard
         rail, ctx = prepared.rail, self._ctx
+        from core.signer import attest
+        # The native leg's rule (L-7): an owner_queue approval is signed only with
+        # owner_cleared set by the verb; the caller's control flow is not the proof.
+        if prepared.needs_owner_approval and not self.owner_cleared:
+            return SentLeg("error", "refused: this leg needs the owner's approval and "
+                                    "none is proven for it. Nothing was signed")
         # 1. the exact approval, confirmed before anything else
         try:
+            if prepared.needs_owner_approval:
+                attest.record_owner_cleared(prepared.intent, prepared.tx)   # L-7
             approve_hash = rail.sign_and_send(prepared.tx)
         except Exception as exc:
             from core.wallet.broadcast.evm import broadcast_failure_text
@@ -439,6 +462,8 @@ class EvmTokenOriginLeg:
             except Exception as exc:
                 return SentLeg("error", f"deposit gas sizing failed: {exc}; {self._revoke(rail)}")
         try:
+            if not decision.allowed:      # owner_queue, cleared by the owner above (L-7)
+                attest.record_owner_cleared(intent, deposit_tx)
             tx_hash = rail.sign_and_send(deposit_tx)
         except Exception as exc:
             from core.wallet.broadcast.evm import broadcast_failure_text, outcome_unknown

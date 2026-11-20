@@ -26,11 +26,10 @@ def calls(monkeypatch):
             if fail:
                 raise RuntimeError(f"{name} boom")
         return fn
-    for n in ("initialize_core", "initialize_modules", "initialize_managers",
-              "initialize_agents"):
+    for n in ("initialize_core", "initialize_modules", "initialize_agents"):
         monkeypatch.setattr(bot_mod, n, phase(n))
     monkeypatch.setattr(bot_mod, "initialize_tools", phase("initialize_tools"))
-    for n in ("cleanup_agents", "cleanup_managers", "cleanup_tools", "cleanup_modules",
+    for n in ("cleanup_agents", "cleanup_tools", "cleanup_modules",
               "cleanup_core"):
         monkeypatch.setattr(init_mod, n, phase(n))
     log.phase = phase

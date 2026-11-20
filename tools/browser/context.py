@@ -222,7 +222,7 @@ class BrowserContext:
 					# WS-3: clean the session id before it becomes a filename.
 					_stem = self.session_id or uuid.uuid4()
 					try:
-						from agents.task.path import pm as _pm
+						from core.session_paths import pm as _pm
 						_stem = _pm().clean_session_id(str(_stem))
 					except Exception:
 						_stem = str(_stem)
@@ -1048,7 +1048,7 @@ class BrowserContext:
 				try:
 					# Try to use PathManager for consistent path handling
 					try:
-						from agents.task.path import pm
+						from core.session_paths import pm
 						path_manager = pm()
 						
 						# Get screenshots directory for this session
@@ -1066,7 +1066,7 @@ class BrowserContext:
 						# same way pm() would, so a stray id can't escape the tree.
 						from core.runtime_paths import resolve_session_data_root
 						try:
-							from agents.task.path import pm as _pm
+							from core.session_paths import pm as _pm
 							_sid = _pm().clean_session_id(session.session_id)
 						except Exception:
 							_sid = str(session.session_id)
@@ -1143,7 +1143,7 @@ class BrowserContext:
 				
 			# Try to use SessionManager for consistent path handling
 			try:
-				from agents.task.path import pm
+				from core.session_paths import pm
 				path_manager = pm()
 				
 				# Get screenshots directory for this session
@@ -1160,7 +1160,7 @@ class BrowserContext:
 				# tree (never a relative "data" under the cwd) + clean the session id.
 				from core.runtime_paths import resolve_session_data_root
 				try:
-					from agents.task.path import pm as _pm
+					from core.session_paths import pm as _pm
 					_sid = _pm().clean_session_id(session.session_id)
 				except Exception:
 					_sid = str(session.session_id)

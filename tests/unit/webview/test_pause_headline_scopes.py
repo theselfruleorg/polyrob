@@ -41,7 +41,7 @@ def test_a_scoped_pause_names_its_scope(headline):
 def test_a_pause_of_everything_says_since_when(headline, monkeypatch):
     import webview.pages_new as mod
     monkeypatch.setattr(mod, "_when", lambda ts: "14:02")
-    assert headline(scopes=["all"], since=1_700_000_000.0) == "The agent is paused since 14:02."
+    assert headline(scopes=["all"], since=1_700_000_000.0) == "The agent has been paused since 14:02."
 
 
 def test_a_pause_of_everything_does_not_say_for(headline):

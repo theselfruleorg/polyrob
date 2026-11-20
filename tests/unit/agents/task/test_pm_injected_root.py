@@ -3,7 +3,7 @@ import os
 
 import pytest
 
-from agents.task.path import get_path_manager
+from core.session_paths import get_path_manager
 
 
 def test_injected_root_keeps_artifacts_under_rob(tmp_path):

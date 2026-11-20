@@ -6,7 +6,7 @@ user-facing content. These give the autonomous loop's leak metric a contract —
 fail if the scrubber or the renderer's brain-state detection is weakened.
 """
 from cli.ui.dialog import is_brain_state, strip_control_tokens
-from modules.llm.think_scrubber import scrub_think_blocks
+from core.think_scrubber import scrub_think_blocks
 
 
 # --- reasoning blocks are scrubbed ----------------------------------------

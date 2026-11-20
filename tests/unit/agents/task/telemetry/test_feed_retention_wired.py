@@ -18,7 +18,7 @@ class _FakeEvent:
 
 
 def test_feed_retention_runs_and_bounds_dir(tmp_path, monkeypatch):
-    from agents.task.path import PathManager
+    from core.session_paths import PathManager
     import agents.task.telemetry.service as svc
 
     test_pm = PathManager(data_root=str(tmp_path))

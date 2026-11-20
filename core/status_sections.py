@@ -29,7 +29,8 @@ logger = logging.getLogger(__name__)
 #: The SECTION_ORDER names a provider may fill (pinned against SECTION_ORDER by
 #: tests/unit/core/test_status_sections.py).
 CONTRIBUTED_SLOTS = ("room_actions", "creations", "collectibles", "liquidity",
-                     "wallet", "custody", "money", "economics", "harness")
+                     "wallet", "custody", "money", "economics", "harness",
+                     "income_rule", "mandates")
 # ``harness`` (093 D1, the gated-tool view) is filled from the TOOLS tier: core
 # may not import it, so its provider registers itself when ``tools`` is
 # imported (the provider module is in ``tools/``). A process that never imports
@@ -43,6 +44,7 @@ _IN_CORE_PROVIDERS: Dict[str, tuple] = {
     "core.status_liquidity": ("liquidity",),
     "core.status_custody": ("custody",),
     "core.status_economics": ("economics",),
+    "core.status_standing": ("income_rule", "mandates"),
 }
 
 NOT_INSTALLED = "not installed — no installed pack provides this section"

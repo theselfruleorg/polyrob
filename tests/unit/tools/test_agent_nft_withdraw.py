@@ -7,7 +7,7 @@ import os
 
 import pytest
 
-from core.wallet import abi, erc6551, nft_holdings
+from core.wallet import abi, erc6551, holdings_state, nft_holdings
 from core.wallet.broadcast.evm import Receipt
 from core.wallet.policy import PolicyGate
 from core.wallet.signer import LocalEoaSigner
@@ -109,11 +109,13 @@ def _run(coro):
     return asyncio.new_event_loop().run_until_complete(coro)
 
 
-def test_withdraw_needs_a_destination():
-    with pytest.raises(Exception):
-        TakeParams(chain="robinhood")
+def test_withdraw_needs_a_destination(armed):
+    """`to` is optional in the schema (124 N2: a sweep has none) and required by the send."""
     with pytest.raises(Exception):
         TakeParams(chain="robinhood", to="not-an-address")
+    tool, seen = _tool(armed, Chain(armed.address))
+    res = _run(tool.agent_nft_withdraw_token(TakeParams(chain="robinhood", nft="3")))
+    assert seen == [] and "name where the NFT goes" in res.error
 
 
 def test_withdraw_is_a_treasury_transfer_declared_as_nft_out_and_needs_no_package(armed):
@@ -135,12 +137,12 @@ def test_withdraw_defaults_to_the_only_tracked_nft(armed):
     tool, seen = _tool(armed, Chain(armed.address))
     res = _run(tool.agent_nft_withdraw_token(TakeParams(chain="robinhood", to=TO)))
     assert "holds no tracked NFT" in res.error and seen == []
-    path = nft_holdings.state_path()
-    state = nft_holdings.load_state(path)
+    path = holdings_state.state_path()
+    state = holdings_state.load_state(path)
     state["tracked"][f"4663:{PINNED.lower()}:3"] = {
         "chain": "robinhood", "chain_id": 4663, "collection": PINNED.lower(), "token_id": 3,
         "account": ACCOUNT, "label": "POLYROB #3", "since": 1.0}
-    nft_holdings.save_state(path, state)
+    holdings_state.save_state(path, state)
     res = _run(tool.agent_nft_withdraw_token(TakeParams(chain="robinhood", to=TO)))
     assert res.error is None and seen[0][0].nft_out[0][2] == 3
 
@@ -187,7 +189,7 @@ def test_revoke_all_with_nothing_open_says_the_table_is_complete(armed):
 
 
 def test_nft_send_on_the_owner_seat_runs_the_withdraw(armed, monkeypatch):
-    from surfaces.telegram import nft_ops
+    from tools.defi.owner_verbs import nft as nft_ops
     got = {}
 
     async def fake(self, params, ctx=None):
@@ -292,3 +294,48 @@ def test_the_card_context_is_registered_and_rendered_on_the_grant_card():
     card = grant_card.render_grant_card("agent_nft_withdraw_token", {"to": TO}, "tap-1",
                                         context_lines=["• What leaves: 2 ETH"])
     assert "• What leaves: 2 ETH" in card
+
+
+# --- 124 N2: the sweep ------------------------------------------------------------------------
+
+NESTED = "0x" + "4e" * 20
+
+
+class NestedChain(Chain):
+    """The treasury owns PINNED #3; its account holds NESTED #9."""
+
+    def __call__(self, method, params, *a, **k):
+        if method == "eth_call" and params[0]["data"][:10] == SEL["ownerOf(uint256)"] \
+                and params[0]["to"].lower() == NESTED.lower():
+            return _w(ACCOUNT)
+        return super().__call__(method, params, *a, **k)
+
+
+def test_a_sweep_moves_a_nested_nft_from_the_account_to_the_treasury(armed):
+    tool, seen = _tool(armed, NestedChain(armed.address))
+    res = _run(tool.agent_nft_withdraw_token(TakeParams(chain="robinhood", nft="3",
+                                                        nested=f"{NESTED}#9", dry_run=True)))
+    assert res.error is None, res.error
+    (intent, tx, _), = seen
+    assert intent.via_account == ACCOUNT and intent.to.lower() == armed.address.lower()
+    assert intent.nft_out == ((NESTED.lower(), "erc721", 9, 1),)
+    inner_to, _v, inner_data, _op = erc6551.decode_execute(tx["data"])[:4] if \
+        tx["data"][:10] == erc6551.EXECUTE_SELECTOR else erc6551.decode_execute_batch(tx["data"])[0]
+    assert inner_to.lower() == NESTED.lower()
+    assert inner_data == abi.encode_call(
+        "safeTransferFrom", [{"type": "address"}, {"type": "address"}, {"type": "uint256"}],
+        [ACCOUNT, armed.address, 9])
+
+
+def test_a_sweep_goes_to_the_treasury_only(armed):
+    tool, seen = _tool(armed, NestedChain(armed.address))
+    res = _run(tool.agent_nft_withdraw_token(TakeParams(chain="robinhood", nft="3", to=TO,
+                                                        nested=f"{NESTED}#9")))
+    assert seen == [] and "treasury only" in res.error
+
+
+def test_a_sweep_of_an_nft_the_account_does_not_hold_refuses(armed):
+    tool, seen = _tool(armed, Chain(armed.address))
+    res = _run(tool.agent_nft_withdraw_token(TakeParams(chain="robinhood", nft="3",
+                                                        nested=f"{PINNED}#4")))
+    assert seen == [] and "is not held by the account" in res.error

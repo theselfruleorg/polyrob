@@ -133,7 +133,7 @@ def test_scanner_unavailable_fails_closed(tmp_path, monkeypatch):
     real_import = builtins.__import__
 
     def _blocked_import(name, *args, **kwargs):
-        if name == "modules.memory.task.threat_scan":
+        if name == "core.security.threat_scan":
             raise ImportError("scanner unavailable")
         return real_import(name, *args, **kwargs)
 

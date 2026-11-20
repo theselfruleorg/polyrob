@@ -116,9 +116,11 @@ async def pending_verb(c) -> str:
     if c.args and c.args[0].lower() != "all":
         return _review_one(c, pending, c.args[0])
     rest = _elsewhere(c, "pending")
+    from core.surfaces.card_list import call_cards_lines
+    calls = "\n".join(call_cards_lines(c.user_id))      # 126 wave 5
     if not pending.items:
-        return "\n".join(x for x in (pending.degraded_line() or "No pending approvals.",
-                                       rest) if x)
+        return "\n".join(x for x in (calls or pending.degraded_line()
+                                       or "No pending approvals.", rest) if x)
     # 096 W3/A8: a self-evolution item reads as the notice does (what · why ·
     # changes · taps), and a linked pair is ONE entry, not two halves.
     by_key = {f"{it['kind']}:{it['id']}": it for it in pending.items}
@@ -141,6 +143,8 @@ async def pending_verb(c) -> str:
                      f"{self_evolution.pending_tap_token('reject', it)} · "
                      f"read it: {self_evolution.pending_tap_token('pending', it)}")
     lines.append("Everything at once: /approve_all")
+    if calls:
+        lines.append(calls)
     if pending.degraded_line():
         lines.append(pending.degraded_line())
     if rest:
@@ -156,7 +160,7 @@ def _review_one(c, pending, target: str) -> str:
     that decides it. A queued tool approval or a contact has no draft body:
     its whole record is its list line."""
     from core import self_evolution
-    from tools.controller.approval_queue import resolve_pending_target
+    from tools.controller.approval_target import resolve_pending_target
     match = resolve_pending_target(target, pending)
     if match is None:
         return f"No pending item '{target}' — see /pending."
@@ -238,25 +242,30 @@ async def decide_verb(c) -> str:
         # exactly one item waited. On the console (which shares this
         # handler) that approved an item the owner never saw, and the REPL
         # lists. A bare verb now always shows; only an id or a tap decides.
+        # 126: an open money call card waits on the owner too; it is listed first
+        # (its id typed after the verb is its Confirm or Cancel).
+        from core.surfaces.card_list import call_cards_lines
+        calls = "\n".join(call_cards_lines(user_id))
         if not pending.items:
-            return (pending.degraded_line()
-                    or "Nothing pending — there is nothing waiting on you.")
+            return (calls or pending.degraded_line()
+                    or "Nothing waits on you — there is no decision to make.")
         _n = len(pending.items)
-        _lines = [f"{_n} pending — tap {'it' if _n == 1 else 'the one you mean'}"
+        _what = "decision waits" if _n == 1 else "decisions wait"
+        _lines = ([calls] if calls else []) + [f"{_n} {_what} — tap {'it' if _n == 1 else 'the one you mean'}"
                   f" to {cmd.lstrip('/')}:"]
-        for _it in pending.items:
+        for _i, _it in enumerate(pending.items, start=1):
             from core.pending_review import summary_line
-            _preview = summary_line(_it)
+            _preview = summary_line(_it) or f"{_it['kind']} `{_it['id']}`"
             _lines.append(
-                f"  {self_evolution.pending_tap_token(cmd.lstrip('/'), _it)}"
-                f" — {_it['kind']}:{_it['id']}"
-                + (f" — {_preview}" if _preview else ""))
+                f"{_i}. {_preview}\n   {self_evolution.pending_tap_token(cmd.lstrip('/'), _it)}")
         if _n > 1:
             _lines.append(f"All of them: {cmd}_all")
         if pending.degraded_line():
             _lines.append(pending.degraded_line())
         return "\n".join(_lines)
     target = args[0]
+    # 126: a call card's id never reaches here — the executor turns
+    # `/approve|/reject <card id>` into the card's tap (surfaces/card_press.py).
     # 035 P1-10: `/approve all` — decide the whole queue from the phone. The
     # owner surface where friction costs most is the one where typing an id
     # is hardest. 2026-09-15: "the whole queue" now means the UNION it is
@@ -287,20 +296,15 @@ async def decide_verb(c) -> str:
         verb = "approved" if approve else "rejected"
         msgs = list(msgs) + [f"{ok_n} {verb}, {fail_n} failed"]
         return "\n".join(msgs)
-    from tools.controller.approval_queue import resolve_pending_target
-    match = resolve_pending_target(target, pending)
+    # The ONE seat resolver (proposal 125 S10): a shared id is named, and a
+    # `tap-`-shaped target that left the OPEN queue goes to the tool-approval
+    # lane — only it can tell whether the ask was decided, expired or never existed.
+    from tools.controller.approval_target import resolve_decision_target
+    hit = resolve_decision_target(target, pending)
+    if hit.refusal:
+        return hit.refusal
+    match = hit.item
     if match is None:
-        # A `tap-`-shaped target that is not in the OPEN queue is still the
-        # tool-approval lane's business: only it can tell the owner whether
-        # the ask was already decided, expired, or never existed. A generic
-        # "no pending proposal" would flatten those three into one.
-        from tools.controller.approval_queue import strip_tap_prefix
-        if strip_tap_prefix(target) is not None:
-            ok, msg = await _decide_pending_item(
-                c.task_agent, {"kind": "tool_approval", "id": target},
-                approve=approve, user_id=user_id, data_dir=data_dir,
-                instance_id=instance_id, board=board)
-            return msg if ok else f"Failed: {msg}"
         _done = self_evolution.last_decision_for_alias(target, user_id=user_id)
         if _done is not None:
             import datetime as _dt
@@ -321,7 +325,7 @@ async def asks_verb(c) -> str:
     """`/asks`. Tool-approval asks have their OWN dedicated surface (/pending +
     /approve /reject, tap-<id>) — excluded here so a payment request doesn't
     show twice under two different id shapes."""
-    from agents.task.goals.board import ASK_OPEN
+    from modules.goals.board import ASK_OPEN
     from core.goal_vocab import has_own_surface
     rows = [a for a in c.board.asks(user_id=c.user_id, status=ASK_OPEN)
             if not has_own_surface(a.payload or {})]
@@ -424,7 +428,7 @@ async def fulfill_verb(c) -> str:
                                      answer=answer or None)
     if not ok:
         return f"No open ask '{args[0]}' — see /asks."
-    from agents.task.goals.rail_answers import decision_note
+    from modules.goals.rail_answers import decision_note
     return (f"✅ Ask fulfilled — {decision_note(board, args[0], unblocked) or 'saved.'}"
             + (f"\nYour answer was passed to the run: {clip(answer, 200)}"
                if answer else ""))

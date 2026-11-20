@@ -37,12 +37,12 @@ def test_boot_snapshot_passes_the_context_db_paths_and_shares_the_update_lock(mo
         dir_paths = []
         db_paths = [outside_db]
 
-    monkeypatch.setattr("cli.update.context.resolve_update_context", lambda **k: _Ctx())
+    monkeypatch.setattr("core.update_snapshot.context.resolve_update_context", lambda **k: _Ctx())
 
     def fake_create_snapshot(**kw):
         seen.update(kw)
-    monkeypatch.setattr("cli.update.snapshot.create_snapshot", fake_create_snapshot)
-    monkeypatch.setattr("cli.update.snapshot.prune_snapshots", lambda *a, **k: [])
+    monkeypatch.setattr("core.update_snapshot.snapshot.create_snapshot", fake_create_snapshot)
+    monkeypatch.setattr("core.update_snapshot.snapshot.prune_snapshots", lambda *a, **k: [])
 
     async def fake_apply(db, mgr, on_before_change=None, lock_path=None):
         seen["lock_path"] = lock_path

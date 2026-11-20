@@ -17,7 +17,7 @@ from modules.llm.messages import (
     AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage,
     MessageOrigin, make_control_message,
 )
-from agents.task.agent.messages.foundation_layers import foundation_messages
+from agents.task.agent.messages.foundation_layers import foundation_messages, owner_chat_tainted
 
 
 def drop_usage_anchor(manager: Any, reason: str = "") -> None:
@@ -279,6 +279,11 @@ class MessageRetrievalMixin:
 				"⚠️ H-MEM DISABLED: session_id not set. "
 				"Agent will run without hierarchical memory context."
 			)
+		elif owner_chat_tainted(self):
+			# A correspondent's reply taints the OWNER's chat: its memory summary (the
+			# owner's conversation) stays out until the owner drives again. A room or a
+			# correspondent's own session keeps its own summary.
+			self.logger.debug("H-MEM off: a correspondent's reply taints the owner chat")
 		else:
 			try:
 				context = self.task_context_manager.get_context_injection(self.session_id)

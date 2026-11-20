@@ -17,7 +17,7 @@ from core.surfaces.command_reply import reply_text
 from cron.jobs import CronJobStore
 from cron.service import CronService
 from polyrob.app import trading_jobs as tj
-from surfaces.telegram import trade_ops
+from polyrob.app import trade_owner as trade_ops
 import tests.trading_fixture  # noqa: F401  (registers the test preset)
 
 U = "owner-1"

@@ -25,7 +25,7 @@ import re
 from typing import Any, Optional
 
 from core.surfaces.act import InboundResult  # canonical envelope (R-4) — was a local duplicate
-from core.surfaces.dispatcher import RouteDecision, route_inbound
+from core.surfaces.dispatcher import RouteDecision, RouteKind, route_inbound
 from core.surfaces.envelopes import Identity, InboundMessage, SessionSource
 from core.surfaces.media import Media
 # OS5: the ONE machine-mail classifier — the surface never answers such mail.
@@ -175,7 +175,11 @@ def build_inbound_message(msg: dict, user_directory: Any) -> Optional[InboundMes
     media = _attachment_media(msg.get("attachments") or [])
     if media:
         text = _append_attachment_manifest(text, media)
-    user_id = user_directory.resolve_internal(addr, "email")
+    # 125 S32: the id only — no directory row before the tier is known (a forged
+    # From: must not write one). process_email persists it for an accepted route.
+    _id_for = getattr(user_directory, "internal_id_for", None)
+    user_id = (_id_for(addr, "email") if callable(_id_for)
+               else user_directory.resolve_internal(addr, "email"))
     source = SessionSource(
         surface_id="email",
         chat_id=addr,
@@ -235,4 +239,11 @@ async def process_email(
     if inbound is None:
         return None
     decision = await route_inbound(container, inbound)
+    if decision.kind != RouteKind.DENIED and callable(
+            getattr(user_directory, "internal_id_for", None)):
+        try:  # 125 S32: the directory row is written only for an accepted sender
+            user_directory.resolve_internal(inbound.identity.raw_user_id, "email")
+        except Exception:
+            logger.warning("email inbound: directory row write failed for an accepted "
+                           "sender", exc_info=True)
     return InboundResult(inbound=inbound, decision=decision)

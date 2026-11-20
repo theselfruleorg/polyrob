@@ -18,7 +18,7 @@ import stat as _stat
 
 from core.doc_kind import is_doc_path, parse_front_matter
 from core.walk_skip import prune_dirs
-from agents.task.path import pm
+from core.session_paths import pm
 from agents.task.agent.session import SessionManager
 
 

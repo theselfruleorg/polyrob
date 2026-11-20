@@ -1,10 +1,10 @@
 """T5 — the read tools are low-risk/delegatable/in toolsets; the trade tools keep
 every gate."""
 from core.tool_catalog import _PERMISSIONS, _HIGH_RISK_TOOLS
-from tools.controller.delegation import DELEGATE_BLOCKED_TOOLS
+from core.delegation_policy import DELEGATE_BLOCKED_TOOLS
 from agents.task.agent.skill_manager import VALID_TOOL_IDS
 from agents.task.tool_defaults import TOOLSETS
-from agents.task.agent.core.correspondent_gate import HIGH_IMPACT_TOOLS
+from core.security.high_impact import HIGH_IMPACT_TOOLS
 
 READ = ("polymarket_data", "hyperliquid_data")
 TRADE = ("polymarket", "hyperliquid")

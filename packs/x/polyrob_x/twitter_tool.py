@@ -104,11 +104,13 @@ class TwitterPostAction(BaseModel):
     media_alt_texts: Optional[List[str]] = Field(None, description="Alt text per media file, same order (≤1000 chars each).")
     poll_options: Optional[List[str]] = Field(None, description="2-4 poll choices (creates a poll).")
     poll_duration_minutes: Optional[int] = Field(None, ge=5, le=10080, description="Poll duration in minutes.")
+    why: Optional[str] = Field(None, description="One line: why you post this now (the owner's act record).")
 
 
 class TwitterReplyAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
     tweet_id: str = Field(..., description="ID of the tweet to reply to.")
+    why: Optional[str] = Field(None, description="One line: why you reply now (the owner's act record).")
     text: str = Field(..., min_length=1, max_length=_TWEET_MAX_INPUT,
                       description="Reply text. ≤280 chars posts a single reply." + _AUTOTHREAD_NOTE)
     media_paths: Optional[List[str]] = Field(
@@ -2228,7 +2230,8 @@ class TwitterTool(TwitterMediaArticleMixin, BaseTool):
 
     # --- act-on-context reads (always available) ------------------------
 
-    @BaseTool.action("Get recent mentions of your own account.", param_model=TwitterMentionsAction)
+    @BaseTool.action("Get recent mentions of your own account, each with its metrics (likes, "
+                     "replies, reposts).", param_model=TwitterMentionsAction)
     async def twitter_get_mentions(self, params: TwitterMentionsAction, execution_context=None):
         if not self._enabled:
             return self._err("Twitter service not available - missing credentials")
@@ -2239,12 +2242,13 @@ class TwitterTool(TwitterMediaArticleMixin, BaseTool):
             extra = {"since_id": params.since_id} if params.since_id else {}
             resp = await self._make_request(func=self.client.get_users_mentions, endpoint_type="tweets",
                                             id=me_id, max_results=params.max_results, user_fields=["username"],
-                                            **full_read_kwargs(["created_at", "text", "author_id",
-                                                                "conversation_id"], ["author_id"]), **extra)
+                                            **full_read_kwargs(["created_at", "text", "author_id", "conversation_id",
+                                                                "public_metrics"], ["author_id"]), **extra)
             users = {str(u.id): u.username for u in ((getattr(resp, "includes", None) or {}).get("users") or [])}
             items = [{"id": str(t.id), "text": t.text, "author_id": str(t.author_id) if t.author_id else None,
                       "author_username": users.get(str(t.author_id)),
                       "conversation_id": str(getattr(t, "conversation_id", "") or "") or None,
+                      "metrics": with_repost_total(getattr(t, "public_metrics", None)),  # 122 W2: likes count
                       **_storefront_mark(t), **tweet_extras(t, getattr(resp, "includes", None))}
                      for t in (getattr(resp, "data", None) or [])]
             return self._ok(f"🐦 Mentions:\n{json.dumps(items, indent=2)}")

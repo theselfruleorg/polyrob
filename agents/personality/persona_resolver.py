@@ -9,7 +9,10 @@ guidance (e.g. trading's "Never executes trades") shipped on one surface only.
 Single precedence, applied identically everywhere:
 
 1. Gate: ``task_personality_block_enabled()`` off -> ``""``.
-2. Explicit ``POLYROB_PERSONA``, through :func:`resolve_persona_selector`: a
+2. The OWNER's persona setting (``agents/personality/persona_setting.py`` — the
+   ``session.persona`` preference ``/persona <name>`` writes on every owner seat),
+   threat-scanned on read; else the operator's explicit ``POLYROB_PERSONA``.
+   Either runs through :func:`resolve_persona_selector`: a
    known template key renders that template's persona; a known CHARACTER slug
    renders that character (F1 — the selector namespace ``/persona`` lists);
    any other non-empty value is used as LITERAL free-form persona text.
@@ -83,8 +86,18 @@ def resolve_persona_selector(val: Optional[str]) -> Optional[str]:
     return val
 
 
-def _explicit_persona() -> Optional[str]:
-    """Tier 2: the operator-chosen POLYROB_PERSONA (template/character/literal)."""
+def _explicit_persona(user_id: Optional[str] = None, home_dir=None) -> Optional[str]:
+    """Tier 2: the owner's persona setting, else the operator-chosen POLYROB_PERSONA
+    (template/character/literal). A setting that fails its read-time scan is not
+    used (the operator's persona applies)."""
+    try:
+        from agents.personality.persona_setting import owner_selector
+        selector, _problem = owner_selector(user_id, home_dir)
+    except Exception as e:  # noqa: BLE001 — a broken setting must not stop a session
+        logger.debug(f"persona setting not read: {e}")
+        selector = ""
+    if selector:
+        return resolve_persona_selector(selector)
     return resolve_persona_selector(os.environ.get("POLYROB_PERSONA"))
 
 
@@ -105,7 +118,7 @@ def character_search_dirs(data_dir: Optional[str] = None) -> "list[Path]":
     if not data_dir:  # None/empty both resolve via the data-home SSOT
         try:
             from core.runtime_paths import data_dir_or_home
-            data_dir = data_dir_or_home((os.environ.get("POLYROB_DATA_DIR") or "").strip())
+            data_dir = data_dir_or_home(None)  # the data home (a pinned env wins)
         except Exception:
             data_dir = None
     if data_dir:
@@ -242,24 +255,26 @@ def _default_character_dict() -> Optional[dict]:
         return None
 
 
-def resolve_persona_sync() -> str:
-    """Persona text for surfaces without an initialized container (CLI/REPL)."""
+def resolve_persona_sync(user_id: Optional[str] = None, home_dir=None) -> str:
+    """Persona text for surfaces without an initialized container (CLI/REPL).
+    ``user_id``/``home_dir`` name the setting's scope (default: the owner's)."""
     if not _gate_on():
         return ""
-    explicit = _explicit_persona()
+    explicit = _explicit_persona(user_id, home_dir)
     if explicit is not None:
         return explicit
     from agents.personality.persona_render import render_persona_block
     return render_persona_block(_default_character_dict())
 
 
-async def resolve_persona(container=None) -> str:
+async def resolve_persona(container=None, user_id: Optional[str] = None,
+                          home_dir=None) -> str:
     """Persona text for async surfaces (chat front door). Same precedence; the
     character tier prefers the container's CharacterManager (honors config-driven
     default-character selection), falling back to the direct file read."""
     if not _gate_on():
         return ""
-    explicit = _explicit_persona()
+    explicit = _explicit_persona(user_id, home_dir)
     if explicit is not None:
         return explicit
     from agents.personality.persona_render import render_persona_block
