@@ -105,7 +105,7 @@ polyrob config check
 
 ## 3. Version notes
 
-### Upgrading to the next release
+### Upgrading to 1.7.14
 
 - The outgoing-message queue (`outbox.db`) gains two columns, `reply_to` and `actions`, the first
   time a process opens it; rows already queued keep working and read as "no reply target, no
@@ -128,6 +128,10 @@ polyrob config check
 - **`agent_nft_collection_mint` no longer takes `min_pnl_out`.** Its bound is `min_out_per_token`, the
   least each new account must receive from the sale's buy (else the mint reverts). A saved job, skill or script that passes `min_pnl_out`
   must use the new name.
+- **Email from the owner needs a known mail server.** An email sender, the owner too, counts as
+  authenticated only when the receiving server is one the agent knows (Gmail, Outlook/Office 365).
+  With an AgentMail, Fastmail, iCloud, Yahoo or self-hosted mailbox, email to the agent is refused:
+  reach the agent on a chat app instead.
 - **Production is one rule.** Any of `ENVIRONMENT`, `POLYROB_ENV`, `CONFIG_ENV` or `ENV` set to a
   production value, or `PRODUCTION=true`, marks the process as production. Production needs a strong
   `JWT_SECRET_KEY` (a weak or missing one stops the start), and the connected apps then need a real
