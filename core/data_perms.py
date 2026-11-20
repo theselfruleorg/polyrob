@@ -160,11 +160,12 @@ class PermsReport:
     def headline(self) -> str:
         if self.skipped:
             return f"data perms: not checked ({self.skip_reason})"
-        if self.offender_total == 0:
-            return (f"data perms: OK ({self.scanned} entries, group {self.group}, "
-                    f"group-writable, setgid dirs)")
-        parts = [f"{k}={v}" for k, v in sorted(self.counts.items()) if v]
         checked = f"; first {self.scanned:,} checked" if self.truncated else ""
+        if self.offender_total == 0:
+            # A scan stopped at its budget says so: the unchecked rest is not "OK".
+            return (f"data perms: OK ({self.scanned} entries, group {self.group}, "
+                    f"group-writable, setgid dirs{checked})")
+        parts = [f"{k}={v}" for k, v in sorted(self.counts.items()) if v]
         return (f"data perms: {self.offender_total} offender(s) in {self.data_dir} "
                 f"(by reason: {', '.join(parts)}{checked})")
 
