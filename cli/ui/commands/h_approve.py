@@ -20,7 +20,7 @@ Subcommands: ``list`` (default), ``add <action>``, ``remove <action>``.
   ``/config`` shows after a fresh ``approvals.require`` write
   (``h_config.py::_approval_gate_enforcement_warning``).
 - ``add <action>`` UNIONs ``<action>`` into the owner's ``approvals.require``
-  preference list directly (``write_preference``) — adding a gate only
+  preference list directly (``core.prefs_lists.add_list_entries``) — adding a gate only
   TIGHTENS policy, so it needs no owner-review queue (mirrors the "add=safe"
   half of the ``approvals.require`` union-merge contract in
   ``core.prefs.PREF_SCHEMA``). The CLI has no live tool registry to validate
@@ -135,13 +135,13 @@ def _cmd_add(ctx: ApproveCtx, rest: List[str]) -> str:
         return "usage: /gates add <action>"
     action = rest[0].strip()
 
-    from core.prefs import load_preferences, write_preference
+    from core.prefs import load_preferences
+    from core.prefs_lists import add_list_entries
 
     current = list(load_preferences(ctx.home_dir, ctx.user_id).get("approvals.require", []) or [])
     if action in current:
         return f"'{action}' is already in approvals.require (no change)."
-    updated = sorted(set(current) | {action})
-    ok, err = write_preference(ctx.home_dir, ctx.user_id, "approvals.require", updated)
+    ok, err, _ = add_list_entries(ctx.home_dir, ctx.user_id, "approvals.require", [action])  # 125 S20
     if not ok:
         return f"error: {err}"
     from tools.controller.approval import effective_approval_state

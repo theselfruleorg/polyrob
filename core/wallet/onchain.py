@@ -35,6 +35,14 @@ USDC_BASE_SEPOLIA = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
 VENUE_CHAIN = {"treasury": "base", "x402": "base",
                "hyperliquid": "arbitrum", "polymarket": "polygon"}
 
+#: The venues that hold a same-chain float at their DERIVED address — the only
+#: ones a balance is shown for, money is funded to, or the operational venue may
+#: be. hyperliquid (delegated signer, collateral in the master account) and
+#: polymarket (per-user proxy creds) NEVER do: showing a balance there re-creates
+#: the fund-the-wrong-address footgun. The ONE tuple (proposal 125 S14): /wallet,
+#: ``polyrob wallet``, the signer's config check and its provisioning read it.
+FUNDABLE_VENUES = ("treasury", "x402")
+
 
 def _read_table():
     """chain → (rpc, USDC erc20 contract, native symbol). The USDC decimals are the

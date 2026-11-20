@@ -26,7 +26,7 @@ from cli.ui.commands.registry import CommandContext
 from core.runtime_paths import data_dir_or_home
 
 # 113 W6 G-6: the one `/self` text every seat renders.
-from surfaces.telegram.self_memory_ops import (  # noqa: E402,F401 — the shared reply
+from modules.memory.self_memory_reply import (  # noqa: E402,F401 — the shared reply
     DOC_PREVIEW_CHARS as _DOC_PREVIEW_CHARS,
     TRUNCATION_MARKER as _TRUNCATION_MARKER,
     preview as _preview,
@@ -50,12 +50,12 @@ def _resolve_home_dir(ctx: CommandContext) -> Any:
 def h_self(ctx: CommandContext) -> None:
     """Show the running instance's identity: SOUL + SELF docs (read-only).
 
-    The chat seat's own reply (``surfaces.telegram.self_memory_ops.self_reply``,
+    The chat seat's own reply (``modules.memory.self_memory_reply.self_reply``,
     113 W6 G-6): the phone and the terminal read one text. Fail-open: an error
     degrades to one line, never raises into the REPL.
     """
     try:
-        from surfaces.telegram.self_memory_ops import self_reply
+        from modules.memory.self_memory_reply import self_reply
         ctx.emit(self_reply(ctx.user_id or "local", _resolve_home_dir(ctx)), title="self")
     except Exception as exc:
         ctx.emit(f"Could not resolve self-context: {exc}", title="self")

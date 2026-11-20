@@ -71,3 +71,21 @@ def test_top_level_prompt_is_unchanged_by_the_sub_agent_flag_default():
     text = SystemPrompt("x", use_native_tools=True, tool_ids=[]).get_system_message().content
     assert "IS your report to the parent" not in text
     assert "<message-shape>" in text
+
+
+def test_a_profile_built_worker_prompt_keeps_the_session_persona():
+    """A delegated worker with a profile builds its own prompt; before, it
+    dropped the persona and wrote public text in a neutral voice."""
+    ctx = ProfileManager._prompt_context(
+        {"injected_controller": _Controller(), "is_sub_agent": True,
+         "use_native_tools": True, "persona_block": "You are Nova — dry."},
+        _profile(), {})
+    ad = ctx.pop("action_description")
+    text = SystemPrompt(ad, **ctx).get_system_message().content
+    assert "You are Nova — dry." in text
+
+
+def test_no_persona_adds_no_key():
+    ctx = ProfileManager._prompt_context(
+        {"injected_controller": _Controller()}, _profile(), {})
+    assert "persona_block" not in ctx

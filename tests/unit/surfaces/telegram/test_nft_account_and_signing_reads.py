@@ -7,7 +7,8 @@ is not created, and an unreadable one is not "nothing signed".
 """
 import asyncio
 
-from surfaces.telegram import nft_ops, signing_ops
+from tools.defi.owner_verbs import nft as nft_ops
+from tools.defi.owner_verbs import wallet as signing_ops
 
 
 def test_nft_account_runs_the_snapshot_read(monkeypatch):
@@ -45,7 +46,7 @@ def test_signing_history_lists_the_journal(monkeypatch, tmp_path):
                   now=1_700_000_000.0, per_origin_day=5, all_origins_day=10)
     monkeypatch.setattr("tools.wallet_sign.store.store_path", lambda data_home=None: str(path))
     out = signing_ops.signing_history_reply(["5"])
-    assert "example.test — login (eip191, class A, by an autonomous run)" in out
+    assert "example.test — login (eip191, class A, on my own)" in out
     assert "d1" not in out  # the digest is not shown
 
 
@@ -59,7 +60,7 @@ def test_an_unreadable_journal_is_not_nothing_signed(monkeypatch, tmp_path):
 
 def test_wallet_signed_is_the_owner_verb(monkeypatch):
     monkeypatch.setattr("core.wallet.authority.owner_refusal", lambda uid: None)
-    monkeypatch.setattr("surfaces.telegram.signing_ops.signing_history_reply",
+    monkeypatch.setattr("tools.defi.owner_verbs.wallet.signing_history_reply",
                         lambda args: f"HISTORY {args}")
-    from surfaces.telegram.owner_ops import wallet_reply
+    from tools.defi.owner_verbs.wallet import wallet_reply
     assert wallet_reply(["signed", "3"], user_id="u_owner") == "HISTORY ['3']"

@@ -11,6 +11,7 @@ enforcement is skipped anyway (matching the no-auth posture).
 import os
 from typing import Optional
 
+from core.env import is_development_env
 from webview.copy import t
 
 
@@ -56,6 +57,6 @@ def render_owner_login(request, *, return_to: str = "/", error=None,
     from webview import webgate
     response.set_cookie(
         "csrf_nonce", nonce, max_age=600, httponly=True, samesite="lax",
-        secure=(not webgate.is_local() and os.environ.get("ENVIRONMENT", "production") == "production"), path="/owner-login",
+        secure=(not webgate.is_local() and not is_development_env()), path="/owner-login",
     )
     return response

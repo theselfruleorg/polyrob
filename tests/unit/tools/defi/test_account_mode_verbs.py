@@ -160,9 +160,9 @@ def test_resolve_by_id_and_by_account_agree(env):
     (dict(owner=STRANGER), str(ID), None, "does not own"),
     (dict(code="0x6080dead"), str(ID), None, "not the pinned"),
     (dict(account_code="0x"), str(ID), None, "not deployed"),
-    (dict(token=(8453, STRANGER, ID)), None, ACCOUNT, "not a pinned collection"),
+    (dict(token=(8453, STRANGER, ID)), None, ACCOUNT, STRANGER),   # 124 W3: read, then named
     (dict(token=(1, PINNED, ID)), None, ACCOUNT, "on chain 1"),
-    (dict(), f"{STRANGER}#{ID}", None, "not a pinned collection"),
+    (dict(), f"{STRANGER}#{ID}", None, STRANGER),
     (dict(), "99999", None, "outside the collection's ids"),
     (dict(), None, "0x" + "12" * 20, "not the pinned ERC-6551 account"),
 ])
@@ -174,23 +174,25 @@ def test_resolve_refuses(env, rpc_kw, nft, account, why):
     assert why in str(e.value)
 
 
-def test_resolve_refuses_with_nothing_pinned_or_an_untrusted_registry(env, monkeypatch):
+def test_resolve_with_nothing_pinned_or_an_untrusted_registry_asks_for_the_collection(env, monkeypatch):
+    """124 W3/5.5: no pin (or an unreadable pin store) is not a refusal — a bare id needs the
+    collection named, and a named collection is read from the chain."""
     pin(monkeypatch)
-    with pytest.raises(NftAccountError, match="no collection is pinned"):
+    with pytest.raises(NftAccountError, match="name the collection"):
         resolve("base", rpc=AcctRpc(env["signer"].address), treasury=env["signer"].address, nft="1")
     from core.wallet import collection_registry
 
     def boom():
         raise collection_registry.CollectionRegistryError("writable")
     monkeypatch.setattr(collection_registry, "profiles", boom)
-    with pytest.raises(NftAccountError, match="cannot be trusted"):
+    with pytest.raises(NftAccountError, match="name the collection"):
         resolve("base", rpc=AcctRpc(env["signer"].address), treasury=env["signer"].address, nft="1")
 
 
 def test_two_pinned_collections_need_the_collection_named(env, monkeypatch):
     other = "0xC011000000000000000000000000000000000002"
     pin(monkeypatch, profile(PINNED, chain_id=8453), profile(other, chain_id=8453))
-    with pytest.raises(NftAccountError, match="name one"):
+    with pytest.raises(NftAccountError, match="name the collection"):
         resolve("base", rpc=AcctRpc(env["signer"].address), treasury=env["signer"].address, nft="3")
     assert resolve("base", rpc=AcctRpc(env["signer"].address), treasury=env["signer"].address,
                    nft=f"{PINNED}#3").account == ACCOUNT

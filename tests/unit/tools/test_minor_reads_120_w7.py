@@ -18,7 +18,7 @@ import types
 
 import pytest
 
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from core.security.untrusted_wrap import wrap_untrusted
 from tools import goal_tools as T
 
@@ -247,11 +247,11 @@ async def test_recap_is_refused_for_a_tenant_that_is_not_the_owner(monkeypatch, 
 @pytest.mark.asyncio
 async def test_the_chat_journey_prints_the_same_recap(monkeypatch, tmp_path, entries):
     from core.recap import recap_reply
-    from surfaces.telegram import status_ops
+    from core.surfaces import owner_reads as status_ops
 
     async def _header(*a, **k):
         return ["header"]
-    monkeypatch.setattr(status_ops, "_health_header", _header)
+    monkeypatch.setattr(status_ops, "health_header", _header)
     out = await status_ops.journey_reply(OWNER, str(tmp_path / "data"), None, ["7d"])
     assert out == "header\n" + recap_reply(OWNER, str(tmp_path / "data"), "7d",
                                            more_tenant=OWNER)

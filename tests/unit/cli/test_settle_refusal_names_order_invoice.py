@@ -9,7 +9,7 @@ CAUSE = "or it is an order's invoice: give the transaction hash"
 
 @pytest.mark.asyncio
 async def test_telegram_settle_refusal_names_the_order_invoice(monkeypatch):
-    from surfaces.telegram import owner_ops
+    from tools.defi.owner_verbs import invoices as invoice_verbs
 
     async def _rows(**kwargs):
         return [{"request_id": "inv-1", "amount_usd": 5.0, "status": "pending"}]
@@ -18,7 +18,7 @@ async def test_telegram_settle_refusal_names_the_order_invoice(monkeypatch):
         return False
     monkeypatch.setattr("modules.x402.invoicing.list_payment_requests", _rows)
     monkeypatch.setattr("modules.x402.invoicing.settle_payment_request", _settle)
-    out = await owner_ops.settle_reply("alice", ["inv-1"])
+    out = await invoice_verbs.settle_reply("alice", ["inv-1"])
     assert "not settled" in out and CAUSE in out
 
 

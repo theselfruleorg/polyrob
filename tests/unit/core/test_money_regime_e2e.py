@@ -14,7 +14,7 @@ import types
 import pytest
 
 from core import autonomy_marker
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from core.config_policy.money_regime import (
     REGIME_ARMED, REGIME_AUTONOMOUS, REGIME_SUPERVISED, money_regime,
     money_regime_display)
@@ -277,7 +277,7 @@ def _authorize(ctx, monkeypatch, *, daily_cap=50.0):
     token = "0x" + "1" * 40
     intent = tx_guard.TxIntent(chain="base", token=token, to="0x" + "2" * 40,
                                amount_raw=1_000_000, max_spend_usd=5.0,
-                               idempotency_key="regime-e2e")
+                               idempotency_key="regime-e2e", why="the job's rule")
     return tx_guard.authorize(
         intent, {"to": "0x" + "2" * 40, "data": "0x"},
         holder="0x" + "3" * 40,
@@ -375,3 +375,5 @@ def test_every_guard_call_passes_the_goal_turn_detector():
             if "autonomous_ok_fn=" not in window.split(")")[0]:
                 offenders.append(f"{path.relative_to(root)}:{text[:m.start()].count(chr(10)) + 1}")
     assert not offenders, offenders
+
+

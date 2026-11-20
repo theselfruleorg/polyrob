@@ -30,6 +30,7 @@ single-worker scope — same constraint UP-12 already lives under). Gated by
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
@@ -44,6 +45,8 @@ from core.security.forged_turns import (  # noqa: F401
     SELF_WAKE_KIND,
 )
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class _SessionBudget:
@@ -53,6 +56,14 @@ class _SessionBudget:
 
 # Persisted budget rows older than this are dropped on hydrate.
 _STALE_BUDGET_SEC = 7 * 86400
+
+
+class BudgetStoreUnreadable(RuntimeError):
+    """The durable budget store is present but could not be read (125 S30, D9).
+
+    The budget is the runaway guard: an unreadable store must not read as "no
+    wakes used yet". ``try_consume`` raises this; ``allow`` reads it as False and
+    ``remaining`` as 0. Without a store (in-memory budget) it never fires."""
 
 
 class ReentryBudget:
@@ -79,19 +90,21 @@ class ReentryBudget:
         # survives a restart (a mid-storm loop must not get a free reset by
         # crashing). A store REQUIRES a wall-clock `clock` (persisted timestamps
         # must be comparable across processes — monotonic resets on reboot).
-        # Fail-open: store errors degrade to in-memory-only.
+        # 125 S30: an unreadable store fails CLOSED (BudgetStoreUnreadable);
+        # a failed write is best-effort.
         self._store = store
 
     def _hydrate_locked(self, session_id: str) -> Optional[_SessionBudget]:
         """The session's budget (caller holds the lock). With a store the DB row
         is read EVERY time (AG-11: it is the source; another process's wake or
-        reset shows at once); stale rows are dropped; errors read as no-row."""
+        reset shows at once); stale rows are dropped. A read error raises
+        :class:`BudgetStoreUnreadable` (125 S30: never read as no-row)."""
         if self._store is None:
             return self._by_session.get(session_id)
         try:
             row = self._store.get_budget(session_id)
-        except Exception:
-            return None
+        except Exception as e:
+            raise BudgetStoreUnreadable(str(e)) from e
         if not row:
             return None
         if (time.time() - float(row.get("last_wake_at") or 0.0)) > _STALE_BUDGET_SEC:
@@ -117,7 +130,10 @@ class ReentryBudget:
         if self._max <= 0:
             return False
         with self._lock:
-            b = self._hydrate_locked(session_id)
+            try:
+                b = self._hydrate_locked(session_id)
+            except BudgetStoreUnreadable:
+                return False
             if b is None:
                 return True
             if b.count >= self._max:
@@ -128,25 +144,34 @@ class ReentryBudget:
 
     def record(self, session_id: str, user_id: str = "") -> None:
         """Account a forged wake that was just dispatched."""
-        if self._store is not None and self._store_consume(session_id, user_id, force=True):
-            return
+        if self._store is not None:
+            try:
+                if self._store_consume(session_id, user_id, force=True):
+                    return
+            except BudgetStoreUnreadable:
+                pass   # accounting after the fact: count it in memory below
         with self._lock:
-            b = self._hydrate_locked(session_id) or self._by_session.setdefault(
-                session_id, _SessionBudget())
+            try:
+                b = self._hydrate_locked(session_id)
+            except BudgetStoreUnreadable:
+                b = None  # accounting after the fact: count in memory, never drop it
+            b = b or self._by_session.setdefault(session_id, _SessionBudget())
             b.count += 1
             b.last_wake_at = self._clock()
             self._persist_locked(session_id, b)
 
     def _store_consume(self, session_id: str, user_id: str = "", *,
-                       force: bool = False) -> Optional[bool]:
-        """AG-11: the cross-process CAS; None when the store failed (fall back
-        to this process's memory)."""
+                       force: bool = False) -> bool:
+        """AG-11: the cross-process CAS. A store that fails raises
+        :class:`BudgetStoreUnreadable` (logged, with its cause): ``try_consume``
+        fails closed on it (125 S30); ``record`` counts the wake in memory."""
         try:
             return bool(self._store.consume_budget(
                 session_id, user_id, max_reentries=self._max, backoff_s=self._backoff,
                 now=self._clock(), force=force))
-        except Exception:
-            return None
+        except Exception as e:
+            logger.warning("reentry budget store failed for %s: %s", session_id, e, exc_info=True)
+            raise BudgetStoreUnreadable(f"reentry budget store failed for {session_id}") from e
 
     def try_consume(self, session_id: str, user_id: str = "") -> bool:
         """Atomic allow()+record(): True (and consumes a slot) iff within budget.
@@ -158,9 +183,9 @@ class ReentryBudget:
         if self._max <= 0:
             return False
         if self._store is not None:
-            res = self._store_consume(session_id, user_id)
-            if res is not None:
-                return res
+            # 125 S30 (D9): a store that fails raises — fail CLOSED, never fall back
+            # to this process's empty memory (a free budget reset).
+            return self._store_consume(session_id, user_id)
         with self._lock:
             b = self._hydrate_locked(session_id)
             if b is None:
@@ -186,7 +211,10 @@ class ReentryBudget:
 
     def remaining(self, session_id: str) -> int:
         with self._lock:
-            b = self._hydrate_locked(session_id)
+            try:
+                b = self._hydrate_locked(session_id)
+            except BudgetStoreUnreadable:
+                return 0
             used = b.count if b else 0
             return max(0, self._max - used)
 

@@ -140,7 +140,7 @@ def test_positions_policy_matches_portfolio():
     from core.verb_policy_rows import CORE_VERB_ROWS
     row = CORE_VERB_ROWS["defi_data"]["defi_data_positions"]
     assert row == CORE_VERB_ROWS["defi_data"]["defi_data_portfolio"]
-    from agents.task.agent.core.correspondent_gate import is_high_impact
+    from core.security.high_impact import is_high_impact
     assert is_high_impact("defi_data_positions") is True
 
 

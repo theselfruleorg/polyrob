@@ -4,7 +4,7 @@ one goal of ANOTHER tenant that must never show.
 
 Shared by ``test_goal_board_routes.py`` and the rendered-board check
 (``tests/integration/test_goal_board_render.py``)."""
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from core.sqlite_util import execute_retry
 
 

@@ -419,7 +419,7 @@ def test_b42_host_header_cannot_set_the_base_url(monkeypatch):
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert "evil.example" not in str(body)
-    assert body["url"] == "https://real.example/a2a"
+    assert body["url"] == "https://real.example/a2a/rpc"
 
 
 def test_b42_unconfigured_base_url_is_loopback_not_a_guess(monkeypatch):
@@ -454,7 +454,7 @@ def test_b43_bad_session_id_is_400_not_500(monkeypatch):
         def clean_session_id(self, sid):
             raise ValueError("Security violation: traversal")
 
-    monkeypatch.setattr("agents.task.path.pm", lambda: _PM())
+    monkeypatch.setattr("core.session_paths.pm", lambda: _PM())
     with pytest.raises(HTTPException) as ei:
         thttp.clean_session_id_at_entry("../../etc/passwd")
     assert ei.value.status_code == 400

@@ -26,7 +26,7 @@ from polyrob_markets.polymarket.api_models import (
     ErrorResponse,
 )
 from polyrob_markets.polymarket.models import TradingLimits
-from api.dependencies import get_user_id, get_client_ip
+from polyrob.sdk import get_client_ip, get_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -35,13 +35,13 @@ router = APIRouter(prefix="/polymarket", tags=["polymarket"])
 
 async def get_polymarket_tool():
     """Get PolymarketTool from container."""
-    from api.dependencies import require_service
+    from polyrob.sdk import require_service
     return require_service("polymarket", missing="Polymarket service not available")
 
 
 async def get_polymarket_db():
     """Get PolymarketDBHandler from container."""
-    from api.dependencies import require_service
+    from polyrob.sdk import require_service
     return require_service("polymarket_db", missing="Polymarket database not available")
 
 

@@ -63,7 +63,7 @@ def test_run_sets_the_protocol_and_drops_an_unset_id(monkeypatch):
     async def dispatch(user_id, action, values):
         seen.update(action=action, values=dict(values))
         return None
-    monkeypatch.setattr('surfaces.telegram.lp_ops.dispatch', dispatch)
+    monkeypatch.setattr('tools.defi.owner_verbs.lp.dispatch', dispatch)
     monkeypatch.setattr('cli.commands.wallet._admin_tenant', lambda: 'owner')
     monkeypatch.setattr('cli.commands.wallet._echo_result', lambda result, what: None)
     wallet_lp.run('positions', {'chain': 'c', 'token_id': None}, v4=True)

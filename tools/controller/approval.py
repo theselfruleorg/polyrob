@@ -284,7 +284,8 @@ class ApprovalOutcome:
     """What a provider's answer MEANS (095 W1b): falsy unless approved, so every
     caller that tests the answer as a bool keeps working.
 
-    ``kind``: approved | pending | denied_by_owner | timeout | not_created | crashed.
+    ``kind``: approved | pending | denied_by_owner | timeout | not_created | crashed |
+    carded (126: the call became ONE owner card; ``reason`` is the agent's text).
     ``reason`` (not_created): forged | leaf | autonomous | tainted | store_down |
     no_provider | money_owner | busy | duplicate | closed. ``pending_id`` is set only when an
     owner ask really exists — the one fact that may send the owner to /pending.
@@ -483,22 +484,25 @@ def _emit_approval_event(kind: str, action_name: str, context: Any, **fields: An
         logger.debug("approval run-event emit failed", exc_info=True)
 
 
-def _stamp_owner_grant(context, params: Dict[str, Any]) -> None:
+def _stamp_owner_grant(context, params: Dict[str, Any], *, action: str = "") -> None:
     """Carry the owner's approval of THIS call to the money guard.
 
     ``tx_guard`` step 9 reads it (``core.wallet.tx_guard.OWNER_GRANT_KEY``):
     without it an approved spend above the autonomous ceiling was re-queued by
     the guard and never sent. It covers the declared ``max_spend_usd`` only —
     the guard holds the simulated value to that bound — and the controller
-    clears it before the next action (``tools/controller/execution.py``).
+    clears it before the next action (``tools/controller/execution.py``). A
+    reveal names no bound: its bound is the operator's fee cap
+    (``core.wallet.collection_reveal.declared_usd``; rig CW2, 2026-11-20).
     Never raises: a grant that cannot be stamped just leaves the ceiling on.
     """
     try:
         metadata = getattr(context, "metadata", None)
         if not isinstance(metadata, dict):
             return
-        declared = params.get("max_spend_usd")
-        if isinstance(declared, bool) or not isinstance(declared, (int, float)):
+        from core.wallet.collection_reveal import declared_usd
+        declared = declared_usd(action, params)
+        if declared is None:
             return
         from core.wallet.tx_guard import OWNER_GRANT_KEY
         metadata[OWNER_GRANT_KEY] = {"approved": True, "max_spend_usd": float(declared)}
@@ -666,10 +670,13 @@ def make_approval_hook(
                 outcome = ApprovalOutcome(
                     "crashed", reason=f"provider crashed: {type(e).__name__}: {e}")
             decision = {"approved": "approved", "timeout": "timeout",
-                        "crashed": "error"}.get(outcome.kind, "denied")
+                        "crashed": "error", "carded": "carded"}.get(outcome.kind, "denied")
+            if outcome.kind == "carded":
+                # 126 wave 5: not a refusal — the owner's card runs THIS call.
+                return outcome.reason
             if outcome:
                 if getattr(provider, "decides_as_owner", False) is True:
-                    _stamp_owner_grant(context, params or {})
+                    _stamp_owner_grant(context, params or {}, action=action_name)
                 return None
             # The ONE record of this refusal; the kind names the cause.
             from core.security.refusals import record_refusal

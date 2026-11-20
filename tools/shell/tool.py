@@ -130,7 +130,7 @@ class ShellTool(BaseTool):
     def _save_dir(execution_context):
         try:
             from pathlib import Path
-            from agents.task.path import pm
+            from core.session_paths import pm
             sid = getattr(execution_context, "session_id", None) or "shell"
             return Path(pm().get_logs_dir(sid, getattr(execution_context, "user_id", None))) / "shell"
         except Exception:
@@ -179,7 +179,7 @@ class ShellTool(BaseTool):
         sid = getattr(execution_context, "session_id", None) or "shell"
         uid = getattr(execution_context, "user_id", None) or ""
         try:
-            from agents.task.agent.core.self_wake import effective_self_wake_enabled
+            from agents.task.public import effective_self_wake_enabled
             from core.runtime_paths import data_dir_or_home
             if not effective_self_wake_enabled(uid, data_dir_or_home(None)):
                 return None

@@ -120,8 +120,9 @@ def skills_export(skill_id: str, dest: Optional[str]):
     ``--to DIR`` targets ``DIR/<skill_id>`` instead. Refuses to clobber an
     existing target directory.
     """
-    import shutil
     from pathlib import Path
+
+    from core import fs_copy
 
     mgr = get_skill_manager()
     src = mgr.resolve_skill_dir(skill_id)
@@ -132,7 +133,7 @@ def skills_export(skill_id: str, dest: Optional[str]):
     if out.exists():
         raise click.ClickException(f"already exists: {out} (remove it first)")
     out.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(src, out)
+    fs_copy.copy_tree(src, out)
     click.echo(f"exported {skill_id} -> {out}")
 
 

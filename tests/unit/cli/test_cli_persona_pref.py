@@ -7,7 +7,16 @@ pref > env > default); the resolver itself (agents.personality.persona_resolver)
 is never touched — the wiring lives entirely at the cli.persona call site.
 """
 from core.prefs import write_preference
+import pytest
+
 from cli.persona import resolve_cli_persona
+
+
+@pytest.fixture(autouse=True)
+def _own_data_home(tmp_path, monkeypatch):
+    """The owner's persona setting (agents/personality/persona_setting.py) is read
+    from the data home: give every test its own, never a shared or real one."""
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
 
 
 def test_no_user_id_is_legacy_unchanged(monkeypatch):
@@ -81,7 +90,7 @@ def test_suspicious_persona_pref_falls_back_to_default(tmp_path, monkeypatch):
 
 
 def test_persona_pref_scan_error_falls_back_to_default(tmp_path, monkeypatch):
-    import modules.memory.task.threat_scan as threat_scan
+    import core.security.threat_scan as threat_scan
 
     def _raise(_text):
         raise RuntimeError("boom")

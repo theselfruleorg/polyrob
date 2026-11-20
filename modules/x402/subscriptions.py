@@ -24,7 +24,7 @@ refused at creation, mirroring ``invoicing.create_payment_request``. The
 system-wide sweep queries (``subscriptions_needing_renewal`` /
 ``subscriptions_to_grace`` / ``subscriptions_to_suspend``) are deliberately
 NOT tenant-scoped — they are the ticker's own cross-tenant pass, exactly like
-``agents.task.goals.board.GoalBoard.ready()`` is not tenant-scoped.
+``modules.goals.board.GoalBoard.ready()`` is not tenant-scoped.
 
 Landmine (T3 pattern, repeated here on purpose): ``DatabaseConnection`` auto-
 parses JSON-looking TEXT columns into dicts, so an exact match on

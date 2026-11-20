@@ -1,7 +1,7 @@
 """057 WS-A: goal_create carries a named tool rig."""
 import asyncio
 
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from tools.goal_tools import GoalTool, GoalCreateAction
 
 
@@ -59,9 +59,9 @@ import pytest
 @pytest.fixture
 def _supervised(monkeypatch):
     """The historical allowlist: no full autonomy, no defi autonomy."""
-    monkeypatch.setattr("tools.goal_tools.allowed_self_goal_tools",
-                        lambda: __import__("tools.goal_tools", fromlist=["x"])
-                        ._SELF_GOAL_ALLOWED_TOOLS)
+    monkeypatch.setattr("core.tool_grants.allowed_self_goal_tools",
+                        lambda: __import__("core.tool_grants", fromlist=["x"])
+                        .SELF_GOAL_ALLOWED_TOOLS)
 
 
 @pytest.mark.parametrize("rig,leaks", [

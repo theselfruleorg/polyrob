@@ -263,7 +263,7 @@ async def test_mode_renders_card_and_change_hint(tg_env):
     out = await act_on_inbound(_Agent(str(tg_env)), _cmd("/mode", "/mode"))
     # 104: the four answers, on the seat's own words.
     for answer in ("You are the owner, in Telegram", "Without asking:", "Asks first:",
-                   "When you are away:", "To change from here: `/config set AUTONOMY_ENABLED"):
+                   "When you are away:", "To change from here: /pause"):
         assert answer in out, f"answer {answer!r} missing:\n{out}"
     assert "polyrob config set" not in out
     # `/mode all` keeps the card for whoever wants the settings behind it.

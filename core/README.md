@@ -51,9 +51,12 @@ core/
 ├── seams.py                     # core⇄platform seam seed: the frozen LLMUsage carrier (the UsageRecorder/admission/PaymentVerifier Protocols land with the seam-inversion plan)
 ├── secret_scan.py               # Workspace secret/VCS scan (SEC-1 launch-in-a-repo backstop)
 ├── secret_scrub.py              # Pattern-based secret redaction for persisted content
+├── brain_scrubber.py            # Strips leaked brain-state JSON from the user-facing stream
+├── think_scrubber.py            # Strips leaked <think>/<reasoning> blocks at the content seam
 ├── tool_catalog.py              # Product-facing tool catalog builder (from tools/descriptors.py)
 ├── config_policy/               # Flag/policy resolvers: policy.py FACADE over _env, local_profile, autonomy_mode, autonomy_posture, compute_posture, payment_policy, capability_toggles, autonomy_config, runtime_gates (+ goal_flags, spend_lane, payment_tools, posture_card, flag_defaults, flag_enums, memory_policy)
-├── security/                    # Tier-0 security primitives (secret_guard, untrusted_wrap, forged_turns)
+├── security/                    # Tier-0 security primitives (secret_guard, untrusted_wrap, forged_turns,
+│                                #   high_impact, safe_fetch, loopback_allow, threat_scan)
 ├── llm_auth/                    # LLM credential store + resolution oracle + OAuth flows
 ├── surfaces/                    # Surface contracts (CLI/WebView/etc.)
 └── wallet/                      # Native agent wallet (signer, policy gate, audit sink)
@@ -188,7 +191,6 @@ Orchestrates the complex initialization sequence of interdependent components.
 - `initialize_core()` - Core components (config, logging, container)
 - `initialize_modules()` - Database, LLM, memory systems
 - `initialize_tools()` - Tool services
-- `initialize_managers()` - State managers
 - `initialize_agents()` - AI agents
 - `cleanup_core()` - Resource cleanup
 - `cleanup_tools()` - Tool cleanup
@@ -342,7 +344,7 @@ __all__ = [
     
     # Initialization
     'initialize_core', 'initialize_modules', 'initialize_tools',
-    'initialize_managers', 'initialize_agents', 'cleanup_core', 'cleanup_tools',
+    'initialize_agents', 'cleanup_core', 'cleanup_tools',
     
     # Logging
     'setup_logging', 'get_component_logger', 'initialize_task_logging',

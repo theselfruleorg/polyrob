@@ -55,7 +55,6 @@ def mcp_inventory(tenant: Optional[tuple], container: Any, *,
     ``tenant`` is ``(rows, error)`` (None = not read); ``detail`` renders a server
     config without its secrets (the console's scrubber)."""
     from tools.gate_effective import tool_state
-    from tools.mcp.config import mcp_gate_on  # noqa: F401 — registers the gate
     state, why = tool_state("mcp", "MCP_ENABLED", None, container=container)
     enabled = state == "ON"
     operator, note = operator_servers(container)

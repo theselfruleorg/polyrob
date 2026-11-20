@@ -269,3 +269,15 @@ def test_the_overlay_needs_no_stylesheet_of_its_own(writable_client):
     assert "<dialog" in html
     assert "/static/app/app.css" in html
     assert html.count("<link rel=\"stylesheet\"") == 5
+
+
+def test_read_only_keeps_read_it_and_its_script(client, monkeypatch):
+    """2026-11-20: "Read it" is a GET. A read-only console decides nothing, but
+    the owner can still read a proposal's why, changes and diff."""
+    from core.surfaces.inbox import Item
+    soup = _inbox_soup(client, monkeypatch, [
+        Item(kind="proposal", id="p1", title="a change", actions=("approve", "show"),
+             source="self_evolution")])
+    assert not soup.select(".entry-actions button[data-verb]")
+    assert len(soup.select(".entry-actions button[data-read]")) == 1
+    assert "/static/app/inbox.js" in [s_.get("src") for s_ in soup.select("script[src]")]

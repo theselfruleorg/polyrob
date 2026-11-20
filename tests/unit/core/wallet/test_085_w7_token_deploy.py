@@ -182,7 +182,7 @@ def test_format_supply_is_exact(value, text):
 
 @pytest.mark.asyncio
 async def test_the_telegram_retry_hint_carries_the_exact_supply(monkeypatch):
-    from surfaces.telegram import token_ops
+    from tools.defi.owner_verbs import token as token_ops
     import tools.defi.deploy_verb as dv
     seen = {}
 
@@ -249,7 +249,7 @@ def _hint_args(out: str):
 @pytest.mark.parametrize("chain", ["base", "solana"])
 async def test_deploy_parses_and_the_retry_hint_round_trips(
         monkeypatch, typed, expected, chain):
-    from surfaces.telegram import token_ops
+    from tools.defi.owner_verbs import token as token_ops
     import tools.defi.deploy_verb as dv
     import tools.defi.spl_deploy_verb as sv
     seen = []
@@ -270,7 +270,7 @@ async def test_deploy_parses_and_the_retry_hint_round_trips(
 @pytest.mark.asyncio
 async def test_the_repl_deploy_verb_rides_the_same_parser(monkeypatch):
     from cli.ui.commands import h_token
-    from surfaces.telegram import token_ops
+    from tools.defi.owner_verbs import token as token_ops
     import inspect
     assert "token_ops.deploy_reply" in inspect.getsource(h_token)
     assert token_ops._exact_positive("1,000,000") == Decimal(10 ** 6)

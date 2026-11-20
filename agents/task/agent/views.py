@@ -19,7 +19,7 @@ from agents.task.loop_types.dom_history_service import (
 	HistoryTreeProcessor,
 )
 from agents.task.loop_types.dom_views import SelectorMap
-from agents.task.path import pm
+from core.session_paths import pm
 
 
 @dataclass

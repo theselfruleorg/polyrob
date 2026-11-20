@@ -137,7 +137,7 @@ def test_nothing_moves_when_the_new_db_exists(tmp_path):
 def test_the_update_snapshot_captures_an_unmoved_legacy_tree(tmp_path, server_env):
     home = _v140_home(tmp_path)
     server_env(home)
-    from cli.update.context import resolve_update_context
+    from core.update_snapshot.context import resolve_update_context
     ctx = resolve_update_context(local=False)
     dbs = {p.resolve() for p in ctx.db_paths}
     assert (home / "data" / "database" / "bot.db").resolve() in dbs

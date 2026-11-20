@@ -652,7 +652,7 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 					return ActionResult(error=f"Knowledge-base search failed ({e}); nothing was searched.",
 					                    include_in_memory=True)
 
-			from agents.task.agent.core.memory_prefetch import memory_read_error, recall_reader
+			from agents.task.public import memory_read_error, recall_reader
 			from modules.memory.registry import memory_search
 			try:  # D2: the reader's regime ranks; D3: a read failure is never "no match"
 				recalled = await memory_search(
@@ -801,7 +801,7 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 				try:
 					notes = await prov.curated_read(user_id)
 				except Exception as e:  # D14: never "your curated memory is empty"
-					from agents.task.agent.core.memory_prefetch import memory_read_error
+					from agents.task.public import memory_read_error
 					return ActionResult(error=memory_read_error(e, "Curated memory"), include_in_memory=False)
 				if notes.strip():
 					# P1-7: agent-authored notes read back later — untrusted DATA, like all recall.
@@ -837,7 +837,7 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 				"""True when the write must be rejected. Fail-CLOSED like skill
 				writes: a scanner error blocks the write (never persist unscanned)."""
 				try:
-					from modules.memory.task.threat_scan import is_suspicious
+					from core.security.threat_scan import is_suspicious
 					return any(is_suspicious(t) for t in texts if t)
 				except Exception:
 					return True
@@ -1000,7 +1000,7 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 			res = await perform_message_action(
 				router=router, allowlist=allowlist, owner_targets=owner_targets,
 				user_id=user_id, surface=surface, target=target,
-				text=params.text, action=params.action, reply_to=params.reply_to,
+				text=params.text, action=params.action, reply_to=params.reply_to, thread_id=params.thread_id,
 				message_id=params.message_id, media_paths=params.media_paths, post=params.post, last=params.last,
 				session_id=session_id, container=container, execution_context=execution_context, controller=self)
 			return _message_action_result(res, surface, target, params.text)
@@ -1044,7 +1044,7 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 			return
 
 		from tools.controller.views import DelegateTaskAction
-		from tools.controller.delegation import evaluate_delegation
+		from core.delegation_policy import evaluate_delegation
 
 		# UP-10 2.4: the single gated delegation core (role+depth gate,
 		# evaluate_delegation).
@@ -1158,9 +1158,9 @@ class ActionRegistrationMixin(DocAuthoringMixin, PreferencesActionMixin):
 				build_fn = getattr(parent_agent, '_create_llm_from_config_async', None) if parent_agent else None
 				if build_fn is None:
 					return None, f"Could not build sub-agent model '{m}': parent agent unavailable"
-				from agents.task.model_choice import child_model_check
-				refusal = await child_model_check(parent_agent, m, p, _route)
-				if refusal:
+				from agents.task.model_choice import child_model_check, child_provider
+				named, p = bool(p), await child_provider(parent_agent, m, p)   # one provider for the check and the build
+				if refusal := await child_model_check(parent_agent, m, p, _route, detected=not named):
 					return None, f"Sub-agent model {refusal}"
 				cfg = {"model": m, **({"provider": p} if p else {})}
 				try:

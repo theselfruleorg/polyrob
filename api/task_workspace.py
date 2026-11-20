@@ -95,7 +95,7 @@ async def get_workspace_file(
     """
     from fastapi.responses import FileResponse
     import mimetypes
-    from agents.task.path import pm
+    from core.session_paths import pm
     from api.task_http_api import _guard_session_route, _require_session_owner, \
         clean_session_id_at_entry
 

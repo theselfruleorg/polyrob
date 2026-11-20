@@ -87,7 +87,7 @@ def _service_sizes(container) -> dict:
         for attr, value in list(getattr(instance, "__dict__", {}).items()):
             if isinstance(value, SIZED):
                 sizes[f"service:{service}.{attr}"] = len(value)
-    from agents.task.path import _SINGLETON_REGISTRY
+    from core.session_paths import _SINGLETON_REGISTRY
     for key, instance in list(_SINGLETON_REGISTRY.items()):
         for attr, value in list(getattr(instance, "__dict__", {}).items()):
             if isinstance(value, SIZED):

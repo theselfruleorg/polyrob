@@ -6,7 +6,7 @@ metadata:
   polyrob-when: 'Uniswap v3/v4 liquidity: add, remove, judge, move a range'
   polyrob-priority: '2'
   polyrob-triggers: '{"tool_ids":["defi_trade","defi_data"]}'
-  polyrob-version: '3'
+  polyrob-version: '5'
 ---
 # DeFi Liquidity — Uniswap v3 and v4 positions
 
@@ -17,7 +17,9 @@ position's result, or propose to shrink or move one, read
 `references/managing-a-position.md`: what a position does when the price moves, the result
 against holding, the three size ratios, when to propose a smaller position, range choice
 and the steps of a move. A position that is most of its pool pays for the net selling:
-watch its native leg, not only its USD value.
+watch its native leg, not only its USD value. Watch it with a job that WAKES you
+(a `precheck`, §7 of the reference), never an alert-only read job. You keep it in shape
+yourself: collect, re-range to a band around the price, and put the plan on one card (§4b).
 
 ## Liquidity
 

@@ -264,7 +264,7 @@ def _seed_stores() -> None:
     """An empty, READABLE fresh instance: the goal board, the cron store and
     the telemetry log exist, so the step-1 blocks read "nothing" rather than
     "could not read" (whose error text would carry a machine path)."""
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from core.event_log import get_event_log, telemetry_db_path
     from core.runtime_paths import cron_db_path, goals_db_path
     from cron.jobs import CronJobStore

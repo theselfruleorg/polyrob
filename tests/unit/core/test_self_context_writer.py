@@ -181,7 +181,7 @@ def test_patch_prefers_pending_draft_over_active(tmp_path):
 
 def test_scanner_raising_is_fail_closed(tmp_path, monkeypatch):
     # CRIT-1: a raising identity scanner must REJECT the write (fail-closed), not skip.
-    import modules.memory.task.threat_scan as ts
+    import core.security.threat_scan as ts
 
     def _boom(_text):
         raise RuntimeError("scanner exploded")
@@ -252,7 +252,7 @@ def test_scan_gate_is_shared_by_all_three_writers(tmp_path, monkeypatch):
     """T4 (2026-07-16): the fail-CLOSED identity gate must be ONE implementation —
     a raising scanner rejects the write in every writer, and the subclasses must
     not carry their own copy-pasted propose() bodies (the 3-copy drift hazard)."""
-    import modules.memory.task.threat_scan as ts
+    import core.security.threat_scan as ts
 
     def _boom(_body):
         raise RuntimeError("scanner exploded")

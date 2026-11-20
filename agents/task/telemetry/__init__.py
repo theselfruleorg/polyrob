@@ -40,7 +40,7 @@ ProductTelemetry = None
 
 def get_telemetry():
     """Get the ProductTelemetry instance safely using singleton pattern"""
-    from agents.task.path import get_safe_singleton
+    from core.session_paths import get_safe_singleton
     from agents.task.telemetry.service import ProductTelemetry
     return get_safe_singleton(ProductTelemetry)()
 

@@ -201,7 +201,7 @@ def test_the_real_cron_scheduler_exposes_what_the_drain_reads():
 def test_the_real_goal_dispatcher_exposes_what_the_drain_reads():
     from agents.task.goals.dispatcher import GoalDispatcher
     assert callable(getattr(GoalDispatcher, "hold_inflight", None))
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     assert callable(getattr(GoalBoard, "get", None))
     assert callable(getattr(GoalBoard, "hold_running", None))
 
@@ -209,7 +209,7 @@ def test_the_real_goal_dispatcher_exposes_what_the_drain_reads():
 def test_cut_by_restart_is_the_vocabulary_the_ledger_already_renders():
     """056 WS1 named this outcome; the shutdown drain must use THAT word, not a
     second one nobody renders."""
-    src = (REPO / "cron/jobs.py").read_text()
+    src = (REPO / "core/cron_store.py").read_text()
     assert '"cut_by_restart"' in src
     status = (REPO / "core/status_loops.py").read_text()  # W9: the loops section
     assert "cut_by_restart" in status

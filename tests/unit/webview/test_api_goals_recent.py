@@ -60,7 +60,7 @@ class _RaisingBoard(_ListForbidden):
 
 
 def _goal(id_, user_id, title, status):
-    from agents.task.goals.board import Goal
+    from modules.goals.board import Goal
     return Goal(id=id_, user_id=user_id or "u1", title=title, status=status)
 
 
@@ -116,7 +116,7 @@ def test_goals_disabled_still_lists_the_stored_goals(monkeypatch, tmp_path):
     goal. With the dispatcher off the board is still listed, flagged off."""
     client, pages = _client(monkeypatch, tmp_path, user_id="u1")
     monkeypatch.setattr(pages.AutonomyConfig, "goals_enabled", staticmethod(lambda: False))
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from core.runtime_paths import goals_db_path
     board = GoalBoard(goals_db_path(str(tmp_path)))
     g = board.create(user_id="u1", title="stored while off")

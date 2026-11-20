@@ -8,7 +8,7 @@ import pytest
 
 from agents.task.agent.skill_manager import SkillManager
 from core.skills import scopes
-from surfaces.telegram import skills_ops
+from agents.task import skills_owner as skills_ops
 
 pytestmark = pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
                                 reason="root reads everything; there is nothing to lock")

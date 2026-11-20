@@ -38,7 +38,9 @@ class _Tool:
                     "  RESULT: DRY RUN (simulation only)")
         else:
             body = "transfer\n  RESULT: SENT AND CONFIRMED\n  tx: 0xabc"
-        return SimpleNamespace(error=None, extracted_content=body)
+        return SimpleNamespace(error=None, extracted_content=body, metadata={
+            "simulated_usd": self.usd, "sent_usd": None, "unverified": False,
+            "allowed": True, "dry_run": params.dry_run})
 
 
 class _Container:
@@ -239,3 +241,31 @@ def test_the_room_mode_line_a_card_stores_changes_the_mode_on_the_seat(env):
     reply = reply_text(_run(_agent(env.dir), proposal.line))
     policy = chat_policy.load(env.dir, resolve_owner_user_id(), "telegram", chat)
     assert policy.mode == "active", reply
+
+
+def test_a_decision_tap_retires_only_its_own_item():
+    """2026-11-20 UX review M1: Approve A left B and C with no buttons."""
+    from surfaces.telegram.card_ops import retire_tapped_buttons
+    bot = _Bot()
+    upd = _tap_update()
+    upd["message"]["callback_markup"] = {"inline_keyboard": [
+        [{"text": "Approve", "callback_data": "/approve_p_abc"},
+         {"text": "Reject", "callback_data": "/reject_p_abc"}],
+        [{"text": "Approve", "callback_data": "/approve_p_def"},
+         {"text": "Reject", "callback_data": "/reject_p_def"}]]}
+    assert asyncio.run(retire_tapped_buttons(bot, upd, "✅ Approved."))
+    left = bot.edits[0]["reply_markup"]
+    rows = left.inline_keyboard if hasattr(left, "inline_keyboard") else left["inline_keyboard"]
+    datas = [getattr(b, "callback_data", None) or b["callback_data"] for row in rows for b in row]
+    assert datas == ["/approve_p_def", "/reject_p_def"]
+
+
+def test_a_menu_tap_keeps_every_button():
+    from surfaces.telegram.card_ops import retire_tapped_buttons
+    bot = _Bot()
+    upd = _tap_update()
+    upd["message"]["text"] = "/nav_0123456789ab"
+    assert not asyncio.run(retire_tapped_buttons(bot, upd, "**Money**"))
+    upd["message"]["text"] = "/status"
+    assert not asyncio.run(retire_tapped_buttons(bot, upd, "Health: OK"))
+    assert bot.edits == []

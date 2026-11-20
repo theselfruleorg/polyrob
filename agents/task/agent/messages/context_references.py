@@ -216,7 +216,7 @@ def _load_url(url: str) -> Optional[str]:
 	# safe_fetch validates and pins EVERY hop, closing that gap. Bridge the async
 	# fetcher into this sync callback via the shared background loop.
 	try:
-		from tools.web_fetch.fetcher import safe_fetch
+		from core.security.safe_fetch import safe_fetch
 		from core.async_bridge import run_coroutine_sync
 
 		result = run_coroutine_sync(

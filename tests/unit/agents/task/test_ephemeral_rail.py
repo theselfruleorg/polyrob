@@ -19,7 +19,7 @@ from unittest.mock import MagicMock
 import agents.task.agent.service  # noqa: F401 (import order)
 from agents.task.agent.message_manager.service import MessageManager
 from agents.task.agent.prompts import SystemPrompt
-from agents.task.path import get_path_manager, set_path_manager
+from core.session_paths import get_path_manager, set_path_manager
 from modules.llm.messages import HumanMessage, MessageOrigin, make_control_message
 
 SESSION = "test-ephemeral-rail"

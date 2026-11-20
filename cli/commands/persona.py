@@ -124,17 +124,14 @@ def scaffold_character(slug: str, *, preset: str | None = None,
 
 def _echo_block(data: dict) -> None:
     """Print exactly what the model receives, plus what it will NOT receive."""
-    from agents.personality.persona_render import (
-        ignored_populated_fields, render_persona_block,
-    )
+    from agents.personality.persona_render import render_persona_block, stored_only_note
     block = render_persona_block(data)
     click.echo("\n--- rendered persona block (what the model receives) ---")
     click.echo(block or "(empty — the character has no renderable fields)")
     click.echo("--- end ---")
-    dropped = ignored_populated_fields(data)
-    if dropped:
-        click.echo(f"\nNOT rendered (stored only): {', '.join(dropped)}. "
-                   "Move that voice into bio/lore/style to reach the model.")
+    note = stored_only_note(data)
+    if note:
+        click.echo(f"\n{note}")
 
 
 @click.group("persona")

@@ -3,7 +3,7 @@ import pytest
 from core.config import BotConfig
 from tools.web_fetch.tool import WebFetchTool
 from tools.controller.views import WebFetchAction
-from tools.web_fetch.fetcher import FetchResult, WebFetchError
+from core.security.safe_fetch import FetchResult, WebFetchError
 
 
 @pytest.mark.asyncio

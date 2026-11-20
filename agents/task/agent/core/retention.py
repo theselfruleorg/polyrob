@@ -110,7 +110,7 @@ class RetentionSweeper:
         files were written by no retention window: prod held 535 at the
         project root, the oldest 12 weeks old."""
         try:
-            from agents.task.path import pm
+            from core.session_paths import pm
             from core.tool_results import prune
             root = getattr(pm(), "_project_root", None)
             if root is None or not getattr(pm(), "_workspace_is_project_root", False):

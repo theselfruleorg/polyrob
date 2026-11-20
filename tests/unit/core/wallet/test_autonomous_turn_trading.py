@@ -132,7 +132,7 @@ class TestAutonomousLaneNeedsADailyCap:
         token = "0x" + "1" * 40
         intent = tx_guard.TxIntent(chain="base", token=token, to="0x" + "2" * 40,
                                    amount_raw=1_000_000, max_spend_usd=5.0,
-                                   idempotency_key="k")
+                                   idempotency_key="k", why="the job's rule")
         return tx_guard.authorize(
             intent, {"to": "0x" + "2" * 40, "data": "0x"},
             holder="0x" + "3" * 40, gate=gate,

@@ -7,7 +7,7 @@ planner session woken with a completion could queue more goals.
 """
 import asyncio
 
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from tools.goal_tools import GoalTool, GoalCreateAction
 
 

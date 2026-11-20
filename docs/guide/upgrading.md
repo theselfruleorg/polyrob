@@ -105,6 +105,40 @@ polyrob config check
 
 ## 3. Version notes
 
+### Upgrading to 1.7.14
+
+- The outgoing-message queue (`outbox.db`) gains two columns, `reply_to` and `actions`, the first
+  time a process opens it; rows already queued keep working and read as "no reply target, no
+  buttons". Nothing to run. Restart every unit that shares the data home together, as usual: an
+  older process that drains a newer row ignores the two columns and posts it at the top of the chat.
+- **Deposit credits use the agent's spend price for ETH.** `modules/payments/price_oracle.py` and
+  its two settings, `ETH_PRICE_USD_OVERRIDE` and `ETH_PRICE_USD_MAX`, are removed. An ETH deposit is
+  valued at the same graded price a spend uses; when no such price is known, the increase is not
+  credited until the next check that has one. Delete the two lines from your env file:
+  `polyrob doctor` names them.
+- **Internal modules moved (for code that imports POLYROB modules).** No behaviour changes. These
+  files are gone; import from the new path: `modules/llm/brain_scrubber.py` → `core/brain_scrubber.py`,
+  `modules/llm/think_scrubber.py` → `core/think_scrubber.py`, `tools/web_fetch/fetcher.py` →
+  `core/security/safe_fetch.py`, `tools/shell/loopback_allow.py` → `core/security/loopback_allow.py`,
+  `cli/update/{context,snapshot,restore}.py` → `core/update_snapshot/{context,snapshot,restore}.py`,
+  `modules/memory/task/threat_scan.py` → `core/security/threat_scan.py`,
+  `agents/task/path.py` → `core/session_paths.py` (a pack reads `pm` from `polyrob.sdk`), and
+  `agents/task/goals/{board,board_asks,board_deps,board_types,claim_liveness,machines,payload_keys,rail_answers,run_cancel}.py`
+  → `modules/goals/` (a pack reads `ASK_OPEN` from `polyrob.sdk`).
+- **`agent_nft_collection_mint` no longer takes `min_pnl_out`.** Its bound is `min_out_per_token`, the
+  least each new account must receive from the sale's buy (else the mint reverts). A saved job, skill or script that passes `min_pnl_out`
+  must use the new name.
+- **Email from the owner needs a known mail server.** An email sender, the owner too, counts as
+  authenticated only when the receiving server is one the agent knows (Gmail, Outlook/Office 365).
+  With an AgentMail, Fastmail, iCloud, Yahoo or self-hosted mailbox, email to the agent is refused:
+  reach the agent on a chat app instead.
+- **Production is one rule.** Any of `ENVIRONMENT`, `POLYROB_ENV`, `CONFIG_ENV` or `ENV` set to a
+  production value, or `PRODUCTION=true`, marks the process as production. Production needs a strong
+  `JWT_SECRET_KEY` (a weak or missing one stops the start), and the connected apps then need a real
+  `MCP_ENCRYPTION_KEY` instead of the dev key file: set both before you restart. Only an
+  explicit `development` turns off the `secure` cookie flag, and `ENVIRONMENT=development` no longer
+  skips the access-tier check.
+
 ### Upgrading to 1.7.13
 
 No database migration.

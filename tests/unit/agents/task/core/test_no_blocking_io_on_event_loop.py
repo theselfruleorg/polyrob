@@ -133,3 +133,120 @@ def test_curator_body_is_separated_from_the_async_entry_point():
     assert not inspect.iscoroutinefunction(SkillCurator._run_once_blocking)
     body = inspect.getsource(SkillCurator.run_once)
     assert "asyncio.to_thread" in body
+
+
+# --- 125 S18b (B-H1): goal-board and cron-store calls from async code ----------------
+#
+# A GoalBoard / CronJobStore method is a synchronous SQLite call (execute_retry can
+# sleep up to ~17 s on a contended file). Called inside an ``async def`` it holds every
+# session on the loop. The goal and cron loops await it through
+# ``core.async_bridge.off_loop`` (``self._board_io`` / ``self._store_io``).
+
+import ast  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+_REPO = Path(__file__).resolve().parents[5]
+#: Files that hold ZERO direct store calls inside an ``async def``.
+_OFF_LOOP_FILES = (
+    "agents/task/goals/dispatcher.py",
+    "agents/task/goals/goal_run.py",
+    "agents/task/goals/escalation.py",
+    "cron/scheduler.py",
+)
+#: Receivers that name a goal board or a cron store.
+_RECEIVERS = {"board", "_board", "goal_board", "store", "_store", "cron_store", "job_store"}
+#: Every other production file with a direct store call inside an ``async def``:
+#: the count may only go DOWN. Lower a row when you move a call off the loop;
+#: delete it at zero.
+_ON_LOOP_BASELINE = {
+    "api/mcp_serve/handlers.py": 2,
+    "core/surfaces/room_actions.py": 7,
+    "modules/x402/settlement_subscriptions.py": 3,
+    "packs/x/polyrob_x/x_browser/escalation.py": 2,
+    "surfaces/telegram/approval_ops.py": 3,
+    "tools/controller/approval_queue.py": 6,
+    "tools/controller/autonomy_control_action.py": 2,
+    "tools/controller/message_delete.py": 1,
+    "tools/controller/message_send.py": 1,
+    "tools/controller/owner_ask_action.py": 4,
+    "tools/controller/setting_actions.py": 1,
+    "tools/cronjob_tools.py": 8,
+    "tools/dapp_browser/tool.py": 2,
+    "tools/email_tool.py": 1,
+    "tools/goal_tools.py": 15,
+    "tools/publish/tool.py": 2,
+    "webview/goal_board_routes.py": 13,
+    "webview/job_routes.py": 2,
+    "webview/pages.py": 4,
+}
+
+
+def _store_methods() -> set:
+    from modules.goals.board import GoalBoard
+    from cron.jobs import CronJobStore
+    names = set()
+    for cls in (GoalBoard, CronJobStore):
+        names |= {n for n, _ in inspect.getmembers(cls, callable) if not n.startswith("__")}
+    return names
+
+
+def _direct_store_calls(source: str, methods: set) -> list:
+    out = []
+    for fn in ast.walk(ast.parse(source)):
+        if not isinstance(fn, ast.AsyncFunctionDef):
+            continue
+        for node in ast.walk(fn):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                continue
+            recv = node.func.value
+            last = recv.attr if isinstance(recv, ast.Attribute) else getattr(recv, "id", None)
+            if last in _RECEIVERS and node.func.attr in methods:
+                out.append((fn.name, node.lineno, f"{last}.{node.func.attr}"))
+    return out
+
+
+def test_store_calls_are_off_the_loop():
+    methods = _store_methods()
+    bad = {}
+    for rel in _OFF_LOOP_FILES:
+        hits = _direct_store_calls((_REPO / rel).read_text(), methods)
+        if hits:
+            bad[rel] = hits
+    assert bad == {}, (
+        "a goal-board / cron-store call inside an async def runs on the event loop; "
+        f"await it through off_loop (self._board_io / self._store_io): {bad}")
+
+
+def _production_files():
+    from tests.support.repo_index import repo_index
+    skip = set(_OFF_LOOP_FILES)
+    for rel in repo_index().tracked():
+        if not rel.endswith(".py") or rel in skip:
+            continue
+        top = rel.split("/", 1)[0]
+        if top in ("tests", "ops", "build", "docs", "scripts", "devtools") or "/tests/" in rel:
+            continue
+        yield rel
+
+
+def test_store_calls_on_loop_only_shrink():
+    methods = _store_methods()
+    counts = {}
+    for rel in _production_files():
+        path = _REPO / rel
+        if not path.is_file():
+            continue
+        try:
+            n = len(_direct_store_calls(path.read_text(), methods))
+        except SyntaxError:
+            continue
+        if n:
+            counts[rel] = n
+    grew = {f: (n, _ON_LOOP_BASELINE.get(f, 0)) for f, n in counts.items()
+            if n > _ON_LOOP_BASELINE.get(f, 0)}
+    assert grew == {}, (
+        "new goal-board / cron-store calls on the event loop (file: (now, baseline)); "
+        f"await them through core.async_bridge.off_loop: {grew}")
+    stale = {f: (counts.get(f, 0), n) for f, n in _ON_LOOP_BASELINE.items()
+             if counts.get(f, 0) < n}
+    assert stale == {}, f"lower these baseline rows (file: (now, baseline)): {stale}"

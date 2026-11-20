@@ -8,8 +8,8 @@ def test_the_notice_names_the_stop_the_error_and_the_resume():
     text = turn_end_notice(StopReason.LOOP, 9, 50,
                            last_error="cronjob_edit:\n  Nothing to change")
     lines = text.splitlines()
-    assert lines[0] == "⚠️ My turn ended early: stopped because it repeated the same tool call (9/50)."
-    assert lines[1] == "Last tool error: cronjob_edit: Nothing to change"
+    assert lines[0] == "⚠️ My turn ended early: stopped because it repeated the same step (9/50)."
+    assert lines[1] == "Last error: cronjob_edit: Nothing to change"
     assert lines[-1] == CONTINUE_HINT
 
 
@@ -20,10 +20,17 @@ def test_a_last_report_rides_in_the_notice_labelled():
 
 def test_a_long_error_is_one_short_line():
     text = turn_end_notice("failures", 5, 50, last_error="x" * 900)
-    err = [ln for ln in text.splitlines() if ln.startswith("Last tool error")][0]
+    err = [ln for ln in text.splitlines() if ln.startswith("Last error")][0]
     assert len(err) < 240
 
 
 def test_the_quiet_stops():
     assert QUIET_STOPS == {"done", "awaiting_reply", "cancelled", "control",
                            "conversational_exit"}
+
+
+def test_a_stop_that_continue_cannot_fix_names_its_own_next_step():
+    """2026-11-20 UX review H10: "say continue" after a fatal error was false."""
+    text = turn_end_notice(StopReason.ERROR, 3, 30)
+    assert CONTINUE_HINT not in text and text.splitlines()[-1] == "Next: `/status`."
+    assert turn_end_notice(StopReason.MAX_STEPS, 30, 30).splitlines()[-1] == CONTINUE_HINT

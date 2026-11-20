@@ -88,12 +88,10 @@ class AgentCard(BaseModel):
 
     Hosted at /.well-known/agent.json for discovery.
     """
-    # Core Identity
-    name: str = "POLYROB"
-    description: str = Field(
-        default="AI automation agent with browser control, file system access, "
-                "MCP integrations, and autonomous task execution capabilities."
-    )
+    # Core Identity — THIS instance's name and description (`_card_identity`),
+    # never the framework's.
+    name: str
+    description: str
     url: str = Field(..., description="Base URL for A2A service endpoint")
     version: str = Field(default_factory=get_version)
 
@@ -129,6 +127,23 @@ class AgentCard(BaseModel):
 
     # Metadata
     metadata: Optional[Dict[str, Any]] = None
+
+
+def _card_identity() -> tuple:
+    """``(name, description)`` of THIS instance — the one identity read the
+    ERC-8004 registration file uses (`modules.eip8004.registration.agent_identity`),
+    so the card and the registration file never name two different agents.
+
+    The card is PUBLIC and must render even when the eip8004 package cannot
+    import (it pulls web3): then the bare instance id is the name."""
+    try:
+        from modules.eip8004.registration import agent_identity
+        return agent_identity()
+    except ImportError as e:
+        logger.info("Agent card: eip8004 identity not importable (%s); using the instance id", e)
+        from core.instance import resolve_instance_id
+        instance_id = resolve_instance_id()
+        return instance_id, f"An autonomous agent instance ({instance_id}) running on the POLYROB framework."
 
 
 def build_agent_card(request: Optional[Request] = None) -> AgentCard:
@@ -291,11 +306,16 @@ def build_agent_card(request: Optional[Request] = None) -> AgentCard:
     # instance sets its brand once; default is instance-neutral (the base URL).
     brand_url = os.environ.get("POLYROB_BRAND_URL", base_url).strip().rstrip("/")
 
+    name, description = _card_identity()
     return AgentCard(
-        url=f"{base_url}/a2a",
+        name=name,
+        description=description,
+        # The JSON-RPC endpoint itself (A2A: `url` is where a client POSTs).
+        url=f"{base_url}/a2a/rpc",
         skills=skills,
+        # The provider is the instance itself: core ships no organization name.
         provider=AgentProvider(
-            organization="The Self Rule",
+            organization=name,
             url=brand_url
         ),
         securitySchemes=security_schemes,

@@ -92,7 +92,9 @@ class ChainReadsMixin:
         if facts.get("owner"):
             lines.append(f"  owner: {facts['owner']}")
         if facts.get("uri"):
-            lines.append(f"  metadata (provider text): {quoted(str(facts['uri'])[:2048], name=True)}")
+            # The collection wrote it: capped and fenced (audit 2026-11-21 L-15).
+            lines.append("  metadata (collection text): "
+                         + nft_verbs.uri_for_model(facts["uri"]))
         if facts.get("not_checked"):
             # ⚠️ A check that did not run is not a check that passed.
             lines.append("  NOT CHECKED: " + "; ".join(facts["not_checked"]))
@@ -106,9 +108,18 @@ class ChainReadsMixin:
         address, err = self._validate(params.chain, params.address)
         if err:
             return self._ar(error=err)
+        # The arguments are ABI-encoded from the signature (the ONE encoder,
+        # tools.defi.call_verb.encode_call). Before 2026-11-20 only the selector
+        # went out, so ownerOf(5) silently called ownerOf() with no argument.
+        from tools.defi.call_verb import encode_call  # call-time: same tier
+        try:
+            calldata = encode_call(params.signature, list(params.args or []))
+        except ValueError as exc:
+            return self._ar(error=f"contract_read: {exc}")
         try:
             raw = self._eth_call(chain=params.chain, address=address,
-                                 signature=params.signature, args=params.args)
+                                 signature=params.signature, args=params.args,
+                                 calldata=calldata)
         except Exception as exc:
             return self._ar(error=f"contract_read failed: {exc}")
         if raw is None:
@@ -123,6 +134,11 @@ class ChainReadsMixin:
                  f"  raw: {raw}"]
         if truncated:
             lines.append(f"  truncated: true (capped at {CONTRACT_READ_MAX_BYTES} bytes)")
+        if params.returns:
+            typed, derr = self._decode_returns(raw, params.returns)
+            lines.append(f"  decoded as {params.returns}: {typed}" if derr is None
+                         else f"  decode as {params.returns} failed: {derr}")
+            return self._ar(content="\n".join(lines))
         decoded = self._best_effort_decode(raw)
         if decoded is not None:
             lines.append(f"  decoded (best-effort, UNVERIFIED — the interpretation may be "
@@ -154,16 +170,45 @@ class ChainReadsMixin:
             logger.debug("scan set: token cache unavailable", exc_info=True)
         return sorted(out)
 
-    def _eth_call(self, *, chain: str, address: str, signature: str, args) -> Optional[str]:
+    def _eth_call(self, *, chain: str, address: str, signature: str, args,
+                  calldata: str) -> Optional[str]:
         from tools.defi.data_tool import CONTRACT_READ_GAS_CAP  # call-time
         if self._call_fn is not None:
-            return self._call_fn(chain=chain, address=address, signature=signature, args=args)
-        from eth_utils import keccak
+            return self._call_fn(chain=chain, address=address, signature=signature,
+                                 args=args, calldata=calldata)
         from core.wallet.onchain import _rpc, rpc_url_for_chain
-        selector = "0x" + keccak(text=signature.replace(" ", "")).hex()[:8]
         return _rpc(rpc_url_for_chain(chain), "eth_call",
-                    [{"to": address, "data": selector, "gas": hex(CONTRACT_READ_GAS_CAP)},
+                    [{"to": address, "data": calldata, "gas": hex(CONTRACT_READ_GAS_CAP)},
                      "latest"], 8.0)
+
+    @staticmethod
+    def _decode_returns(raw: str, returns: str):
+        """``(text, None)`` — *raw* decoded as the ABI types *returns* (``address``,
+        ``(uint256,address)``) — or ``(None, reason)``. Addresses come back
+        checksummed and bytes as ``0x`` hex, so the text is quotable as is."""
+        from eth_abi import decode
+        from tools.defi.call_verb import _split_types
+        spec = returns.replace(" ", "")
+        if spec.startswith("(") and spec.endswith(")"):
+            spec = spec[1:-1]
+        types = _split_types(spec)
+        if not types:
+            return None, "no types given"
+        try:
+            values = decode(types, bytes.fromhex((raw or "0x")[2:]))
+        except Exception as exc:
+            return None, str(exc)[:160]
+
+        def show(v):
+            if isinstance(v, (bytes, bytearray)):
+                return "0x" + bytes(v).hex()
+            if isinstance(v, (list, tuple)):
+                return "(" + ", ".join(show(x) for x in v) + ")"
+            if isinstance(v, str) and v.startswith("0x") and len(v) == 42:
+                from eth_utils import to_checksum_address
+                return to_checksum_address(v)
+            return str(v)
+        return ", ".join(show(v) for v in values), None
 
     @staticmethod
     def _best_effort_decode(raw: str) -> Optional[str]:

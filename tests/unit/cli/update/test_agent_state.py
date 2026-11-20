@@ -78,8 +78,9 @@ def test_running_goal_is_busy_done_goal_is_not(home):
 
 
 def test_cron_running_or_imminent_is_busy(home):
-    soon = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() + 30))
-    later = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() + 3600))
+    # next_run_at is the cron store's naive LOCAL time (CronService writes datetime.now()).
+    soon = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() + 30))
+    later = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() + 3600))
     _cron(home, [("a", "scheduled", 1, later)])
     assert st.observe(home, cron_imminent_sec=120).idle
     os.remove(home / "cron.db"); _cron(home, [("a", "scheduled", 1, soon)])

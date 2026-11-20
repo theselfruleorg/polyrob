@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from agents.task.goals.board import ASK_OBSOLETE, ASK_OPEN, GoalBoard
+from modules.goals.board import ASK_OBSOLETE, ASK_OPEN, GoalBoard
 from core.sqlite_util import execute_retry
 from core.wake_queue import get_wake_queue
 from tools.controller import approval_queue as aq

@@ -53,7 +53,8 @@
          /api/webgate/goals/board; a card opens #goal-detail from
          /api/webgate/goals/{id}/detail. Every action is an existing verb. #}
       <div data-pane="goals" hidden>
-        {% if not read_only %}
+        {# A create posts to an owner-console route: absent elsewhere, not a form that 403s. #}
+        {% if not read_only and owner_console %}
         <details class="section">
           <summary>{{ t('work.create.goal_label') }}</summary>
           {# A44: the goal writer accepts a body, a priority and a tool grant;
@@ -104,7 +105,8 @@
       {# Scheduled jobs — listed with Pause / Resume / Run now / Stop. Drawn by
          work-now.js from /api/webgate/cron; each posts /api/webgate/cron/{id}/{verb}. #}
       <div data-pane="schedule" hidden>
-        {% if not read_only %}
+        {# A create posts to an owner-console route: absent elsewhere, not a form that 403s. #}
+        {% if not read_only and owner_console %}
         <details class="section">
           <summary>{{ t('work.create.cron_label') }}</summary>
           {# A44: a scheduled run that delivers nowhere is a run nobody sees.
@@ -284,7 +286,7 @@
          data-event_dep_failed="{{ t('work.board.event.dep_failed') }}"
          data-event_requeued_on_boot="{{ t('work.board.event.requeued_on_boot') }}"
          data-event_stale_completion="{{ t('work.board.event.stale_completion') }}"
-         data-disabled="{{ t('work.now.disabled') }}"
+         data-disabled="{{ t('work.now.off') }}"
          data-unreadable="{{ t('work.now.unreadable') }}"
          data-unreadable_why="{{ t('work.now.unreadable_why') }}"
          data-stop="{{ t('work.now.stop') }}"
@@ -313,7 +315,9 @@
          data-class_cron="{{ t('work.log.class_cron') }}"
          data-class_money="{{ t('work.log.class_money') }}"
          data-class_message="{{ t('work.log.class_message') }}"
+         data-class_owner="{{ t('work.log.class_owner') }}"
          data-class_system="{{ t('work.log.class_system') }}"
+         data-reason="{{ t('work.log.reason') }}"
          data-class_tool="{{ t('work.log.class_tool') }}"
          data-raw="{{ t('work.log.raw') }}"
          data-raw_hide="{{ t('work.log.raw_hide') }}"
@@ -343,7 +347,7 @@
          data-live_unreadable="{{ t('work.now.live_unreadable') }}"
          data-live_unreadable_why="{{ t('work.now.live_unreadable_why') }}"
          data-empty_next="{{ t('work.now.empty_next') }}"
-         data-disabled="{{ t('work.now.disabled') }}"
+         data-disabled="{{ t('work.now.off') }}"
          data-unreadable="{{ t('work.now.unreadable') }}"
          data-unreadable_why="{{ t('work.now.unreadable_why') }}"
          data-running_count="{{ t('work.now.running_count') }}"
@@ -370,10 +374,14 @@
          data-days="{{ t('work.now.days') }}"
          data-sched_loading="{{ t('work.schedule.loading') }}"
          data-sched_empty="{{ t('work.schedule.empty') }}"
-         data-sched_disabled="{{ t('work.schedule.disabled') }}"
+         data-sched_disabled="{{ t('work.schedule.off') }}"
          data-sched_unreadable="{{ t('work.schedule.unreadable') }}"
          data-sched_unreadable_why="{{ t('work.schedule.unreadable_why') }}"
          data-sched_cancel="{{ t('work.schedule.cancel') }}"
+         data-sched_cancel_ask="{{ t('work.schedule.cancel_ask') }}"
+         data-sched_cancel_yes="{{ t('work.schedule.cancel_yes') }}"
+         data-sched_cancel_no="{{ t('work.schedule.cancel_no') }}"
+         data-sched_a_job="{{ t('work.schedule.a_job') }}"
          data-sched_pause="{{ t('work.schedule.pause') }}"
          data-sched_resume="{{ t('work.schedule.resume') }}"
          data-sched_run="{{ t('work.schedule.run') }}"

@@ -112,7 +112,7 @@ async def guarded_send(tool, *, execution_context, verb: str, chain: str,
             price_fn=tool._price,
             fallback_price_fn=tool._fallback_price,
             forged_fn=_is_forged_or_autonomous_turn,
-            autonomous_ok_fn=_is_autonomous_goal_turn, **guard_kw)
+            autonomous_ok_fn=_is_autonomous_goal_turn, dry_run=bool(dry_run), **guard_kw)
 
         usd = ('unknown' if decision.amount_usd is None
                else f'${decision.amount_usd:.4f}')
@@ -143,9 +143,10 @@ async def guarded_send(tool, *, execution_context, verb: str, chain: str,
                        f"(simulation used {decision.sim_gas_used})\n")
 
         if dry_run:
-            return tool._ar(content=header + (
+            from tools.base_tool import dry_run_result
+            return dry_run_result(tool, header + (
                 "  RESULT: DRY RUN — the guard would allow this, but nothing "
-                "was broadcast. Re-run with dry_run=false to send."))
+                "was broadcast. Re-run with dry_run=false to send."), decision.amount_usd)
 
         try:
             tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
@@ -246,10 +247,14 @@ async def guarded_send(tool, *, execution_context, verb: str, chain: str,
     try:
         async with gate.reserve():
             from tools.defi.receipt_wait import book_after_receipt
+            # 122 W4: a claim's record carries what it received (the owed balance the
+            # guard asserted), the income the allocation rule reads.
+            income = ({"income_raw": int(min_native_inflow_wei)}
+                      if is_claim and min_native_inflow_wei else {})
             book_after_receipt(gate, receipt, venue="defi", action=f"launchpad_{verb}",
                                amount_usd=decision.amount_usd or 0.0, counterparty=counterparty,
                                idempotency_key=idem, result_ref=tx_hash, chain=chain,
-                               account=(held.account if held is not None else None))
+                               account=(held.account if held is not None else None), **income)
         recorded = True
     finally:
         _settled_notice(recorded)

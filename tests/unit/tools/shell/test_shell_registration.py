@@ -48,7 +48,7 @@ def test_explicit_off_wins_at_posture_1(monkeypatch):
 
 
 def test_shell_and_process_are_delegation_blocked():
-    from tools.controller.delegation import DELEGATE_BLOCKED_TOOLS
+    from core.delegation_policy import DELEGATE_BLOCKED_TOOLS
     assert "shell" in DELEGATE_BLOCKED_TOOLS
     assert "process" in DELEGATE_BLOCKED_TOOLS
 

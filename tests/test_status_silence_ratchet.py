@@ -57,7 +57,8 @@ CEILINGS = {
     # W9 (2026-10-10): the owner reply helpers that left harness.py.
     "surfaces/telegram/status_ops.py": 0,
     "surfaces/telegram/prefs_ops.py": 0,
-    "surfaces/telegram/kb_ops.py": 1,
+    "core/prefs_reply.py": 0,      # 125 S14: /prefs and /config moved below the seats
+    "modules/memory/kb_reply.py": 1,
     "surfaces/telegram/approval_ops.py": 1,
     "surfaces/telegram/admin_verbs.py": 0,
     # 2026-08-28: 10 -> 3. The three survivors are not status omissions:

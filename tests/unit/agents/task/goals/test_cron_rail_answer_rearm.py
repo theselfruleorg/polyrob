@@ -6,8 +6,8 @@ seat says where the answer went."""
 import asyncio
 from datetime import datetime, timedelta
 
-from agents.task.goals.board import GoalBoard
-from agents.task.goals.rail_answers import answered_during_run, decision_note
+from modules.goals.board import GoalBoard
+from modules.goals.rail_answers import answered_during_run, decision_note
 from core.runtime_paths import goals_db_path
 from cron.jobs import CronJob, CronJobStore
 from cron.scheduler import CronScheduler

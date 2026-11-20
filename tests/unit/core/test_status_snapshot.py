@@ -34,7 +34,7 @@ def _no_dropped_rows_from_earlier_tests(monkeypatch):
 
 
 def _seed_goals(data_dir, *, ready=0, blocked=True, asks=True):
-    from agents.task.goals.board import GoalBoard, STATUS_READY
+    from modules.goals.board import GoalBoard, STATUS_READY
     board = GoalBoard(os.path.join(data_dir, "goals.db"))
     for i in range(ready):
         board.create(user_id=OWNER, title=f"Ready goal {i}", status=STATUS_READY)
@@ -407,7 +407,7 @@ def test_empty_tenant_is_refused_not_widened(degraded):
 # --- literal parity with the owning modules ----------------------------------
 
 def test_literals_match_owning_modules():
-    from agents.task.goals import board as b
+    from modules.goals import board as b
     from core import event_kinds as ek
     from core import status_snapshot as ss
     from core.surfaces import user_delivery as ud

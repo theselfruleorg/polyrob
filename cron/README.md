@@ -26,6 +26,8 @@ cron/
 │                 #   jittered retry on write contention
 ├── service.py    # CronService — schedule / list / cancel API over schedule+jobs
 │                 #   (thin, fully testable; shared by the tool and the ticker)
+├── owner_jobs.py # `/jobs` and `/job …` for every owner seat (Telegram, console,
+│                 #   REPL): parse, decide and word the reply over CronService
 ├── scheduler.py  # tick(): find due jobs → run each through an injected async
 │                 #   runner under a hard per-run duration cap → reschedule
 │                 #   (recurring) or complete (one-shot); file-based TickLock

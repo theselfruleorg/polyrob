@@ -2,7 +2,7 @@
 tenant-facing callers pass it so a foreign goal id is simply 'not found'."""
 import pytest
 
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 
 
 @pytest.fixture

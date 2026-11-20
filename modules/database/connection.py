@@ -1,6 +1,8 @@
 import aiosqlite
 import asyncio
 import contextlib
+import functools
+from concurrent.futures import ThreadPoolExecutor
 import logging
 from typing import Optional, List, Any, Dict, Union, Tuple
 import json
@@ -9,6 +11,7 @@ import sqlite3
 import os
 from pathlib import Path
 
+from core.async_bridge import shielded
 from core.data_perms import apply_birth_mode
 from core.exceptions import DatabaseError
 from core.sqlite_util import _WAL_SIZE_LIMIT_BYTES
@@ -46,34 +49,51 @@ class DatabaseConnection:
         self._txn_owner: Optional["asyncio.Task"] = None
         self._txn_done = asyncio.Event()
         self._txn_done.set()
-        
+        # 125 S18c (B-H2): every statement runs on this connection's ONE thread, off
+        # the event loop — a write that waits on another process's lock
+        # (busy_timeout) no longer freezes every session. Created on first use.
+        self._executor: Optional[ThreadPoolExecutor] = None
+
+    async def _run(self, fn, *args, **kwargs):
+        """Run ``fn`` on the connection thread. A statement and its auto-commit are
+        ONE ``fn`` (never a commit after an await). Shielded: a cancel waits for
+        the statement to finish, so the caller's ``_lock`` is held until it is done."""
+        if self._executor is None:
+            self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="botdb")
+        loop = asyncio.get_running_loop()
+        return await shielded(loop.run_in_executor(
+            self._executor, functools.partial(fn, *args, **kwargs)))
+
     async def connect(self) -> None:
         """Establish database connection."""
         try:
-            self._birth_private()
-            self.connection = sqlite3.connect(
-                self.db_path,
-                check_same_thread=False,
-                timeout=BUSY_TIMEOUT_MS / 1000,
-            )
-            self.connection.row_factory = sqlite3.Row
-            self.connection.execute(f"PRAGMA busy_timeout = {int(BUSY_TIMEOUT_MS)}")
-            self._enable_wal()
-
-            # SECURITY FIX: Enable foreign key constraints for data integrity
-            # FK constraints ensure referential integrity and prevent orphaned records
-            # Schema uses ON DELETE CASCADE to handle user deletions properly
-            self.connection.execute("PRAGMA foreign_keys = ON")
-
-            # Clean up orphaned records that might have accumulated when FK was disabled
-            await self._cleanup_orphaned_records()
-
+            await self._run(self._connect_sync)
             self.logger.debug(f"Connected to database at {self.db_path} (FK: ON)")
-            
         except Exception as e:
             self.logger.error(f"Failed to connect to database: {e}")
             raise DatabaseError(f"Failed to connect to database: {e}")
-            
+
+    def _connect_sync(self) -> None:
+        """Open the handle, its pragmas and the WAL switch — on the connection thread."""
+        self._birth_private()
+        conn = sqlite3.connect(
+            self.db_path,
+            check_same_thread=False,
+            timeout=BUSY_TIMEOUT_MS / 1000,
+        )
+        conn.row_factory = sqlite3.Row
+        conn.execute(f"PRAGMA busy_timeout = {int(BUSY_TIMEOUT_MS)}")
+        self.connection = conn
+        self._enable_wal()
+        # SECURITY FIX: Enable foreign key constraints for data integrity
+        # FK constraints ensure referential integrity and prevent orphaned records
+        # Schema uses ON DELETE CASCADE to handle user deletions properly
+        conn.execute("PRAGMA foreign_keys = ON")
+        # 125 S16 (B-H7, D14): connect() deletes no row. The old orphan sweep
+        # deleted ledger rows (credit_transactions, …) whose user had no
+        # profile row, with the foreign keys off, on every connect. The
+        # expired-nonce sweep lives in siwe_auth.
+
     def _birth_private(self) -> None:
         """Create a missing bot.db before SQLite does, under the shared birth rule.
 
@@ -118,80 +138,12 @@ class DatabaseConnection:
     async def close(self) -> None:
         """Close database connection."""
         if self.connection:
-            self.connection.close()
-            self.connection = None
+            conn, self.connection = self.connection, None
+            if self._executor is not None:
+                await self._run(conn.close)
+            else:
+                conn.close()
             self.logger.debug("Database connection closed")
-
-    async def _cleanup_orphaned_records(self) -> None:
-        """Clean up orphaned records that accumulated while FK constraints were disabled.
-
-        This runs once at connection time to fix any data integrity issues
-        before FK constraints are enforced.
-        """
-        try:
-            # Temporarily disable FK for cleanup (we're fixing old data)
-            self.connection.execute("PRAGMA foreign_keys = OFF")
-
-            # Tables with FK to user_profiles(user_id)
-            orphan_tables = [
-                'api_keys',
-                'user_credits',
-                'credit_transactions',
-                'usage_records',
-                'user_deposit_addresses',
-                'crypto_payments',
-                'pending_sweeps',
-                'wallet_history',
-                'blocked_users',
-                'conversation_contexts',
-            ]
-
-            total_cleaned = 0
-            for table in orphan_tables:
-                try:
-                    # Check if table exists before cleaning
-                    cursor = self.connection.execute(
-                        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-                        (table,)
-                    )
-                    if cursor.fetchone() is None:
-                        continue
-
-                    # Delete orphaned records
-                    cursor = self.connection.execute(f"""
-                        DELETE FROM {table}
-                        WHERE user_id IS NOT NULL
-                        AND user_id NOT IN (SELECT user_id FROM user_profiles)
-                    """)
-                    if cursor.rowcount > 0:
-                        total_cleaned += cursor.rowcount
-                        self.logger.info(f"Cleaned {cursor.rowcount} orphaned records from {table}")
-                except Exception as e:
-                    # Log but continue - some tables may not exist yet
-                    self.logger.debug(f"Could not clean {table}: {e}")
-
-            # Clean up expired nonces
-            try:
-                cursor = self.connection.execute("""
-                    DELETE FROM auth_nonces WHERE expires_at < datetime('now')
-                """)
-                if cursor.rowcount > 0:
-                    self.logger.info(f"Cleaned {cursor.rowcount} expired nonces")
-            except Exception:
-                pass  # Table may not exist
-
-            self.connection.commit()
-
-            # Re-enable FK constraints
-            self.connection.execute("PRAGMA foreign_keys = ON")
-
-            if total_cleaned > 0:
-                self.logger.info(f"✅ Cleaned up {total_cleaned} total orphaned records")
-
-        except Exception as e:
-            self.logger.warning(f"Error during orphan cleanup: {e}")
-            # Re-enable FK even if cleanup failed
-            self.connection.execute("PRAGMA foreign_keys = ON")
 
     # NOTE (U11, 2026-07-14 review): the legacy inline-schema initializers
     # (_initialize_base_schema / _ensure_required_columns /
@@ -203,6 +155,37 @@ class DatabaseConnection:
     # tests/unit/migrations/test_inline_schema_at_head.py enforces that it
     # matches migration HEAD. (The unloaded schema.sql "mirror" was deleted
     # 2026-10-10, W8 — a fourth schema source nothing read.)
+
+    # --- the connection thread (125 S18c): each helper is ONE unit of work ----------
+
+    def _execute_sync(self, query: str, params, commit: bool):
+        cursor = self.connection.execute(query, params)
+        if commit:
+            self.connection.commit()
+        return cursor
+
+    def _fetch_sync(self, query: str, params, many: bool):
+        cursor = self.connection.execute(query, params)
+        try:
+            rows = cursor.fetchall() if many else cursor.fetchone()
+            return rows, cursor.description
+        finally:
+            cursor.close()
+
+    def _executemany_sync(self, query: str, params_list, commit: bool) -> None:
+        self.connection.executemany(query, params_list)
+        if commit:
+            self.connection.commit()
+
+    def _transaction_sync(self, statements) -> None:
+        self.connection.execute("BEGIN TRANSACTION")
+        try:
+            for query, params in statements:
+                self.connection.execute(query, params)
+            self.connection.commit()
+        except BaseException:
+            self.connection.rollback()
+            raise
 
     async def begin_transaction(self) -> None:
         """Begin a new transaction.
@@ -401,14 +384,12 @@ class DatabaseConnection:
                         # Debug logging
                         self.logger.debug(f"Processed params: {processed_params}")
 
-                        cursor = self.connection.execute(query, processed_params)
-
                         # Only auto-commit if NOT in an explicit transaction AND
-                        # not a transaction control statement.
-                        if not self._in_transaction and not is_transaction_control:
-                            self.connection.commit()
-
-                        return cursor
+                        # not a transaction control statement. The statement and
+                        # its commit are ONE call on the connection thread.
+                        return await self._run(
+                            self._execute_sync, query, processed_params,
+                            not self._in_transaction and not is_transaction_control)
                 # Released the lock: wait for the owning transaction to finish,
                 # then retry the ownership check (another transaction may have
                 # started, or this one may have ended).
@@ -438,12 +419,10 @@ class DatabaseConnection:
                 # Debug logging    
                 self.logger.debug(f"Processed params: {processed_params}")
                     
-                cursor = self.connection.execute(query, processed_params)
-                row = cursor.fetchone()
-                cursor.close()
-                
+                row, description = await self._run(self._fetch_sync, query, processed_params, False)
+
                 if row:
-                    columns = [description[0] for description in cursor.description]
+                    columns = [d[0] for d in description]
                     # Handle potential JSON fields
                     result = {}
                     for col, val in zip(columns, row):
@@ -494,10 +473,8 @@ class DatabaseConnection:
                 # Debug logging    
                 self.logger.debug(f"Processed params: {processed_params}")
                     
-                cursor = self.connection.execute(query, processed_params)
-                rows = cursor.fetchall()
-                columns = [description[0] for description in cursor.description]
-                cursor.close()
+                rows, description = await self._run(self._fetch_sync, query, processed_params, True)
+                columns = [d[0] for d in description]
                 
                 # Debug logging
                 self.logger.debug(f"Raw rows: {rows}")
@@ -559,9 +536,9 @@ class DatabaseConnection:
                                        for p in params)
                     processed_params.append(processed)
                 
-                self.connection.executemany(query, processed_params)
-                if not self._in_transaction:  # EP-4: never commit an open span
-                    self.connection.commit()
+                # EP-4: never commit an open span. One call on the connection thread.
+                await self._run(self._executemany_sync, query, processed_params,
+                                not self._in_transaction)
                 self.logger.debug(f"Executed multiple queries: {query}")
         except Exception as e:
             self.logger.error(f"Executemany error: {e} | Query: {query}")
@@ -575,10 +552,8 @@ class DatabaseConnection:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit."""
-        if exc_type:
-            self.connection.rollback()
-        else:
-            self.connection.commit()
+        if self.connection is not None:
+            await self._run(self.connection.rollback if exc_type else self.connection.commit)
         await self.close()
 
     async def transaction(self, statements: List[Tuple[str, tuple]]) -> None:
@@ -592,20 +567,11 @@ class DatabaseConnection:
                 if not self.connection:
                     await self.connect()
                 
-                # Start transaction
-                self.connection.execute("BEGIN TRANSACTION")
-                
                 try:
-                    # Execute all statements
-                    for query, params in statements:
-                        self.connection.execute(query, params)
-                    
-                    # Commit if all successful
-                    self.connection.commit()
-                    
+                    # BEGIN, every statement and the commit (or the rollback) are
+                    # ONE call on the connection thread.
+                    await self._run(self._transaction_sync, statements)
                 except Exception as e:
-                    # Rollback on any error
-                    self.connection.rollback()
                     self.logger.error(f"Transaction failed, rolling back: {e}")
                     raise DatabaseError(f"Transaction failed: {e}")
                     

@@ -57,7 +57,7 @@ async def test_own_published_sandbox_port_is_the_one_loopback_exception(monkeypa
     """Parity with discovery._validate: the agent must still be able to pay/probe
     its OWN published dev-container port — never RFC1918, never metadata."""
     monkeypatch.setattr(
-        "tools.shell.loopback_allow.is_loopback_allowed", lambda u: True)
+        "core.security.loopback_allow.is_loopback_allowed", lambda u: True)
     refusal, pinned = await net_guard.validate_x402_url(
         "http://127.0.0.1:8931/paid", validator=_Validator(ok=False))
     assert refusal is None

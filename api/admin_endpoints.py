@@ -642,7 +642,7 @@ async def set_user_tier(
     - free: No access (blocked from sessions)
     - free_access: Admin-granted access (uses credits)
     - x402: Pay-per-request
-    - admin: Unlimited access
+    - admin: Unlimited access (only the owner sets it)
 
     Use 'free_access' to grant someone access for demo/showcase purposes.
     """
@@ -663,6 +663,9 @@ async def set_user_tier(
         raise HTTPException(status_code=404, detail=f"User {user_id} not found")
     _refuse_protected_target(request, user_id, dict(current_user),
                              verb="given another tier", act="change the tier of")
+    # L-27: the `admin` tier is unlimited access — only the owner gives it.
+    if tier_request.tier == "admin" and getattr(request.state, "role", None) != "owner":
+        raise HTTPException(status_code=403, detail="Only the owner can give the admin tier")
 
     old_tier = current_user['tier']
 

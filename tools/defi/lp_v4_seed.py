@@ -6,7 +6,7 @@ Two entries of the one verb, ``defi_trade.lp_add(protocol='v4', …)``:
 * **a PoolKey named in full** (``tick_spacing`` given, with ``fee``, ``range``,
   both amounts and ``initial_price``) sends nothing. It reads the chain, stores
   a PROPOSED declaration (``core.wallet.lp_seed``) and puts ONE card to the
-  owner. Confirm runs ``/lp seed confirm <ref>`` on the owner's seat.
+  owner: ONE call card (126, ``lp_move_card``) whose Confirm declares and runs it.
 * **``seed=<ref>``** builds the transaction from the CONFIRMED row and from
   nothing the caller says: ``multicall([initializePool, modifyLiquidities])``
   while the pool has no price, the plain mint when it has one. A dry run also
@@ -15,13 +15,13 @@ Two entries of the one verb, ``defi_trade.lp_add(protocol='v4', …)``:
 The price the owner confirmed is the anchor. A pool that exists must be within
 the declared gap of it; the signed maxima hold the mint to that price
 (``liquidity_guard._assert_price_bound``). The grants are the existing verbs:
-the ERC-20 allowance to Permit2 (owner turn), then
-``approve_token(via='permit2')``; a short one refuses with the exact call.
+the ERC-20 allowance to Permit2, then ``approve_token(via='permit2')``; a live run
+makes a missing one itself (:func:`make_grants`).
 """
 import logging
 import time
 from decimal import Decimal
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from core.wallet import chains, dex_registry, lp_seed as S, tx_guard, univ3_math as M
 from tools.defi import lp_reads as R, lp_v4 as V
@@ -126,7 +126,6 @@ def _notes(f, rpc, price_fn) -> tuple:
 async def raise_card(tool, p, ctx, rpc, holder=None):
     """Store the proposed declaration and put its card to the owner. Sends no
     transaction and writes nothing but the PROPOSED row."""
-    from core.surfaces import cards
     user_id = _uid(ctx)
     try:
         from core.instance import is_owner_uid
@@ -146,24 +145,14 @@ async def raise_card(tool, p, ctx, rpc, holder=None):
         else:
             fields = build_fields(p, rpc, source="owner" if seat else "agent")
         ref, f = S.propose(user_id, fields, origin="owner_seat" if seat else "agent")
-        sid = str(getattr(ctx, "session_id", "") or "") or None
-        card = S.seed_card(user_id, ref, f, origin="owner_seat" if seat else "agent",
-                           session_id=sid, notes=_notes(f, rpc, tool._price))
+        notes = _notes(f, rpc, tool._price)
     except (S.SeedError, V.LpReadError, ValueError) as exc:
         return tool._ar(error=f"refused: {exc}. Nothing was proposed and nothing was sent.")
-    outcome = "failed"
-    try:
-        outcome = await cards.push(getattr(tool, "container", None), user_id, card, session_id=sid)
-    except Exception as exc:
-        logger.warning("pool declaration card %s: delivery failed: %s", card.card_id, exc)
-    where = ("on the owner's chat" if outcome in ("sent", "queued")
-             else "in the owner's /cards list (no live chat reached)")
-    return tool._ar(content=(
-        f"NOT sent: this is a {'move' if 'from_token_id' in f else 'pool'} the owner must declare first. Declaration {ref} is "
-        f"PROPOSED; card {card.card_id} is {where}.\n" + "\n".join(S.summary_lines(f)) + "\n"
-        f"See the plan now with lp_add(chain='{p.chain}', protocol='v4', seed='{ref}', "
-        f"max_spend_usd=…, dry_run=true). After the owner confirms, the same call with "
-        f"dry_run=false sends it. Do not say a pool exists until that call reports success."))
+    # 126: a declaration is ONE call card: its dry run, and one Confirm that declares,
+    # grants and mints (a move also withdraws first) — tools/defi/lp_move_card.py.
+    from tools.defi.lp_move_card import declaration_card
+    return await declaration_card(tool, ctx, p.chain, ref, f, summary="\n".join(
+        list(S.summary_lines(f)) + [n for n in notes if n]))
 
 
 def _uid(ctx) -> str:
@@ -201,9 +190,101 @@ def load(p, ctx) -> Dict[str, Any]:
     return row
 
 
-def prepare_seed_v4(p, rpc, holder, npm, row, credit=None):
+def _has_grant(rpc, chain, holder, cur, via, need, reg, npm) -> bool:
+    """True when the allowance a grant step makes is already there. A failed read is
+    False: the step then runs and the guard judges it."""
+    try:
+        if via == "erc20":
+            return R.allowance(rpc, chain, cur, holder, reg.permit2) >= need
+        granted, expiration = V.permit2_allowance(rpc, chain, holder, cur, npm)
+        return granted >= need and expiration > time.time() + 300
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def make_grants(tool, p, ctx) -> tuple:
+    """The Permit2 legs of a live ``lp_add(seed=<ref>)`` (2026-11-20), made here and not
+    asked of the owner: each ERC-20 leg gets the ERC-20 allowance to the pinned Permit2
+    and the exact, expiring Permit2 grant to the PositionManager, sized to the mint's
+    MAXIMA at the price now (:func:`mint_bounds`; audit 2026-11-21 L-10). A grant already there is skipped; the guard judges every grant. Returns
+    ``(why a grant was not made or None, the reports of the grants made)``. A row that
+    cannot be loaded is ``(None, [])``: the send path reports it."""
+    from core.wallet.broadcast.evm import EvmRail
+    from tools.defi.approve_verb import perform_approve_token
+    from tools.defi.trade_params import ApproveParams
+    try:
+        row = load(p, ctx)
+        reg = dex_registry.row_for(p.chain, "v4")
+        npm = dex_registry.resolve_position_manager(p.chain, "v4")
+        wallet = tool._get_wallet()
+    except Exception:  # noqa: BLE001
+        return None, []
+    if row["state"] != S.CONFIRMED or reg is None or not reg.permit2 or wallet is None:
+        return None, []
+    f, key = row["fields"], S.key_of(row["fields"])
+    if not any(c != V.ZERO and int(f[a]) > 0 for c, a in (
+            (key["currency0"], "amount0_raw"), (key["currency1"], "amount1_raw"))):
+        return None, []
+    signer = wallet.operational_signer()
+    rpc = getattr(tool, "_lp_rpc", None) or (tool._rail_factory or EvmRail)(
+        chain=p.chain, signer=signer)._rpc
+    # Audit 2026-11-21 L-10: the grants are sized to the mint's computed MAXIMA at the
+    # price now, not to the declared amounts — the ERC-20 allowance to Permit2 has no
+    # expiry, so whatever the mint does not pull stays a standing claim.
+    try:
+        _liq, maxima = mint_bounds(f, V.pool_state(rpc, p.chain, f["pool_id"]).sqrt_price_x96)
+    except Exception as exc:  # noqa: BLE001 — the mint could not be planned either
+        return f"the mint's maxima could not be computed ({exc})", []
+    legs = [(c, int(m), int(f[d])) for c, m, d in (
+        (key["currency0"], maxima[0], "dec0"), (key["currency1"], maxima[1], "dec1"))
+        if c != V.ZERO and int(m) > 0]
+    made = []
+    for cur, need, dec in legs:
+        # The maximum itself: a float amount must not round below it.
+        amount = _human_at_least(need, dec)
+        for spender, via in ((reg.permit2, "erc20"), (npm, "permit2")):
+            if _has_grant(rpc, p.chain, signer.address, cur, via, need, reg, npm):
+                continue
+            res = await perform_approve_token(tool, ApproveParams(
+                chain=p.chain, token=cur, spender=spender, amount=amount,
+                max_spend_usd=p.max_spend_usd, via=via, dry_run=False), ctx)
+            text = str(res.error or res.extracted_content or "")
+            if res.error or "NOT SENT" in text:
+                return f"the {via} grant of {cur} to {spender} was not made: {text}", made
+            made.append(text)
+    return None, made
+
+
+def mint_bounds(f: Dict[str, Any], sqrt_now: int) -> tuple:
+    """``(liquidity, [max0, max1])`` of the declaration's mint at the pool price
+    ``sqrt_now`` (0: no pool yet, the mint creates it at the anchor). ONE rule for the
+    plan (:func:`prepare_seed_v4`) and the grants it needs (:func:`make_grants`)."""
+    lo, hi = f["tick_lower"], f["tick_upper"]
+    sa, sb = M.sqrt_price_at_tick(lo), M.sqrt_price_at_tick(hi)
+    declared = [int(f["amount0_raw"]), int(f["amount1_raw"])]
+    if sqrt_now == 0:
+        sqrt, slack = int(f["sqrt_price_x96"]), _ROUNDING_BPS
+    else:
+        sqrt, slack = sqrt_now, int(f["gap_bps"])
+    liq = M.liquidity_for_amounts(sqrt, sa, sb, *(d * (10000 - slack) // 10000 for d in declared))
+    if not 0 < liq < 2 ** 128:
+        raise ValueError("at the price now the declared amounts make no liquidity")
+    used = M.amounts_for_liquidity(sqrt, sa, sb, liq)
+    return liq, [min(d, u * (10000 + slack) // 10000 + 1) if u else 0
+                 for d, u in zip(declared, used)]
+
+
+def _human_at_least(raw: int, dec: int) -> float:
+    """The float ``amount`` whose ``round(amount * 10**dec)`` is ``raw`` or a hair
+    above it, never below (a float holds ~16 digits; the margin is 1e-12 of ``raw``)."""
+    return float(Decimal(raw + max(2, raw // 10 ** 12)) / Decimal(10) ** dec)
+
+
+def prepare_seed_v4(p, rpc, holder, npm, row, credit=None, grants_follow=None):
     """The plan of ``lp_add(protocol='v4', seed=<ref>)``. Everything but
-    ``max_spend_usd`` and ``dry_run`` comes from the declaration row."""
+    ``max_spend_usd`` and ``dry_run`` comes from the declaration row. In a dry run
+    (``grants_follow``, default ``p.dry_run``) a missing Permit2 grant is a note: the
+    live run makes it first (:func:`make_grants`)."""
     from core.wallet import liquidity_guard as G
     from tools.defi.lp_verbs import Plan
     f = row["fields"]
@@ -212,15 +293,11 @@ def prepare_seed_v4(p, rpc, holder, npm, row, credit=None):
     st = V.pool_state(rpc, p.chain, pid)
     anchor, gap = int(f["sqrt_price_x96"]), int(f["gap_bps"])
     lo, hi = f["tick_lower"], f["tick_upper"]
-    sa, sb = M.sqrt_price_at_tick(lo), M.sqrt_price_at_tick(hi)
-    declared = [int(f["amount0_raw"]), int(f["amount1_raw"])]
     creates = st.sqrt_price_x96 == 0
     if creates:
-        sqrt, slack = anchor, _ROUNDING_BPS
         how = "the pool has no price: this transaction creates it at the confirmed price"
     else:
-        sqrt, slack = st.sqrt_price_x96, gap
-        drift = _drift_bps(sqrt, anchor)
+        drift = _drift_bps(st.sqrt_price_x96, anchor)
         if drift > gap:
             raise ValueError(
                 f"v4 pool {pid} exists and its price is {drift / 100:.2f}% away from the price "
@@ -230,16 +307,15 @@ def prepare_seed_v4(p, rpc, holder, npm, row, credit=None):
     if row["state"] != S.CONFIRMED:
         how += ("\nNOT CONFIRMED: this is a plan only. A live send needs the owner's Confirm "
                 "on the declaration's card")
-    liq = M.liquidity_for_amounts(sqrt, sa, sb, *(d * (10000 - slack) // 10000 for d in declared))
-    if not 0 < liq < 2 ** 128:
-        raise ValueError("at the price now the declared amounts make no liquidity")
-    used = M.amounts_for_liquidity(sqrt, sa, sb, liq)
-    maxima = [min(d, u * (10000 + slack) // 10000 + 1) if u else 0 for d, u in zip(declared, used)]
+    liq, maxima = mint_bounds(f, st.sqrt_price_x96)
     c0, c1 = key["currency0"], key["currency1"]
     now = int(time.time())
+    grant_notes = [] if (p.dry_run if grants_follow is None else grants_follow) else None
     out, held = legs_ready(p.chain, rpc, holder, npm,
                            ((c0, maxima[0], f["dec0"]), (c1, maxima[1], f["dec1"])), now,
-                           credit=credit)
+                           credit=credit, notes=grant_notes)
+    if grant_notes:
+        how += "\n" + "\n".join(sorted(set(grant_notes)))
     unlock = V.encode_mint_unlock(key, lo, hi, liq, maxima[0], maxima[1], holder)
     data = V.encode_modify_liquidities(unlock, now + DEADLINE_S)
     reg = dex_registry.row_for(p.chain, "v4")
@@ -252,7 +328,9 @@ def prepare_seed_v4(p, rpc, holder, npm, row, credit=None):
         chain=p.chain, token=None, to=npm, amount_raw=0, max_spend_usd=p.max_spend_usd,
         is_liquidity_op=True, lp_outflows=tuple(out), lp_held_balances=tuple(held),
         watch_spenders=(reg.permit2,), lp_position=(npm, None), lp_position_effect="mint",
-        expected_events=tuple(events), idempotency_key=None)
+        expected_events=tuple(events), idempotency_key=None,
+        # 122 W3: a launch's seed is held to the launch pin and the seed ceiling (step 7a).
+        launch=(("seed", c0, c1) if row.get("origin") == "launch" else ()))
     amt = lambda n, d: f"{Decimal(n) / Decimal(10) ** d:f}"
     plan = Plan(intent, data, value, pid, (c0, c1), (f["dec0"], f["dec1"]),
                 f"declaration {p.seed} ({row['state']}): " + "; ".join(S.summary_lines(f)[:3]) + "\n"

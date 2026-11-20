@@ -134,7 +134,7 @@ except ImportError:
 from agents.task.logging_config import get_task_logger
 
 # Import centralized path management
-from agents.task.path import pm
+from core.session_paths import pm
 
 
 # Generic logger for the module itself (not instances)
@@ -287,7 +287,7 @@ class Agent(AgentConstructionMixin, RunLoopMixin, StepMixin, StepExecutionMixin,
 		user message/task at the top of the conversation.
 		"""
 		try:
-			from agents.task.path import pm
+			from core.session_paths import pm
 
 			session_id = pm().clean_session_id(self.session_id)
 			session_dir = pm().get_data_dir(session_id, user_id=self.user_id)
@@ -416,7 +416,7 @@ class Agent(AgentConstructionMixin, RunLoopMixin, StepMixin, StepExecutionMixin,
 			return
 		
 		try:
-			from agents.task.path import pm
+			from core.session_paths import pm
 			from pathlib import Path
 			
 			# Get session directory

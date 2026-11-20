@@ -138,3 +138,62 @@ async def test_process_email_routes(monkeypatch):
     res = await process_email(c, _msg(), dedup=d, user_directory=_UserDir())
     # no tier flag, no bound session -> default TASK_AGENT decision (routing works)
     assert res.decision.kind in (RouteKind.TASK_AGENT, RouteKind.DENIED)
+
+
+# --- proposal 125 S32: no directory row before the tier is known -------------
+
+
+class _CountingDir:
+    """A directory fake that counts persisting writes (resolve_internal)."""
+
+    def __init__(self):
+        self.writes = 0
+
+    def internal_id_for(self, raw_user_id, surface_id):
+        return f"u_{surface_id}_{raw_user_id}"
+
+    def resolve_internal(self, raw_user_id, surface_id):
+        self.writes += 1
+        return f"u_{surface_id}_{raw_user_id}"
+
+
+def _route_to(monkeypatch, kind):
+    import surfaces.email.inbound as inbound_mod
+    from core.surfaces.dispatcher import RouteDecision
+
+    async def _route(container, inbound):
+        return RouteDecision(kind=kind, session_key="k")
+
+    monkeypatch.setattr(inbound_mod, "route_inbound", _route)
+
+
+@pytest.mark.asyncio
+async def test_forged_mail_writes_no_directory_row(monkeypatch):
+    _route_to(monkeypatch, RouteKind.DENIED)
+    ud = _CountingDir()
+    res = await process_email(_Container(), _msg(), dedup=None, user_directory=ud)
+    assert res.decision.kind == RouteKind.DENIED
+    assert res.inbound.identity.user_id == "u_email_john@acme.com"
+    assert ud.writes == 0
+
+
+@pytest.mark.asyncio
+async def test_accepted_correspondent_writes_one_directory_row(monkeypatch):
+    _route_to(monkeypatch, RouteKind.CORRESPONDENT_DATA)
+    ud = _CountingDir()
+    res = await process_email(_Container(), _msg(sender_authenticated=True), dedup=None,
+                              user_directory=ud)
+    assert res.decision.kind == RouteKind.CORRESPONDENT_DATA
+    assert ud.writes == 1
+
+
+def test_user_directory_internal_id_for_is_pure(tmp_path):
+    from tools.user_directory import UserDirectory
+    ud = UserDirectory(str(tmp_path / "users.db"))
+    uid = ud.internal_id_for("john@acme.com", "email")
+    assert uid == ud.resolve_internal("john@acme.com", "email")
+    ud2 = UserDirectory(str(tmp_path / "users2.db"))
+    assert ud2.internal_id_for(" john@acme.com ", "email") == uid
+    from core.sqlite_util import execute_retry
+    row = execute_retry(ud2.db_path, "SELECT COUNT(*) AS n FROM user_profiles", (), fetch="one")
+    assert row["n"] == 0  # the pure call writes no row

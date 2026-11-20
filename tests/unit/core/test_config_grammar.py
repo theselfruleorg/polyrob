@@ -1,7 +1,7 @@
 """113 W4 item 4 (D-3): one `/config` grammar on every seat.
 
 ``core.config_service.parse_config_command`` parses the words; the chat apps
-(``surfaces.telegram.prefs_ops._config_reply``), the terminal
+(``core.prefs_reply.config_reply``), the terminal
 (``cli.ui.commands.h_config.cmd_config``) and ``polyrob config`` know the same
 seven verbs, and ``unset`` exists on every seat (it runs on the box only).
 """
@@ -49,7 +49,7 @@ def test_polyrob_config_has_every_verb_of_the_grammar():
 
 def test_the_terminal_and_the_chat_apps_refuse_the_same_bad_line(tmp_path):
     from cli.ui.commands.h_config import ConfigCtx, cmd_config
-    from surfaces.telegram.prefs_ops import _config_reply
+    from core.prefs_reply import config_reply as _config_reply
     for words in (["frobnicate"], ["get"], ["set", "k"], ["search"]):
         expected = parse_config_command(words).error
         assert cmd_config(ConfigCtx(user_id="u1", home_dir=tmp_path), words) == expected
@@ -80,6 +80,6 @@ def test_the_terminal_unset_removes_the_line(tmp_path, monkeypatch):
 
 def test_chat_search_and_check_answer(tmp_path, monkeypatch):
     monkeypatch.setattr("core.runtime_paths.prefs_home_dir", lambda: str(tmp_path))
-    from surfaces.telegram.prefs_ops import _config_reply
+    from core.prefs_reply import config_reply as _config_reply
     assert "style.verbosity" in _config_reply("u1", str(tmp_path), "i1", ["search", "verbosity"])
     assert _config_reply("u1", str(tmp_path), "i1", ["check"]).startswith("Config check:")

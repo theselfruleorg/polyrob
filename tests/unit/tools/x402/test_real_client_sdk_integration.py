@@ -940,3 +940,22 @@ def test_a_non_json_body_gets_no_type():
     from tools.x402.real_client import body_headers
     assert body_headers(b"plain words") == {}
     assert body_headers(b'{"a": 1}') == {"Content-Type": "application/json"}
+
+
+@pytest.mark.asyncio
+async def test_a_seller_402_after_the_signed_payment_is_marked_sent(fake_transport):
+    """F8: the seller answers 402 to the request that CARRIES our signed payment.
+    The result says the payment was sent (a rejection, not "no paywall"), so the
+    service books the signed ceiling and frees the other rails."""
+    real = fake_transport.handler
+
+    def reject_paid(request):
+        if request.headers.get("payment-signature") or request.headers.get("x-payment"):
+            return httpx.Response(402, json={"error": "payment rejected"})
+        return real(request)
+    fake_transport.handler = reject_paid
+    res = await RealX402Client().fetch_with_payment(expected_pay_to=PAY_TO,
+        url="http://fake/paid", method="GET", body=None,
+        signer=LocalEoaSigner(KEY), network=NETWORK, max_amount_usd=0.1)
+    assert res.paid is False and res.status_code == 402
+    assert res.payment_sent is True and res.submission_ref

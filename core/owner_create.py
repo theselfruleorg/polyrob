@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 #: The default status a fresh owner-created goal lands in — dispatchable at once.
 #: A string, not the imported ``STATUS_READY`` constant, because importing
-#: ``agents.task.goals.board`` would re-open the core->agents edge this module
+#: ``modules.goals.board`` would be an upward core->modules edge this module
 #: exists to avoid. ``GoalBoard.create`` validates the value.
 _STATUS_READY = "ready"
 

@@ -1,7 +1,8 @@
 """h_money_verbs.py — ``/wallet`` ``/trade`` ``/bridge`` in the REPL (043 A23).
 
-Thin consumers of the SAME primitives the Telegram owner seat calls
-(``surfaces.telegram.owner_ops``), so the
+Thin consumers of the SAME bodies the Telegram owner seat runs
+(``tools.defi.owner_verbs.wallet`` / ``.bridge``, ``polyrob.app.trade_owner``),
+so the
 terminal and the phone can never drift into different answers about a cap, a
 quote, or what a bridge guarantees. This is the ``h_token.py`` / ``h_inbox.py``
 pattern: a registrar beside its handlers, out of the size-ratcheted
@@ -9,9 +10,9 @@ pattern: a registrar beside its handlers, out of the size-ratcheted
 
 ⚠️ REACH, never policy (043 global constraint). These verbs change no money
 gate: ``tx_guard``, the per-transaction ceiling, the autonomous-vs-owner-queue
-lane, and the 031 pause all still apply inside ``owner_ops``. ``/bridge``
+lane, and the 031 pause all still apply inside the verb body. ``/bridge``
 QUOTES unless the owner adds ``go``; a spend above the autonomous ceiling still
-waits in ``/pending``. ``/trade`` (``surfaces.telegram.trade_ops``) writes
+waits in ``/pending``. ``/trade`` (``polyrob.app.trade_owner``) writes
 nothing before its card's Confirm.
 
 The data-home + tenant resolution reuses ``h_owner``'s canonical helpers — the
@@ -37,9 +38,9 @@ async def _awaited(value):
 
 async def h_wallet(ctx) -> None:
     """Addresses, network, caps — and the one cap the owner may set from chat."""
-    from surfaces.telegram import owner_ops
+    from tools.defi.owner_verbs.wallet import wallet_reply
     ctx.emit(
-        await _awaited(owner_ops.wallet_reply(
+        await _awaited(wallet_reply(
             list(ctx.args or []), user_id=_tenant(ctx),
             data_dir=_admin_data_dir(write=None))),
         title="wallet",
@@ -54,12 +55,12 @@ async def h_offer(ctx) -> None:
 
 
 async def h_trade(ctx) -> None:
-    """The trading mandate (086 W5) — the same ``trade_ops`` the phone runs."""
+    """The trading mandate (086 W5) — the same ``trade_reply`` the phone runs."""
     import asyncio
 
     from core.surfaces.command_reply import reply_text
-    from surfaces.telegram import trade_ops
-    reply = await asyncio.to_thread(trade_ops.trade_reply, _tenant(ctx),
+    from polyrob.app.trade_owner import trade_reply
+    reply = await asyncio.to_thread(trade_reply, _tenant(ctx),
                                     _admin_data_dir(write=True), list(ctx.args or []),
                                     via="cli")
     ctx.emit(reply_text(reply), title="trade")
@@ -67,10 +68,10 @@ async def h_trade(ctx) -> None:
 
 async def h_bridge(ctx) -> None:
     """Move NATIVE value between chains. Bare = quote; add ``go`` to execute."""
-    from surfaces.telegram import owner_ops
+    from tools.defi.owner_verbs.bridge import bridge_reply
     ctx.emit(
-        await _awaited(owner_ops.bridge_reply(
-            _tenant(ctx), _admin_data_dir(write=True), list(ctx.args or []))),
+        await _awaited(bridge_reply(
+            _tenant(ctx), _admin_data_dir(write=True), list(ctx.args or []), seat="repl")),
         title="bridge",
     )
 

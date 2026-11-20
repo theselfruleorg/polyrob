@@ -518,7 +518,7 @@ def test_supervised_unset_payment_mode_stays_approve(monkeypatch):
 def test_delegate_blocked_tools_money_entries_untouched():
     """Regression pin: leaf-delegation of any money tool_id stays blocked regardless
     of AUTONOMY_MODE (a different axis from the mode's capability/approval grants)."""
-    from tools.controller.delegation import DELEGATE_BLOCKED_TOOLS
+    from core.delegation_policy import DELEGATE_BLOCKED_TOOLS
 
     for tool_id in ("x402_pay", "x402_invoice", "hyperliquid", "polymarket"):
         assert tool_id in DELEGATE_BLOCKED_TOOLS, tool_id
@@ -531,9 +531,7 @@ def test_correspondent_gate_high_impact_money_verbs_untouched():
     their READ verbs stay allowed while tainted — their trade verbs are enumerated
     by name in _HIGH_IMPACT_NAMES instead; assert both money-relevant sets are
     intact rather than assuming they overlap."""
-    from agents.task.agent.core.correspondent_gate import (
-        HIGH_IMPACT_TOOL_IDS, _HIGH_IMPACT_NAMES,
-    )
+    from core.security.high_impact import HIGH_IMPACT_TOOL_IDS, _HIGH_IMPACT_NAMES
 
     # x402_pay/x402_invoice tool_ids are fully high-impact (every action gated).
     for tool_id in ("x402_pay", "x402_invoice"):

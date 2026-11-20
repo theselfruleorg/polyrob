@@ -1,7 +1,7 @@
 import inspect
 from datetime import datetime
 
-import cron.jobs as jobs_mod
+import core.cron_store as jobs_mod
 
 
 def test_cron_jobs_does_not_reimplement_sqlite_retry():

@@ -162,7 +162,7 @@ URL = "https://api.example.com/v1/data"
 
 @pytest.mark.asyncio
 async def test_bare_pay_only_quotes(fake_tool):
-    from surfaces.telegram.pay_ops import pay_reply
+    from tools.defi.owner_verbs.pay import pay_reply
     out = await pay_reply("owner", [URL, "0.10"])
     assert fake_tool.calls[0][0] == "quote" and "go" in out
     assert not [c for c in fake_tool.calls if c[0] == "fetch"]
@@ -170,14 +170,14 @@ async def test_bare_pay_only_quotes(fake_tool):
 
 @pytest.mark.asyncio
 async def test_go_without_a_max_never_pays(fake_tool):
-    from surfaces.telegram.pay_ops import pay_reply
+    from tools.defi.owner_verbs.pay import pay_reply
     out = await pay_reply("owner", [URL, "go"])
     assert "max_usd" in out and not fake_tool.calls
 
 
 @pytest.mark.asyncio
 async def test_go_pays_as_the_owner_and_bounds_the_body(fake_tool):
-    from surfaces.telegram.pay_ops import pay_reply
+    from tools.defi.owner_verbs.pay import pay_reply
     out = await pay_reply("owner", [URL, "$0.10", "go"])
     kind, amount, ctx = fake_tool.calls[0]
     assert kind == "fetch" and amount == 0.10
@@ -187,7 +187,7 @@ async def test_go_pays_as_the_owner_and_bounds_the_body(fake_tool):
 
 @pytest.mark.asyncio
 async def test_no_owner_no_payment(fake_tool):
-    from surfaces.telegram.pay_ops import pay_reply
+    from tools.defi.owner_verbs.pay import pay_reply
     assert "owner" in (await pay_reply(None, [URL, "1", "go"])).lower()
     assert not fake_tool.calls
 
@@ -216,7 +216,7 @@ class _KeyTool:
 @pytest.mark.asyncio
 async def test_pay_keys_by_the_command_identity(monkeypatch):
     import tools.x402.service as svc
-    from surfaces.telegram.pay_ops import pay_reply
+    from tools.defi.owner_verbs.pay import pay_reply
     _KeyTool.keys = []
     monkeypatch.setattr(svc, "X402PayTool", _KeyTool)
     await pay_reply("owner", [URL, "0.10", "go"], request_id="tg:1001")

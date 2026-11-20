@@ -580,6 +580,17 @@ describe("Cash — the owner wallet is wired as a read-only identity", () => {
     expect(section.textContent).not.toContain("$0.00");
   });
 
+  it("no wallet: the balance dash says no wallet, never 'not trustworthy'", () => {
+    const root = document.createElement("div");
+    const copy = { ...CASH, wallet_disabled: "The agent wallet is not enabled.",
+                   cash_dash_why: "this reading is not trustworthy right now" };
+    renderCash(root, ledger({ treasury: { income_usd: 0, spend_usd: 0, pending_usd: 0,
+      pending_count: 0, balance_usd: null, net_usd: 0, available: true } }), copy,
+      { wallet: { state: "disabled" } });
+    expect(root.textContent).toContain("The agent wallet is not enabled.");
+    expect(root.textContent).not.toContain("not trustworthy");
+  });
+
   it("keeps the wallet visible when the cash-flow ledger is unavailable", () => {
     const root = document.createElement("div");
     expect(renderCash(root, { error: "ledger down" }, CASH, { wallet })).toBe("unreadable");

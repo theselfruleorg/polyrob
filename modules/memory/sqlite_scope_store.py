@@ -109,7 +109,7 @@ class ScopeStoreMixin:
             for r in rows:
                 content = r[1] or ""
                 if scan and content:
-                    from modules.memory.task.threat_scan import is_suspicious
+                    from core.security.threat_scan import is_suspicious
                     if is_suspicious(content):
                         purge.append((r[0], content))
                         continue

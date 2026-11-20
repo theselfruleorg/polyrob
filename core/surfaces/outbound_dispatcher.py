@@ -11,7 +11,8 @@ from core.config_policy import dead_target_registry_enabled
 from core.surfaces.dead_targets import classify_dead_error
 from core.surfaces.envelopes import OutboundMessage
 from core.surfaces.outbound_queue import (
-    INFLIGHT_LEASE_SEC, PROACTIVE_SESSION_PREFIX, OutboundDeliveryQueue, owner_pause_hold,
+    INFLIGHT_LEASE_SEC, PROACTIVE_SESSION_PREFIX, OutboundDeliveryQueue, decode_actions,
+    owner_pause_hold,
 )
 from core.rate_limit import TokenBucket
 
@@ -294,7 +295,8 @@ class OutboundDispatcher:
                                            len(swapped), swapped)
                     res = await self._send_holding_lease(surface, row, OutboundMessage(
                         session_key=row["session_key"], text=row["payload"],
-                        media=media,
+                        media=media, reply_to=row.get("reply_to") or None,
+                        actions=decode_actions(row.get("actions")),
                     ))
                     ok = bool(getattr(res, "success", False))
                     err = getattr(res, "error", None) or ("ok" if ok else "send returned False")

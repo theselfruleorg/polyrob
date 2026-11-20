@@ -153,6 +153,25 @@ def _call(rpc, chain: str, to: str, data: str) -> Optional[str]:
         return None
 
 
+#: The longest ``tokenURI`` kept from a read. A ``data:`` URI carries the whole metadata
+#: (the avatar decodes up to 1 MiB of it, ~1.4 M base64 chars); a longer one is NOT
+#: CHECKED, never cut (a cut ``data:`` URI does not decode).
+MAX_URI_CHARS = 1_500_000
+#: How much of a ``tokenURI`` the model sees (:func:`uri_for_model`).
+URI_SHOWN_CHARS = 512
+
+
+def uri_for_model(uri: Any, *, source: str = "nft tokenURI") -> str:
+    """A ``tokenURI`` for the model: the COLLECTION wrote it (any contract can send the
+    treasury a token, and a group member can ask for the read), so it is capped to
+    :data:`URI_SHOWN_CHARS`, put on one line and fenced as untrusted data
+    (``core.security.untrusted_wrap.wrap_untrusted``, the one fence). Audit 2026-11-21 L-15."""
+    from core.security.untrusted_wrap import wrap_untrusted
+    text = " ".join(str(uri or "").split())
+    shown = text[:URI_SHOWN_CHARS] + ("…" if len(text) > URI_SHOWN_CHARS else "")
+    return wrap_untrusted(source, shown)
+
+
 def read_token_facts(rpc, *, chain: str, contract: str, token_id: int,
                      holder: Optional[str] = None) -> Dict[str, Any]:
     """Per-token facts straight from the chain. No key, no indexer, exact.
@@ -192,11 +211,17 @@ def read_token_facts(rpc, *, chain: str, contract: str, token_id: int,
         raw = _call(rpc, chain, c, encode_call(sel, inputs, [int(token_id)]))
         if raw:
             try:
-                facts["uri"] = decode([{"type": "string"}], raw)[0]
+                uri = decode([{"type": "string"}], raw)[0]
+                if len(uri) > MAX_URI_CHARS:
+                    facts["not_checked"].append(
+                        f"metadata uri (longer than {MAX_URI_CHARS:,} characters)")
+                    break
+                facts["uri"] = uri
                 break
             except Exception:
                 continue
-    if facts["uri"] is None:
+    if facts["uri"] is None and not any(n.startswith("metadata uri")
+                                        for n in facts["not_checked"]):
         facts["not_checked"].append("metadata uri")
     return facts
 
@@ -270,3 +295,36 @@ _ALCHEMY_HOSTS = {
     # that has code on the Robinhood public RPC (eth_getCode, chain 4663).
     "robinhood": "robinhood-mainnet.g.alchemy.com",
 }
+
+
+def nft_transfer_card_context(params: dict, *, rpc=None) -> list:
+    """124 D2: the owner's card for ``defi_trade_nft_transfer`` says whether the NFT has an
+    ERC-6551 account and what it holds in the native unit — everything in that account leaves
+    with the NFT. An unreadable fact is said ON the card, never left out."""
+    from core.wallet import collection_registry, nft_rules
+    chain = str(params.get("chain") or "")
+    contract = str(params.get("contract") or "")
+    if str(params.get("standard") or "erc721").lower() != "erc721" or not contract:
+        return []
+    try:
+        token_id = int(params.get("token_id"))
+        if rpc is None:
+            from core.wallet.simulation import _default_rpc_for
+            rpc = _default_rpc_for(chain)
+        chain_id = collection_registry.chain_id_of(chain)
+        accounts = nft_rules.account_addresses(
+            chain_id, contract, [token_id], nft_rules.implementations(rpc, chain_id, contract))
+        lines = []
+        for account in sorted(accounts):
+            code = rpc("eth_getCode", [account, "latest"])
+            if not (isinstance(code, str) and len(code) > 2):
+                continue
+            wei = int(str(rpc("eth_getBalance", [account, "latest"]) or "0x0"), 16)
+            lines.append(f"• This NFT has an ERC-6551 account {account}: {wei / 10 ** 18:.6f} "
+                         f"native, and any tokens it holds (agent_nft_inspect lists them) — "
+                         f"everything in it leaves with the NFT.")
+    except Exception as exc:  # noqa: BLE001 — unreadable is not empty
+        return [f"⚠️ ACCOUNT UNREADABLE ({type(exc).__name__}: {str(exc)[:160]}) — you would "
+                f"approve without seeing what may leave with this NFT."]
+    return lines or ["• This NFT has no deployed ERC-6551 account: nothing else leaves with it."]
+

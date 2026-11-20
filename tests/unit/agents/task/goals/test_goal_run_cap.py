@@ -7,7 +7,7 @@ import asyncio
 
 import pytest
 
-from agents.task.goals.board import GoalBoard, STATUS_READY, STATUS_BLOCKED
+from modules.goals.board import GoalBoard, STATUS_READY, STATUS_BLOCKED
 from agents.task.goals import dispatcher as disp_mod
 from agents.task.goals.dispatcher import GoalDispatcher
 

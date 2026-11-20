@@ -94,10 +94,12 @@ def test_an_unreadable_choice_is_named(rig, monkeypatch):
     from core import model_pins
     monkeypatch.setattr(model_pins, "chat_runtime_for",
                         lambda uid: ("p0", "m0", None, "DEFAULT_MODEL (operator env) — ⚠️ …"))
-    monkeypatch.setattr(model_pins, "load", lambda uid: ({}, "TOMLDecodeError: bad"))
+    monkeypatch.setattr(model_pins, "load", lambda uid, *a: (
+        {}, "/home/x/models.json could not be read (TOMLDecodeError)"))
     monkeypatch.setattr(model_pins, "chat_pin_for", lambda uid: None)
     body = rig.client.get("/api/webgate/model").json()
-    assert body["readable"] is False and "TOMLDecodeError" in body["error"]
+    # the type at most: the store's own words name a path, which is logged, never sent
+    assert body["readable"] is False and body["error"] == "TOMLDecodeError"
 
 
 def test_the_write_carries_the_console_guards():

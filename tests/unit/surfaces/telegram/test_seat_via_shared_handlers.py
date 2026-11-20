@@ -23,7 +23,8 @@ def _call(cmd, args, surface_id):
 
 
 def test_job_writes_name_the_arrival_seat(monkeypatch):
-    from surfaces.telegram import admin_verbs, job_ops
+    from surfaces.telegram import admin_verbs
+    from cron import owner_jobs as job_ops
     seen = {}
     monkeypatch.setattr(job_ops, "jobs_reply",
                         lambda uid, home, args, *, via: seen.setdefault("via", via))
@@ -32,7 +33,8 @@ def test_job_writes_name_the_arrival_seat(monkeypatch):
 
 
 def test_trade_writes_name_the_arrival_seat(monkeypatch):
-    from surfaces.telegram import admin_verbs, trade_ops
+    from surfaces.telegram import admin_verbs
+    from polyrob.app import trade_owner as trade_ops
     seen = {}
     monkeypatch.setattr(trade_ops, "trade_reply",
                         lambda uid, home, args, *, via: seen.setdefault("via", via))

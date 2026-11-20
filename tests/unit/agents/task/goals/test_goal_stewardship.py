@@ -16,7 +16,7 @@ import time
 
 import pytest
 
-from agents.task.goals.board import (GoalBoard, STATUS_BLOCKED, STATUS_CANCELLED,
+from modules.goals.board import (GoalBoard, STATUS_BLOCKED, STATUS_CANCELLED,
                                      STATUS_READY, STATUS_RUNNING)
 
 

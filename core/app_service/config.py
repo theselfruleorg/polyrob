@@ -101,6 +101,26 @@ def app_service_nginx_conf_dir() -> str:
     return (os.getenv("APP_SERVICE_NGINX_CONF_DIR") or "/etc/nginx/apps.d").strip().rstrip("/")
 
 
+#: The code-execution sandbox's rootless daemon (deployment/hardening/install-sandbox.sh).
+SANDBOX_DOCKER_SOCKET_DIR = "/run/polyrob-sandbox/"
+
+
+def supervisor_docker_env(environ) -> Optional[str]:
+    """Drop an inherited ``DOCKER_HOST`` that names the code-exec sandbox daemon.
+
+    The supervisor reads the agent's env file, and on a box with the sandbox that
+    file sets ``DOCKER_HOST`` to the ROOTLESS daemon. That daemon cannot see
+    ``<data>/apps`` as root does, and its containers sit in its own network
+    namespace, so the supervisor's per-app nft egress rules would not apply —
+    an app would run with no egress rule and nothing would say so. The apps run
+    on the system daemon. Returns the dropped value (for one log line), else None."""
+    value = environ.get("DOCKER_HOST") or ""
+    if SANDBOX_DOCKER_SOCKET_DIR in value:
+        environ.pop("DOCKER_HOST", None)
+        return value
+    return None
+
+
 def apps_root(data_dir: Optional[str]) -> str:
     """Where snapshots and logs live: ``<data_dir>/apps``."""
     if not data_dir:

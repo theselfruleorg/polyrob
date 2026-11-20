@@ -144,7 +144,7 @@ def test_create_cron_reraises_schedule_error():
 # --- end-to-end against the real stores ------------------------------------- #
 
 def test_create_goal_against_a_real_board_lands_owner_tenant_and_tools(tmp_path):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
 
     board = GoalBoard(str(tmp_path / "goals.db"))
     goal = create_goal(board, user_id="u1", title="ship the widget",

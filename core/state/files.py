@@ -11,7 +11,7 @@ import contextlib
 import json
 import os
 import tempfile
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 try:  # POSIX only; on other platforms the update is atomic but not exclusive
     import fcntl
@@ -19,11 +19,16 @@ except ImportError:  # pragma: no cover
     fcntl = None  # type: ignore[assignment]
 
 
-def atomic_write_json(path: str, obj: Any, *, mode: int = 0o600, indent: int = 2) -> None:
-    """mkstemp in the same directory + fsync + os.replace (+ best-effort dir fsync)."""
+def atomic_write_json(path: str, obj: Any, *, mode: Optional[int] = None, indent: int = 2) -> None:
+    """mkstemp in the same directory + fsync + os.replace (+ best-effort dir fsync).
+
+    ``mode=None``: the shared-store rule (``core.fs_copy.shared_file_mode``)."""
     path = os.fspath(path)
     d = os.path.dirname(os.path.abspath(path))
     os.makedirs(d, exist_ok=True)
+    if mode is None:
+        from core.fs_copy import shared_file_mode
+        mode = shared_file_mode(d)
     fd, tmp = tempfile.mkstemp(prefix="." + os.path.basename(path) + ".", suffix=".tmp", dir=d)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -80,7 +85,9 @@ def file_lock(path: str):
     """Exclusive cross-process lock on ``<path>.lock``."""
     lock_path = os.fspath(path) + ".lock"
     os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
-    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    # 0660 (less the umask): a lock another unit cannot open O_RDWR is EACCES
+    # for every sibling writer. A private dir keeps the file private anyway.
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o660)
     try:
         if fcntl is not None:
             fcntl.flock(fd, fcntl.LOCK_EX)
@@ -94,7 +101,7 @@ def file_lock(path: str):
 
 
 def locked_update_json(path: str, fn: Callable[[Any], Any], *, default: Any,
-                       mode: int = 0o600) -> Any:
+                       mode: Optional[int] = None) -> Any:
     """Read, ``fn(data)``, write — exclusive across processes.
 
     ``fn`` mutates ``data`` in place and returns a result, or returns a NEW

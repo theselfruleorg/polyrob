@@ -43,11 +43,26 @@ def account_collection_refusal(chain: str, account: str, rpc, *,
     if int(chain_id) != int(want):
         return (f"the token-bound account {account} is bound to a token on chain {chain_id}, "
                 f"not {chain} ({want})"), (None, None)
-    why = _tg._collection_runtime_refusal(chain, collection, rpc)
+    # 124 W4: a pinned collection is re-hashed against its pin; any other collection is read
+    # from the chain (collection_registry.chain_profile: the account kind proven by ERC-165, or
+    # Tokenbound v3) — an implementation nobody reviewed never gets a profile, so its account
+    # is read-only. An unreadable pin store is no pin.
+    try:
+        profile = collection_registry.profile_for(want, collection)
+    except Exception:  # noqa: BLE001
+        profile = None
+    if profile is not None:
+        why = collection_registry.runtime_refusal(rpc, profile)
+    else:
+        try:
+            profile = collection_registry.chain_profile(chain, collection, rpc=rpc)
+            why = None
+        except Exception as exc:  # noqa: BLE001
+            why = (f"its collection cannot be read as a reviewed account kind ({exc}) — an "
+                   f"unreviewed account implementation is read-only")
     if why:
         return f"the token-bound account {account} belongs to {collection} #{token_id}: {why}", \
             (None, None)
-    profile = collection_registry.profile_for(want, collection)
     canonical = {erc6551.account_address(want, profile.address, int(token_id), salt=v.salt,
                                          implementation=v.implementation).lower()
                  for v in profile.accounts}
@@ -82,7 +97,8 @@ def inner_targets(outer_tx) -> Tuple[str, ...]:
 
 def via_account_preflight(intent, sender: str, rpc, *, inner_to=None,
                           journal_to: Optional[str] = None, owner_asked: bool = False,
-                          sale_act=None, notes: Optional[list] = None) -> Optional[str]:
+                          sale_act=None, notes: Optional[list] = None,
+                          card: Optional[list] = None) -> Optional[str]:
     """Rule 5: reads BEFORE simulation. Any failed read refuses (fail closed).
 
     069 v4 (the simple model): the SIGNER must be the NFT's current owner — the only way this
@@ -112,6 +128,14 @@ def via_account_preflight(intent, sender: str, rpc, *, inner_to=None,
             return (f"the token-bound account clones {impl}, not an account implementation "
                     f"pinned for {profile.address} (one of its account versions: "
                     f"{', '.join(v.kind.label for v in profile.accounts)})")
+        if not getattr(profile, "pinned", True):
+            # 124 section 5.1: no pin = every act through the account is the owner's card.
+            line = (f"{profile.address} is not pinned: an act through its account {acct} is "
+                    f"your call (/nft trust grants autonomy)")
+            if card is not None:
+                card.append(("UNPINNED", line))
+            if owner_asked and notes is not None:
+                notes.append(line)
         erc6551.verify(rpc, version)
         kind = version.kind
         if kind.has_lock and erc6551.read_is_locked(rpc, acct):

@@ -75,7 +75,7 @@ STRINGS = {
     ),
     "shell.state.unknown": "The agent's state is not known right now.",
     # A pause of everything with no end says since when (070 E.7).
-    "shell.state.paused_since": "The agent is paused since {when}.",
+    "shell.state.paused_since": "The agent has been paused since {when}.",
     # A pause has SCOPES (031). A scoped pause rendered as a full stop is the
     # one line that may never be confidently wrong: every other seat says
     # "trading only", so this one may not say "everything".
@@ -490,6 +490,15 @@ STRINGS = {
     "money.limits.unknown_why": "Why",
     "money.limits.body": "The limits the agent spends within live in Agent, where you set them.",
     "money.limits.link": "Open Agent",
+    # The owner's standing money rules under Limits — the status snapshot's
+    # income_rule and mandates sections, drawn by money-standing.js.
+    "money.standing.title": "Standing rules",
+    "money.standing.aside": "What the agent may do with money without asking you each time",
+    "money.standing.income_rule": "Income rule",
+    "money.standing.mandates": "Mandates",
+    "money.standing.loading": "Reading the standing rules.",
+    "money.standing.unreadable": "I could not read this. That is not the same as none.",
+    "money.standing.why": "Why it failed",
 
     "agent.title": "Agent",
 
@@ -607,10 +616,12 @@ STRINGS = {
         "/avatar set <image URL> in Chat, or with `polyrob avatar set <image>` in a "
         "terminal (a file, a URL, or an NFT)."
     ),
+    "agent.id_character_title": "The character it speaks as",
+    "agent.id_character_aside": "from its character file; /persona shows the same",
     "agent.id_persona_title": "How the agent should behave",
     "agent.id_persona_aside": "written by you",
-    "agent.id_persona_empty": "You have not written a persona yet.",
-    "agent.id_persona_unreadable": "I could not read the persona, so it is not shown.",
+    "agent.id_persona_empty": "You have not written these rules yet.",
+    "agent.id_persona_unreadable": "I could not read these rules, so they are not shown.",
     "agent.id_learned_title": "What the agent has learned about itself",
     "agent.id_learned_aside": "written by the agent, approved by you",
     "agent.id_learned_empty": "The agent has not written anything about itself yet.",
@@ -829,10 +840,6 @@ STRINGS = {
     "work.now.live_unreadable_why": "Why",
     "work.now.empty_next": "Nothing is waiting its turn.",
     # 080 F-5: drawn ABOVE the stored goals, never instead of them.
-    "work.now.disabled": (
-        "The agent's own work is off. Nothing starts until you ask, and a stored goal "
-        "does not run. To turn it on, run polyrob autonomy on."
-    ),
     "work.now.unreadable": "I could not read the goal board.",
     "work.now.unreadable_why": "Why it failed",
     "work.now.running_count": "{count} running",
@@ -868,10 +875,6 @@ STRINGS = {
     "work.schedule.empty": "No scheduled jobs yet.",
     # 080 F-5: a banner above the stored jobs — never "nothing runs here"
     # while jobs exist.
-    "work.schedule.disabled": (
-        "The scheduler is off — nothing will run. These jobs are stored and "
-        "run again when it is on."
-    ),
     "work.schedule.unreadable": "I could not read the schedule.",
     "work.schedule.unreadable_why": "Why it failed",
     "work.schedule.header_what": "What it does",
@@ -1074,7 +1077,6 @@ STRINGS = {
     "chat.card.ok": "Confirm",
     "chat.card.re": "Refresh",
     "chat.card.no": "Cancel",
-    "chat.card.pick": "Pick {n}",
     "chat.steer": "Steer",
 
     # The transcript's action line is narrated in Python (narrate.py) and shipped
@@ -1320,7 +1322,6 @@ STRINGS.update({
     "error.details": "Show details",
     "error.hint_chat": "This chat may have been deleted.",
     "error.hint_url": "Check the address and try again.",
-    "error.repair": "Try to repair this chat",
     "error.home": "Go to Chat",
 
     # A1 — the agent's face on Agent, read from the one avatar slot (core/avatar.py).
@@ -1430,3 +1431,7 @@ STRINGS.update(PREF_WORDS)
 from webview.copy.en_coverage import COVERAGE  # noqa: E402 — 113 W6 coverage
 
 STRINGS.update(COVERAGE)
+
+from webview.copy.en_work_log import WORK_LOG  # noqa: E402 — Work › Log owner words
+
+STRINGS.update(WORK_LOG)

@@ -16,7 +16,8 @@ correspondent injection, cleared on owner intake).
 the bare *action name* — ``run_code``, ``goal_create``, ``x402_fetch`` — never the
 *tool_id* (``code_execution``, ``goal``, ``x402_pay``). A denylist keyed on tool_ids is
 therefore dead: it only ever fires for a tool whose single action is literally named
-after the tool_id. So this module blocks in two layers:
+after the tool_id. So the gate blocks in two layers (both in
+``core/security/high_impact.py``):
 
   1. ``_HIGH_IMPACT_NAMES`` — explicit high-impact *action* names (delegation, skill/
      self-context, crypto trade verbs, git/github write verbs). Matched by name.
@@ -37,110 +38,10 @@ from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Layer 1 — high-impact *action* names (matched against the bare action name the
-# pre-hook receives). Includes standalone actions (registered directly, with no
-# owning container tool_id) plus enumerated verbs kept for defense-in-depth even
-# when tool-id resolution is unavailable. Crypto READ verbs are deliberately absent.
-#
-# 067 P1: a DERIVED view of the per-action policy table (core/verb_policy.py;
-# the rows and their per-verb rationale are in core/verb_policy_rows.py) — block
-# a verb there with ``correspondent_blocked``. The legacy tool_id tokens
-# (``code_execution``, ``hyperliquid``, ...) and the bare venue verbs
-# (``place_limit_order``, ...) are RESERVED rows, kept so ``is_high_impact(tool_id)``
-# stays truthy and the substring layer below keeps its anchors. The namespaced
-# venue trade verbs (``hyperliquid_place_limit_order``, ...) have their own rows,
-# so the name layer alone blocks every emitted money write and the substring
-# layer is redundant for every emitted verb (pinned by
-# tests/unit/core/test_action_name_parity.py); it stays as defense-in-depth.
-# ---------------------------------------------------------------------------
-from core.lazy_views import lazy_module_getattr, view
-from core.verb_policy import ids_where as _verb_ids_where
-
-# 067 P4 prerequisite: LAZY (``core/lazy_views.py``), built on first read after the
-# pack loader's phase 1 (the module ``__getattr__`` at the end of this file).
-def _high_impact_names():
-    return _verb_ids_where(correspondent_blocked=True)
-
-
-# Back-compat public name HIGH_IMPACT_TOOLS (tests / other callers import it) is the
-# SAME object as _HIGH_IMPACT_NAMES.
-def _high_impact_tools():
-    return view(__name__, "_HIGH_IMPACT_NAMES")
-
-# ---------------------------------------------------------------------------
-# Layer 2 — tool_ids whose EVERY action is high-impact, resolved at hook time from
-# the action name. Crypto is intentionally absent (its reads must stay allowed; its
-# trade verbs are in _HIGH_IMPACT_NAMES). Blocking a high-impact tool's read verbs
-# too (e.g. goal_list, cronjob_list, git_log) while tainted is the safe/fail-closed
-# direction — the owner clears the taint by replying.
-# ---------------------------------------------------------------------------
-# WS-2 (2026-07-16): derived from the ONE per-tool capability table
-# (core/tool_capabilities.py, `high_impact`) — classify a new tool there, not here;
-# per-entry rationale lives with the table rows. Parity-pinned by
-# tests/unit/core/test_tool_capabilities.py.
-from core.tool_capabilities import ids_with as _ids_with
-
-# 067 P4 prerequisite: LAZY, like _HIGH_IMPACT_NAMES (the ``__getattr__`` at the end).
-def _high_impact_tool_ids():
-    return _ids_with("high_impact")
-
-# Substrings that mark a high-impact action even if the exact name isn't enumerated
-# (e.g. provider-prefixed MCP/web tools that reach the outside world). NOTE: do NOT add
-# "trade" here — as a substring it falsely flags the read action get_trade_history while
-# matching no real trade verb (those are enumerated above). F4 (2026-09-14): the same
-# reasoning killed the bare "pay" entry — it matched every action whose name merely
-# CONTAINS "pay" (e.g. a hypothetical get_payment_history read verb), not just the real
-# payer verb, so it is narrowed to the actual namespaced prefix "x402_pay_" (the only
-# tool_id whose actions are auto-paying verbs; x402_invoice's request verb is enumerated
-# by name above instead, since it isn't namespaced under "x402_pay_").
-_HIGH_IMPACT_PREFIXES = ("mcp_", "browser_", "web_", "email_", "x402_pay_", "send_email")
-
-# H10 (2026-07-15): the crypto TRADE verbs, matched as substrings so BOTH the bare
-# name AND every venue-namespaced runtime form are caught. Container-tool actions
-# register namespaced (polymarket_place_limit_order / hyperliquid_place_market_order),
-# and that namespaced name is what reaches the gate hook — but crypto tool_ids are
-# deliberately absent from HIGH_IMPACT_TOOL_IDS (reads must stay allowed), so bare-name
-# matching alone let the namespaced trade verb slip the gate. Unlike "trade", none of
-# these substrings appears in a read verb (reads are get_*). Keep in sync with the trade
-# verbs enumerated in _HIGH_IMPACT_NAMES.
-_HIGH_IMPACT_VERB_SUBSTRINGS = (
-    "place_limit_order", "place_market_order", "cancel_order",
-    "cancel_all_orders", "update_leverage", "approve_agent", "revoke_agent",
-)
-
-
-def is_high_impact(action_name: Optional[str]) -> bool:
-    """Name-only high-impact test (no tool_id resolution).
-
-    True if ``action_name`` is an enumerated high-impact action name (or legacy
-    tool_id token) or matches a high-impact substring. This is the backward-compatible
-    surface; the wired hook additionally resolves the owning tool_id via
-    :func:`is_high_impact_call`.
-    """
-    if not action_name:
-        return False
-    name = str(action_name).strip().lower()
-    if name in view(__name__, "_HIGH_IMPACT_NAMES"):
-        return True
-    if any(sub in name for sub in _HIGH_IMPACT_VERB_SUBSTRINGS):
-        return True
-    return any(name.startswith(p) or p in name for p in _HIGH_IMPACT_PREFIXES)
-
-
-def is_high_impact_call(action_name: Optional[str], tool_id: Optional[str] = None) -> bool:
-    """Full high-impact decision for one action call.
-
-    Blocks when the bare action name is high-impact (:func:`is_high_impact`) OR when the
-    action's owning ``tool_id`` is in :data:`HIGH_IMPACT_TOOL_IDS`. ``tool_id`` is the
-    resolved owning tool (``Controller.get_action_details(name).tool``); pass ``None``
-    when it can't be resolved, in which case the decision degrades to the name-only path.
-    """
-    if is_high_impact(action_name):
-        return True
-    if tool_id and str(tool_id).strip().lower() in view(__name__, "HIGH_IMPACT_TOOL_IDS"):
-        return True
-    return False
+# The high-impact classification (both layers, the prefixes and the verb
+# substrings) has one home, core/security/high_impact.py (proposal 125 S21f): the
+# public-room gate reads the SAME policy. Import it from there.
+from core.security.high_impact import is_high_impact_call
 
 
 def build_tool_resolver(controller: Any) -> Callable[[str], Optional[str]]:
@@ -199,6 +100,10 @@ def _reply_target(action_name: str, params: Any) -> tuple:
         # posts in any chat — never something a correspondent's text may steer.
         if str(_param(params, "action") or "send").strip().lower() not in ("send", "reply"):
             return ("", "")
+        # Like email_send's attachments: a file would carry workspace bytes to the
+        # party that tainted the session — not a clean reply.
+        if _param(params, "media_paths"):
+            return ("", "")
         return (str(_param(params, "surface") or ""),
                 str(_param(params, "target") or ""))
     if name == "email_send":
@@ -225,6 +130,9 @@ def _is_scoped_reply(action_name: str, params: Any, sources: Any) -> tuple:
     return (key in (sources or set()), surface, address.strip().lower())
 
 
+_NO_STORE_WARNED = False
+
+
 def build_reply_allowed(
     get_container: Callable[[], Any],
     get_user_id: Callable[[], str],
@@ -247,10 +155,14 @@ def build_reply_allowed(
             store = (container.get_service("conversation_store")
                      if container else None)
             if store is None:
-                # Flag explicitly ON but no budget substrate — allow (the flag is
-                # the operator's informed opt-in; without a store there is no
-                # rounds history to enforce).
-                return True
+                # 125 S30 (D9): no store = the rounds budget cannot be checked —
+                # deny (fail closed), with one warning per process.
+                global _NO_STORE_WARNED
+                if not _NO_STORE_WARNED:
+                    _NO_STORE_WARNED = True
+                    logger.warning("correspondent reply denied: no conversation_store "
+                                   "to check the rounds budget")
+                return False
             user_id = get_user_id() or ""
             return store.outbound_count_since(user_id, surface, address,
                                               86400) < max_rounds
@@ -267,6 +179,23 @@ def install_correspondent_gate(controller, orchestrator):
     return hook
 
 
+def _is_owner_chat(orchestrator) -> bool:
+    """The owner's own chat: not a correspondent's session and not a goal/cron run
+    (an autonomous run gets no owner turn to clear a taint, and its workspace is the
+    run's own). The chat history there is the owner's private conversation."""
+    if getattr(orchestrator, "_correspondent_session", False) is True:
+        return False
+    from core.autonomy_marker import is_autonomous
+    return not is_autonomous(getattr(orchestrator, "session_id", None))
+
+
+def owner_chat_tainted(orchestrator) -> bool:
+    """A correspondent's reply taints the owner's OWN chat right now (the H-MEM tail
+    and the workspace row hide; foundation_layers.owner_chat_tainted)."""
+    from core.security.taints import correspondent_tainted
+    return correspondent_tainted(orchestrator) and _is_owner_chat(orchestrator)
+
+
 def build_correspondent_gate(controller, orchestrator):
     """The correspondent gate over *orchestrator*'s taint (the policy chain,
     ``tools/controller/policy_chain.py``, registers it in its order)."""
@@ -278,6 +207,7 @@ def build_correspondent_gate(controller, orchestrator):
         reply_allowed=build_reply_allowed(
             lambda: getattr(orchestrator, "container", None),
             lambda: getattr(orchestrator, "user_id", "") or ""),
+        owner_chat=lambda: _is_owner_chat(orchestrator),
     )
 
     def _seat_denies(tool_id: str) -> Optional[str]:
@@ -297,6 +227,7 @@ def make_correspondent_gate_hook(
     resolve_tool: Optional[Callable[[str], Optional[str]]] = None,
     get_taint_sources: Optional[Callable[[], Any]] = None,
     reply_allowed: Optional[Callable[[str, str], bool]] = None,
+    owner_chat: Optional[Callable[[], bool]] = None,
 ):
     """Pre-tool-call hook ``(action_name, params, context) -> Optional[str]``.
 
@@ -314,16 +245,32 @@ def make_correspondent_gate_hook(
     while tainted, ``message``/``send_email`` to EXACTLY a tainting (surface, address)
     is permitted when ``reply_allowed(surface, address)`` approves (flag + rounds
     budget). Everything else stays denied.
+
+    ``owner_chat`` (True = an owner chat, not a correspondent's own session) adds the
+    ``owner_workspace`` tools (``core.tool_capabilities``) to the denied set: a
+    correspondent's reply that taints an OWNER chat must not read the owner's files
+    for the scoped reply to carry out. Fail-closed: a probe error counts as an owner chat.
     """
     def _hook(action_name: str, params: Any, context: Any) -> Optional[str]:
         tool_id: Optional[str] = None
+        resolve_failed = False
         if resolve_tool is not None:
             try:
                 tool_id = resolve_tool(action_name)
             except Exception as e:  # resolution must never break the gate
                 logger.debug("correspondent gate tool resolve failed: %s", e)
                 tool_id = None
-        if not is_high_impact_call(action_name, tool_id):
+                resolve_failed = True
+        blocked = is_high_impact_call(action_name, tool_id)
+        if not blocked and owner_chat is not None and (tool_id is not None or resolve_failed):
+            from core.tool_capabilities import ids_with
+            # Fail-CLOSED: an action whose tool cannot be resolved may be a file act.
+            if resolve_failed or str(tool_id).strip().lower() in ids_with("owner_workspace"):
+                try:
+                    blocked = bool(owner_chat())
+                except Exception:
+                    blocked = True
+        if not blocked:
             return None
         try:
             tainted = bool(get_tainted())
@@ -354,10 +301,3 @@ def make_correspondent_gate_hook(
         return None
     return _hook
 
-
-# 067 P4 prerequisite: the name layer, built on first read.
-__getattr__ = lazy_module_getattr(__name__, {
-    "_HIGH_IMPACT_NAMES": _high_impact_names,
-    "HIGH_IMPACT_TOOLS": _high_impact_tools,
-    "HIGH_IMPACT_TOOL_IDS": _high_impact_tool_ids,
-})

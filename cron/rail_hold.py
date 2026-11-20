@@ -44,7 +44,7 @@ def _board(data_dir: str) -> Optional[Any]:
     path = goals_db_path(data_dir)
     if not os.path.exists(path):
         return None
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     return GoalBoard(path)
 
 
@@ -58,11 +58,11 @@ def observe_run(job: Any, effect: Optional[str], *, data_dir: str,
         board = board if board is not None else _board(data_dir)
         if board is None:
             return None
-        from agents.task.goals.rail_answers import mark_holds_rail, open_rail_asks
+        from modules.goals.rail_answers import mark_holds_rail, open_rail_asks
         asks = open_rail_asks(board, job.user_id, f"cron:{job.id}")
         if not asks:
             return None
-        from agents.task.goals.payload_keys import patch, update_key_cas
+        from modules.goals.payload_keys import patch, update_key_cas
         newly = None
         for ask in asks:
             p = dict(ask.payload or {})

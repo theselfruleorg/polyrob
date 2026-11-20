@@ -322,6 +322,12 @@ async def _quote_and_build(tool, params, execution_context, s):
             why = unchecked_route_refusal(sanity_verdict, params.max_spend_usd,
                                           trusted=out_trusted)
         if why:
+            if "lane: owner_queue" in why and not params.dry_run:
+                # 126 wave 3: the owner confirms this exit — the exact swap is ONE card.
+                from tools.controller.call_card_run import owner_lane_card
+                card = await owner_lane_card(tool, execution_context, why=why)
+                if card is not None:
+                    return card
             return tool._ar(error=why)
 
     raw_tx = await asyncio.to_thread(tool._solana_build, quote, signer.address)
@@ -666,11 +672,12 @@ async def _broadcast(tool, params, execution_context, s):
         _ceiling = tx_guard.autonomous_max_usd(
             *tx_guard.ceiling_scope(execution_context))
         if amount_usd > _ceiling and not _owner_direct and not _owner_granted:
-            return tool._ar(content=header + (
-                f"  guard: owner approval required: ${amount_usd:.2f} is "
-                f"above the autonomous ceiling "
-                f"${_ceiling:.2f}\n"
-                f"  lane:  owner_queue\n" + _NOT_SENT_OWNER_QUEUE))
+            from tools.defi.trade_tool import owner_lane_result
+            why = (f"owner approval required: ${amount_usd:.2f} is above the autonomous "
+                   f"ceiling ${_ceiling:.2f}")
+            return await owner_lane_result(
+                tool, execution_context, text=header + f"  guard: {why}\n  lane:  owner_queue\n",
+                lane="owner_queue", dry_run=bool(params.dry_run), value_usd=amount_usd, why=why)
         if autonomous_origin and not getattr(gate, "has_daily_cap", False):
             return tool._ar(content=header + (
                 "  guard: refused — unattended trading needs an aggregate "
@@ -679,6 +686,10 @@ async def _broadcast(tool, params, execution_context, s):
         _lane = ("owner_direct" if _owner_direct
                  else "owner_approved" if _owner_granted else "autonomous")
         header += f"  lane:  {_lane}\n"
+        from core.act_reason import autonomous_why_refusal  # 122 W1: the EVM rule
+        _no_why = autonomous_why_refusal(_lane, execution_context)
+        if _no_why:
+            return tool._ar(content=header + f"  guard: {_no_why}\n  RESULT: NOT SENT — nothing was broadcast.")
         if monitor_exit:
             logger.info(
                 "defi.solana_swap monitor_exit token_in=%s token_out=%s "
@@ -686,7 +697,8 @@ async def _broadcast(tool, params, execution_context, s):
                 "swap (DEFI_MONITOR_EXITS)", token_in, token_out, amount_usd)
         if params.dry_run:
             return tool._ar(content=header + "\n[DRY RUN] simulation only — nothing was broadcast, queued or staged.",
-                            metadata={"min_out_raw": floor, **valuation})
+                            metadata={"min_out_raw": floor, **valuation,
+                                      "simulated_usd": amount_usd, "allowed": True})
 
         # RPC trust (tx_guard step 4 mirror): the simulation, the deltas
         # and the caps all read from the RPC, so the shared public endpoint

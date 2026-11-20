@@ -152,13 +152,33 @@ def test_every_pinned_account_version_is_scanned(monkeypatch):
     assert d.allowed is False and "open approval" in d.reason
 
 
-def test_the_helper_reads_the_registry_fail_closed(monkeypatch):
+def test_an_unreadable_registry_is_no_pin_and_the_scan_still_runs(monkeypatch):
+    """124 section 5.5: the approval rule does not wait for a pin — a token whose account is
+    deployed is scanned from the account's own creation block."""
     def boom():
         raise collection_registry.CollectionRegistryError("bad file")
     monkeypatch.setattr(collection_registry, "profiles", boom)
+    assert tx_guard._pinned_nft_departure_refusal(
+        "robinhood", [(PINNED, "erc721", DEST, 42, 1)], Rpc()) is None
+
+
+def test_an_unpinned_token_with_an_open_approval_refuses():
+    """124 D1: every agent NFT, not only a pinned one."""
+    account = erc6551.account_address(4663, OTHER_NFT, 42, implementation=erc6551.ACCOUNT_V3_IMPL)
+
+    class Deployed(Rpc):
+        def __call__(self, method, params):
+            if method == "eth_getCode" and str(params[0]).lower() == account.lower():
+                self.calls.append(method)
+                return "0x6001"
+            if method == "eth_getBalance":
+                return "0x0"
+            return super().__call__(method, params)
+
+    rpc = Deployed(logs=[_erc20_approval_log(account=account)])
     why = tx_guard._pinned_nft_departure_refusal(
-        "robinhood", [(PINNED, "erc721", DEST, 42, 1)], Rpc())
-    assert "cannot be trusted" in why
+        "robinhood", [(OTHER_NFT, "erc721", DEST, 42, 1)], rpc)
+    assert why and "open approval" in why and "agent_nft_revoke_all" in why, why
 
 
 def test_runtime_refusal_helper():

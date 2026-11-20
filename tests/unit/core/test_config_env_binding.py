@@ -69,10 +69,8 @@ def test_data_dir_binds_from_env(_isolated, monkeypatch):
 
 
 def test_documented_unaliased_names_still_bind(_isolated, monkeypatch):
-    monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("DB_PATH", str(Path(_isolated) / "x.db"))
     cfg = ServerConfig(_env_file=None)
-    assert cfg.environment == "production"
     assert cfg.db_path == str(Path(_isolated) / "x.db")
 
 

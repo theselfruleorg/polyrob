@@ -31,7 +31,8 @@ def seat_refused_actions(controller, orchestrator) -> FrozenSet[str]:
     # later, and the gate decides each call live.
     from core.surfaces.room_grants import is_bundle_call
     stamped = public and bool(getattr(orchestrator, "_room_admin", None))
-    from agents.task.agent.core.correspondent_gate import _REPLY_TOOLS, is_high_impact_call
+    from agents.task.agent.core.correspondent_gate import _REPLY_TOOLS
+    from core.security.high_impact import is_high_impact_call
     actions = controller.registry.registry.actions
     out = set()
     for name, action in list(actions.items()):

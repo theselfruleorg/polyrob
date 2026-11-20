@@ -375,7 +375,7 @@ def test_an_unreadable_registry_is_named_not_shown_as_no_binding(tmp_path, monke
 async def test_the_agent_and_the_seat_print_the_same_listing(tmp_path, monkeypatch):
     monkeypatch.setenv("CORRESPONDENT_ACCESS_ENABLED", "true")
     conv, reg = _contacts_home(tmp_path)
-    from surfaces.telegram.contacts_ops import contacts_reply
+    from core.surfaces.owner_reads import contacts_reply
     seat = contacts_reply("local", str(tmp_path), [])
     from tools.controller.contact_history_action import register_contact_history_action
     c = _Controller(tmp_path, {"conversation_store": conv, "correspondent_registry": reg})

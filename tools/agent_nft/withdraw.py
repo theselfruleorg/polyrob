@@ -57,10 +57,11 @@ def withdraw_card_context(params: dict, *, tool=None) -> list:
         from core.wallet import collection_registry
         held, signer = _held(tool, p, None)
         rpc = tool.rpc_for(held.chain)
-        profile = collection_registry.profile_for(held.chain_id, held.collection)
+        from core.wallet.nft_account import profile_of
+        profile = profile_of(held)
         view = V.build_view(rpc, held.chain, profile, held.token_id, treasury=signer.address)
         from tools.agent_nft.core_verbs import _extend
-        snapshot = V.render(view, extra=_extend(tool, view, rpc))
+        snapshot = V.render(view, extra=_extend(view, rpc))
     except Exception as exc:  # noqa: BLE001 — an unreadable snapshot is not an empty account
         lines.append(f"⚠️ ACCOUNT HOLDINGS UNREADABLE ({type(exc).__name__}: {str(exc)[:160]}) — "
                      f"you would approve without seeing what leaves with this NFT.")
@@ -79,6 +80,10 @@ async def withdraw(tool, params, execution_context) -> Any:
     from core.wallet.tokens import normalize_address
     from core.wallet.tx_guard import TxIntent
     from tools.agent_nft.guarded import guarded_call
+    if getattr(params, "nested", None):
+        return await sweep(tool, params, execution_context)
+    if not params.to:
+        return tool._ar(error="name where the NFT goes (`to`). Nothing was broadcast.")
     try:
         to = normalize_address(params.to)
         held, signer = _held(tool, params, execution_context)
@@ -120,6 +125,49 @@ async def withdraw(tool, params, execution_context) -> Any:
     return res
 
 
+async def sweep(tool, params, execution_context) -> Any:
+    """124 N2: an NFT nested in the account of ``params.nft`` moves to this treasury — one
+    ``execute`` that calls ``safeTransferFrom(account, treasury, id)`` on the nested NFT's
+    collection, through the same guard (the nested token's own departure rules apply). The
+    treasury is the only destination; nothing acts through a second level."""
+    from core.wallet import abi
+    from core.wallet.nft_account import NftAccountError, parse_nft
+    from core.wallet.tx_guard import TxIntent
+    from tools.agent_nft.guarded import guarded_call
+    if params.to:
+        return tool._ar(error="a sweep goes to this treasury only — leave `to` out. Nothing was "
+                              "broadcast.")
+    try:
+        held, signer = _held(tool, params, execution_context)
+        collection, token_id = parse_nft(params.nested)
+        if collection is None:
+            raise NftAccountError("name the nested NFT as <collection>#<id>")
+        owner = read_owner(tool.rpc_for(held.chain), collection, int(token_id))
+        if owner.lower() != str(held.account).lower():
+            raise NftAccountError(f"{collection} #{token_id} is not held by the account "
+                                  f"{held.account} (its owner is {owner})")
+    except (NftAccountError, ValueError) as exc:
+        return tool._ar(error=f"{exc}. Nothing was broadcast.")
+    data = abi.encode_call("safeTransferFrom", [{"type": "address"}, {"type": "address"},
+                                                {"type": "uint256"}],
+                           [held.account, signer.address, int(token_id)])
+    intent = TxIntent(chain=params.chain, token=None, to=signer.address, amount_raw=0,
+                      max_spend_usd=params.max_spend_usd, idempotency_key="", is_nft_op=True,
+                      nft_out=((collection.lower(), "erc721", int(token_id), 1),))
+    header = (f"SWEEP {collection} #{token_id} from the account {held.account} of {held.label} "
+              f"→ this treasury {signer.address}\n")
+    return await guarded_call(tool, execution_context=execution_context, verb="withdraw_token",
+                              intent=intent, inner_to=collection, inner_data=data, held=held,
+                              dry_run=params.dry_run, header=header,
+                              asset=f"erc721:{collection}:{token_id}", counterparty=signer.address,
+                              journal_kind="exit", journal_text=f"swept {collection} #{token_id} to the treasury")
+
+
+def read_owner(rpc, collection: str, token_id: int) -> str:
+    from core.wallet.nft_account import read_owner_of
+    return str(read_owner_of(rpc, collection, int(token_id)))
+
+
 async def revoke_all(tool, params, execution_context) -> Any:
     from core.wallet import abi, erc6551
     from core.wallet import collection_registry
@@ -128,7 +176,8 @@ async def revoke_all(tool, params, execution_context) -> Any:
     from tools.agent_nft.guarded import guarded_call
     try:
         held, _signer = _held(tool, params, execution_context)
-        profile = collection_registry.profile_for(held.chain_id, held.collection)
+        from core.wallet.nft_account import profile_of
+        profile = profile_of(held)
         rpc = tool.rpc_for(params.chain)
         head = int(rpc("eth_blockNumber", []), 16)
         rows = erc6551.open_approvals(rpc, held.account, profile.deploy_block, to_block=head)

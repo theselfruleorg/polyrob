@@ -6,7 +6,7 @@ silently never matches — that is not hypothetical, it is live today for
 bare verb while the action registers as `x402_invoice_x402_request`, so the
 owner-approval lane has never fired.
 """
-from agents.task.agent.core.correspondent_gate import is_high_impact
+from core.security.high_impact import is_high_impact
 from core.security.untrusted_wrap import is_untrusted_tool
 from core.tool_capabilities import TOOL_CAPABILITIES, is_classified
 

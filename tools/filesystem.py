@@ -879,7 +879,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
     def _workspace_root(self) -> str:
         """The confinement root (the session workspace), resolved the same way
         _normalize_path resolves it."""
-        from agents.task.path import pm
+        from core.session_paths import pm
         session_id = (getattr(self, "session_id", None)
                       or getattr(getattr(self, "container", None), "session_id", None)
                       or getattr(self, "_current_session_id", None))
@@ -985,7 +985,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
     def _normalize_path(self, file_path: str) -> str:
         """Normalize a file path to be within the workspace directory."""
         try:
-            from agents.task.path import pm
+            from core.session_paths import pm
 
             # Get session ID with multiple fallback options
             session_id = None

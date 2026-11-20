@@ -32,6 +32,10 @@ ALLOWED = {
     # W5: the ONE owner-seat context constructor (owner_seat_context).
     "core/security/turn_facts.py": "owner_seat_context, called only by seat code",
     "webview/owner_auth.py": "console owner login (auth role, not a turn)",
+    # 122 W4: NOT an owner seat — the autonomous main-agent context of the income rule's buy,
+    # marked autonomous and PAGE_REQUEST_KEY, so owner_direct_turn answers False.
+    "tools/autonomous_act.py": "the autonomous-act context of an income rule buy "
+                               "(never the owner: PAGE_REQUEST_KEY)",
 }
 
 #: W5: the files that CALL the one constructor (``owner_seat_context`` or its
@@ -40,13 +44,16 @@ ALLOWED = {
 SEAT_CALLERS = {
     "cli/commands/wallet.py": "owner CLI seat (server shell)",
     "core/wallet/token_trust.py": "owner_seat_ctx, the shared /wallet trust replies",
-    "surfaces/telegram/nft_ops.py": "Telegram NFT seat",
-    "surfaces/telegram/owner_ops.py": "Telegram /bridge seat",
-    "surfaces/telegram/send_ops.py": "Telegram /send seat",
-    "surfaces/telegram/token_ops.py": "Telegram token seat (/lp, /pay, /check, /claim ride it)",
+    "tools/defi/owner_verbs/nft.py": "the /nft body every seat runs (collection trust, 125 S14)",
+    "tools/income_rule/owner_verb.py": "the /wallet income body every seat runs (122 W4)",
+    "tools/defi/owner_verbs/_seat.py": "owner_ctx, the owner money verbs' body every seat runs (125 S1)",
     "tools/defi/token_identity_ask.py": "the owner's answer to a token-identity ask (/pending)",
     "webview/tokens_routes.py": "console token routes (owner login)",
-    "surfaces/telegram/lp_ops.py": "/lp seat (Telegram, the REPL and `polyrob wallet lp`)",
+    "tools/defi/owner_verbs/lp.py": "/lp body (Telegram, the REPL and `polyrob wallet lp`)",
+    "tools/controller/call_card_run.py": "126: a call card's Confirm runs its steps as the "
+                                         "owner seat that pressed it (every seat's tap)",
+    "tools/defi/lp_move_card.py": "126: a call card's Refresh re-runs the move's dry run "
+                                  "for the owner seat that pressed it",
     "packs/markets/polyrob_markets/http_seat.py": "HTTP /execute (non-read verbs need the bound owner)",
 }
 

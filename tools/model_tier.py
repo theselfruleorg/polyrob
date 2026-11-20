@@ -72,8 +72,9 @@ async def model_payload(model: Optional[str], why: Optional[str], *, tier: Optio
     names on a goal or a job. No model → ``({}, None, "", "")``. *existing* is the stored
     payload of the row being changed (None on a create). ``model_by`` records who set it:
     ``owner`` on a genuine owner turn (and from the owner CLI), else ``agent``. The notice
-    is non-empty when an UNATTENDED run changes a stored model: the caller sends it with
-    :func:`notify_model_change` AFTER the write succeeded."""
+    is non-empty when an UNATTENDED run changes a stored model, or creates work on a model
+    the owner does not use or list: the caller sends it with :func:`notify_model_change`
+    AFTER the write succeeded."""
     name = str(model or "").strip()
     if not name:
         return {}, None, "", ""
@@ -95,7 +96,7 @@ async def model_payload(model: Optional[str], why: Optional[str], *, tier: Optio
             + (f": {reason}" if reason else "") + ".")
         return updates, None, " Model: back to the default.", notice
     from agents.task import model_switch_service as svc
-    from agents.task.model_choice import is_listed
+    from agents.task.model_choice import is_listed, price_ceiling
     from core import model_choice as mc, model_switch as ms
     from core.runtime_config import resolve_default_provider
     words = name.split()
@@ -114,8 +115,9 @@ async def model_payload(model: Optional[str], why: Optional[str], *, tier: Optio
         except Exception:
             main_model = None
     listed = is_listed(user_id, plan.provider, plan.model, own=(main_provider, main_model))
-    verdict, reason_why = mc.decide(listed=listed, mode=mc.choice_mode(user_id),
-                                    new_price=plan.price)
+    verdict, reason_why = mc.decide(
+        listed=listed, mode=mc.choice_mode(user_id), new_price=plan.price,
+        ceiling=None if plan.price else price_ceiling(plan.provider))
     if verdict != mc.ALLOW:
         return {}, (f"Refused: '{plan.model}' — {reason_why}. agent_status view='models' "
                     f"lists the models you can use and their prices."), "", ""
@@ -127,16 +129,20 @@ async def model_payload(model: Optional[str], why: Optional[str], *, tier: Optio
             + (f" — {reason}" if reason else "") + "."
             + (f" {reason_why.capitalize()}." if reason_why else ""))
     notice = ""
-    if existing and not owner_turn and existing.get("model") != plan.model:
-        notice = (f"I changed the model of {what or 'a job'} to {plan.model} "
-                  f"({ms.fmt_price(plan.price)})" + (f": {reason}" if reason else "")
+    if not owner_turn and (existing.get("model") != plan.model if existing else not listed):
+        # A change of a stored model, or new work on a model the owner does not use or list.
+        head = (f"I changed the model of {what or 'a job'} to" if existing else
+                f"I created {what or 'a job'} on a model you do not use or list:")
+        notice = (f"{head} {plan.model} ({ms.fmt_price(plan.price)})"
+                  + (f": {reason}" if reason else "")
                   + ". To set it yourself: polyrob cron edit --model / polyrob goals edit "
                   "--model.")
     return updates, None, note, notice
 
 
 def notify_model_change(controller, text: str) -> None:
-    """One owner notice when an UNATTENDED run changed the model of standing work. Call it
+    """One owner notice when an UNATTENDED run changed the model of standing work or created
+    work on a model off the owner's set. Call it
     after the write succeeded; an empty *text* sends nothing."""
     if not text:
         return

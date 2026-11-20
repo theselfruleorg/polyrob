@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-from agents.task.goals.board import (
+from modules.goals.board import (
     ASK_AUTO_UNBLOCK, ASK_OBSOLETE, ASK_OPEN, GoalBoard, STATUS_BLOCKED, STATUS_READY,
 )
 

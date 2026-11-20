@@ -38,7 +38,7 @@ def _workspace_dir(execution_context) -> Optional[str]:
 	if not session_id:
 		return None
 	try:
-		from agents.task.path import pm
+		from core.session_paths import pm
 		return str(pm().get_workspace_dir(pm().clean_session_id(session_id),
 										  getattr(execution_context, 'user_id', None)))
 	except Exception:

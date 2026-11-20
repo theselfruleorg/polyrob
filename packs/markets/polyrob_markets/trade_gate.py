@@ -17,12 +17,12 @@ is gated by the same master + per-venue switches but NOT the size cap (a cancel 
 amount). ``risk_reducing=True`` does NOT mean "this cannot increase risk" — cancelling a
 protective stop plainly can (cancelling a resting stop-loss, or ``cancel_all_orders``
 wiping every protective order at once, both raise exposure). It means "this is a
-position-management action the OWNER may still perform BY HAND while halted", so pulling
-the kill-switch can never strand a position the owner can no longer close. It is an
-OWNER-only carve-out (R16, 2026-08-22): it applies only to a direct/CLI/programmatic call
-(``execution_context is None`` in ``trade_turn_refusal``) — it never relaxes anything for
-an agent-loop turn, including a genuine, non-forged main-agent turn. A leverage change
-(not a position-management action) is blocked while halted like an order, for anyone.
+position-management action the OWNER may still perform BY HAND while paused", so the
+pause can never strand a position the owner can no longer close. It matters only for a
+direct/CLI/programmatic call (``execution_context is None`` in ``trade_turn_refusal``,
+R16): a genuine owner turn passes the pause anyway (the money kernel, 125 S7 / D2), and
+an agent's own turn never gets it. A leverage change (not a position-management action)
+by a direct call is held by the pause like an order.
 """
 from __future__ import annotations
 
@@ -49,83 +49,58 @@ class TradeGateDecision:
     reason: str
 
 
+_FORGED_SENTENCE = ("live trade refused: a forged/autonomous turn (self-wake, "
+                    "delegation-result, leaf, or autonomous run) cannot place orders — "
+                    "the owner must drive trades")
+
+
 def trade_turn_refusal(execution_context, tool_self, *, risk_reducing: bool = False,
                        entry: bool | None = None) -> str | None:
     """H11: return a refusal reason if this turn must NOT run a value-moving / mutating
-    trade verb — else None. Two independent bars (either one refuses):
+    trade verb — else None. Two money-kernel calls (``polyrob.sdk.authorize_spend``,
+    125 S7), in this order:
 
-      1. The owner kill-switch (``AutonomyConfig.autonomy_halted()``) halts ALL agent
-         trading, exactly like x402 spend (``x402/service.py``). Applies regardless of
-         turn origin (a direct/CLI call is halted too) — UNLESS BOTH ``risk_reducing=True``
-         AND ``execution_context is None`` (R16, 2026-08-22, narrowing M10): the ONLY
-         rationale for this carve-out is that the OWNER, acting directly (CLI/programmatic
-         call — see bar 2's note on what ``None`` means), must still be able to close a
-         position by hand while halted. Nothing in that rationale extends to an agent-loop
-         turn — an ``execution_context`` being present means this is an agent-loop turn
-         (LLM-driven, whether genuine-owner-initiated or not), and the kill-switch bar
-         applies to it exactly as before, `risk_reducing` or not. A genuine, non-forged
-         main-agent turn (``role="orchestrator"``) gets ZERO relaxation here — only a
-         literal ``None`` context does. Every verb other than the four cancels keeps the
-         default ``risk_reducing=False`` and is fully unaffected by this bar's narrowing.
-      2. A forged self-wake / async-delegation-result / leaf / autonomous turn can never
-         place/mutate an order — parity with the owner-queue payment approver
-         (``approval_queue.py``). The trade methods historically took no
-         ``execution_context`` so origin was invisible; a ``None`` context means a
-         direct/programmatic/CLI call (not an agent-loop turn), so the forged check is
-         skipped there (flag + cap gates still apply) — but the kill-switch above STILL
-         applies (subject to the bar-1 owner-only carve-out). This bar is UNCONDITIONAL —
-         ``risk_reducing`` never weakens it; a forged turn still cannot cancel an order.
+      1. The turn origin: a forged self-wake / async-delegation-result / leaf /
+         autonomous turn never places or mutates an order. The markets venues never
+         admit the autonomous lane (an ``ord_`` run included), and ``risk_reducing``
+         never weakens this bar. A ``None`` context is a direct Python/CLI call: no
+         turn to judge. A detector that raises refuses (fail closed).
+      2. The principal (the bound owner; for a ``None`` context the HTTP routes'
+         ambient exec identity, CR-M14), then the owner pause: the autonomy pause,
+         and the scoped ``/pause trading`` for an ENTRY (a risk-reducing mutation,
+         a reduce-only order and a SELL are exits). The pause bounds the agent's own
+         work: a GENUINE OWNER turn trades through it (D2), like every other money
+         verb. A ``None`` context is never the owner, so the pause binds it — except
+         a ``risk_reducing`` mutation, which the owner may still make by hand while
+         paused (R16: never stranded in a position).
 
-    Fail CLOSED on every probe error (money-safe): if we cannot prove the turn is
-    genuine, or cannot read the kill-switch, we refuse."""
-    # (1) Owner kill-switch — refuse ALL trading while halted (parity with x402_fetch),
-    # except a risk-reducing mutation made by the OWNER directly (R16: `execution_context
-    # is None` — an agent-loop turn, even a genuine one, is NEVER exempt from this bar).
-    if not (risk_reducing and execution_context is None):
-        try:
-            from core.config_policy import AutonomyConfig
-            if AutonomyConfig.autonomy_halted():
-                return ("live trade refused: paused by the owner's autonomy pause "
-                        "— the owner lifts it with /resume; the order was not submitted")
-        except Exception as e:
-            return f"live trade refused: pause probe failed ({e}); failing closed"
-    # (1b) CR-L21: the scoped `/pause trading` (``trade_entry``) refuses a NEW
-    # position on these venues too — not only in tx_guard and the Solana gate.
-    # Exits pass: a risk-reducing mutation, a reduce-only order, a SELL.
-    if (not risk_reducing) if entry is None else entry:
-        try:
-            from core.autonomy_control import pause_refusal_text
-            paused = pause_refusal_text("trade_entry", what="opening a position")
-        except Exception as e:
-            paused = f"live trade refused: entry-pause probe failed ({e}); failing closed"
-        if paused:
-            return paused
-    # (2) Forged / autonomous turn origin — only meaningful when a context is
-    # present. A ``None`` context is a direct Python/CLI call; the HTTP routes
-    # bind their caller as the ambient exec identity (CR-M14), so
-    # ``turn_refusal(None)`` checks THAT principal, never a blank owner.
-    if execution_context is None:
-        from core.wallet.authority import turn_refusal
-        return turn_refusal(None)
-    try:
-        from polyrob.sdk import is_forged_or_autonomous_turn
-        forged = is_forged_or_autonomous_turn(execution_context, tool_self)
-    except Exception:
-        forged = True  # cannot prove the turn is genuine → refuse
-    if forged:
-        return ("live trade refused: a forged/autonomous turn (self-wake, "
-                "delegation-result, leaf, or autonomous run) cannot place orders — "
-                "the owner must drive trades")
-    from core.wallet.authority import turn_refusal
-    principal_error = turn_refusal(execution_context)
-    if principal_error:
-        return principal_error
-
-    return None
+    No ledger check and no lane: the pack keeps its own exposure reservation and
+    the per-venue live switches and caps (``evaluate_live_trade``).
+    """
+    from polyrob import sdk
+    is_entry = (not risk_reducing) if entry is None else entry
+    turn = sdk.authorize_spend(
+        sdk.SpendIntent.turn_origin(), execution_context,
+        forged_fn=sdk.is_forged_or_autonomous_turn, autonomous_ok_fn=None,
+        tool_self=tool_self)
+    if turn.refused:
+        # "turn" = forged / no detector, "turn_probe" = the detector raised.
+        return _FORGED_SENTENCE
+    rest = sdk.authorize_spend(
+        sdk.SpendIntent(principal=True, leaf=False, turn=False,
+                        pause=not (risk_reducing and execution_context is None),
+                        entry=is_entry),
+        execution_context, forged_fn=sdk.is_forged_or_autonomous_turn,
+        tool_self=tool_self)
+    return rest.reason if rest.refused else None
 
 
 def evaluate_live_trade(venue: str, amount_usd: float | None) -> TradeGateDecision:
-    """Decide whether an order may be submitted live, or must dry-run."""
+    """Decide whether an order may be submitted live, or must dry-run.
+
+    The switches and the cap only. The owner pause is ``trade_turn_refusal``'s bar
+    (the money kernel): callers MUST run ``trade_turn_refusal`` first (125 S7).
+    """
     if not _bool_env("CRYPTO_TRADE_LIVE_ENABLED", False):
         return TradeGateDecision(False, "live trading disabled (CRYPTO_TRADE_LIVE_ENABLED off) — dry-run")
 
@@ -144,16 +119,6 @@ def evaluate_live_trade(venue: str, amount_usd: float | None) -> TradeGateDecisi
         return TradeGateDecision(False, f"order value could not be determined for {venue} — dry-run (fail-closed)")
     if amount_usd > cap:
         return TradeGateDecision(False, f"order ${amount_usd:.2f} exceeds the {venue} live cap ${cap:.2f} — blocked")
-
-    # H5: the owner kill-switch halts ALL agent spend — including live trades, not just
-    # x402 payments. Checked only on the would-be-live path; fail CLOSED (a probe error
-    # blocks the trade). This is the single central seam that covers both venues.
-    try:
-        from core.config_policy import AutonomyConfig
-        if AutonomyConfig.autonomy_halted():
-            return TradeGateDecision(False, f"live trade refused: paused by the owner's autonomy pause — the owner lifts it with /resume; {venue} order not submitted")
-    except Exception as e:
-        return TradeGateDecision(False, f"live trade refused: pause probe failed ({e}) — failing closed")
 
     return TradeGateDecision(True, f"live trading enabled for {venue} (within ${cap:.2f} cap)")
 
@@ -176,7 +141,8 @@ def evaluate_live_mutation(venue: str, *, risk_reducing: bool) -> TradeGateDecis
     tell an owner-direct call from an agent-loop one — that narrowing is
     `trade_turn_refusal`'s job (its bar 1 only lifts for `risk_reducing=True`
     AND `execution_context is None`). Callers MUST run `trade_turn_refusal`
-    first; this function alone does not restrict `risk_reducing=True` to the
+    first: the owner pause is its bar (the money kernel, 125 S7), never probed
+    here, and this function alone does not restrict `risk_reducing=True` to the
     owner.
     """
     if not _bool_env("CRYPTO_TRADE_LIVE_ENABLED", False):
@@ -185,19 +151,5 @@ def evaluate_live_mutation(venue: str, *, risk_reducing: bool) -> TradeGateDecis
     if not flag or not _bool_env(flag, False):
         return TradeGateDecision(False, f"live trading disabled for {venue} ({flag} off)")
     if risk_reducing:
-        # Deliberately returns here WITHOUT probing the halt switch (Minor 6, R16):
-        # this function only encodes the switches+cap policy, not turn origin, so the
-        # halt decision for a risk-reducing mutation is entirely `trade_turn_refusal`'s
-        # (owner-only) responsibility — probing it again here would be redundant and,
-        # since this function can't see `execution_context`, could not be narrowed to
-        # the owner anyway. A raising halt probe therefore never refuses a cancel HERE;
-        # it is still enforced upstream for every agent-loop turn.
         return TradeGateDecision(True, f"risk-reducing mutation permitted for {venue}")
-    try:
-        from core.config_policy import AutonomyConfig
-        if AutonomyConfig.autonomy_halted():
-            return TradeGateDecision(
-                False, f"refused: paused by the owner's autonomy pause — the owner lifts it with /resume ({venue})")
-    except Exception as e:
-        return TradeGateDecision(False, f"refused: pause probe failed ({e}) — failing closed")
     return TradeGateDecision(True, f"mutation permitted for {venue}")

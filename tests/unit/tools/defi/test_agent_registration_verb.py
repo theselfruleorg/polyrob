@@ -37,7 +37,7 @@ def test_the_verb_is_classified_for_a_spend_lane():
 
 
 def test_the_verb_is_blocked_while_correspondent_tainted():
-    from agents.task.agent.core.correspondent_gate import is_high_impact
+    from core.security.high_impact import is_high_impact
     assert is_high_impact("defi_trade_register_agent")
 
 

@@ -44,7 +44,8 @@ def test_seat_context_is_a_genuine_owner_turn(seat):
 def test_seat_contexts_have_one_shape():
     """Every seat helper returns the one constructor's shape."""
     from cli.commands import wallet
-    from surfaces.telegram import send_ops, token_ops
+    from surfaces.telegram import send_ops
+    from tools.defi.owner_verbs import token as token_ops
     from core.wallet.token_trust import owner_seat_ctx
     for ctx in (token_ops._owner_ctx("owner-1"), send_ops._owner_ctx("owner-1"),
                 wallet._owner_ctx(), owner_seat_ctx("owner-1")):

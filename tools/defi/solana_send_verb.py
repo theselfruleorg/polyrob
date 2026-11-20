@@ -43,6 +43,7 @@ from typing import Optional
 
 from pydantic import Field
 
+from tools.act_reason_param import ActReason
 from tools.defi.account_mode import NoAccountMode
 from tools.defi.send_order import fmt_tokens
 
@@ -66,7 +67,7 @@ _BENIGN_EXTENSIONS = frozenset({
 })
 
 
-class SolanaTransferParams(NoAccountMode):
+class SolanaTransferParams(ActReason, NoAccountMode):
     token: str = Field(..., description=(
         "'native' (or 'SOL') to send SOL itself, or the SPL token's MINT "
         "address (base58). A ticker is not accepted — resolve it to a mint "
@@ -320,10 +321,14 @@ async def perform_solana_transfer(tool, params, execution_context=None):
                       f"simulation that did not run is not one that passed")
 
     header = (f"solana transfer {fmt_tokens(float(params.amount))} {shown} -> {to}\n")
+    # 125 S1: the typed facts a seat binds to (the EVM rail's ``send_facts``),
+    # never parsed from the text. None = not valued.
+    facts = {"simulated_usd": None, "sent_usd": None, "unverified": False,
+             "allowed": False, "dry_run": bool(params.dry_run)}
     check = _assert_deltas(deltas, native=native, mint=mint, to=to,
                            amount_raw=amount_raw)
     if isinstance(check, str):
-        return tool._ar(content=header + f"  guard: refused — {check}\n  {_NOT_SENT}")
+        return tool._ar(metadata=dict(facts), content=header + f"  guard: refused — {check}\n  {_NOT_SENT}")
     lamports_out, rent = check
     header += (f"  simulated: {lamports_out} lamports leave (fee "
                f"{deltas.fee_lamports}"
@@ -342,7 +347,7 @@ async def perform_solana_transfer(tool, params, execution_context=None):
     except Exception:
         sol_px = None
     if not sol_px or sol_px <= 0:
-        return tool._ar(content=header + (
+        return tool._ar(metadata=dict(facts), content=header + (
             "  guard: refused — SOL could not be priced, so the outflow cannot "
             f"be held to any cap\n  {_NOT_SENT}"))
     amount_usd = lamports_out / 1e9 * float(sol_px)
@@ -366,7 +371,7 @@ async def perform_solana_transfer(tool, params, execution_context=None):
             # anyway", owner lanes only, never valued as free.
             from tools.defi.transfer_verb import owner_typed_anyway
             if not owner_typed_anyway(params, execution_context):
-                return tool._ar(content=header + (
+                return tool._ar(metadata=dict(facts), content=header + (
                     f"  guard: refused: {UNVERIFIED_MARK} — the token {mint} is not "
                     f"priced at spend grade, so the caps cannot measure it. The "
                     f"owner can still send it with the extra 'send anyway' step "
@@ -406,9 +411,11 @@ async def perform_solana_transfer(tool, params, execution_context=None):
     if sent_usd is not None:
         sent_usd = usd_ceiling(sent_usd)
         header += f"  {SENT_VALUE_LABEL} ${sent_usd:.4f} (without the network fee and rent)\n"
+    facts.update(simulated_usd=None if placeholder else amount_usd, sent_usd=sent_usd,
+                 unverified=unverified)
     held_to = sent_usd if sent_usd is not None else amount_usd
     if held_to > declared:
-        return tool._ar(content=header + (
+        return tool._ar(metadata=dict(facts), content=header + (
             f"  guard: refused — ${held_to:.4f} exceeds the declared "
             f"max_spend_usd ${declared:.4f}\n  {_NOT_SENT}"))
 
@@ -425,38 +432,48 @@ async def perform_solana_transfer(tool, params, execution_context=None):
             verdict = gate.check(venue="defi", amount_usd=amount_usd,
                                  idempotency_key=idem)
         if not verdict.allowed:
-            return tool._ar(content=header + (
+            return tool._ar(metadata=dict(facts), content=header + (
                 f"  guard: refused by PolicyGate: {verdict.reason}\n  {_NOT_SENT}"))
         ceiling = tx_guard.autonomous_max_usd(*tx_guard.ceiling_scope(execution_context))
+        from tools.defi.trade_tool import owner_lane_result
         if amount_usd > ceiling and not owner_direct and not owner_granted:
-            return tool._ar(content=header + (
-                f"  guard: owner approval required: ${amount_usd:.2f} is above "
-                f"the autonomous ceiling ${ceiling:.2f}\n  lane:  owner_queue\n"
-                f"  {_NOT_SENT}"))
+            why = (f"owner approval required: ${amount_usd:.2f} is above the autonomous "
+                   f"ceiling ${ceiling:.2f}")
+            return await owner_lane_result(
+                tool, execution_context, text=header + f"  guard: {why}\n  lane:  owner_queue\n",
+                lane="owner_queue", dry_run=bool(params.dry_run), value_usd=amount_usd,
+                why=why, metadata=dict(facts))
         if unverified and not owner_direct and not owner_granted:
-            return tool._ar(content=header + (
-                f"  guard: owner approval required: {UNVERIFIED_MARK} — only the "
-                f"owner can send a token with no spend-grade price\n"
-                f"  lane:  owner_queue\n  {_NOT_SENT}"))
+            why = (f"owner approval required: {UNVERIFIED_MARK} — only the owner can send a "
+                   f"token with no spend-grade price")
+            return await owner_lane_result(
+                tool, execution_context, text=header + f"  guard: {why}\n  lane:  owner_queue\n",
+                lane="owner_queue", dry_run=bool(params.dry_run), value_usd=amount_usd,
+                why=why, metadata=dict(facts))
         if autonomous_origin and not getattr(gate, "has_daily_cap", False):
-            return tool._ar(content=header + (
+            return tool._ar(metadata=dict(facts), content=header + (
                 "  guard: refused — unattended sending needs an aggregate damage "
                 "bound; set WALLET_DAILY_CAP_USD\n  lane:  owner_queue\n"
                 f"  {_NOT_SENT}"))
         _lane = ("owner_direct" if owner_direct
                  else "owner_approved" if owner_granted else "autonomous")
+        from core.act_reason import autonomous_why_refusal  # 122 W1: the EVM rule
+        _no_why = autonomous_why_refusal(_lane, execution_context)
+        if _no_why:
+            return tool._ar(metadata=dict(facts), content=header + f"  guard: {_no_why}\n  {_NOT_SENT}")
+        facts["allowed"] = True
         header += (f"  guard: allowed — simulated deltas match the declared send, "
                    f"within max_spend_usd and the caps\n"
                    f"  lane:  {_lane}\n")
         if params.dry_run:
-            return tool._ar(content=header + (
+            return tool._ar(metadata=dict(facts), content=header + (
                 "  RESULT: DRY RUN — the guard would allow this, but nothing was "
                 "broadcast. Re-run with dry_run=false to send."))
 
         # RPC trust, the solana_swap mirror: the simulation, the deltas and the
         # caps all read from the RPC. Dry runs above stay available unpinned.
         if not os.getenv("DEFI_SOLANA_RPC", "").strip():
-            return tool._ar(content=header + (
+            return tool._ar(metadata=dict(facts), content=header + (
                 "  guard: refused — no pinned RPC for solana. The simulation, "
                 "the deltas and the caps all read from it, so the shared public "
                 f"endpoint cannot authorize moving funds — set DEFI_SOLANA_RPC\n"
@@ -467,7 +484,7 @@ async def perform_solana_transfer(tool, params, execution_context=None):
         except Exception as exc:
             bh_ok, bh_detail = False, f"check failed: {exc}"
         if not bh_ok:
-            return tool._ar(content=header + (
+            return tool._ar(metadata=dict(facts), content=header + (
                 f"  guard: refused — the blockhash is no longer valid on the "
                 f"pinned RPC ({bh_detail}); re-run to rebuild\n  {_NOT_SENT}"))
 
@@ -510,18 +527,18 @@ async def perform_solana_transfer(tool, params, execution_context=None):
         detail=f"to {to}; {detail}", ledger_recorded=True), settled=True)
 
     if outcome == "confirmed":
-        return tool._ar(content=header + (
+        return tool._ar(metadata=dict(facts), content=header + (
             f"  RESULT: SENT AND CONFIRMED ({detail})\n  sig: {signature}"))
     if outcome == "reverted":
-        return tool._ar(content=header + (
+        return tool._ar(metadata=dict(facts), content=header + (
             f"  RESULT: FAILED ON-CHAIN — the transfer did NOT happen, but the "
             f"fee was spent.\n  sig: {signature}\n  detail: {detail}"))
     if outcome == "expired":
-        return tool._ar(content=header + (
+        return tool._ar(metadata=dict(facts), content=header + (
             f"  RESULT: EXPIRED — the transfer never landed and its blockhash has "
             f"expired, so it can no longer land; nothing moved. It stays counted "
             f"on the caps.\n  sig: {signature}\n  detail: {detail}"))
-    return tool._ar(content=header + (
+    return tool._ar(metadata=dict(facts), content=header + (
         f"  RESULT: BROADCAST BUT NOT CONFIRMED within the timeout. It may still "
         f"land, or the blockhash may have expired — do NOT retry blindly; check "
         f"the signature first.\n  sig: {signature}\n  detail: {detail}"))

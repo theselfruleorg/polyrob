@@ -117,7 +117,7 @@ async def collect_provenance(orchestrator: Any) -> Dict[str, Any]:
             steps += int(getattr(getattr(agent, "state", None), "n_steps", 0) or 0)
         out["steps"] = steps
     except Exception:
-        pass
+        logger.warning("episode: the step count could not be read", exc_info=True)
     try:
         tracker = getattr(orchestrator, "usage_tracker", None)
         session_id = getattr(orchestrator, "session_id", None)
@@ -126,7 +126,7 @@ async def collect_provenance(orchestrator: Any) -> Dict[str, Any]:
             out["spend_usd"] = float(breakdown.get("total_api_cost_usd", 0.0) or 0.0)
             out["billed_usd"] = float(breakdown.get("total_user_cost_usd", 0.0) or 0.0)
     except Exception:
-        pass
+        logger.warning("episode: the run spend could not be read", exc_info=True)
     try:
         # Lazy import (same pattern as finalize_episode's constants import) so this
         # module keeps working when the agents package isn't importable.
@@ -135,7 +135,7 @@ async def collect_provenance(orchestrator: Any) -> Dict[str, Any]:
         if arts:
             out["artifacts"] = arts
     except Exception:
-        pass
+        logger.warning("episode: the run artifacts could not be read", exc_info=True)
     return out
 
 

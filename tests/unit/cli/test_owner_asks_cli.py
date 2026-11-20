@@ -1,7 +1,7 @@
 """`polyrob owner asks/fulfill` — the owner surface for first-class asks (§7.2b)."""
 from click.testing import CliRunner
 
-from agents.task.goals.board import ASK_FULFILLED, GoalBoard, STATUS_READY
+from modules.goals.board import ASK_FULFILLED, GoalBoard, STATUS_READY
 
 
 def _env(tmp_path, monkeypatch):

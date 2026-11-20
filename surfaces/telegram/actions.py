@@ -31,11 +31,23 @@ _CALLBACK_DATA_MAX = 64
 _PER_ROW = 3
 
 
+#: ``Action.style`` → the Bot API button colour (``default`` keeps the plain button).
+_BUTTON_STYLE = {"primary": "primary", "danger": "danger"}
+
+
 def keyboard_rows(actions: list) -> list:
     """``[[{"text", "callback_data"}, …], …]`` — the Bot API shape."""
-    buttons = [{"text": a.label[:64], "callback_data": a.command}
-               for a in actions
-               if len(a.command.encode("utf-8")) <= _CALLBACK_DATA_MAX]
+    buttons = []
+    for a in actions:
+        if len(a.command.encode("utf-8")) > _CALLBACK_DATA_MAX:
+            logger.warning("telegram: button %r dropped: payload over %d bytes",
+                           a.label[:32], _CALLBACK_DATA_MAX)
+            continue
+        b = {"text": a.label[:64], "callback_data": a.command}
+        style = _BUTTON_STYLE.get(getattr(a, "style", "default"))
+        if style:
+            b["style"] = style
+        buttons.append(b)
     return [buttons[i:i + _PER_ROW] for i in range(0, len(buttons), _PER_ROW)]
 
 
@@ -47,7 +59,8 @@ def reply_markup_for(actions: Optional[list]) -> Any:
     try:
         from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
         return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=b["text"], callback_data=b["callback_data"])
+            [InlineKeyboardButton(text=b["text"], callback_data=b["callback_data"],
+                                  style=b.get("style"))
              for b in row] for row in rows])
     except Exception:  # no aiogram (tests, a bare install): the raw Bot API dict
         return {"inline_keyboard": rows}
@@ -73,7 +86,10 @@ def callback_to_update(update: dict) -> Optional[dict]:
     # NOTICE's id aliased the owner-thread referent — a later quote-reply to the
     # notice resolved to "/approve_p_…" instead of the notice's text.
     synthetic = {"message_id": None, "callback_of": msg.get("message_id"),
-                 "from": frm, "chat": chat, "date": msg.get("date"), "text": data}
+                 "from": frm, "chat": chat, "date": msg.get("date"), "text": data,
+                 # the keyboard the press came from: a decision tap retires only
+                 # its own item's buttons (card_ops.retire_tapped_buttons)
+                 "callback_markup": msg.get("reply_markup")}
     if msg.get("message_thread_id") is not None:
         synthetic["message_thread_id"] = msg["message_thread_id"]
     return {"update_id": update.get("update_id"), "message": synthetic}
@@ -85,7 +101,9 @@ async def accept_callback(bot: Any, update: dict) -> Optional[dict]:
     answer = getattr(bot, "answer_callback_query", None)
     if cq.get("id") and callable(answer):
         try:
-            await answer(cq["id"])
+            # A toast names what runs, so a slow command never looks dead.
+            data = cq.get("data")
+            await answer(cq["id"], text=(f"⏳ {data}"[:200] if isinstance(data, str) else None))
         except Exception as e:  # a lost spinner-stop never costs the command
             logger.debug("telegram: answer_callback_query failed: %s", e)
     return callback_to_update(update)

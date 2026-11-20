@@ -1,6 +1,6 @@
 // 070 W0.14 — nothing polls while the socket is up.
 import { describe, it, expect } from "vitest";
-import { beat, liveState, onLiveChange, wireSocket } from "../static/app/live.js";
+import { beat, liveState, mayJoinActivity, onLiveChange, wireSocket } from "../static/app/live.js";
 
 function fakeSocket() {
   const handlers = {};
@@ -140,5 +140,16 @@ describe("FE4 — small reads refresh with a healthy socket", () => {
     expect(reads).toBe(3);
     document.dispatchEvent(new CustomEvent("polyrob:tick"));
     expect(reads).toBe(4);
+  });
+});
+
+describe("a seat the activity room refuses does not ask", () => {
+  it("a multitenant tenant's shell is marked off; the owner's is not", () => {
+    const doc = document.implementation.createHTMLDocument("x");
+    expect(mayJoinActivity(doc)).toBe(true);
+    doc.body.dataset.liveActivity = "false";
+    expect(mayJoinActivity(doc)).toBe(false);
+    doc.body.dataset.liveActivity = "true";
+    expect(mayJoinActivity(doc)).toBe(true);
   });
 });

@@ -242,7 +242,7 @@ class ToolCallTracker:
             # source of truth). P1 finalization: one attempt, no retry sleep — this
             # runs on the event loop; a miss is re-saved at the next change.
             try:
-                from agents.task.path import pm
+                from core.session_paths import pm
 
                 clean_session_id = pm().clean_session_id(self.session_id)
                 data_dir = pm().get_data_dir(clean_session_id, self.user_id)

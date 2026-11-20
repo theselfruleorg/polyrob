@@ -6,8 +6,9 @@ meta goal/skill tools.
 """
 import asyncio
 
-from agents.task.goals.board import GoalBoard
-from tools.goal_tools import GoalTool, GoalCreateAction, _SELF_GOAL_ALLOWED_TOOLS
+from modules.goals.board import GoalBoard
+from core.tool_grants import SELF_GOAL_ALLOWED_TOOLS as _SELF_GOAL_ALLOWED_TOOLS
+from tools.goal_tools import GoalTool, GoalCreateAction
 
 
 class _Ctx:
@@ -36,7 +37,7 @@ def test_spend_money_tools_excluded_from_every_self_goal_grant(monkeypatch):
     every grant surface, in BOTH autonomy modes.
     """
     from core.tool_capabilities import ids_with
-    from tools.goal_tools import allowed_self_goal_tools, _SELF_GOAL_ALLOWED_TOOLS
+    from core.tool_grants import SELF_GOAL_ALLOWED_TOOLS as _SELF_GOAL_ALLOWED_TOOLS, allowed_self_goal_tools
     from agents.task.goals.dispatcher import (
         CHILD_INHERITABLE_TOOLS, default_goal_tools, child_inheritable_tools)
     from agents.task.constants import AUTONOMOUS_MODE_TOOLS

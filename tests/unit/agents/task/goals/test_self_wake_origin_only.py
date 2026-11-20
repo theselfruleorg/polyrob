@@ -8,7 +8,7 @@ for the work does.
 """
 import asyncio
 
-from agents.task.goals.board import Goal
+from modules.goals.board import Goal
 from agents.task.goals.dispatcher import GoalDispatcher
 
 

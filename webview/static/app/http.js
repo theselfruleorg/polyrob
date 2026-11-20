@@ -60,6 +60,10 @@ export async function patchJson(url, payload, options = {}) {
   return requestJson("PATCH", url, payload, options);
 }
 
+export async function deleteJson(url, payload, options = {}) {
+  return requestJson("DELETE", url, payload, options);
+}
+
 /**
  * GET JSON — the ONE read helper (113 W5, C-09). The same `{ok, status, body}`
  * as `postJson`: `body` is the parsed answer or `null`. A network failure

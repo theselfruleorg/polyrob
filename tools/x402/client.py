@@ -27,6 +27,9 @@ class X402Result:
     # Durable pre-signing intent; cleared only after the policy audit is fsynced.
     submission_ref: Optional[str] = None
     authorized_amount_usd: Optional[float] = None
+    # True once the SDK created (signed) a payment payload and sent it: a 402 after
+    # that is the seller REJECTING a signed authorization (F8), not "no paywall".
+    payment_sent: bool = False
 
 
 class X402PaymentClient(Protocol):

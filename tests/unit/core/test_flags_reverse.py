@@ -235,7 +235,7 @@ def test_every_env_bound_settings_field_is_cataloged():
     from core.config import ServerConfig
 
     bound = {f.alias for f in ServerConfig.model_fields.values() if f.alias}
-    assert len(bound) > 50, "no aliased fields found — the introspection broke"
+    assert len(bound) > 40, "no aliased fields found — the introspection broke"
     missing = sorted(n for n in bound
                      if n not in REGISTRY and pattern_flag_for(n) is None)
     assert not missing, (

@@ -12,7 +12,7 @@ import pytest
 from core.surfaces import cards
 from core.wallet import dex_registry, liquidity_guard as G, lp_seed as S, univ3_math as M
 from core.wallet.tx_guard import Decision
-from surfaces.telegram import lp_ops
+from tools.defi.owner_verbs import lp as lp_ops
 from tools.defi import lp_reads as R, lp_v4 as V4, lp_v4_seed as SEED, lp_verbs as LV
 from tools.defi.trade_tool import DefiTradeTool, LpAddParams
 from tests.unit.tools.defi.test_deploy_and_call_verbs import _Gate, _Rail, _Wallet, HOLDER
@@ -64,6 +64,7 @@ def _tool(captured, allow=True, rail=_Rail):
     t._lp_rpc = lambda method, params=None, **kw: hex(BIG) if method == "eth_getBalance" else {"logs": []}
     t._notify_tx = lambda *a, **kw: None
     t._container = object()            # the delivery rail is faked (cards.push)
+    t._test_captured = captured
     return t, gate
 
 
@@ -82,6 +83,7 @@ def _run(ref, **kw):
 async def _proposed(t):
     res = await t.lp_add(_declare())
     assert res.extracted_content, res.error
+    t._test_captured.clear()     # 126: the proposal's card dry-ran the mint; start clean
     return res.extracted_content.split("Declaration ")[1].split(" ")[0]
 
 
@@ -93,11 +95,16 @@ async def test_a_named_pool_key_is_a_proposal_and_sends_nothing(world):
     t, gate = _tool(captured)
     res = await t.lp_add(_declare(dry_run=False))           # even "live": a card, not a send
     text = res.extracted_content
-    assert text.startswith("NOT sent") and "PROPOSED" in text and PID in text
-    assert not captured and not gate.recorded and not _Rail.last.sent
+    assert "NOT sent yet" in text and "PROPOSED" in text
+    assert not gate.recorded and not _Rail.last.sent        # only the card's dry run ran
     card, = world["pushed"]
-    ref = card.line.split()[-1]
-    assert card.line == f"/lp seed confirm {ref}" and ref in text
+    # 126: ONE call card — confirm the declaration, then the live mint at the shown bound.
+    steps = card.draft["call"]["steps"]
+    ref = steps[0]["args"]["ref"]
+    assert card.kind == cards.KIND_CALL and ref in text and PID in card.body
+    assert [s["do"] for s in steps] == ["lp_seed_confirm", "defi_trade_lp_add"]
+    assert steps[1]["args"]["seed"] == ref and steps[1]["args"]["dry_run"] is False
+    assert "DRY RUN" in card.body
     assert "does NOT exist yet" in card.body and "the AGENT proposed" in card.body
     assert "value: about $12,000.00" in card.body          # 2 native at 3000, both legs
     row = S.get(ref, user_id="owner")
@@ -192,7 +199,10 @@ async def test_confirm_then_send_seeds_once_and_reads_the_chain_back(world, monk
     captured = []
     t, gate = _tool(captured)
     ref = await _proposed(t)
-    assert "Declared, for ONE use" in lp_ops.seed_confirm_reply("owner", ref)
+    reply = lp_ops.seed_confirm_reply("owner", ref)
+    assert "Declared, for ONE use" in reply
+    # 2026-11-20: a card that confirms a declaration finishes DONE, not FAILED.
+    assert not cards.failed_result(reply)
     monkeypatch.setattr(LV, "receipt_position", lambda plan, raw, holder: 77)
 
     def position(rpc, chain, token_id):
@@ -213,6 +223,19 @@ async def test_confirm_then_send_seeds_once_and_reads_the_chain_back(world, monk
     assert (row["state"], row["token_id"]) == (S.SEEDED, "77")
     again = await t.lp_add(_run(ref, dry_run=False))     # one use
     assert "SEEDED" in again.error and len(captured) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_seed_of_a_launch_declaration_carries_the_launch_mark(world):
+    """122 W3: a declaration whose origin is ``launch`` marks its seed for guard step 7a."""
+    captured = []
+    t, _ = _tool(captured)
+    ref, _f = S.propose("owner", _fields(), origin="launch")
+    await t.lp_add(_run(ref))
+    assert captured[-1][0].launch == ("seed", ZERO, TKN)
+    plain = await _proposed(t)
+    await t.lp_add(_run(plain))
+    assert captured[-1][0].launch == ()
 
 
 @pytest.mark.asyncio
@@ -322,7 +345,7 @@ def test_confirm_is_the_owners_only_and_says_what_it_did(world):
     assert "Not confirmed" in lp_ops.seed_confirm_reply("someone", ref)
     assert S.get(ref, user_id="owner")["state"] == S.PROPOSED
     text = lp_ops.seed_confirm_reply("owner", ref)
-    assert "Nothing was sent" in text and f"/lp seed run {ref} max <usd> go" in text
+    assert "No transaction yet" in text and f"/lp seed run {ref} max <usd> go" in text
     assert "Not confirmed" in lp_ops.seed_confirm_reply("owner", ref)     # once
 
 
@@ -332,3 +355,28 @@ def _fields():
             "amount0_raw": 2 * 10 ** 18, "amount1_raw": 12_750_000 * 10 ** 18, "dec0": 18,
             "dec1": 18, "sym0": "ETH", "sym1": "TKN", "sqrt_price_x96": ANCHOR,
             "price_source": "owner", "gap_bps": 100}
+
+
+@pytest.mark.asyncio
+async def test_a_new_pool_is_one_tap(world, monkeypatch):
+    """126 wave 2: the declaration's card holds the dry run and the exact call; ONE
+    Confirm declares and seeds. Nothing for the owner to type."""
+    from tools.controller import call_card_run as RUN
+    captured = []
+    t, _ = _tool(captured)
+    monkeypatch.setitem(RUN.TOOL_FACTORIES, "defi_trade", lambda: t)
+    monkeypatch.setattr("core.instance.is_owner_uid", lambda uid, **kw: uid == "owner")
+    monkeypatch.setattr(LV, "receipt_position", lambda plan, raw, holder: 77)
+
+    def position(rpc, chain, token_id):
+        liq = G.decode_v4_mint(captured[-1][1])["liquidity"]
+        return V4.V4Position(token_id, HOLDER.lower(), {}, PID, -160000, 380000, liq)
+    monkeypatch.setattr(V4, "position", position)
+    res = await t.lp_add(_declare())
+    card = world["pushed"][-1]
+    assert "/lp seed run" not in res.extracted_content + card.body
+    out = await RUN.on_press(cards.press(card.card_id, "ok", "owner"), seat="telegram")
+    assert "RESULT: success; position #77" in out, out
+    ref = card.draft["call"]["steps"][0]["args"]["ref"]
+    assert S.get(ref, user_id="owner")["state"] == S.SEEDED
+    assert cards.store().get(card.card_id).state == cards.S_DONE

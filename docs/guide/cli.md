@@ -611,7 +611,8 @@ polyrob kb reindex [--limit N] [--dry-run]    # index the documents the agent al
 ```
 
 `kb export` writes notes, episodes, skills, identity and goals as an
-Obsidian-compatible markdown vault. `polyrob knowledge export` is a deprecated
+Obsidian-compatible markdown vault. A section the agent cannot read shows
+`unreadable` in the summary and in `index.md`, not `0`. `polyrob knowledge export` is a deprecated
 alias for it.
 
 ### `polyrob workers`

@@ -177,7 +177,7 @@ async def test_threat_scan_rejects_injection(tool, provider):
 @pytest.mark.asyncio
 async def test_scan_failure_blocks_write(tool, provider, monkeypatch):
     """Fail-CLOSED: a crashing scanner blocks the write (skill-write convention)."""
-    import modules.memory.task.threat_scan as scan_mod
+    import core.security.threat_scan as scan_mod
     def boom(text):
         raise RuntimeError("scanner down")
     monkeypatch.setattr(scan_mod, "is_suspicious", boom)

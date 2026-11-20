@@ -56,9 +56,9 @@ def open_owner_ask_since(user_id: str, since: float, *,
             path = goals_db_beside(cron_db_path)
             if not os.path.exists(path):
                 return None
-            from agents.task.goals.board import GoalBoard
+            from modules.goals.board import GoalBoard
             board = GoalBoard(path)
-        from agents.task.goals.board import ASK_OPEN
+        from modules.goals.board import ASK_OPEN
         from tools.controller.approval_queue import TOOL_APPROVAL_ASK_KIND
         for ask in board.asks(user_id=user_id, status=ASK_OPEN):
             payload = ask.payload or {}

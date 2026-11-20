@@ -191,6 +191,10 @@ RETIRED_FLAGS: dict[str, str] = {
     "POLYROB_STREAMS_MANIFEST": "",
     # 083 — the step cap is the operator's: one cap for every autonomous run
     "GOAL_DEFAULT_MAX_STEPS": "AUTONOMOUS_MAX_STEPS",
+    # 125 S5 — deposit credits value ETH at the one graded spend price; the
+    # CoinGecko oracle, its fixed override and its upper clamp are deleted
+    "ETH_PRICE_USD_OVERRIDE": "",
+    "ETH_PRICE_USD_MAX": "",
 }
 
 #: The aliases whose silent loss changes identity, posture or money. Their old

@@ -37,6 +37,19 @@ COVERAGE = {
     "agent.model.loading": "Reading the model for new chats…",
     "agent.model.unreadable": "I could not read your model choice.",
     "agent.model.why": "Why",
+    "agent.model.bad_name": "That is not a model name. Use one word, such as a model name or an alias.",
+    # 121: the heavy and light models and what the agent may choose — the
+    # /model heavy|light|choice settings every seat runs (agents/task/model_settings.py).
+    "agent.model.settings_unreadable": "⚠️ The model settings could not be read ({reason}).",
+    "agent.model.set_failed": "❌ The model did not change ({reason}).",
+    "agent.model.tiers_title": "Heavy and light models, and what the agent may choose",
+    "agent.model.tier_label": "Model name or alias",
+    "agent.model.tier_heavy": "Set as heavy",
+    "agent.model.tier_light": "Set as light",
+    "agent.model.tier_reset_heavy": "Heavy: operator's value",
+    "agent.model.tier_reset_light": "Light: operator's value",
+    "agent.model.choice_free": "Let it choose any model",
+    "agent.model.choice_listed": "Only listed models",
     # Money › Invoices › what the agent sells and its orders (113 W6 item 6). Read by
     # static/app/money-offers.js off #money-offers-copy; an answer to Pause or
     # Resume is the /offer verb's own text.

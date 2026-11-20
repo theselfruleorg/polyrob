@@ -397,11 +397,40 @@ export function cronRow(job, copy, nowMs, readOnly) {
       btn.type = "button";
       btn.dataset.cron = verb;
       btn.dataset.id = String((job && job.id) || "");
+      if (verb === "cancel") btn.dataset.name = jobName(job);
       act.appendChild(btn);
     });
   }
   tr.appendChild(act);
   return tr;
+}
+
+/** A job as the owner names it: the name the reader sends, else the first line
+ *  of its task (the scheduler's own rule, `cron.scheduler._job_name`), at most
+ *  60 characters. Never the id. */
+export function jobName(job) {
+  const raw = String((job && (job.name || job.task)) || "").trim().split("\n")[0];
+  return raw.split(/\s+/).join(" ").slice(0, 60);
+}
+
+/** The in-row question Stop asks before it stops a job for good (the two-step
+ *  pattern Agent › Settings uses for a guarded change: the act, then a
+ *  confirm and a keep). Pure: the click is wired by delegation. */
+export function stopAsk(name, id, copy) {
+  const box = el("span", "why");
+  box.dataset.ask = "1";
+  const label = name ? `“${name}”` : ((copy && copy.sched_a_job) || "");
+  box.appendChild(document.createTextNode(format(copy && copy.sched_cancel_ask, { job: label })));
+  const yes = el("button", "btn", (copy && copy.sched_cancel_yes) || "");
+  yes.type = "button";
+  yes.dataset.cron = "cancel";
+  yes.dataset.confirmed = "1";
+  yes.dataset.id = String(id || "");
+  const no = el("button", "btn btn-quiet", (copy && copy.sched_cancel_no) || "");
+  no.type = "button";
+  no.dataset.cronKeep = "1";
+  box.append(" ", yes, " ", no);
+  return box;
 }
 
 /** The sentence a job verb's answer becomes. The job routes answer pause /
@@ -529,7 +558,7 @@ async function post(url, copy) {
   }
 }
 
-function wireMutations(nowCtx, schedCtx, copy, onJobChange) {
+export function wireMutations(nowCtx, schedCtx, copy, onJobChange) {
   const goalHandler = async (ev) => {
     const btn = ev.target.closest("button[data-verb]");
     if (!btn) return;
@@ -546,8 +575,27 @@ function wireMutations(nowCtx, schedCtx, copy, onJobChange) {
     root && root.addEventListener("click", goalHandler));
   if (schedCtx.rows) {
     schedCtx.rows.addEventListener("click", async (ev) => {
+      const keep = ev.target.closest("button[data-cron-keep]");
+      if (keep) {
+        const cellK = keep.closest("td");
+        const askK = keep.closest("[data-ask]");
+        if (askK) askK.remove();
+        if (cellK) cellK.querySelectorAll("button[data-cron]").forEach((b) => { b.hidden = false; });
+        return;
+      }
       const btn = ev.target.closest("button[data-cron]");
       if (!btn) return;
+      // Stop is for good: it asks first, in the row, and names the job.
+      if (btn.dataset.cron === "cancel" && btn.dataset.confirmed !== "1") {
+        const cellA = btn.closest("td");
+        if (!cellA || cellA.querySelector("[data-ask]")) return;
+        cellA.querySelectorAll("button[data-cron]").forEach((b) => { b.hidden = true; });
+        const ask = stopAsk(btn.dataset.name || "", btn.dataset.id, copy);
+        cellA.appendChild(ask);
+        const yes = ask.querySelector("button[data-confirmed]");
+        if (yes && yes.focus) yes.focus();
+        return;
+      }
       const tr = btn.closest("tr");
       const buttons = tr ? tr.querySelectorAll("button") : [btn];
       buttons.forEach((b) => { b.disabled = true; });
@@ -573,11 +621,15 @@ function wireMutations(nowCtx, schedCtx, copy, onJobChange) {
         }
         answer.textContent = result.message || "";
       }
+      const asked = tr && tr.querySelector("[data-ask]");
+      if (asked) asked.remove();
       if (result.ok && verb === "cancel" && tr) {
         tr.querySelectorAll("button[data-cron]").forEach((b) => b.remove());
       } else if (result.ok && verb !== "run" && onJobChange) {
         onJobChange();   // pause / resume change which buttons the row offers
-      } else buttons.forEach((b) => { b.disabled = false; });
+      } else {
+        buttons.forEach((b) => { b.disabled = false; b.hidden = false; });
+      }
     });
   }
 }

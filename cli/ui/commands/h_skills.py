@@ -241,9 +241,9 @@ async def _cmd_approve(ctx: CommandContext, rest: List[str]) -> None:
 
 def _cmd_catalog(ctx: CommandContext) -> None:
     """`/skills [query | id]` — the chat seat's own reply
-    (``surfaces.telegram.skills_ops.skills_reply``, 113 W4 item 3): the same
+    (``agents.task.skills_owner.skills_reply``, 113 W4 item 3): the same
     list, the same words and the same read taps (``/skill_<id>`` runs here
     too), and a word that IS a skill id opens that skill's text. Read-only;
     an unreadable store says so, never "no skills"."""
-    from surfaces.telegram.skills_ops import skills_reply
+    from agents.task.skills_owner import skills_reply
     ctx.emit(skills_reply(ctx.user_id or "local", list(ctx.args or [])), title="skills")

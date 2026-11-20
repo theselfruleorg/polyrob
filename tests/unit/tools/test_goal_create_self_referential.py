@@ -6,7 +6,7 @@ failed every one, which bred Unblock asks and more goals (~100 calls of churn).
 """
 import asyncio
 
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from tools.goal_tools import GoalCreateAction, GoalTool
 
 

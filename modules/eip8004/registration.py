@@ -59,8 +59,12 @@ def is_public_base_url(base_url) -> bool:
 _is_public = is_public_base_url
 
 
-def _agent_identity() -> tuple:
+def agent_identity() -> tuple:
     """``(name, description)`` for THIS instance — never a framework literal.
+
+    The ONE identity read: the registration file and the A2A agent card
+    (`api/a2a/agent_card.py`) both take their name from here, so the two never
+    disagree.
 
     ⚠️ W1 neutral-identity rule: a specific bot's name is DATA (its character,
     its profile, its instance id), never code. Until 2026-09-15 this file
@@ -84,17 +88,38 @@ def _agent_identity() -> tuple:
             if candidate.is_file():
                 char = json.loads(candidate.read_text(encoding="utf-8"))
                 if isinstance(char, dict):
-                    name = char.get("name") or name
-                    description = char.get("description") or char.get("bio") or None
+                    name = _public_text(char.get("name"), PUBLIC_NAME_MAX) or name
+                    # Audit 2026-11-21 L-20: only the field written FOR the public. The
+                    # bio, lore and style are text written for the model.
+                    description = _public_text(char.get(PUBLIC_DESCRIPTION_FIELD),
+                                               PUBLIC_DESCRIPTION_MAX)
                 break
     except Exception:
         logger.debug("eip8004: no character to describe this instance", exc_info=True)
     if not description:
-        description = (
-            f"An autonomous agent instance ({instance_id}) running on the POLYROB "
-            f"framework. See the linked services for what it can actually do."
-        )
+        description = neutral_description(instance_id)
     return name, description
+
+
+#: The one character field the public card and the registration file publish as the
+#: description. ``bio`` is never a fallback: it is written for the model.
+PUBLIC_DESCRIPTION_FIELD = "public_description"
+PUBLIC_NAME_MAX = 64
+PUBLIC_DESCRIPTION_MAX = 500
+
+
+def neutral_description(instance_id: str) -> str:
+    """The description when the character has no public one."""
+    return (f"An autonomous agent instance ({instance_id}) running on the POLYROB "
+            f"framework. See the linked services for what it can actually do.")
+
+
+def _public_text(value, limit: int) -> Optional[str]:
+    """*value* as one bounded line of text, None when it is not a non-empty string."""
+    if not isinstance(value, str):
+        return None
+    text = " ".join(value.split())
+    return text[:limit] or None
 
 
 def _avatar(base_url: str) -> tuple:
@@ -295,7 +320,7 @@ def build_registration_file(
     registrations.extend(_account_registrations())
 
     # Build the registration file
-    name, description = _agent_identity()
+    name, description = agent_identity()
     image, avatar = _avatar(base_url)
     registration_file = RegistrationFile(
         name=name,

@@ -3,187 +3,25 @@
 ``polyrob update --apply`` used to refuse the moment anything looked busy and
 tell the operator to stop the agent. A code swap under a running turn, a goal
 run or a cron rail is the harm; a turn that ends in forty seconds is not a
-reason to give up. This module reads the agent-activity signals
-``scripts/deploy_when_idle.sh`` reads before a prod deploy, and waits — bounded —
-until they clear. (The shell's two DEPLOY-side gates — the owner-DM veto over
-``inbound_routed`` and the ``.deploy.lock`` of a concurrent deployer — are not
-agent activity and are not read here; the cron-imminent horizon is 120 s to the
-shell's 60 s, a wider "busy".)
-
-- a live human turn: ``<data>/locks/turn.active`` (dead-pid aware, via
-  ``core.interactive_gate.read_turn_marker``);
-- a goal ``running`` (``goals.db``);
-- a cron job ``running``, or one due within ``cron_imminent_sec`` (a job due in
-  30 s is as busy as a running one — the scheduler's next tick would start it
-  mid-swap);
-- the cross-process workspace turn lock;
-- a write-locked SQLite store.
-
-⚠️ An UNREADABLE store is BUSY, never idle: a reader deciding whether to swap
-code under an agent may not guess. Absent stores are simply not signals (a
-fresh install has no goals.db). A resident server PROCESS is a different
-fact — waiting does not end it — so it is not part of ``idle`` here; the
-caller reports it separately (``process_guard.server_process_alive``).
+reason to give up. The busy signals are read by ONE reader,
+``core.agent_activity`` (proposal 125 S13) — the same one the 077 drain and
+``scripts/deploy_when_idle.sh`` call. This module re-exports it and adds the
+bounded wait.
 """
 from __future__ import annotations
 
-from core.runtime_paths import cron_db_path, goals_db_path
-import os
 import time
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, Optional
 
-#: A cron job due within this many seconds counts as running.
-DEFAULT_CRON_IMMINENT_SEC = 120
+from core.agent_activity import (  # noqa: F401  (re-exported for the CLI)
+    DEFAULT_CRON_IMMINENT_SEC,
+    AgentActivity,
+    observe,
+)
+
 DEFAULT_WAIT_SEC = 1800
 DEFAULT_POLL_SEC = 15
-
-
-@dataclass
-class AgentActivity:
-    reasons: List[str] = field(default_factory=list)      # why it is busy, in plain words
-    unreadable: List[str] = field(default_factory=list)   # stores that could not be read (busy)
-    waited: float = 0.0
-
-    @property
-    def idle(self) -> bool:
-        return not self.reasons and not self.unreadable
-
-    def describe(self) -> str:
-        if self.idle:
-            return "idle"
-        return "; ".join(self.reasons + [f"unreadable: {u}" for u in self.unreadable])
-
-
-def _count(db: Path, sql: str, params: tuple = ()) -> Optional[int]:
-    """A read-only count, or raise. Never creates the file (the caller checks)."""
-    import sqlite3
-    uri = f"file:{db}?mode=ro"
-    con = sqlite3.connect(uri, uri=True, timeout=3)
-    try:
-        row = con.execute(sql, params).fetchone()
-        return int(row[0] if row and row[0] is not None else 0)
-    finally:
-        con.close()
-
-
-def _marker_candidates(data_home: Path) -> List[Path]:
-    """Where a live turn marker may sit, primary first.
-
-    077 F8: before the marker followed the data home, a gateway with no
-    POLYROB_DATA_DIR wrote it beside its workspace LOCK — ``<WorkingDirectory>/
-    .polyrob/turn.active``, which for the ``polyrob service`` user unit
-    (WorkingDirectory=$HOME) is ``~/.polyrob/turn.active``. An update run against
-    a gateway still on that older code must see its turn there too.
-    """
-    out = [data_home / "locks" / "turn.active"]
-    if (os.environ.get("POLYROB_DATA_DIR") or "").strip():
-        # A data-dir install (prod) always wrote the marker under it.
-        return out
-    try:
-        from core.paths import polyrob_home
-        out.append(Path(polyrob_home()) / "turn.active")
-    except Exception:
-        pass
-    out.append(Path.home() / ".polyrob" / "turn.active")
-    seen, uniq = set(), []
-    for p in out:
-        if str(p) not in seen:
-            seen.add(str(p))
-            uniq.append(p)
-    return uniq
-
-
-def _read_marker_file(mp: Path):
-    """``(marker, None)`` for a live marker, ``(None, None)`` for none/dead, or
-    ``(None, reason)`` for one that cannot be parsed (treated as a live turn)."""
-    if not mp.exists():
-        return None, None
-    import json
-    try:
-        m = json.loads(mp.read_text(encoding="utf-8"))
-        # A marker with no positive pid is not a turn (the shell reader's
-        # `[ "$pid" -gt 0 ]`). 098 CO-01: live only while pid + start time +
-        # boot id match (a reused pid after a crash is not a turn); a marker
-        # without a start time falls back to the pid check.
-        from core.interactive_gate import marker_is_live
-        if not marker_is_live(m):
-            return None, None
-    except (OSError, ValueError, TypeError, AttributeError):
-        return None, "a live turn marker that cannot be parsed (treated as a live turn)"
-    return m, None
-
-
-def _turn_reason(data_home: Path) -> Optional[str]:
-    from core.interactive_gate import read_turn_marker
-    m = read_turn_marker()
-    if not m:
-        # read_turn_marker resolves the path from the env; an updater process has
-        # no lock dir, so also read the explicit home (and the pre-077 location).
-        for mp in _marker_candidates(Path(data_home)):
-            m, bad = _read_marker_file(mp)
-            if bad:
-                return bad
-            if m:
-                break
-        if not m:
-            return None
-    kind = str(m.get("kind") or "turn")
-    sid = str(m.get("session_id") or "")[:12]
-    # The writer (core.interactive_gate._write_turn_marker) stamps ``started``;
-    # ``since`` is accepted for an older marker shape.
-    since = m.get("started", m.get("since"))
-    age = f", {int(time.time() - float(since))} s" if isinstance(since, (int, float)) else ""
-    return f"a live human turn ({kind}{', session ' + sid if sid else ''}{age})"
-
-
-def observe(data_home: Path, *,
-            cron_imminent_sec: Optional[int] = DEFAULT_CRON_IMMINENT_SEC) -> AgentActivity:
-    """One read of every busy signal.
-
-    ``cron_imminent_sec=None`` drops the "due soon" signal: a draining process
-    (077) starts no new job, so a due one would keep it busy for ever."""
-    data_home = Path(data_home)
-    act = AgentActivity()
-
-    reason = _turn_reason(data_home)
-    if reason:
-        act.reasons.append(reason)
-
-    goals = Path(goals_db_path(str(data_home)))
-    if goals.exists():
-        try:
-            n = _count(goals, "SELECT count(*) FROM goals WHERE status IN ('running','claimed')")
-            if n:
-                act.reasons.append(f"{n} goal(s) running")
-        except Exception as e:
-            act.unreadable.append(f"goals.db ({type(e).__name__}: {e})")
-
-    cron = Path(cron_db_path(str(data_home)))
-    if cron.exists():
-        try:
-            n = _count(cron, "SELECT count(*) FROM cron_jobs WHERE status = 'running'")
-            if n:
-                act.reasons.append(f"{n} cron job(s) running")
-            if cron_imminent_sec is not None:
-                horizon = time.strftime("%Y-%m-%dT%H:%M:%S",
-                                        time.gmtime(time.time() + cron_imminent_sec))
-                n = _count(cron, "SELECT count(*) FROM cron_jobs WHERE status = 'scheduled' "
-                                 "AND enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ?",
-                           (horizon,))
-                if n:
-                    act.reasons.append(f"{n} cron job(s) due within {cron_imminent_sec} s")
-        except Exception as e:
-            act.unreadable.append(f"cron.db ({type(e).__name__}: {e})")
-
-    try:
-        from cli.update.process_guard import workspace_lock_busy
-        if workspace_lock_busy():
-            act.reasons.append("a session turn holds the workspace lock")
-    except Exception as e:
-        act.unreadable.append(f"workspace lock ({type(e).__name__}: {e})")
-    return act
 
 
 def wait_for_wrap_up(data_home: Path, *, timeout: float = DEFAULT_WAIT_SEC,

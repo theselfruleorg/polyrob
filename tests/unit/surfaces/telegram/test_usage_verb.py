@@ -11,7 +11,7 @@ import time
 
 from core import verbs
 from core.surfaces.dispatcher import _COMMANDS
-from surfaces.telegram import usage_ops
+from cron import usage_reply as usage_ops
 from surfaces.telegram.admin_verbs import ADMIN_VERBS
 from surfaces.telegram.harness import _OWNER_ADMIN_COMMANDS
 

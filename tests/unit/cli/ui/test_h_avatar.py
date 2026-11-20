@@ -73,7 +73,7 @@ def test_a_non_image_is_refused(monkeypatch, tmp_path):
 
 def test_show_is_the_chat_text_plus_the_file(monkeypatch, tmp_path):
     """113 W4 item 3: the chat seat's own words; the terminal adds the file."""
-    from surfaces.telegram.owner_ops import avatar_reply
+    from tools.avatar_owner import avatar_reply
     _home(monkeypatch, tmp_path)
     ctx = _ctx([])
     h_avatar(ctx)

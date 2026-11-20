@@ -27,7 +27,7 @@ def _fs_tool():
 
 @pytest.fixture
 def _tool(tmp_path, monkeypatch):
-    from agents.task.path import PathManager, set_path_manager
+    from core.session_paths import PathManager, set_path_manager
     set_path_manager(PathManager(data_root=str(tmp_path / "data")))
 
     async def _noop(self):

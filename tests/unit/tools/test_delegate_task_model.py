@@ -24,7 +24,7 @@ def _allow_any_child_model(monkeypatch):
     child may run on) is tested in tests/unit/agents/task/test_model_choice.py."""
     import agents.task.model_choice as choice
 
-    async def _allow(parent_agent, model, provider, route=None):
+    async def _allow(parent_agent, model, provider, route=None, *, detected=None):
         return ""
 
     monkeypatch.setattr(choice, "child_model_check", _allow)
@@ -146,7 +146,8 @@ async def test_goal_with_model_builds_isolated_llm_and_forwards_to_run_subtask(m
     )
     assert res.error is None
     assert len(parent.calls) == 1
-    assert parent.calls[0]["cfg"] == {"model": "claude-haiku-4-5"}
+    # audit 2026-11-21 L-13: the build gets the provider the check read
+    assert parent.calls[0]["cfg"] == {"model": "claude-haiku-4-5", "provider": "anthropic"}
     assert parent.calls[0]["isolated"] is True
     assert c._fake_mgr.run_subtask_calls
     assert c._fake_mgr.run_subtask_calls[0]["parent_llm"] is _SENTINEL_LLM

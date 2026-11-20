@@ -86,9 +86,29 @@ async def _sell():
 
 
 @pytest.mark.asyncio
-async def test_an_untrusted_unpriced_sell_goes_to_the_owner():
+async def test_an_untrusted_unpriced_sell_goes_to_the_owner(monkeypatch):
+    # No card can reach the owner (126 need_owner refuses): the refusal stands.
+    monkeypatch.setattr("tools.controller.call_card_run._refusal", lambda ctx, uid: "no owner")
     err = await _sell()
     assert err and "owner approval required" in err and "owner_queue" in err
+
+
+@pytest.mark.asyncio
+async def test_the_owner_gets_the_exact_sell_as_one_card(monkeypatch):
+    """126 wave 3: on the owner tenant the refused exit is ONE card of this swap."""
+    from core.surfaces import cards
+    monkeypatch.setattr("core.instance.is_owner_uid", lambda uid, **kw: uid == "alice")
+    monkeypatch.setattr(cards, "_STORE", None)
+    pushed = []
+
+    async def push(container, user_id, card, session_id=None):
+        pushed.append(card)
+        return "sent"
+    monkeypatch.setattr(cards, "push", push)
+    assert await _sell() is None
+    step, = pushed[0].draft["call"]["steps"]
+    assert step["do"] == "defi_trade_solana_swap" and step["args"]["token_in"] == OTHER
+    assert step["args"]["dry_run"] is False and step["args"]["max_spend_usd"] == 45.0
 
 
 @pytest.mark.asyncio

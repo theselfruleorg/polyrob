@@ -2,7 +2,7 @@
 while the record is fresh and goals are ready, so a frozen board never reads healthy."""
 import time
 
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from core.event_kinds import GOAL_HOLD_UNREADABLE
 from core.status_types import SEVERITY_CRIT, Section
 from core.status_work import _work_section

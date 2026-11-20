@@ -69,7 +69,7 @@ def test_a_failed_child_with_a_typed_stop_names_it():
     r = SubAgentResult(agent_id="c1", task="t", success=False,
                        output=SubAgentOutput(summary="Task: t"),
                        stop_reason="wall_clock", steps_taken=3)
-    assert r.status_label == "Failed (cut by the wall-clock cap (step 3))"
+    assert r.status_label == "Failed (stopped at its time limit (step 3))"
 
 
 def test_an_unfinished_child_summary_does_not_say_completed():

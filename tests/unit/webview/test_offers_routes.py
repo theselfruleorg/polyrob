@@ -72,7 +72,8 @@ def test_an_unreadable_store_is_not_no_offers(rig, monkeypatch):
         raise st.CommerceUnreadable("commerce store unreadable: disk I/O error")
     monkeypatch.setattr(st, "list_offers", boom)
     body = rig.client.get("/api/webgate/offers").json()
-    assert body["readable"] is False and "disk I/O error" in body["error"]
+    # the exception TYPE at most: its text is logged, never sent
+    assert body["readable"] is False and body["error"] == "CommerceUnreadable"
     assert "offers" not in body
 
 

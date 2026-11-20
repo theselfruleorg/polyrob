@@ -66,6 +66,30 @@ def _session_section(task_agent: Any, session_id: Optional[str]) -> Section:
     return sec
 
 
+def _pin_did_not_start(tele: Section, pin: Optional[str]) -> Optional[dict]:
+    """The pin's LATEST start record, when it says the client did not start.
+
+    Read past the 24 h window: a process that started on the wrong provider
+    a week ago still runs on it. ``None`` = no pin, no record, or it started."""
+    path = tele.data.get("path") if tele.available else None
+    if not pin or not path:
+        return None
+    import json
+    from core.runtime_config import PIN_READY, PIN_UNAVAILABLE, canonicalize_provider
+    from core.status_types import snapshot_rows
+    rows = snapshot_rows(path, "SELECT ts, kind, attrs FROM telemetry_events WHERE kind IN (?, ?) "
+                               "ORDER BY ts DESC LIMIT 1", (PIN_READY, PIN_UNAVAILABLE))
+    if not rows or rows[0].get("kind") != PIN_UNAVAILABLE:
+        return None
+    try:
+        attrs = json.loads(rows[0].get("attrs") or "{}") or {}
+    except ValueError:
+        attrs = {}
+    if attrs.get("pin") != canonicalize_provider(pin):
+        return None     # the pin changed since: its start is not this record
+    return {**attrs, "ts": rows[0].get("ts")}
+
+
 def _providers_section(tele: Section, now: float) -> Section:
     sec = Section(name="providers")
     from core.credit_sentinel import credit_sentinel_enabled, credit_sentinel_status
@@ -110,8 +134,18 @@ def _providers_section(tele: Section, now: float) -> Section:
             text="NO configured provider can serve (all credit-dead) — every paid tick is skipped",
             remedy="add credits or connect another provider (`polyrob auth add`)"))
     line = f"live provider: {live or 'NONE'}"
+    down = _pin_did_not_start(tele, pin)
+    if down:
+        served = down.get("primary") or "NONE"
+        sec.data["pin_unavailable"] = down
+        sec.health.append(HealthItem(
+            key="pin_unavailable", severity=SEVERITY_WARN,
+            text=f"pinned provider {down['pin']} did not start ({_hhmm(down.get('ts'))}); "
+                 f"calls go to {served}" + (f": {down['error']}" if down.get("error") else ""),
+            remedy="`polyrob doctor`; a missing SDK: the `lazy install` lines of the service log"))
+        line = f"live provider: {served}"
     if pin:
-        line += f" (pin {pin}{' — dead, rerouted' if pin != live else ''})"
+        line += f" (pin {pin}{' — dead, rerouted' if down or pin != live else ''})"
     if live is None and not usable and usable_reason is None and not latched:
         # No provider at all: nothing can run. This was a doctor-only alert,
         # printed AFTER an "Health: OK" headline. (A latched sentinel already

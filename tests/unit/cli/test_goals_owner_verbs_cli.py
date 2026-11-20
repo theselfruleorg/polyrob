@@ -3,7 +3,7 @@ pause writes `paused`, retry is the one re-queue, stop is once or --forever,
 and `ready` / `resume` / `cancel` are gone."""
 from click.testing import CliRunner
 
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from cli.commands import goals as G
 
 

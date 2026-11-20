@@ -272,7 +272,12 @@ def tx_digest(tx: Dict[str, Any]) -> str:
 
     ``EvmRail.size_gas`` rewrites ``gas`` after ``tx_guard`` authorized the
     transaction, so the digest covers the fields that decide what the
-    transaction DOES: chain, destination, value, calldata and nonce.
+    transaction DOES: chain, destination, value, calldata and nonce. It does
+    NOT bind ``gas``, ``maxFeePerGas``, ``maxPriorityFeePerGas``, ``gasPrice``
+    or ``type``: the fee bound is enforced where the transaction is signed —
+    ``EvmRail.sign_and_send`` (only type 2; ``gas x max fee`` within the
+    chain's max fee per transaction) and, under ``remote``, the signer's own
+    fee check.
     """
     core = {
         "chainId": int(tx.get("chainId") or 0),

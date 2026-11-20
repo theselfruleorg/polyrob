@@ -133,3 +133,14 @@ async def test_cronjob_list_shows_the_last_outcome_and_the_delivery(tmp_path):
                                execution_context=types.SimpleNamespace(user_id="u1"))
     assert "last: failed 10-28 18:05 (cut by the wall-clock cap (600s))" in res.extracted_content
     assert "deliver: telegram" in res.extracted_content
+
+
+def test_a_failed_run_notice_offers_show_and_retry():
+    """2026-11-20 UX review H11: the notice's next steps are buttons, built from the
+    job id — never from the job's own text."""
+    from types import SimpleNamespace
+    from cron.delivery import failed_run_buttons
+    job = SimpleNamespace(id="1a2b3c4d5e6f", one_shot=False)
+    assert [b.line for b in failed_run_buttons(job)] == ["/job show 1a2b3c4d", "/job run 1a2b3c4d"]
+    job.one_shot = True
+    assert [b.line for b in failed_run_buttons(job)] == ["/job show 1a2b3c4d"]

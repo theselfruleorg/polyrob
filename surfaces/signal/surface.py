@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 from core.surfaces.envelopes import (Identity, InboundMessage, OutboundMessage,
                                      SendResult, SurfaceCapabilities)
-from core.surfaces.surface import Surface, split_message
+from core.surfaces.surface import Surface
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +138,7 @@ class SignalSurface(Surface):
             supports_edit=False,
             is_multi_tenant=True,
             max_message_bytes=_SIGNAL_MAX,
-            markdown_flavor="none",
+            markdown_flavor="plain",    # Signal renders no markdown: the markers are stripped
         )
 
     async def _throttle(self) -> None:
@@ -150,7 +150,7 @@ class SignalSurface(Surface):
     async def send(self, msg: OutboundMessage) -> SendResult:
         target = target_from_session_key(msg.session_key)
         try:
-            for chunk in split_message(msg.text or "", _SIGNAL_MAX):
+            for chunk in self.render_outbound(msg.text or ""):   # markdown -> plain text
                 await self._throttle()
                 await self._client.send(target, chunk)
             return SendResult(success=True)

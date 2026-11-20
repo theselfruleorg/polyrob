@@ -31,7 +31,7 @@ import logging
 import os
 from typing import Any, Dict, List, Optional, Sequence
 
-from agents.task.agent.messages.foundation_layers import FOUNDATION_LAYERS, layer_visible
+from agents.task.agent.messages.foundation_layers import FOUNDATION_LAYERS, layer_visible, owner_chat_tainted
 from modules.llm.messages import HumanMessage, MessageOrigin, SystemMessage
 
 logger = logging.getLogger(__name__)
@@ -59,6 +59,15 @@ def _content_of(message: Any) -> Optional[str]:
 	return content if isinstance(content, str) else None
 
 
+def _kept(manager: Any, layer: Any) -> bool:
+	"""Does a snapshot keep this row, and does a replay keep it in place? A row hidden
+	for good (a public or correspondent session never gets owner documents back) is
+	dropped. A row hidden only while a correspondent's reply taints the OWNER's chat is
+	kept: layer_messages hides it per call, and the owner's next turn shows it again
+	(a restored, still-tainted owner chat lost its SOUL and <environment> for good)."""
+	return layer_visible(manager, layer) or owner_chat_tainted(manager)
+
+
 def capture_foundation(manager: Any, tool_names: Optional[Sequence[str]] = None) -> Dict[str, Any]:
 	"""The ``foundation`` object to write into ``message_history.json``.
 
@@ -69,7 +78,7 @@ def capture_foundation(manager: Any, tool_names: Optional[Sequence[str]] = None)
 	blob: Dict[str, Any] = live_identity(manager)
 	for layer in FOUNDATION_LAYERS:
 		key = layer.key
-		value = getattr(manager, layer.attr, None) if layer_visible(manager, layer) else None
+		value = getattr(manager, layer.attr, None) if _kept(manager, layer) else None
 		if isinstance(value, (list, tuple)):
 			# 060 WS-1: a multi-message layer persists as a list of strings.
 			blob[key] = [c for c in (_content_of(m) for m in value) if c is not None] or None
@@ -240,7 +249,7 @@ def replay_foundation(manager: Any, blob: Any, log: Optional[Any] = None) -> boo
 		key, attr, tokens_attr, origin = layer.key, layer.attr, layer.tokens_attr, layer.origin
 		if (layer.group or layer.key) in refreshed:
 			continue  # A2: the fresh render differs — it stands
-		if not layer_visible(manager, layer):
+		if not _kept(manager, layer):
 			planned.append((attr, tokens_attr, None))
 			continue
 		if key == "worker_catalog":

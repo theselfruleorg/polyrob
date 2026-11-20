@@ -12,6 +12,57 @@ import time
 
 
 async def perform_swap(tool, params, execution_context=None):
+    """126 wave 4: an ERC-20 swap is ONE call — when the PINNED route spender lacks the
+    allowance, a live swap makes the exact approval first and revokes it after (each leg
+    judged by the guard), so neither the owner's seat nor a card needs three steps."""
+    legs: dict = {}
+    from agents.task.loop_types.controller_types import ActionResult
+    try:
+        res = await _swap(tool, params, execution_context, legs)
+    except Exception as exc:  # noqa: BLE001
+        if not legs.get("granted"):
+            raise
+        # The approval leg landed and the swap raised after it: the revoke still runs.
+        res = ActionResult(error=f"Command failed: {type(exc).__name__}: {str(exc)[:200]} "
+                                 f"— outcome unknown.")
+    if not legs.get("granted"):
+        return res
+    token, spender = legs["granted"]
+    rev_text = await _revoke_leg(tool, params, execution_context, token, spender, legs)
+    if "RESULT: NOT SENT" in rev_text or "refused" in rev_text or "raised" in rev_text:
+        rev_text += (f"\nThe allowance to {spender} STAYS: revoke_approval(chain="
+                     f"{params.chain}, token={token}, spender={spender}).")
+    legs_text = ("approve leg (exact, pinned route spender):\n" + legs.get("approve_text", "")
+                 + "\nrevoke leg:\n" + rev_text)
+    if res.error:
+        return ActionResult(error=str(res.error) + "\n" + legs_text)
+    return ActionResult(extracted_content=str(res.extracted_content or "") + "\n" + legs_text,
+                        metadata=getattr(res, "metadata", None))
+
+
+
+async def _revoke_leg(tool, params, ctx, token, spender, legs) -> str:
+    """The revoke leg of a swap's exact approval: nothing to send when the allowance now
+    reads zero (the swap pulled all of it); else the revoke, judged by the guard."""
+    owner = legs.get("owner")
+    if owner:
+        try:
+            from tools.defi.providers import univ3
+            if univ3.read_allowance(params.chain, token, owner, spender) == 0:
+                return "none needed: the swap used the whole allowance (it reads 0)."
+        except Exception:  # noqa: BLE001 — unread: revoke, the safe answer
+            pass
+    from tools.defi.approve_verb import perform_revoke_approval
+    from tools.defi.trade_params import RevokeParams
+    try:
+        rev = await perform_revoke_approval(tool, RevokeParams(
+            chain=params.chain, token=token, spender=spender, dry_run=False), ctx)
+        return str(rev.error or rev.extracted_content or "no report")
+    except Exception as exc:  # noqa: BLE001
+        return f"raised {type(exc).__name__}: {exc}"
+
+
+async def _swap(tool, params, execution_context, legs):
     from tools.defi.trade_tool import (  # call-time: tests patch these
         _QUOTE_MAX_AGE_SEC, _SYMBOL_NOTE, _intent_idem,
         _max_slippage_bps, _no_swap_route, _route_drift_max_pct, _shown_symbol,
@@ -190,6 +241,12 @@ async def perform_swap(tool, params, execution_context=None):
         why = unchecked_route_refusal(sanity_verdict, params.max_spend_usd,
                                       trusted=out_trusted)
     if why:
+        if "lane: owner_queue" in why and not params.dry_run:
+            # 126 wave 3: the owner confirms this exit — the exact swap is ONE card.
+            from tools.controller.call_card_run import owner_lane_card
+            card = await owner_lane_card(tool, execution_context, why=why)
+            if card is not None:
+                return card
         return tool._ar(error=why if not params.dry_run
                         else f"dry run — the live send would be {why}")
     # 068 G1: WHICH contract this buys is checked by the verb, not left
@@ -245,6 +302,21 @@ async def perform_swap(tool, params, execution_context=None):
         from tools.defi.providers import univ3
         allowance = univ3.read_allowance(params.chain, token_in, signer.address,
                                          spender)
+        if (allowance is not None and allowance < amount_in_raw and not params.dry_run
+                and str(spender).lower() in tx_guard.pinned_route_spenders(params.chain)):
+            # 126 wave 4: the exact approval is a leg of this swap (perform_swap revokes it).
+            from tools.defi.approve_verb import perform_approve_token
+            from tools.defi.trade_params import ApproveParams
+            got = await perform_approve_token(tool, ApproveParams(
+                chain=params.chain, token=token_in, spender=spender, amount=params.amount_in,
+                max_spend_usd=params.max_spend_usd, dry_run=False), execution_context)
+            got_text = str(got.error or got.extracted_content or "no report")
+            if got.error or "RESULT: NOT SENT" in got_text:
+                return tool._ar(error=(f"refused: the exact approval this swap needs was not "
+                                       f"made, so nothing was swapped:\n{got_text}"))
+            legs["granted"], legs["approve_text"] = (token_in, spender), got_text
+            legs["owner"] = signer.address
+            allowance = amount_in_raw
         if allowance is not None and allowance < amount_in_raw:
             return tool._ar(error=(
                 f"insufficient allowance: the spender may pull {allowance} but this "

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json as _json
+import logging
 import os
 
 import click
@@ -68,6 +69,11 @@ def build_supervisor():
     from core.app_service.nginx import NginxApplier
     from core.app_service.supervisor import AppSupervisor
     from tools.code_exec.backends.docker import _default_docker_runner
+    dropped = c.supervisor_docker_env(os.environ)
+    if dropped:
+        logging.getLogger(__name__).warning(
+            "apps supervisor: ignoring DOCKER_HOST=%s (the code-exec sandbox daemon); "
+            "apps run on the system docker daemon", dropped)
     data_dir = _data_dir()
     roots = [data_dir, os.getcwd()]
     for extra in (os.getenv("POLYROB_PROJECT_DIR"), os.getenv("APP_SERVICE_SOURCE_ROOT")):

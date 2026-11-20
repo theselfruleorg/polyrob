@@ -7,8 +7,8 @@ Permit2; a signature permit is refused in this tree, so the grant is a
 transaction):
 
 1. ``approve_token(token, spender=Permit2, amount)`` — a standing ERC-20
-   allowance to Permit2. Permit2 is not a route spender, so only a genuine
-   owner turn may create it (CR-H02). The owner sizes it for the program.
+   allowance to the pinned Permit2, a route spender (``tx_guard.pinned_route_spenders``):
+   only a guarded Permit2 grant spends it. A confirmed declaration makes both grants.
 2. ``approve_token(token, spender=<v4 PositionManager>, amount, via='permit2')``
    — an EXACT Permit2 grant that expires in ``PERMIT2_GRANT_TTL_S`` (<= the
    guard's ``PERMIT2_GRANT_MAX_TTL_S``). Priced by the guard like any grant.
@@ -20,6 +20,8 @@ anything the guard refuses. ``LP_ETH_CAP`` defaults to 0: no v4 native deposit
 until the owner sets a program cap.
 """
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from decimal import Decimal
 from typing import Optional, Tuple
 
@@ -101,14 +103,17 @@ def caps_refusal(gate, native_wei: int, balance_wei: int, now: Optional[float] =
     return None
 
 
-def legs_ready(chain, rpc, holder, npm, legs, now, credit=None):
+def legs_ready(chain, rpc, holder, npm, legs, now, credit=None, notes=None):
     """``(outflows, held)`` for the legs of a v4 mint, each ``(currency, raw
     maximum, decimals)``. An ERC-20 leg needs the standing allowance to Permit2
     and the exact, unexpired Permit2 grant to the PositionManager; every leg
     needs the balance. A refusal names the exact approval to make. A leg of 0
     (a one-sided range) is not an outflow. ``credit`` is ``{currency: raw}`` the
     wallet WILL hold before the send (a move's withdrawal): it counts for the
-    balance check only, so the allowances are still judged."""
+    balance check only, so the allowances are still judged. ``notes`` (a list) is
+    given only for the plan of a declaration, whose live run makes its own Permit2
+    grants first (``lp_v4_seed.make_grants``): a missing grant is then a note in that
+    list, not a refusal."""
     row = dex_registry.row_for(chain, "v4")
     out, held = [], []
     for cur, n, dec in legs:
@@ -118,17 +123,24 @@ def legs_ready(chain, rpc, holder, npm, legs, now, credit=None):
             balance = int(rpc("eth_getBalance", [holder, "latest"]), 16)
         else:
             to_permit2 = R.allowance(rpc, chain, cur, holder, row.permit2)
-            if to_permit2 < n:
-                raise ValueError(
-                    f"Permit2 holds an ERC-20 allowance of {to_permit2} on {cur}, need {n}. The "
-                    f"owner runs defi_trade.approve_token(chain={chain}, token={cur}, "
-                    f"spender={row.permit2}, amount=<program size>) once (owner turn only).")
             granted, expiration = V.permit2_allowance(rpc, chain, holder, cur, npm)
-            if granted < n or expiration <= now + DEADLINE_S:
+            if notes is not None and (to_permit2 < n or granted < n
+                                      or expiration <= now + DEADLINE_S):
+                notes.append(f"the run first makes the Permit2 grant(s) for {cur} (exact, "
+                             f"expiring; the guard judges each)")
+            elif to_permit2 < n:
+                raise ValueError(
+                    f"Permit2 holds an ERC-20 allowance of {to_permit2} on {cur}, need {n}. Run "
+                    f"defi_trade.approve_token(chain={chain}, token={cur}, "
+                    f"spender={row.permit2}, amount={Decimal(n) / 10 ** dec}) first (the pinned "
+                    f"Permit2 is a route spender; a live run of a CONFIRMED pool declaration "
+                    f"makes it itself).")
+            elif granted < n or expiration <= now + DEADLINE_S:
                 raise ValueError(
                     f"Permit2 grant to the v4 PositionManager is {granted} (expires {expiration}), "
                     f"need {n}. Run defi_trade.approve_token(chain={chain}, token={cur}, "
-                    f"spender={npm}, amount={Decimal(n) / 10 ** dec}, via='permit2') first.")
+                    f"spender={npm}, amount={Decimal(n) / 10 ** dec}, via='permit2') first (a live run "
+                    f"of a CONFIRMED pool declaration makes it itself).")
             balance = int(R.view(rpc, cur, A.NPM_BALANCE_OF, [holder]))
         balance += int((credit or {}).get(cur, 0))
         if balance < n:
@@ -307,6 +319,28 @@ def prepare_collect_v4(p, rpc, holder, npm):
                 + owed)
 
 
+#: Audit 2026-11-21 L-11: a MOVE's withdrawal floor, ``(token_id, (min0, min1))`` — what the
+#: moved part held at the declaration's ANCHOR, less its gap (:func:`anchor_floor`). Set by
+#: ``lp_verbs._perform_move`` around its ``lp_remove`` only (:func:`move_floor`).
+_MOVE_FLOOR: ContextVar = ContextVar("lp_v4_move_floor", default=None)
+
+
+def anchor_floor(f) -> Tuple[int, int]:
+    """The raw amounts a move's withdrawal must return at least: the declaration's own
+    amounts (the moved part at the anchor price, ``lp_v4_move.build_fields``) less its gap."""
+    keep = 10000 - int(f["gap_bps"])
+    return int(f["amount0_raw"]) * keep // 10000, int(f["amount1_raw"]) * keep // 10000
+
+
+@contextmanager
+def move_floor(token_id: int, floor: Tuple[int, int]):
+    tok = _MOVE_FLOOR.set((int(token_id), tuple(int(x) for x in floor)))
+    try:
+        yield
+    finally:
+        _MOVE_FLOOR.reset(tok)
+
+
 def prepare_remove_v4(p, rpc, holder, npm, price_fn=None):
     """The v4 lp_remove plan (117 W7): DECREASE_LIQUIDITY(token_id, part, min0,
     min1) + TAKE_PAIR(currency0, currency1 → holder). The position NFT stays
@@ -339,6 +373,18 @@ def prepare_remove_v4(p, rpc, holder, npm, price_fn=None):
     amounts = M.amounts_for_liquidity(st.sqrt_price_x96, M.sqrt_price_at_tick(pos.tick_lower),
                                       M.sqrt_price_at_tick(pos.tick_upper), liq)
     minimums = [max(1, n * (10000 - p.slippage_bps) // 10000) if n else 0 for n in amounts]
+    floor = _MOVE_FLOOR.get()
+    if floor is not None and floor[0] == int(p.token_id):
+        # L-11: a move's minimums are bound to the declaration ANCHOR, not only to spot. The
+        # "independent" price of a token with one pool is the indexer's read of that same
+        # pool, so spot and the check can move together over several blocks.
+        short = [i for i in (0, 1) if floor[1][i] > amounts[i]]
+        if short:
+            raise ValueError(
+                f"at the pool price now the withdrawal returns {amounts[0]}/{amounts[1]} raw, "
+                f"less than the move's floor {floor[1][0]}/{floor[1][1]} (the declaration's "
+                f"amounts at its anchor, less the gap): the pool moved. Declare the move again")
+        minimums = [max(m, a) for m, a in zip(minimums, floor[1])]
     if not any(minimums):
         raise ValueError("the withdrawal would return nothing at the pool price")
     price_token0 = chains.get(p.chain).wrapped_native if native0 else c0

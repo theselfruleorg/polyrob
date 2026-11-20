@@ -7,7 +7,7 @@ hook seam was unit-tested).
 import pytest
 from pydantic import ValidationError
 
-from tools.controller.delegation import evaluate_delegation, DelegationDecision
+from core.delegation_policy import evaluate_delegation, DelegationDecision
 from tools.controller.views import DelegateTaskAction
 
 

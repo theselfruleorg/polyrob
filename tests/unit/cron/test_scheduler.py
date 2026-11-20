@@ -5,7 +5,8 @@ from datetime import datetime, timedelta
 import pytest
 
 from cron.jobs import CronJob, CronJobStore
-from cron.scheduler import CronScheduler, TickLock
+from core.file_lock import TickLock
+from cron.scheduler import CronScheduler
 
 
 def _store(tmp_path):

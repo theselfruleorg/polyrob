@@ -24,7 +24,7 @@ class _Orch(HITLIngressMixin):
 
 @pytest.fixture(autouse=True)
 def _pm(tmp_path):
-    from agents.task.path import get_path_manager, set_path_manager
+    from core.session_paths import get_path_manager, set_path_manager
     set_path_manager(get_path_manager(data_root=str(tmp_path)))
     yield
 

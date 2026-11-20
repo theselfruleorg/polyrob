@@ -478,19 +478,3 @@ class SecretScrubbingFilter(logging.Filter):
         return True
 
 
-def install_secret_scrubbing_filter(logger_name: str = None):
-    """
-    Install the secret scrubbing filter on a logger.
-
-    Args:
-        logger_name: Name of logger to install on, None for root logger
-    """
-    logger = logging.getLogger(logger_name)
-
-    # Check if filter is already installed
-    for filter_obj in logger.filters:
-        if isinstance(filter_obj, SecretScrubbingFilter):
-            return
-
-    filter_obj = SecretScrubbingFilter()
-    logger.addFilter(filter_obj)

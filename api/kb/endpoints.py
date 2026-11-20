@@ -154,7 +154,7 @@ def _resolve_and_guard(
             detail="Absolute paths are not allowed. Provide a path relative to your session workspace.",
         )
 
-    from agents.task.path import pm
+    from core.session_paths import pm
     try:
         workspace_root = pm().get_workspace_dir(session_id, user_id)
     except Exception as exc:
@@ -238,7 +238,7 @@ async def kb_ingest_upload(
 
     # Resolve the tenant's confined workspace root and write the upload UNDER it,
     # so the engine's is_within_root confinement check passes naturally.
-    from agents.task.path import pm
+    from core.session_paths import pm
     try:
         workspace_root = pm().get_workspace_dir(session_id, user_id)
     except Exception as exc:

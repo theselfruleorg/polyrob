@@ -34,6 +34,17 @@ def _emit_spend_to_event_log(entry: dict) -> None:
         # none of them. Fall back to the ambient identity multi_act binds.
         from core.exec_identity import current_exec_identity
         _uid, _sid = current_exec_identity()
+        if not _uid:
+            # F9: a spend outside a turn (a cron tick, a watcher, a bare `polyrob`
+            # verb) binds no identity. The wallet is the operator's (one wallet
+            # per process), so its spend is the OWNER's — the one owner-tenant
+            # resolver, the bucket the owner's ledger reads. A tenantless row was
+            # invisible to every tenant-scoped reader.
+            try:
+                from core.instance import resolve_owner_user_id
+                _uid = resolve_owner_user_id()
+            except Exception:  # noqa: BLE001 — an unknown owner keeps the row, tenantless
+                logger.debug("wallet_spend: the owner tenant is unreadable", exc_info=True)
         get_event_log().record(
             "wallet_spend",
             user_id=_uid,

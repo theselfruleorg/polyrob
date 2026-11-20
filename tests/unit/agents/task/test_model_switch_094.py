@@ -129,7 +129,7 @@ def test_chat_tier_precedence(home):
     from core.model_pins import chat_runtime_for
     provider, model, _r, source = chat_runtime_for("owner1")
     assert (provider, model) == ("openrouter", "deepseek/deepseek-v4.1-flash")
-    assert "DEFAULT_MODEL" in source
+    assert source == model_pins.OPERATOR_SOURCE
     model_pins.set_default("owner1", "openrouter", "z-ai/glm-5.3")
     provider, model, _r, source = chat_runtime_for("owner1")
     assert model == "z-ai/glm-5.3" and "your default" in source
@@ -440,8 +440,8 @@ def test_default_writes_the_owner_store_not_the_env(home, catalog, keyed, no_env
 
 def test_show_names_the_live_model_and_the_tiers(home, catalog, keyed):
     out = _cmd(_task_agent(_FakeAgent()), [])
-    assert "Model: deepseek/deepseek-v4.1-flash (openrouter)" in out
-    assert "New chats start on:" in out
+    assert "**This chat:** `deepseek/deepseek-v4.1-flash` (openrouter)" in out
+    assert "**New chats:**" in out and "operator env" not in out
     # 121: the owner's settings and the switch for the agent's own choice
     assert "Heavy model: not set (it uses the main model)" in out
     assert "What I may choose for a helper, a goal or a job: free" in out
@@ -737,8 +737,11 @@ def test_child_on_a_model_with_no_price_runs_with_a_warning(home, catalog, keyed
                              llm_provider="openrouter")
     route = SimpleNamespace(notes=[])
     assert asyncio.run(child_model_check(parent, "openrouter/auto", None, route)) == ""
-    assert route.notes == ["openrouter/auto: price unknown (warning: its price is unknown, so "
-                           "only the run spend cap bounds its cost)"]
+    # audit 2026-11-21 M-6: the warning names the ceiling the meter charges it at
+    (note,) = route.notes
+    assert note.startswith("openrouter/auto: price unknown (warning: its price is unknown, so "
+                           "it is metered at the highest known price of its provider ($")
+    assert "only the run spend cap bounds" not in note
 
 
 def test_failed_list_read_is_not_retried_at_once(catalog, monkeypatch):
@@ -929,12 +932,14 @@ def test_the_owners_model_is_locked_and_an_unattended_change_is_told(home, catal
     updates, refusal, _ = _job_model("z-ai/glm-5.3", existing=mine)
     assert refusal is None and updates["model"] == "z-ai/glm-5.3"
     assert len(told) == 1 and "job `j1`" in told[0] and "z-ai/glm-5.3" in told[0]
-    _job_model("z-ai/glm-5.3", existing={})             # a create tells nothing
-    assert len(told) == 1
+    _job_model("deepseek/deepseek-v4.1-flash", existing={})   # a create on a listed model
+    assert len(told) == 1                                      # tells nothing
+    _job_model("z-ai/glm-5.3", existing={})   # audit 2026-11-21 L-12: off the owner's set
+    assert len(told) == 2 and "a model you do not use or list" in told[1]
     updates, refusal, note = _job_model("default", existing=mine)
     assert updates == {"model": None, "model_by": None, "model_why": None, "provider": None}
     assert "back to the default" in note
-    assert len(told) == 2 and "back to the default" in told[1]   # an unattended clear is told
+    assert len(told) == 3 and "back to the default" in told[2]   # an unattended clear is told
 
 
 def test_every_run_records_its_model(monkeypatch):
@@ -1144,3 +1149,82 @@ def test_the_settings_live_where_they_are_read(home, catalog, keyed, monkeypatch
     assert model_pins.owner_tier("owner1", "light")["model"] == "anthropic/claude-haiku-5.5"
     assert model_pins.owner_tier("local", "light") is None
     assert tier_models("openrouter")["light"] == "anthropic/claude-haiku-5.5"
+
+
+# --- the chat pin carries across an idle/daily rollover (2026-11-20) ------------------ #
+
+def _stale(monkeypatch):
+    import core.surfaces.session_policy as sp
+    monkeypatch.setattr(sp, "should_start_fresh", lambda row, **kw: (True, "idle"))
+    monkeypatch.setattr(sp, "with_agent_activity", lambda row, c: row)
+
+
+def test_a_rolled_over_chat_keeps_its_model(home, catalog, keyed):
+    """`/model <name>` is "this chat until /new": an idle rollover is not /new."""
+    from agents.task.model_switch_service import owner_chat_pin
+    ta = _task_agent(_FakeAgent())
+    _cmd(ta, ["haiku", "reasoning=low"])
+    pin = owner_chat_pin("tg:dm:1", "owner1", ta)
+    assert pin == {"provider": "openrouter", "model": "anthropic/claude-haiku-5.5",
+                   "reasoning": "low"}
+
+
+def test_after_new_the_chat_starts_on_the_default(home, catalog, keyed):
+    from agents.task.model_switch_service import owner_chat_pin
+    ta = _task_agent(_FakeAgent())
+    _cmd(ta, ["haiku"])
+    unbound = _task_agent(None, bound=None)          # /new deleted the binding
+    unbound.session_manager = ta.session_manager
+    assert owner_chat_pin("tg:dm:1", "owner1", unbound) is None
+
+
+def test_an_unpinned_rollover_starts_on_the_default(home, catalog, keyed):
+    from agents.task.model_switch_service import owner_chat_pin
+    assert owner_chat_pin("tg:dm:1", "owner1", _task_agent(_FakeAgent())) is None
+
+
+def test_reset_on_a_stale_chat_drops_the_carried_pin(home, catalog, keyed, monkeypatch):
+    from agents.task.model_switch_service import owner_chat_pin
+    ta = _task_agent(_FakeAgent())
+    _cmd(ta, ["haiku"])
+    _stale(monkeypatch)
+    show = _cmd(ta, [])
+    assert "The next one starts on: anthropic/claude-haiku-5.5" in show
+    assert _cmd(ta, ["reset"]).startswith("✅")
+    assert owner_chat_pin("tg:dm:1", "owner1", ta) is None
+
+
+# --- the picker (2026-11-20 Telegram UX review, H5) ------------------------------------ #
+
+def test_the_picker_offers_keyed_names_and_never_the_current_model(home, catalog, keyed):
+    from agents.task.model_switch_service import picker_buttons
+    buttons = picker_buttons(_task_agent(_FakeAgent()), user_id="owner1", chat_key="tg:dm:1")
+    lines = [b.line for b in buttons]
+    assert "/model deepseek" not in lines            # the chat already runs it
+    assert "/model glm" in lines and "/model reset" in lines
+    assert "/model openrouter deepseek/deepseek-v4.1-flash default" in lines
+    assert "/model reasoning=low" in lines
+
+
+def test_a_picker_line_parses_to_what_its_label_says():
+    for words, action in ((["glm"], "set"), (["reasoning=low"], "reasoning"),
+                          (["openrouter", "deepseek/deepseek-v4.1-flash", "default"], "set")):
+        cmd = ms.parse_model_args(words)
+        assert cmd.action == action, words
+    cmd = ms.parse_model_args(["openrouter", "deepseek/deepseek-v4.1-flash", "default"])
+    assert cmd.provider == "openrouter" and cmd.default is True
+
+
+def test_reset_onto_the_owner_default_stores_no_chat_pin(home, catalog, keyed):
+    """A reset is not "this chat until /new": when the default is the OWNER's (not the
+    operator's), the reset still stores no chat pin, so a later rollover starts on the
+    owner's default of that time, not on the one the reset saw."""
+    from agents.task.model_switch_service import owner_chat_pin
+    ta = _task_agent(_FakeAgent())
+    assert _cmd(ta, ["glm", "default"]).startswith("✅")
+    _cmd(ta, ["haiku"])
+    assert _cmd(ta, ["reset"]).startswith("✅")
+    meta = ta.session_manager.meta["s-1"]
+    assert meta["model_pin"] is None and meta["operator_pin"] is None
+    pin = owner_chat_pin("tg:dm:1", "owner1", ta) or {}
+    assert pin.get("model") != "anthropic/claude-haiku-5.5"   # no chat pin carried

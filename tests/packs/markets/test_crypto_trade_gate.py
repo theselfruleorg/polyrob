@@ -86,15 +86,17 @@ def test_boundary_amount_equal_to_cap_is_allowed(monkeypatch):
 
 
 def test_owner_kill_switch_blocks_live_trade(monkeypatch):
-    """H5: the owner kill-switch (autonomy_halted) must block LIVE trades, not only
-    x402 payments — otherwise a runaway/compromised session keeps placing orders
-    within caps until the daily cap is exhausted."""
+    """H5: the owner pause blocks a live trade that is not the owner's own — a
+    runaway session must not keep placing orders within caps. Since 125 S7 the
+    pause is trade_turn_refusal's bar (the money kernel), which every order verb
+    runs before evaluate_live_trade; the switches-and-cap gate no longer probes it."""
     _env(monkeypatch, CRYPTO_TRADE_LIVE_ENABLED="true",
          HYPERLIQUID_TRADING_ENABLED="true", HYPERLIQUID_TRADE_MAX_USD="50",
          AUTONOMY_HALT="1")
-    d = evaluate_live_trade("hyperliquid", 10.0)
-    assert d.live is False
-    assert "autonomy pause" in d.reason.lower()
+    from polyrob_markets.trade_gate import trade_turn_refusal
+    r = trade_turn_refusal(None, object())
+    assert r and "autonomy pause" in r.lower()
+    assert evaluate_live_trade("hyperliquid", 10.0).live is True
 
 
 def test_unpriceable_amount_fails_closed(monkeypatch):
@@ -223,13 +225,14 @@ def test_trade_turn_refusal_halt_applies_even_without_context(monkeypatch):
     assert r and "autonomy pause" in r.lower()
 
 
-def test_trade_turn_refusal_halt_overrides_genuine_owner(monkeypatch):
-    # Even a genuine owner turn is refused while halted.
+def test_trade_turn_refusal_genuine_owner_passes_the_halt(monkeypatch):
+    # 125 S7 (D2): a genuine owner turn is the owner acting — the pause bounds the
+    # agent's own work, not the owner (parity with every other money verb).
     monkeypatch.setenv("AUTONOMY_HALT", "1")
     from polyrob_markets.trade_gate import trade_turn_refusal
     from agents.task.loop_types.execution_context import ActionExecutionContext
     r = trade_turn_refusal(ActionExecutionContext(user_id="local", role="orchestrator"), object())
-    assert r and "autonomy pause" in r.lower()
+    assert r is None
 
 
 def test_trade_turn_refusal_halt_probe_fails_closed(monkeypatch):
@@ -284,22 +287,22 @@ def test_cancel_is_ALLOWED_while_halted_because_it_reduces_risk(monkeypatch):
 
 
 def test_update_leverage_is_NOT_risk_reducing_and_is_blocked_while_halted(monkeypatch):
-    monkeypatch.setenv("CRYPTO_TRADE_LIVE_ENABLED", "true")
-    monkeypatch.setenv("HYPERLIQUID_TRADING_ENABLED", "true")
-    monkeypatch.setattr(
-        "core.config_policy.AutonomyConfig.autonomy_halted", staticmethod(lambda: True))
-    assert evaluate_live_mutation("hyperliquid", risk_reducing=False).live is False
+    # A leverage change is not a position-management action: a direct call (never the
+    # owner's turn) is held by the pause like an order — trade_turn_refusal's bar.
+    monkeypatch.setenv("AUTONOMY_HALT", "1")
+    from polyrob_markets.trade_gate import trade_turn_refusal
+    r = trade_turn_refusal(None, object(), risk_reducing=False)
+    assert r and "autonomy pause" in r.lower()
 
 
 def test_a_halt_probe_that_raises_blocks_a_non_reducing_mutation(monkeypatch):
-    monkeypatch.setenv("CRYPTO_TRADE_LIVE_ENABLED", "true")
-    monkeypatch.setenv("HYPERLIQUID_TRADING_ENABLED", "true")
-
     def _boom():
-        raise RuntimeError("probe")
+        raise RuntimeError("halt probe down")
     monkeypatch.setattr(
         "core.config_policy.AutonomyConfig.autonomy_halted", staticmethod(_boom))
-    assert evaluate_live_mutation("hyperliquid", risk_reducing=False).live is False
+    from polyrob_markets.trade_gate import trade_turn_refusal
+    r = trade_turn_refusal(None, object(), risk_reducing=False)
+    assert r and "closed" in r.lower()
 
 
 def test_mutation_master_off_blocks_even_if_venue_on(monkeypatch):
@@ -324,20 +327,14 @@ def test_mutation_not_probed_at_all_when_risk_reducing_and_not_halted(monkeypatc
 
 
 def test_mutation_polymarket_leverage_analog_blocked_while_halted(monkeypatch):
-    # Polymarket has no leverage concept, but the same risk_reducing=False path
-    # must behave identically across venues (venue-agnostic gate logic).
-    monkeypatch.setenv("CRYPTO_TRADE_LIVE_ENABLED", "true")
-    monkeypatch.setenv("POLYMARKET_TRADING_ENABLED", "true")
+    # evaluate_live_mutation encodes the switches only; the pause is the kernel's bar.
+    _env(monkeypatch, CRYPTO_TRADE_LIVE_ENABLED="true", POLYMARKET_TRADING_ENABLED="true")
     monkeypatch.setattr(
         "core.config_policy.AutonomyConfig.autonomy_halted", staticmethod(lambda: True))
-    assert evaluate_live_mutation("polymarket", risk_reducing=False).live is False
+    assert evaluate_live_mutation("polymarket", risk_reducing=False).live is True
+    from polyrob_markets.trade_gate import trade_turn_refusal
+    assert trade_turn_refusal(None, object())
 
-
-# ---- M10/R16: trade_turn_refusal's risk_reducing carve-out is OWNER-ONLY ----------
-# (default risk_reducing=False keeps every existing call site — orders, leverage,
-# approve/revoke_agent — byte-identical to before this change. And even with
-# risk_reducing=True, the kill-switch bar only lifts for a literal owner-direct call
-# — execution_context is None — never for an agent-loop turn, genuine or not.)
 
 def test_trade_turn_refusal_default_still_blocks_during_halt(monkeypatch):
     monkeypatch.setenv("AUTONOMY_HALT", "1")
@@ -355,22 +352,18 @@ def test_trade_turn_refusal_owner_direct_risk_reducing_survives_halt(monkeypatch
     assert r is None  # not refused: no context (not forged) + risk-reducing skips bar 1
 
 
-def test_trade_turn_refusal_genuine_agent_turn_risk_reducing_STILL_blocked_by_halt(monkeypatch):
-    """R16 (2026-08-22): (b) halted + a genuine, NON-FORGED agent-loop turn
-    (role="orchestrator", no forged turn_kind) + risk_reducing=True must still be
-    REFUSED. This is the regression R16 closes: the review proved that without this
-    narrowing, `not risk_reducing` alone let ANY non-forged origin — including a
-    plain LLM-driven agent turn — bypass the kill-switch just because the verb
-    happened to be a cancel, so a halted owner's agent kept mutating live orders.
-    The carve-out is for a literal owner-direct call (execution_context is None)
-    ONLY; presence of a context — genuine or not — means an agent-loop turn, and
-    the kill-switch bar applies to it exactly as if risk_reducing were False."""
+def test_trade_turn_refusal_genuine_owner_turn_risk_reducing_passes_the_halt(monkeypatch):
+    """125 S7 (D2) supersedes R16 for a GENUINE OWNER turn: the owner acting through
+    the agent is not bound by the autonomy pause. What R16 closed stays closed: a
+    forged turn is refused whatever risk_reducing says, and a context that is not the
+    owner's (no bound principal) never passes."""
     monkeypatch.setenv("AUTONOMY_HALT", "1")
     from polyrob_markets.trade_gate import trade_turn_refusal
     from agents.task.loop_types.execution_context import ActionExecutionContext
-    ctx = ActionExecutionContext(user_id="local", role="orchestrator")  # genuine owner-turn, NOT forged
-    r = trade_turn_refusal(ctx, object(), risk_reducing=True)
-    assert r and "autonomy pause" in r.lower()
+    ctx = ActionExecutionContext(user_id="local", role="orchestrator")
+    assert trade_turn_refusal(ctx, object(), risk_reducing=True) is None
+    assert trade_turn_refusal(ActionExecutionContext(role="orchestrator"), object(),
+                              risk_reducing=True)
 
 
 def test_trade_turn_refusal_risk_reducing_still_blocks_forged_turn(monkeypatch):

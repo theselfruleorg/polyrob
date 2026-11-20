@@ -31,7 +31,7 @@ def test_cap_holds_a_realistic_owner_rule_set():
 
 
 def test_cap_is_not_below_the_contract_doc():
-    """Owner facts are always-injectable owner INTENT — never the tightest cap."""
+    """Owner rules are always-injectable owner INTENT — never the tightest cap."""
     assert OWNER_DOC_MAX_CHARS >= CONTRACT_DOC_MAX_CHARS
 
 

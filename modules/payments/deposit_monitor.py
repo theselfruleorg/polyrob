@@ -6,7 +6,8 @@ credits their accounts.
 
 import asyncio
 import logging
-from typing import Dict, List, Optional
+import math
+from typing import Callable, Dict, List, Optional
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
@@ -18,7 +19,8 @@ logger = logging.getLogger(__name__)
 class DepositMonitor:
     """Monitor blockchain for deposits and credit user accounts."""
 
-    def __init__(self, db_manager, balance_manager, config, notify_callback=None):
+    def __init__(self, db_manager, balance_manager, config, notify_callback=None,
+                 price_fn: Optional[Callable[[], Optional[float]]] = None):
         """Initialize deposit monitor.
 
         Args:
@@ -32,11 +34,18 @@ class DepositMonitor:
                 (default), only the durable `user_notifications` DB row is
                 written; wiring an actual delivery channel (Telegram/email)
                 is the operator's job via this hook, not this module's.
+            price_fn: a sync `() -> Optional[float]` giving the ETH/USD price.
+                The composition root passes the ONE graded spend price
+                (`tools.defi.price_sources.spend_price` on mainnet WETH); this
+                module sits below `tools/` and never picks a price source
+                itself. None (the default) means "no price": an ETH increase
+                credits nothing — fail closed, never a hardcoded number.
         """
         self.db = db_manager
         self.balance_manager = balance_manager
         self.config = config
         self.notify_callback = notify_callback
+        self.price_fn = price_fn
         self.logger = logging.getLogger('payments.deposit_monitor')
 
         # Check interval (seconds)
@@ -191,22 +200,26 @@ class DepositMonitor:
                     eth_price = await self._get_eth_price()
                 except Exception as e:
                     self.logger.error(
-                        f"ETH price oracle unavailable, skipping ETH deposit check "
+                        f"ETH spend price unavailable, no ETH credit "
                         f"for {address} this cycle: {type(e).__name__}"
                     )
-            if eth_balance == 0 or eth_price is not None:
-                deposits.append({
-                    'chain': chain_name,
-                    'address': address,  # the sweeper matches it to the signer
-                    'block': block_number,  # 098 MO-01: the reading's finalized block
-                    'token_symbol': 'ETH',
-                    # Price-INDEPENDENT balance reading (wei): the mark in
-                    # `_process_deposit` compares readings, never amount_usd,
-                    # which is `eth_price * balance` and moves every tick.
-                    'amount': str(eth_balance),
-                    'amount_wei': eth_balance,
-                    'amount_usd': Decimal(str(eth_price or 0)) * Decimal(eth_balance) / 10**18,
-                })
+            deposits.append({
+                'chain': chain_name,
+                'address': address,  # the sweeper matches it to the signer
+                'block': block_number,  # 098 MO-01: the reading's finalized block
+                'token_symbol': 'ETH',
+                # Price-INDEPENDENT balance reading (wei): the mark in
+                # `_process_deposit` compares readings, never amount_usd,
+                # which is `eth_price * balance` and moves every tick.
+                'amount': str(eth_balance),
+                'amount_wei': eth_balance,
+                # None = no spend price this cycle: the reading still counts
+                # (a decrease lowers the mark, a reader sees the balance), but
+                # an increase credits nothing until a price is known.
+                'amount_usd': (Decimal(str(eth_price)) * Decimal(eth_balance) / 10**18
+                               if eth_price is not None else
+                               (Decimal(0) if eth_balance == 0 else None)),
+            })
 
             # Check each token on this chain
             token_addresses = self.token_addresses.get(chain_name, {})
@@ -263,16 +276,22 @@ class DepositMonitor:
             return None
 
     async def _get_eth_price(self) -> float:
-        """Get current ETH price in USD from the live oracle (C8).
+        """The ETH/USD spend price from the injected ``price_fn``.
 
-        Fail-closed by design (see modules.payments.price_oracle docstring):
-        if the oracle call fails, callers must NOT fall back to a stale
-        hardcoded number — _check_chain_deposits catches the exception and
-        skips ETH-deposit detection for this cycle only (other tokens on the
-        same cycle are unaffected).
+        Fail-closed by design: no ``price_fn``, a ``None`` answer, or a
+        non-finite / non-positive number raises. Callers never fall back to a
+        stale hardcoded number — an ETH increase is simply not credited this
+        cycle (other tokens on the same cycle are unaffected).
         """
-        from modules.payments.price_oracle import get_eth_price_usd
-        return await get_eth_price_usd()
+        if self.price_fn is None:
+            raise RuntimeError("no ETH spend price source wired")
+        price = await asyncio.to_thread(self.price_fn)
+        if price is None:
+            raise ValueError("no spend-grade ETH price")
+        price = float(price)
+        if not math.isfinite(price) or price <= 0:
+            raise ValueError(f"ETH spend price is not finite and positive: {price!r}")
+        return price
 
     async def _process_deposit(self, user_id: str, deposit: Dict):
         """Process a detected deposit.
@@ -288,7 +307,7 @@ class DepositMonitor:
             # CR-H08: credit only the INCREASE over the last observed balance
             # for this (user, chain, token). The balance reading is
             # price-independent (wei for ETH, the token balance for ERC20s) —
-            # NEVER amount_usd, which moves with the live oracle every tick.
+            # NEVER amount_usd, which moves with the spend price every tick.
             # Crediting the WHOLE balance on every change minted 10 + 10.5 +
             # 11 USDC of credits for 11 USDC received.
             #
@@ -324,7 +343,13 @@ class DepositMonitor:
                 return
 
             # Only the increase is new money. amount_usd prices the WHOLE
-            # reading; scale it to the increase.
+            # reading; scale it to the increase. No price this cycle: credit
+            # nothing and keep the mark, so the next priced tick credits it.
+            if deposit.get('amount_usd') is None:
+                self.logger.warning(
+                    f"No spend price for {deposit['token_symbol']} on {deposit['chain']}: "
+                    f"increase for {user_id} not credited this cycle")
+                return
             full_usd = Decimal(str(deposit['amount_usd']))
             rate = Decimal(str(self.credit_rate))
             if current <= 0:

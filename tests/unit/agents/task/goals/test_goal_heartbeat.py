@@ -1,7 +1,7 @@
 """F8 (live-test): in-flight goal claims must be heartbeated so a goal that runs
 longer than GOAL_CLAIM_TTL_SEC isn't reclaimed by reclaim_stale and DOUBLE-dispatched.
 """
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from agents.task.goals.dispatcher import _heartbeat_interval
 
 

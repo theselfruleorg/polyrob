@@ -45,8 +45,8 @@ def test_gate_modules_actually_derive_from_the_table():
     """The named sets in the gate modules must BE the derivations (identity of value),
     so table edits propagate and the hand-lists cannot silently drift again."""
     from agents.task.runtime.metering_gate import MONEY_TOOLS
-    from tools.controller.delegation import DELEGATE_BLOCKED_TOOLS
-    from agents.task.agent.core.correspondent_gate import HIGH_IMPACT_TOOL_IDS
+    from core.delegation_policy import DELEGATE_BLOCKED_TOOLS
+    from core.security.high_impact import HIGH_IMPACT_TOOL_IDS
 
     assert MONEY_TOOLS == ids_with("money")
     assert DELEGATE_BLOCKED_TOOLS == ids_with("delegate_blocked")

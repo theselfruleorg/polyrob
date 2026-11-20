@@ -5,7 +5,7 @@
 
 A tap here is the owner typing ``/card_<id>_<act>`` into the console chat box:
 it runs through ``webview.console_commands.run_console_line`` → the shared
-owner-verb plane (``surfaces.telegram.harness._handle_command``), so the owner
+owner-verb plane (``surfaces._actor.handle_command``), so the owner
 gate and every money gate are the SAME ones Telegram and the REPL apply. A console
 line is the owner's own private line (its session key is a DM), so the room refusal,
 which guards a verb typed where members talk, does not apply here. This module
@@ -35,9 +35,12 @@ def card_view(card) -> dict:
         _cid, act = cards.parse_card_token(a.command)
         buttons.append({"label": a.label, "act": act,
                         "primary": a.style == "primary", "danger": a.style == "danger"})
+    # 126: a call card names its steps (the exact calls its Confirm runs, in order).
+    steps = [s.get("do", "") for s in ((card.draft or {}).get("call") or {}).get("steps") or []
+             if isinstance(s, dict)]
     return {"id": card.card_id, "kind": card.kind, "origin": card.origin,
             "state": card.state, "title": card.title,
-            "text": cards.render_text(card), "buttons": buttons}
+            "text": cards.render_text(card), "buttons": buttons, "steps": steps}
 
 
 @router.get("/api/webgate/cards")

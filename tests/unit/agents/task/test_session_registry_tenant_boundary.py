@@ -1,7 +1,7 @@
 """E7 fold-in (A6 gap 8): the in-process SessionRegistry has NO notion of
 user_id — pin this explicitly so a future change can't silently assume
 tenant-scoping exists at this layer. The real tenant boundary lives one layer
-down, in agents/task/path.py (get_session_root -> get_user_root); see the A6
+down, in core/session_paths.py (get_session_root -> get_user_root); see the A6
 assessment finding.
 """
 import inspect

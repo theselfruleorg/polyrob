@@ -350,3 +350,70 @@ async def test_portfolio_gas_is_not_summed_into_the_token_total():
                  native_fn=lambda h, c: 1.0)
     out = _text(await tool.portfolio(PortfolioParams(chain="base")))
     assert "$10.00" in out, "the token total stays exactly the token total"
+
+
+# contract_read — arguments are ABI-encoded; `returns` decodes (2026-11-20)
+
+@pytest.mark.asyncio
+async def test_contract_read_encodes_the_arguments():
+    seen = {}
+
+    def call(**k):
+        seen.update(k)
+        return "0x" + "00" * 12 + "11" * 20
+
+    tool = _tool(call_fn=call)
+    out = _text(await tool.contract_read(ContractReadParams(
+        chain="base", address=FAKE, signature="ownerOf(uint256)", args=[5],
+        returns="address")))
+    # selector of ownerOf(uint256) = 0x6352211e, then 5 as one 32-byte word
+    assert seen["calldata"] == "0x6352211e" + "00" * 31 + "05"
+    assert "decoded as address: 0x1111111111111111111111111111111111111111" in out
+
+
+@pytest.mark.asyncio
+async def test_contract_read_refuses_arguments_that_do_not_fit():
+    tool = _tool(call_fn=lambda **k: "0x")
+    res = await tool.contract_read(ContractReadParams(
+        chain="base", address=FAKE, signature="ownerOf(uint256)", args=[]))
+    assert res.error and "takes 1 argument" in res.error
+
+
+@pytest.mark.asyncio
+async def test_contract_read_names_a_failed_typed_decode():
+    tool = _tool(call_fn=lambda **k: "0x")
+    out = _text(await tool.contract_read(ContractReadParams(
+        chain="base", address=FAKE, signature="name()", returns="string")))
+    assert "no result" in out or "decode as string failed" in out
+
+
+# nft_account — the room-safe read of ANY agent NFT (2026-11-20)
+
+def test_nft_account_is_a_room_read_and_agent_nft_inspect_is_not():
+    from core.surfaces.room_policy import is_room_denied_call
+    assert not is_room_denied_call("defi_data_nft_account", "defi_data")
+    assert not is_room_denied_call("defi_data_contract_read", "defi_data")
+    assert is_room_denied_call("agent_nft_inspect", "agent_nft")
+
+
+@pytest.mark.asyncio
+async def test_nft_account_and_agent_nft_inspect_share_one_body(monkeypatch):
+    from tools.agent_nft import core_verbs
+    from tools.defi.data_params import NftAccountParams
+    seen = []
+
+    def fake(rpc_for, target):
+        seen.append(target)
+        return "NFT #7 view", None
+    monkeypatch.setattr(core_verbs, "inspect_text", fake)
+    out = _text(await _tool().nft_account(NftAccountParams(target="robinhood:7")))
+    assert out == "NFT #7 view" and seen == ["robinhood:7"]
+
+    class T:
+        rpc_for = None
+
+        @staticmethod
+        def _ar(**kw):
+            return kw
+    assert await core_verbs.inspect(T(), NftAccountParams(target="base:1"), None) == {
+        "content": "NFT #7 view"}

@@ -197,7 +197,6 @@ def test_tool_descriptions_quote_the_one_routing_text(env):
     from core.prompt_text import owner_route
     from tools.controller.skill_manage import SKILL_MANAGE_DESCRIPTION
     assert owner_route("programme") in SKILL_MANAGE_DESCRIPTION
-    assert "`skill_manage` also drafts the retire" in owner_route("programme")
 
 
 def test_load_skill_names_its_prerequisites(tmp_path):

@@ -51,7 +51,8 @@ class NftAccountError(RuntimeError):
 
 @dataclass(frozen=True)
 class HeldNft:
-    """An NFT of a pinned collection that THIS treasury owns, and its account."""
+    """An NFT that THIS treasury owns (a pinned collection or one read from the chain), and its
+    account."""
     chain: str
     chain_id: int
     collection: str        # lowercase
@@ -62,6 +63,9 @@ class HeldNft:
     journal_log: Optional[str] = None
     #: the collection's deploy block — where an account's on-chain journal can start.
     deploy_block: int = 0
+    #: 124 W3: False when the collection is not pinned (read from the chain): every money act
+    #: through the account is the owner's card.
+    pinned: bool = True
 
     @property
     def label(self) -> str:
@@ -123,12 +127,23 @@ def resolve(chain: str, *, rpc: Rpc, treasury: str, account: Optional[str] = Non
     chain_id = collection_registry.chain_id_of(chain)
     if not chain_id:
         raise NftAccountError(f"{chain!r} is not an EVM chain this build knows")
-    profiles = _profiles(chain_id)
-    if not profiles:
-        raise NftAccountError(f"no collection is pinned on {chain} (the owner's collection registry "
-                              f"is empty by default) — an agent acts only through accounts of a "
-                              f"pinned collection")
+    try:
+        profiles = _profiles(chain_id)
+    except NftAccountError:
+        profiles = ()   # 124 section 5.5: an unreadable pin store is no pin; read the chain
     by_addr = {p.address: p for p in profiles}
+
+    def _any(collection: str):
+        """124 W3: a pinned collection, else its profile read from the chain."""
+        got = by_addr.get(str(collection).lower())
+        if got is not None:
+            return got
+        from core.wallet.collection_registry import chain_profile
+        try:
+            return chain_profile(chain, collection, rpc=rpc)
+        except Exception as exc:  # noqa: BLE001
+            raise NftAccountError(f"{collection} on {chain}: {exc}") from exc
+
     profile = None
     token_id = None
     if nft:
@@ -136,13 +151,12 @@ def resolve(chain: str, *, rpc: Rpc, treasury: str, account: Optional[str] = Non
         if collection is None:
             if len(profiles) != 1:
                 raise NftAccountError(
-                    f"{len(profiles)} collections are pinned on {chain}: name one as "
-                    f"<collection>#{token_id} ({', '.join(sorted(by_addr))})")
+                    f"name the collection as <collection>#{token_id}"
+                    + (f" ({len(profiles)} are pinned on {chain}: {', '.join(sorted(by_addr))})"
+                       if profiles else ""))
             profile = profiles[0]
         else:
-            profile = by_addr.get(collection)
-            if profile is None:
-                raise NftAccountError(f"{collection} is not a pinned collection on {chain}")
+            profile = _any(collection)
     if account:
         if not _ADDR.match(str(account)):
             raise NftAccountError(f"account {account!r} is not a 0x address")
@@ -154,16 +168,13 @@ def resolve(chain: str, *, rpc: Rpc, treasury: str, account: Optional[str] = Non
         if int(t_chain) != int(chain_id):
             raise NftAccountError(f"{account} belongs to a token on chain {t_chain}, not {chain} "
                                   f"({chain_id})")
-        t_profile = by_addr.get(str(t_contract).lower())
-        if t_profile is None:
-            raise NftAccountError(f"{account} is the account of {t_contract} #{t_id}, which is not a "
-                                  f"pinned collection on {chain}")
+        t_profile = _any(str(t_contract))
         if profile is not None and (t_profile.address != profile.address or int(t_id) != token_id):
             raise NftAccountError(f"account={account} is the account of {t_contract} #{t_id}, not "
                                   f"of {nft}")
         profile, token_id = t_profile, int(t_id)
-    if not 1 <= int(token_id) <= int(profile.max_supply):
-        raise NftAccountError(f"#{token_id} is outside the collection's ids 1..{profile.max_supply}")
+    if not 0 <= int(token_id) <= int(profile.max_supply):
+        raise NftAccountError(f"#{token_id} is outside the collection's ids 0..{profile.max_supply}")
     candidates = _account_of(chain_id, profile, token_id)
     if account:
         match = [a for a in candidates if a.lower() == str(account).lower()]
@@ -194,7 +205,15 @@ def resolve(chain: str, *, rpc: Rpc, treasury: str, account: Optional[str] = Non
                 f"is {owner}) — an agent acts through an account only as the NFT's current owner")
     return HeldNft(chain=chain, chain_id=int(chain_id), collection=profile.address,
                    token_id=int(token_id), account=acct, journal_prefix=profile.journal_prefix,
-                   journal_log=profile.journal_log, deploy_block=int(profile.deploy_block))
+                   journal_log=profile.journal_log, deploy_block=int(profile.deploy_block),
+                   pinned=bool(getattr(profile, "pinned", True)))
+
+
+def profile_of(held: "HeldNft", rpc: Optional[Rpc] = None):
+    """124 W3: the profile of *held*'s collection — its pin, else the facts read from the chain
+    (``core.wallet.collection_registry.profile_or_chain``)."""
+    from core.wallet.collection_registry import profile_or_chain
+    return profile_or_chain(held.chain, held.collection, rpc=rpc)
 
 
 # ------------------------------------------------------------------------------ the journal

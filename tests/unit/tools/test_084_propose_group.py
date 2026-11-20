@@ -62,7 +62,7 @@ def test_a_goal_run_names_its_goal(st, monkeypatch):
 
 
 def test_a_failed_unverified_confirm_offers_the_extra_check_as_a_card(st, monkeypatch):
-    from surfaces.telegram import card_ops
+    from surfaces import card_press
     sent = []
 
     async def _deliver(container, user_id, text, **kw):
@@ -78,7 +78,7 @@ def test_a_failed_unverified_confirm_offers_the_extra_check_as_a_card(st, monkey
     q = cards.store().get(q.card_id)
     out = (f"❌ Nothing was sent. DRY RUN … {UNVERIFIED_MARK}\n⚠️ EXTRA CHECK\n"
            f"To continue: /send {' '.join(LINE)} anyway")
-    asyncio.run(card_ops._recover(None, q, out))
+    asyncio.run(card_press._recover(None, q, out))
     assert len(sent) == 1 and sent[0]["card_id"]
     ack = cards.store().get(sent[0]["card_id"])
     assert ack.args[-1] == "anyway" and ack.group_id == gid and ack.parent_id == q.card_id

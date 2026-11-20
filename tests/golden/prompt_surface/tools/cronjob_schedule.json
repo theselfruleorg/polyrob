@@ -66,7 +66,7 @@
         "precheck": {
           "additionalProperties": true,
           "default": null,
-          "description": "For a WATCH job (monitor/scout/exit/watcher): a $0 check that runs BEFORE the model each tick — {'verb': <a read_verb verb>, 'params': {...}, 'alert': {'field', 'below'?, 'above'?}, 'move_pct': 5, 'field': 'price_usd', 'max_quiet_hours': 24}. When the read is clean, no alert fires and the field moved less than move_pct since the last model run, the tick is skipped at $0. Otherwise the run starts with the read attached. Use it on every price/pool watch.",
+          "description": "For a WATCH job (monitor/scout/exit/watcher): a $0 check that runs BEFORE the model each tick — {'verb': <a read_verb verb>, 'params': {...}, 'alert': {'field', 'below'?, 'above'?}, 'move_pct': 5, 'field': 'price_usd', 'max_quiet_hours': 24}. When the read is clean, no alert fires and the field moved less than move_pct since the last model run, the tick is skipped at $0. Otherwise the run starts with the read attached. Use it on every price/pool watch. It is the wake hook: any read verb, a bound or a move wakes YOU to decide. Quiet ticks cost $0, so tick often (15m) on money that can move fast. Added to a read job by cronjob_edit, it turns that job into this kind.",
           "nullable": true,
           "properties": {},
           "type": "object"
@@ -74,7 +74,7 @@
         "read_verb": {
           "additionalProperties": true,
           "default": null,
-          "description": "W9: make this a DETERMINISTIC read job — one allowlisted read verb, no LLM turn per tick: {'verb': 'defi_data.pool_metrics', 'params': {...the verb's params...}, 'deliver_on': 'alert'|'always'|'never'}. 'alert' (default) delivers only a result with an ALERT line or an error. Verbs: defi_data.pool_metrics, defi_data.price, defi_data.token_info, defi_data.wallet_holdings, defi_data.position_mark, defi_data.discovery_count, defi_data.lp_positions (protocol='v4' + token_id: fields in_range 'yes'|'no', currency0, currency1, value0, price, pool_share_pct) (public on-chain reads only; a web page or any other source cannot be a read verb). A price/value watch adds 'alert': {'field': '<key of the verb result metadata>', 'below': n, 'above': n} — the verb compares, you never do; an unreadable value alerts.",
+          "description": "W9: make this a DETERMINISTIC read job — one allowlisted read verb, no LLM turn per tick: {'verb': 'defi_data.pool_metrics', 'params': {...the verb's params...}, 'deliver_on': 'alert'|'always'|'never'}. 'alert' (default) delivers only a result with an ALERT line or an error. Verbs: defi_data.pool_metrics, defi_data.price, defi_data.token_info, defi_data.wallet_holdings, defi_data.position_mark, defi_data.discovery_count, defi_data.lp_positions (protocol='v4' + token_id: fields in_range 'yes'|'no', currency0, currency1, value0, price, pool_share_pct) (public on-chain reads only; a web page or any other source cannot be a read verb). A price/value watch adds 'alert': {'field': '<key of the verb result metadata>', 'below': n, 'above': n} — the verb compares, you never do; an unreadable value alerts. It ONLY tells the owner: you never run and never decide. A watch you must ACT on (a position, an exit) is a precheck instead.",
           "nullable": true,
           "properties": {},
           "type": "object"

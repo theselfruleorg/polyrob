@@ -120,8 +120,8 @@ def child_env() -> Dict[str, str]:
     env.setdefault("PATH", "/usr/bin:/bin")
     env["PYTHONNOUSERSITE"] = "1"
     if "TMPDIR" not in env:
-        from core.runtime_paths import install_tmp_dir
-        tmp = install_tmp_dir()  # pip unpacks wheels there: never a small tmpfs /tmp
+        from core.runtime_paths import scratch_root
+        tmp = scratch_root()  # pip unpacks wheels there: never a small tmpfs /tmp
         if tmp is not None:
             env["TMPDIR"] = str(tmp)
     return env
@@ -201,12 +201,25 @@ def install(feature: str, *, root: Path, wheel_only: bool, python: Optional[str]
                    "--target", str(target), "-r", str(req),
                    *(index_args if index_args is not None else ["--index-url", INDEX_URL])]
             cmd.append("--only-binary=:all:" if wheel_only else "--prefer-binary")
+            # pip --target builds in TMPDIR, prints "Successfully installed", then
+            # MOVES into the target. Under the unit, <data home>/tmp and the target
+            # are two ReadWritePaths bind mounts: the move becomes a copy whose
+            # copystat chmods the setgid bit of <data home>/tmp, and
+            # RestrictSUIDSGID=true refuses it (EPERM, exit 2 — an experiment box, 2026-11-20).
+            # pip's scratch next to its target keeps the move a rename. ON DISK too.
+            pip_tmp = tmp / ".pip-tmp"
+            pip_tmp.mkdir(mode=0o700)
+            env = child_env()
+            env["TMPDIR"] = str(pip_tmp)
             logger.info("lazy install: %s (%d pin(s), wheel_only=%s)", feature, len(wanted), wheel_only)
-            proc = run(cmd, capture_output=True, text=True, env=child_env())
+            proc = run(cmd, capture_output=True, text=True, env=env)
+            shutil.rmtree(pip_tmp, ignore_errors=True)
             if proc.returncode != 0:
-                out = ((proc.stderr or "") + (proc.stdout or "")).strip()
-                kind, why = _classify(out, wheel_only)
-                raise InstallRefused(kind, f"{feature}: {why}; nothing installed\n{out[-600:]}")
+                err, out = (proc.stderr or "").strip(), (proc.stdout or "").strip()
+                kind, why = _classify(f"{err}\n{out}", wheel_only)
+                # stderr holds the cause; stdout may end on a success line.
+                raise InstallRefused(kind, f"{feature}: {why} (pip exit {proc.returncode}); "
+                                           f"nothing installed\n{(err or out)[-800:]}")
             req.unlink()
         else:
             (tmp / "lib").mkdir()

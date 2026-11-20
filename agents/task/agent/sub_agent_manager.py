@@ -542,7 +542,7 @@ class SubAgentManager:
         Least privilege has no off switch: every child is narrowed.
         """
         from tools.controller.service import Controller
-        from tools.controller.delegation import (
+        from core.delegation_policy import (
             narrow_child_tools,
             delegation_exclusions_for_child,
             LEAF,
@@ -1328,7 +1328,7 @@ class SubAgentManager:
         as DATA — a later ``read_file`` (a trusted tool) must not launder it."""
         try:
             import secrets
-            from agents.task.path import pm
+            from core.session_paths import pm
             from agents.task.agent.core.result_offload import _write_new_file
             agent_id = str(getattr(agent, 'agent_id', '') or getattr(agent, 'id', '') or 'child')
             safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in agent_id)[:40]

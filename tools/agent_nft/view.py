@@ -13,8 +13,8 @@ All reads are taken at ONE block (read once, then every ``latest`` is rewritten 
 lock, readiness and approvals describe the same chain state. There is no ``safe_to_buy``: named checks, each
 ``ok`` / ``FAIL`` / ``unknown`` / ``note``.
 
-What stays in the package: a collection's own lines (the face, the reveal state) through the
-optional hook ``verbs.extend_view(view, rpc) -> list[str]``, appended to the render.
+A collection's own lines are core and general (123 D2): its ``tokenURI`` and its
+``revealBlock`` (``tools/agent_nft/core_verbs._extend``).
 """
 from __future__ import annotations
 
@@ -72,6 +72,9 @@ class AccountView:
     #: False when it is another, None (no identity view or no identity) | UNREADABLE.
     card: Any = None
     native_wei: Any = UNREADABLE
+    #: 124 O5: the token's OTHER deployed accounts (another implementation or salt) with a
+    #: native balance — ``[(account, wei)]`` | UNREADABLE. ``nft=`` stays the canonical one.
+    other_accounts: Any = None
     treasury: Optional[str] = None        # this instance's treasury, when the caller named it
     owned_by_treasury: Any = UNREADABLE   # True when the treasury is the NFT's current owner
     notes: List[str] = field(default_factory=list)
@@ -288,12 +291,19 @@ def _profile(chain: str, collection: Optional[str]):
     try:
         chain_id = collection_registry.chain_id_of(chain)
         profiles = collection_registry.profiles_on(chain_id)
-    except Exception as exc:  # noqa: BLE001
-        raise ViewError(f"the owner's collection registry cannot be trusted ({exc})") from exc
+    except Exception:  # noqa: BLE001 — 124 section 5.5: an unreadable pin store is no pin
+        if not collection:
+            raise ViewError("the owner's collection pins cannot be read: name the collection as "
+                            "<chain>:<collection>/<id>") from None
+        profiles = ()
     if collection:
         p = next((p for p in profiles if p.address == str(collection).lower()), None)
-        if p is None:
-            raise ViewError(f"{collection} is not a pinned collection on {chain}")
+        if p is None:   # 124 W3: a read works on any collection
+            from core.wallet.collection_registry import chain_profile
+            try:
+                p = chain_profile(chain, collection)
+            except Exception as exc:  # noqa: BLE001
+                raise ViewError(f"{collection} on {chain}: {exc}") from exc
         return (p,)
     if len(profiles) != 1:
         raise ViewError(f"{len(profiles)} collections are pinned on {chain}: name one as "
@@ -358,6 +368,18 @@ def build_view(rpc, chain: str, profile, token_id: int, *,
             v.paid_clients = _try(v, "paid clients", _paid)
         v.card = _try(v, "card", lambda: card_published(r, chain, profile, int(token_id), account))
     v.native_wei = _try(v, "native balance", lambda: int(r("eth_getBalance", [account, "latest"]), 16))
+
+    def _others():
+        from core.wallet import nft_rules
+        out = []
+        impls = nft_rules.implementations(r, profile.chain_id, profile.address)
+        for addr in sorted(nft_rules.account_addresses(profile.chain_id, profile.address,
+                                                       [int(token_id)], impls)):
+            if addr == str(account).lower() or len(str(r("eth_getCode", [addr, "latest"]))) <= 2:
+                continue
+            out.append((addr, int(r("eth_getBalance", [addr, "latest"]), 16)))
+        return out
+    v.other_accounts = _try(v, "other accounts", _others)
     if v.owner != UNREADABLE:
         v.owner_nested = _try(v, "owner code", lambda: _is_tokenbound(r, v.owner))
         if treasury:
@@ -445,6 +467,11 @@ def render(v: AccountView, *, now: Optional[float] = None, extra: List[str] = ()
                    "publishes the card)"))
     native = v.native_wei if v.native_wei == UNREADABLE else f"{v.native_wei / 1e18:.6f} ETH"
     out.append(f"  native:    {native}")
+    if v.other_accounts == UNREADABLE:
+        out.append("  other accounts: unreadable")
+    for addr, wei in v.other_accounts or ():
+        out.append(f"  other account: {addr} — {wei / 1e18:.6f} ETH (another implementation of "
+                   f"this token; nft= acts through the canonical one)")
     out.extend(extra)
     if v.notes:
         out.append("  unreadable: " + "; ".join(v.notes))

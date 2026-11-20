@@ -129,7 +129,7 @@ def test_the_rules_section_names_a_missed_pin(tmp_path, monkeypatch):
 ])
 async def test_the_goal_request_carries_the_pinned_skills(tmp_path, monkeypatch, payload, expect):
 	import asyncio
-	from agents.task.goals.board import GoalBoard
+	from modules.goals.board import GoalBoard
 	from agents.task.goals.dispatcher import GoalDispatcher
 	monkeypatch.setenv("GOALS_ENABLED", "true")
 	monkeypatch.setenv("GOAL_MAX_CONCURRENT", "5")

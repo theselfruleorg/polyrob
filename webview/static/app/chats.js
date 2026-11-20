@@ -24,7 +24,7 @@
  * crosses from Python into JS.
  */
 
-import { postJson } from "./http.js";
+import { getJson, postJson } from "./http.js";
 
 /**
  * Session status -> running | waiting | done | failed | stopped, or "unknown"
@@ -207,7 +207,7 @@ export function copyFrom(node) {
 }
 
 const requests = new WeakMap();
-export async function load(dialog, offset = 0, fetcher = fetch) {
+export async function load(dialog, offset = 0, fetcher) {
   const request = {};
   requests.set(dialog, request);
   if (!offset) dialog.querySelector('[data-chats-more]')?.remove();
@@ -218,17 +218,17 @@ export async function load(dialog, offset = 0, fetcher = fetch) {
   state.hidden = false;
   const act = async (verb, slug, label) => {
     let out = { ok: false, error: "" };
-    try { out = await change(verb, slug, label, fetcher === fetch ? undefined : fetcher); }
+    try { out = await change(verb, slug, label, fetcher); }
     catch (err) { console.error("[chats] the change did not go through", err); }
     await load(dialog, 0, fetcher);
     if (!out.ok) { state.hidden = false; state.textContent = out.error || copy.unreadable || ""; }
   };
   try {
-    const resp = await fetcher(`/api/webgate/chats?offset=${offset}&limit=50`, { credentials: "include" });
-    if (!resp.ok) throw new Error(String(resp.status));
-    const data = await resp.json();
+    const res = await getJson(`/api/webgate/chats?offset=${offset}&limit=50`, { fetcher });
+    if (!res.ok) throw new Error(String(res.status));
+    const data = res.body;
     if (requests.get(dialog) !== request) return;
-    if (!Array.isArray(data.sessions)) throw new Error('Invalid chat catalog');
+    if (!data || !Array.isArray(data.sessions)) throw new Error('Invalid chat catalog');
     dialog.querySelector('[data-chats-more]')?.remove();
     if (!offset) render(list, state, Array.isArray(data.sessions) ? data.sessions : [], copy, act);
     else {
@@ -274,7 +274,7 @@ function bind() {
   if (close) close.addEventListener("click", () => dialog.close());
   // ⌘K / Ctrl-K is what the button's own hint promises.
   document.addEventListener("keydown", (event) => {
-    if (event.key === "k" && (event.metaKey || event.ctrlKey)) {
+    if (String(event.key).toLowerCase() === "k" && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
       open.click();
     }

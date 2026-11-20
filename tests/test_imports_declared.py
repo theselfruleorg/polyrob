@@ -28,7 +28,7 @@ from core.optional_extras import IMPORT_TO_DIST  # noqa: E402
 #: reason; a row whose import is gone fails the stale check below.
 OPTIONAL_UNDECLARED = {
     "bson": "packs/x/polyrob_x/_vendor/tweepy/cache.py: vendored tweepy's MongodbCache only, imported inside it; never used",
-    "cachetools": "agents/task/path.py: the session LRU cache; a manual LRU fallback",
+    "cachetools": "core/session_paths.py: the session LRU cache; a manual LRU fallback",
     "filelock": "core/file_lock.py: SafeFileLock; a plain lock-file fallback",
     "posthog": "agents/task/telemetry/service.py: optional product telemetry; off without it",
     "pysqlite3": "api/app.py: a newer sqlite3 build when present; stdlib sqlite3 otherwise",

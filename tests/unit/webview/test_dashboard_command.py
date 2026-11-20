@@ -106,7 +106,7 @@ def test_dashboard_leaves_no_data_dir_in_an_empty_cwd(monkeypatch, tmp_path):
         result = CliRunner().invoke(dashboard, ["--no-browser"])
         assert result.exit_code == 0, result.output
 
-        from agents.task.path import PathManager
+        from core.session_paths import PathManager
         from core.runtime_paths import resolve_data_home, resolve_session_data_root
         root = resolve_session_data_root()
         assert root == (resolve_data_home() / "sessions").resolve()

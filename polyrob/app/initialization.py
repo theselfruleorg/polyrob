@@ -110,7 +110,6 @@ class InitPhase(Enum):
     INFRA = auto()       # Database, memory, cache
     LLM = auto()         # Language models
     TOOLS = auto()       # External tools
-    MANAGERS = auto()    # State managers
     AGENTS = auto()      # AI agents
 
 @dataclass
@@ -217,12 +216,6 @@ def _get_tool_components():
         TOOL_COMPONENTS = _TOOL_COMPONENTS
     return TOOL_COMPONENTS
 
-# Define which managers are optional
-OPTIONAL_MANAGERS = set()  # No optional managers currently
-
-# Manager components retired with the legacy ChatAgent (HANDOFF-C). The phase is
-# kept (empty) so the init/cleanup loops stay structurally intact and no-op.
-MANAGER_COMPONENTS = []
 
 async def initialize_phase(
     container: DependencyContainer,
@@ -693,11 +686,17 @@ async def initialize_auth_services(container: DependencyContainer) -> None:
             if balance_manager:
                 try:
                     from modules.payments.deposit_monitor import DepositMonitor
+                    from core.wallet import chains as _chains
+                    from tools.defi import price_sources as _price_sources
 
+                    # The ONE graded spend price (mainnet WETH) values an ETH
+                    # deposit; None means no credit this cycle (fail closed).
+                    _weth = _chains.get("ethereum").wrapped_native
                     deposit_monitor = DepositMonitor(
                         db_manager=db_manager,
                         balance_manager=balance_manager,
-                        config=container.config
+                        config=container.config,
+                        price_fn=lambda: _price_sources.spend_price("ethereum", _weth),
                     )
                     container.register_service('deposit_monitor', deposit_monitor)
 
@@ -763,55 +762,6 @@ async def initialize_auth_services(container: DependencyContainer) -> None:
         logger.error(f"❌ Auth service initialization failed: {e}")
         raise ComponentInitializationError(f"Failed to initialize auth services: {e}")
 
-
-async def initialize_managers(container: DependencyContainer) -> None:
-    """Initialize managers with proper error handling."""
-    logger.info("➤ Manager initialization started")
-    
-    results = {'success': [], 'failed': []}
-
-    # Initialize managers in the specified order
-    for manager_name, manager_class in MANAGER_COMPONENTS:  # Fixed: Unpack tuple properly
-        requires: list = []  # no manager declares dependencies
-        
-        # Check dependencies
-        missing_deps = []
-        for dep in requires:
-            if not container.has_service(dep):
-                missing_deps.append(dep)
-                
-        if missing_deps:
-            logger.warning(f"  ⚠ Skipping manager {manager_name} due to missing dependencies: {', '.join(missing_deps)}")
-            results['failed'].append(manager_name)
-            continue
-            
-        try:
-            # Skip manager config check - method doesn't exist on BotConfig
-            
-            # Initialize manager
-            manager = manager_class(
-                name=manager_name,
-                config=container.config,
-                container=container
-            )
-            
-            # Initialize and register
-            await manager.initialize()
-            container.register_manager(manager_name, manager)
-            
-            logger.info(f"  ✓ Manager {manager_name} initialized")
-            results['success'].append(manager_name)
-            
-        except Exception as e:
-            logger.error(f"  ❌ Failed to initialize manager {manager_name}: {e}")
-            results['failed'].append(manager_name)
-            if metadata.get('required', False):
-                raise ComponentInitializationError(f"Required manager {manager_name} failed to initialize: {e}")
-                
-    # Log summary
-    logger.info(f"✓ Manager initialization complete: {len(results['success'])} succeeded, {len(results['failed'])} failed")
-    if results['failed']:
-        logger.warning(f"  ⚠ Failed managers: {', '.join(results['failed'])}")
 
 async def initialize_agents(container: DependencyContainer) -> None:
     """Initialize agents with proper error handling."""
@@ -902,7 +852,7 @@ async def cleanup_core(container: DependencyContainer) -> None:
         logger.info("Starting cleanup...")
         
         # Clean up in reverse order
-        for component_type in ['agents', 'managers', 'tools', 'modules', 'core']:
+        for component_type in ['agents', 'tools', 'modules', 'core']:
             await _cleanup_component_type(container, component_type)
             
         logger.info("Cleanup complete")
@@ -921,12 +871,6 @@ async def _cleanup_component_type(container: DependencyContainer, component_type
             components = [
                 agent for agent in container.agents.values()
                 if agent is not None
-            ]
-            
-        elif component_type == 'managers':
-            components = [
-                manager for manager in container.managers.values()
-                if manager is not None
             ]
             
         elif component_type == 'tools':
@@ -967,10 +911,6 @@ async def _cleanup_component_type(container: DependencyContainer, component_type
 async def cleanup_agents(container: DependencyContainer) -> None:
     """Clean up agents."""
     await _cleanup_component_type(container, 'agents')
-
-async def cleanup_managers(container: DependencyContainer) -> None:
-    """Clean up managers."""
-    await _cleanup_component_type(container, 'managers')
 
 async def cleanup_modules(container: DependencyContainer) -> None:
     """Clean up modules."""

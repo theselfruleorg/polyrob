@@ -56,3 +56,23 @@ async def test_a_public_thread_gets_no_feedback_line(order, monkeypatch):  # noq
     await service.deliver(order.id, {"tx_hash": TX}, user_id="owner")
     assert "giveFeedback" not in sent[0]
     assert ords.get(order.id).status in (ords.DELIVERED, ords.ACCEPTED)
+
+
+@pytest.mark.asyncio
+async def test_a_machine_buyer_reads_the_feedback_line_on_its_order(order, monkeypatch):  # noqa: F811
+    """RP1 (the level-1 interface rig): an HTTP, MCP or A2A buyer is never pushed to, so the
+    line reaches it only on the order it polls — once delivered, never before."""
+    _capture(monkeypatch, TARGET)
+    assert "feedback" not in service.buyer_status(ords.get(order.id))
+    await service.deliver(order.id, {"tx_hash": TX}, user_id="owner")
+    view = service.buyer_status(ords.get(order.id))
+    assert view["status"] in (ords.DELIVERED, ords.ACCEPTED)
+    assert view["feedback"] == (f"To rate this agent on chain: giveFeedback for agentId 9 on the "
+                                f"ERC-8004 Reputation Registry {REP} (robinhood, chain id 4663).")
+
+
+@pytest.mark.asyncio
+async def test_a_machine_buyer_with_no_identity_gets_no_line(order, monkeypatch):  # noqa: F811
+    _capture(monkeypatch, None)
+    await service.deliver(order.id, {"tx_hash": TX}, user_id="owner")
+    assert "feedback" not in service.buyer_status(ords.get(order.id))

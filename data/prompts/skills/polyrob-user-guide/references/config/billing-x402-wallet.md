@@ -67,8 +67,6 @@ One line per setting: NAME — default — meaning. Code anchors and full prose:
 - PRICING_MARKUP — default: 1.00 — Multiplier on provider API cost for internal credit billing (`1.20` = +20%).
 - MIN_CREDIT_CHARGE — default: 1 — Minimum credits charged per LLM call (prevents free calls).
 - SESSION_CREATION_COST — default: 1 — Shown as `session_credits` in the x402 pricing advertisement; nothing is charged for a session.
-- ETH_PRICE_USD_OVERRIDE — default: unset — Fixed ETH/USD price for the deposit monitor — bypasses the live CoinGecko fetch entirely.
-- ETH_PRICE_USD_MAX — default: 50000 — Sanity upper bound on the ETH/USD price (override or live fetch); a price above this raises instead of crediting a wildly-inflated deposit — guards against an oracle schema error or an `ETH_PRICE_USD_OVERRIDE` typo.
 - DEPOSIT_MONITOR_ENABLED — default: OFF — Enable the deposit-monitoring background loop (requires `SEPOLIA_RPC_URL`/`ETHEREUM_RPC_URL` too).
 - TREASURY_SWEEPER_ENABLED — default: **OFF** — Master gate for `TreasurySweeper` — the SaaS-deposit-side component that signs and broadcasts real fund-moving transactions, sweeping per-user deposit-address balances into the treasury.
 - TREASURY_ADDRESS — default: unset — Gnosis Safe / treasury wallet address the sweeper moves swept funds to.

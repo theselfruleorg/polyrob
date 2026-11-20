@@ -17,7 +17,7 @@ from typing import Optional
 import click
 
 from cli.commands._options import json_option, yes_option
-from cli.update.context import resolve_update_context
+from core.update_snapshot.context import resolve_update_context
 from cli.update.detect import (
     DEFER_TO_MANAGER, DOCKER, EDITABLE_GIT, GIT, PIP, PIPX, SYSTEMD, UNKNOWN,
     detect_install,
@@ -27,7 +27,7 @@ from cli.update.process_guard import (
     UpdateLockHeld, active_use_reasons, update_lock,
 )
 from cli.update.runners import build_runners
-from cli.update.snapshot import (
+from core.update_snapshot.snapshot import (
     latest_complete, list_snapshots, restore_snapshot,
 )
 from cli.update.versions import compare, parse_semver, resolve_status
@@ -393,7 +393,7 @@ def apply_for_boot(channel: str = "stable", target_version: str = "") -> dict:
                                from_version=status.current, to_version=status.latest or "")
         if res.ok:
             try:
-                from cli.update.snapshot import prune_snapshots
+                from core.update_snapshot.snapshot import prune_snapshots
                 prune_snapshots(uctx.snapshots_root, keep=3)
             except Exception:
                 pass
@@ -678,7 +678,7 @@ def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool,
         # Every apply writes a full snapshot (every DB + wallet/ + identity/ + every
         # .env). Without pruning they accumulate forever under <data_home>/snapshots/.
         try:
-            from cli.update.snapshot import prune_snapshots
+            from core.update_snapshot.snapshot import prune_snapshots
             prune_snapshots(uctx.snapshots_root, keep=3)
         except Exception:
             pass  # pruning is housekeeping; never fail a completed update over it

@@ -52,7 +52,7 @@ def register_insights_action(controller) -> None:
 		# 095 W11: per lane, how many runs of the last 30 days did real work
 		# (useful = a receipt) and how many the goal judge verified. Read-only.
 		try:
-			from agents.task.agent.core.episodic_digest import (
+			from agents.task.public import (
 				lane_outcome_rates, render_lane_rates)
 			lanes = render_lane_rates(await lane_outcome_rates(user_id=user_id, days=_LANE_DAYS),
 			                          days=_LANE_DAYS)

@@ -20,7 +20,6 @@ from polyrob.app.initialization import (
     cleanup_core,
     initialize_tools,
     cleanup_tools,
-    initialize_managers,
     initialize_agents,
     initialize_modules,
     initialize_auth_services
@@ -90,23 +89,19 @@ class Bot(BaseComponent):
             self.logger.info("="*50)
 
             # Initialize core first
-            self.logger.info("🔍 [STEP 1/6] Initializing core components...")
+            self.logger.info("🔍 [STEP 1/4] Initializing core components...")
             await initialize_core(self.container)
 
             # Initialize modules (database, memory, LLM, etc.)
-            self.logger.info("🔍 [STEP 2/6] Initializing modules...")
+            self.logger.info("🔍 [STEP 2/4] Initializing modules...")
             await initialize_modules(self.container)
 
             # Initialize tools (browser, filesystem, MCP, etc.)
-            self.logger.info("🔍 [STEP 3/6] Initializing tools...")
+            self.logger.info("🔍 [STEP 3/4] Initializing tools...")
             await initialize_tools(self.container)
 
-            # Initialize managers
-            self.logger.info("🔍 [STEP 4/6] Initializing managers...")
-            await initialize_managers(self.container)
-
             # Initialize agents
-            self.logger.info("🔍 [STEP 5/5] Initializing agents...")
+            self.logger.info("🔍 [STEP 4/4] Initializing agents...")
             await initialize_agents(self.container)
 
             # Auth/billing/payment services (phase 6) are SERVER-SCOPE and no
@@ -183,7 +178,6 @@ class Bot(BaseComponent):
             if svc:
                 await phase(svc_name, svc.stop, 5.0)
         for name, fn, timeout in (("agents", init.cleanup_agents, 15.0),
-                                  ("managers", init.cleanup_managers, 10.0),
                                   ("tools", init.cleanup_tools, 15.0),
                                   ("modules", init.cleanup_modules, 10.0),
                                   ("core", init.cleanup_core, 5.0)):
@@ -229,7 +223,6 @@ class Bot(BaseComponent):
             "state": self.state,
             "components": {
                 "services": len(self.container.services),
-                "managers": len(self.container.managers),
                 "agents": len(self.container.agents)
             }
         }
@@ -267,7 +260,6 @@ class Bot(BaseComponent):
                         "text": f"📊 System Status:\n" +
                                f"Running: {status['running']}\n" +
                                f"Services: {status['components']['services']}\n" +
-                               f"Managers: {status['components']['managers']}\n" +
                                f"Agents: {status['components']['agents']}",
                         "parse_mode": "markdown"
                     }

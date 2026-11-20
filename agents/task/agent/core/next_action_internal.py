@@ -124,7 +124,7 @@ except ImportError:
 from agents.task.logging_config import get_task_logger
 
 # Import centralized path management
-from agents.task.path import pm
+from core.session_paths import pm
 
 # Rate limiter for the swallowed usage_tracker.record_llm_usage failure log
 from agents.task.agent.core.metering_failure_log import metering_failure_limiter

@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from agents.task.goals.dispatcher import GoalDispatcher
 from agents.task.goals.preflight import (UNMEASURED_RUN_STEPS, crossing_rail,
                                          expected_run_seconds, next_preempting_rail,
@@ -172,4 +172,4 @@ def test_yield_ageing_lifts_a_repeatedly_preempted_goal(tmp_path):
     assert [g.id for g in board.ready(limit=2)] == [fresh.id, old.id], \
         "with ageing off the order is untouched"
     assert [g.id for g in board.ready(limit=2, yield_ageing=1)] == [old.id, fresh.id]
-    assert board.yield_count(old.id) == 6
+    assert sum(e["kind"] == "yielded" for e in board.events(old.id)) == 6

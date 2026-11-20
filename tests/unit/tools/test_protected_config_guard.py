@@ -58,7 +58,7 @@ def test_wallet_audit_hwm_sidecar_is_credential_guarded(path):
 
 
 @pytest.mark.parametrize("path", [
-    # M2: `cli/update/snapshot.py` stores config copies under a numeric-index
+    # M2: `core/update_snapshot/snapshot.py` stores config copies under a numeric-index
     # prefix (`config/{i:02d}_{basename}`), which defeated the `.env*`/`*.env`/
     # `config/.env.*` globs (they all assume the ORIGINAL basename). A local
     # box's `config/.env.production` (holds MASTER_SEED) would otherwise be
@@ -247,3 +247,41 @@ def test_default_providers_path_guarded_when_env_unset(monkeypatch, tmp_path):
     monkeypatch.delenv("LLM_CUSTOM_PROVIDERS", raising=False)
     monkeypatch.setenv("POLYROB_HOME", str(tmp_path))
     assert is_credential_file(tmp_path / "providers.yaml") is True
+
+
+# --- the operator's SOUL tier and public knowledge (2026-11-20) -------------------
+
+@pytest.fixture
+def data_home(tmp_path, monkeypatch):
+    home = tmp_path / "data"
+    (home / "identity").mkdir(parents=True)
+    monkeypatch.setattr("core.runtime_paths.prefs_home_dir", lambda: home)
+    return home
+
+
+@pytest.mark.parametrize("name", ["public.md", "identity.md", "operating.md", "Public.md"])
+def test_soul_and_public_docs_are_protected(data_home, name):
+    assert is_protected_config_path(data_home / "identity" / name) is True
+
+
+def test_a_link_to_the_identity_dir_is_protected(data_home, tmp_path):
+    link = tmp_path / "elsewhere"
+    link.symlink_to(data_home / "identity")
+    assert is_protected_config_path(link / "public.md") is True
+
+
+@pytest.mark.parametrize("rel", [
+    "ws/public.md",                         # a workspace file of the same name
+    "ws/docs/identity/public.md",           # a project's own identity/ directory
+    "ws/identity/identity.md",
+    "data/identity/inst1/user_1/public.md", # the doc tools' own tier, not the top one
+])
+def test_other_docs_of_the_same_name_stay_writable(data_home, tmp_path, rel):
+    assert is_protected_config_path(tmp_path / rel) is False
+
+
+def test_an_unresolvable_data_home_protects_the_name(monkeypatch):
+    def boom():
+        raise RuntimeError("no home")
+    monkeypatch.setattr("core.runtime_paths.prefs_home_dir", boom)
+    assert is_protected_config_path(Path("/x/identity/public.md")) is True

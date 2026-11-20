@@ -105,7 +105,7 @@ def test_cold_start_requeue_runs_even_while_paused(home):
     import sys
 
     from core import autonomy_control as ac
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     b = GoalBoard(str(home / "goals.db"))
     g = b.create(user_id="alice", title="a")
     # The claim of the previous, now-dead process (the sweep's subject). The claim

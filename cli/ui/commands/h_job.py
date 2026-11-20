@@ -1,7 +1,7 @@
 """``/jobs`` and ``/job …`` — scheduled jobs from the REPL (080 WS-2).
 
 The REPL runs the SAME handler as Telegram and the console chat box
-(``surfaces.telegram.job_ops.jobs_reply``), so the grammar, the words and the
+(``cron.owner_jobs.jobs_reply``), so the grammar, the words and the
 scheduler-off sentence are one on every seat. This module only resolves the
 REPL's tenant and data home through the ONE owner/admin seam
 (``cli._admin_home``, C2), so the jobs listed and added here are the jobs the
@@ -28,13 +28,13 @@ def _tenant(ctx: CommandContext) -> str:
 def _reply(ctx: CommandContext, args: list) -> str:
     from cli._admin_home import admin_data_dir
     from core.runtime_paths import cron_db_path
-    from surfaces.telegram.job_ops import jobs_reply
+    from cron.owner_jobs import jobs_reply
     sub = args[0].lower() if args else "list"
     write = sub in _WRITES
     home = admin_data_dir(write=write)
     if not write and not os.path.exists(cron_db_path(home)):
         if sub not in ("list", "ls", "show"):
-            from surfaces.telegram.job_ops import USAGE
+            from cron.owner_jobs import USAGE
             return USAGE
         from cron.service import scheduler_off_note
         note = scheduler_off_note()

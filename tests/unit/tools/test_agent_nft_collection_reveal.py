@@ -135,7 +135,7 @@ class FakeRail:
 @pytest.fixture
 def armed(monkeypatch):
     monkeypatch.setenv("AGENT_NFT_ENABLED", "true")
-    monkeypatch.delenv(V.MAX_GAS_FLAG, raising=False)
+    monkeypatch.delenv(R.MAX_GAS_FLAG, raising=False)
     pin(monkeypatch, COLLECTION)
     FakeRail.sent = []
 
@@ -171,14 +171,16 @@ def test_the_verb_needs_no_agent_nft_package(armed):
 def test_no_pinned_collection_refuses(armed, monkeypatch):
     pin(monkeypatch)
     tool, _ = _tool(Chain(head=100, blocks={1: 5}))
-    assert "no collection with the reveal capability is pinned" in _err(
+    assert "name the collection to reveal" in _err(
         _run(tool.agent_nft_collection_reveal(RevealParams(chain="robinhood"))))
 
 
-def test_a_collection_without_the_reveal_capability_is_not_revealed(armed, monkeypatch):
+def test_a_capability_does_not_choose_the_collection(armed, monkeypatch):
+    """124 W5: a capability grants nothing — the one pinned collection is the default target."""
     pin(monkeypatch, profile(COLLECTION, capabilities=("mint",)))
     tool, _ = _tool(Chain(head=100, blocks={1: 5}))
-    assert "reveal capability" in _err(_run(tool.agent_nft_collection_reveal(RevealParams(chain="robinhood"))))
+    err = _err(_run(tool.agent_nft_collection_reveal(RevealParams(chain="robinhood"))))
+    assert "reveal capability" not in (err or "")
 
 
 def test_an_untrusted_registry_refuses(armed, monkeypatch):
@@ -186,7 +188,8 @@ def test_an_untrusted_registry_refuses(armed, monkeypatch):
         raise collection_registry.CollectionRegistryError("unknown spec")
     monkeypatch.setattr(collection_registry, "profiles", boom)
     tool, _ = _tool(Chain(head=100, blocks={1: 5}))
-    assert "cannot be trusted" in _err(_run(tool.agent_nft_collection_reveal(RevealParams(chain="robinhood"))))
+    assert "name the collection to reveal" in _err(   # 124 section 5.5: no pin store = no pin
+        _run(tool.agent_nft_collection_reveal(RevealParams(chain="robinhood"))))
 
 
 def test_nothing_due_sends_nothing(armed):
@@ -202,21 +205,21 @@ def test_the_intent_is_the_reveal_shape_and_goes_through_the_guard(armed):
     assert intent.is_collection_reveal and tuple(intent.reveal_ids) == (2, 3)
     assert (intent.to, intent.amount_raw, intent.token) == (COLLECTION, 0, None)
     assert tx["to"] == COLLECTION and tx["value"] == 0 and R.decode_reveal(tx["data"]) == [2, 3]
-    assert intent.max_spend_usd == V.DEFAULT_MAX_GAS_USD
+    assert intent.max_spend_usd == R.DEFAULT_MAX_GAS_USD
     assert seen["kw"]["holder"] == TREASURY
     assert "DRY RUN" in _text(res) and not FakeRail.sent
     assert "gas only" in _text(res)                                   # says what it spends
 
 
 def test_max_spend_is_clamped_to_the_flag(armed, monkeypatch):
-    monkeypatch.setenv(V.MAX_GAS_FLAG, "0.05")
+    monkeypatch.setenv(R.MAX_GAS_FLAG, "0.05")
     tool, seen = _tool(Chain(head=100, blocks={1: 7}))
     _run(tool.agent_nft_collection_reveal(RevealParams(chain="robinhood", max_spend_usd=5.0)))
     assert seen["intent"].max_spend_usd == 0.05
 
 
 def test_a_zero_cap_disables_the_verb(armed, monkeypatch):
-    monkeypatch.setenv(V.MAX_GAS_FLAG, "0")
+    monkeypatch.setenv(R.MAX_GAS_FLAG, "0")
     tool, seen = _tool(Chain(head=100, blocks={1: 7}))
     assert "disabled" in _err(_run(tool.agent_nft_collection_reveal(RevealParams(chain="robinhood"))))
 

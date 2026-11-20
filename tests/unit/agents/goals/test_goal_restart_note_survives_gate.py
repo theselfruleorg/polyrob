@@ -3,7 +3,7 @@ that can stop the run before it starts — a gate that stops the run must leave
 the note for the run that really happens."""
 import pytest
 
-from agents.task.goals.board import Goal
+from modules.goals.board import Goal
 from tests.unit.agents.goals.test_goal_resume_same_session import (
     _CapturingAgent, _NoteBoard,
 )

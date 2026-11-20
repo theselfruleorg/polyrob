@@ -157,7 +157,7 @@ class HFDeployTool(BaseTool):
         try:
             sid = getattr(execution_context, "session_id", None)
             if sid:
-                from agents.task.path import pm
+                from core.session_paths import pm
                 return str(pm().get_workspace_dir(sid, getattr(execution_context, "user_id", None)))
         except Exception:
             return None

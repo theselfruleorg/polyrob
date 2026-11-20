@@ -18,7 +18,7 @@ def _run(monkeypatch, args):
         return "ok"
 
     # 113 W4 item 3: the REPL wraps the chat seat's own reply.
-    monkeypatch.setattr("surfaces.telegram.status_ops.journey_reply", fake_reply)
+    monkeypatch.setattr("core.surfaces.owner_reads.journey_reply", fake_reply)
     monkeypatch.setattr("cli._admin_home.admin_data_dir", lambda write=None: "/deployed/home")
     monkeypatch.setattr("cli._admin_home.admin_owner_tenant", lambda uid=None: "tg_owner")
     cfg = types.SimpleNamespace(data_dir="/shell/home")

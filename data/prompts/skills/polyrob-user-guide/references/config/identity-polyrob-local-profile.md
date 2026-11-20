@@ -79,7 +79,7 @@ One line per setting: NAME — default — meaning. Code anchors and full prose:
 - POLYROB_CLI_CONFIG — default: unset — CLI config path override (default `~/.polyrob/cli.json`).
 - POLYROB_GITIGNORE_DOTROB — default: ON ("1") — Auto-gitignore the `.polyrob/` home.
 - CLI_WORKSPACE_LOCK — default: ON ("1") — CLI workspace lock to prevent concurrent CWD corruption.
-- CONFIG_ENV — default: unset (→ ENV → development) — Highest-precedence spelling of the environment name that selects `config/.env.<env>` (`CONFIG_ENV` > `ENV` > `development`; see the env-files section at the top).
+- CONFIG_ENV — default: unset (→ ENV → development) — Highest-precedence spelling of the environment name `load_env` returns (`CONFIG_ENV` > `ENV` > `development`); it selects no file.
 - POLYROB_INSTANCE_ID — default: "polyrob" (DEFAULT_INSTANCE_ID; in profile mode the active profile name) — Instance identity id.
 - POLYROB_OWNER_USER_ID — default: unset → **local** — Explicit binding of this instance's OWNER principal (an **internal `user_id`** — **not** a raw Telegram id).
 - POLYROB_LOCAL_OWNER — default: unset — Fallback owner **tenant** id, ranked BETWEEN an explicitly-bound owner and the unbound default `local` (uses the strict `resolve_owner_principal(default_to_instance=False)` so it isn't shadowed by the auto-derive). ⚠️ It is read by the ONE…

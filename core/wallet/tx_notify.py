@@ -127,7 +127,7 @@ def _merge_sent_facts(settled: "TxNotice", held: "TxNotice") -> "TxNotice":
     from dataclasses import replace
     fill = {}
     for f in ("amount_in", "amount_out", "usd", "lane", "cap_used_usd",
-              "cap_limit_usd", "chain"):
+              "cap_limit_usd", "chain", "why"):
         if getattr(settled, f) is None and getattr(held, f) is not None:
             fill[f] = getattr(held, f)
     if not held.extra_refs or settled.extra_refs:
@@ -189,6 +189,9 @@ class TxNotice:
     measured: Optional[str] = None             # "+0.03716593 ETH on base"
     detail: Optional[str] = None
     ledger_recorded: Optional[bool] = None
+    #: 122 W1: the act's reason (``core.act_reason``). ``notify`` fills it from the
+    #: action in flight when the call site does not; the line shows it with the lane.
+    why: Optional[str] = None
 
 
 def _tx_link(n: TxNotice) -> Optional[str]:
@@ -220,9 +223,22 @@ def _ref_lines(n: "TxNotice") -> list:
     return ([" · ".join(refs)] if refs else []) + ([link] if link else [])
 
 
+#: 122 W1: the lane in the owner's words, on the reason line.
+_LANE_WORDS = {"autonomous": "on its own", "owner_direct": "you asked",
+               "owner_approved": "you approved"}
+
+
+def _why_line(n: "TxNotice") -> list:
+    """The reason and the lane, when the act has a reason or the agent acted on its own."""
+    if not n.why and n.lane != "autonomous":
+        return []
+    from core.act_reason import shown_why
+    lane = _LANE_WORDS.get(str(n.lane or ""), str(n.lane or "lane unknown"))
+    return [f"why: {shown_why(n.why) or 'not given'} · {lane}"]
+
+
 def _cap_line(n: "TxNotice") -> list:
-    """The daily cap after this spend. The lane is an audit word: it is in the
-    event (`_emit_event`), not in the owner's line."""
+    """The daily cap after this spend."""
     if n.cap_limit_usd is None or n.cap_used_usd is None:
         return []
     return [f"today: {_usd(n.cap_used_usd)} of {_usd(n.cap_limit_usd)} used"]
@@ -240,6 +256,7 @@ def render_broadcast(n: TxNotice) -> str:
         lines.append(head)
     else:
         lines.append(_usd(n.usd))
+    lines.extend(_why_line(n))
     lines.extend(_ref_lines(n))
     lines.extend(_cap_line(n))
     return "\n".join(lines)
@@ -258,6 +275,7 @@ def render_settled(n: TxNotice) -> str:
         if n.amount_out:
             sent += f" → {n.amount_out}"
         lines.append(sent)
+    lines.extend(_why_line(n))
     if n.measured:
         lines.append(f"measured {n.measured}")
     elif n.amount_out:
@@ -298,6 +316,19 @@ def caps_from_gate(gate: Any, venue: str = "defi") -> tuple:
 _SEAT_REPORTED = frozenset({STATE_CONFIRMED, STATE_ARRIVED, STATE_REVERTED, STATE_FAILED})
 
 
+def _with_why(notice: TxNotice) -> TxNotice:
+    """*notice* with the reason of the action in flight when it states none (122 W1)."""
+    if notice.why:
+        return notice
+    try:
+        from dataclasses import replace
+        from core.act_reason import current_act_why
+        why = current_act_why()
+        return replace(notice, why=why) if why else notice
+    except Exception:
+        return notice
+
+
 def seat_reports(execution_context: Any) -> bool:
     """True when an OWNER SEAT ran the verb (``/send … go``, a card Confirm):
     the seat answers the owner with the whole report, so a notice of the same
@@ -315,6 +346,7 @@ async def notify(container: Any, user_id: Optional[str], notice: TxNotice, *,
     exists for tests and telemetry; no caller branches on it, because a failed
     notification must not change what happened to the money.
     """
+    notice = _with_why(notice)
     # The durable record is immediate; only the owner's line may wait.
     _emit_event(user_id, notice, settled=settled, session_id=session_id)
     if seat_reports and (not settled or notice.state in _SEAT_REPORTED):
@@ -380,6 +412,7 @@ def notify_soon(container: Any, user_id: Optional[str], notice: TxNotice, *,
         # The hold only rides a task on a live loop: the sync bridge below runs
         # the coroutine to completion, and sleeping there would stall the
         # caller for the whole hold.
+        notice = _with_why(notice)  # bound HERE: a held task may outlive the action
         coro = notify(container, user_id, notice, settled=settled,
                       session_id=session_id, seat_reports=seat_reports,
                       hold_sec=sent_hold_sec() if loop is not None else 0.0)
@@ -415,6 +448,6 @@ def _emit_event(user_id: Optional[str], notice: TxNotice, *, settled: bool,
             attrs={"verb": notice.verb, "route": notice.route,
                    "tx_ref": notice.tx_ref, "usd": notice.usd,
                    "state": notice.state, "lane": notice.lane,
-                   "measured": notice.measured})
+                   "measured": notice.measured, "why": notice.why})
     except Exception:
         logger.debug("tx_notify: audit event skipped (fail-open)", exc_info=True)

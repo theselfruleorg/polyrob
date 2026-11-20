@@ -58,7 +58,7 @@ def clean_session_id_at_entry(session_id: str) -> str:
     every endpoint into the generic 500 handler — telling the caller the server
     broke, when the caller sent a bad id.
     """
-    from agents.task.path import require_canonical_session_id
+    from core.session_paths import require_canonical_session_id
     try:
         return require_canonical_session_id(session_id)
     except ValueError as e:
@@ -1232,7 +1232,6 @@ async def create_session(
         # SECURITY: Get user_id from authenticated JWT token or x402 payment
         # Request body user_id is ignored to prevent session hijacking
         from utils.auth_utils import get_authenticated_user_id, get_user_tier
-        import os
 
         # If paid via x402, get user_id from request state (set by middleware)
         if payment_method == "x402":
@@ -1258,11 +1257,11 @@ async def create_session(
         # - free_access: ALLOWED (admin-granted access, uses credits)
         # - x402: ALLOWED (pay-per-request)
         # - admin: ALLOWED (via admin_bypass payment method)
+        # Every box checks the tier: no environment name skips it (proposal 125 S34).
         from api.auth_constants import has_full_access
-        is_development = os.getenv('ENVIRONMENT', 'production') == 'development'
         is_admin_user = payment_method == "admin_bypass"
 
-        if not is_development and not is_admin_user and not has_full_access(tier):
+        if not is_admin_user and not has_full_access(tier):
             raise HTTPException(
                 status_code=403,
                 detail="Task automation requires an access tier that includes it. Ask the operator of this instance for access."
@@ -1356,7 +1355,7 @@ async def create_session(
         start_with_pin(agent, session_id, request_body.get("_chat_pin"))
         pin_notice = f". {request_body['_pin_notice']}" if request_body.get("_pin_notice") else ""
         # Create workspace directory immediately to prevent race condition with file uploads
-        from agents.task.path import pm
+        from core.session_paths import pm
         workspace_dir = pm().get_workspace_dir(session_id, user_id)
         workspace_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Created workspace directory for session {session_id}: {workspace_dir}")
@@ -1557,7 +1556,7 @@ async def verify_files_ready(
         tuple: (all_ready: bool, missing_files: List[str])
     """
     from pathlib import Path
-    from agents.task.path import pm
+    from core.session_paths import pm
     import asyncio
 
     workspace_dir = pm().get_workspace_dir(session_id, user_id)
@@ -1636,7 +1635,7 @@ async def inject_file_content_to_message(
     Returns:
         tuple: (combined_message_text, image_attachments)
     """
-    from agents.task.path import pm
+    from core.session_paths import pm
     from core.surfaces.inbound_attachments import inject_file_content
 
     workspace_dir = str(pm().get_workspace_dir(session_id, user_id))
@@ -1659,7 +1658,7 @@ async def upload_document(
     .doc/.docx that this endpoint's MIME allowlist rejected.
     """
     from pathlib import Path
-    from agents.task.path import pm
+    from core.session_paths import pm
     from core.surfaces.inbound_attachments import (
         UPLOAD_EXTENSIONS, UPLOAD_MIME_TYPES, upload_max_mb,
     )
@@ -1814,7 +1813,7 @@ async def list_session_documents(
 ):
     """List all documents in session workspace with metadata."""
     from pathlib import Path
-    from agents.task.path import pm
+    from core.session_paths import pm
 
     try:
         # 1. Clean session ID

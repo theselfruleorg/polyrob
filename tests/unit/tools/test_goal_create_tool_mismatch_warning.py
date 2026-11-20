@@ -15,7 +15,7 @@ silent doomed goal.
 """
 import asyncio
 
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from tools.goal_tools import GoalTool, GoalCreateAction, _compute_tool_mismatch_warning
 
 

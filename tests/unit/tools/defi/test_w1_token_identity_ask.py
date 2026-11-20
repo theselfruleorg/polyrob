@@ -11,7 +11,7 @@ import types
 
 import pytest
 
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from core import open_positions as op
 from core.wallet import token_pins
 from core.wallet import token_provenance as tp

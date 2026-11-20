@@ -29,7 +29,7 @@ def test_the_mandate_lane_wins_and_is_gated_first():
 
 
 def test_stop_forever_on_one_exit_job_stops_only_that_mandate(tmp_path):
-    from surfaces.telegram.job_ops import jobs_reply
+    from cron.owner_jobs import jobs_reply
     svc = _svc(tmp_path)
     job = svc.schedule(task="exit MEME", schedule_spec="15m", user_id="u1",
                        payload=_exit_payload("m1"))

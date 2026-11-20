@@ -5,7 +5,7 @@ clears it — on the same data home as ``polyrob avatar``. Core makes no faces;
 the generative collection lives in the ``polyrob-desk`` repo.
 
 113 W4 item 3: the show and clear answers are the chat seat's own
-(``surfaces.telegram.owner_ops.avatar_reply`` / ``avatar_change``); a chat app
+(``tools.avatar_owner.avatar_reply`` / ``avatar_change``); a chat app
 sends the photo, and the terminal names the image file instead.
 """
 from __future__ import annotations
@@ -31,7 +31,7 @@ async def h_avatar(ctx: CommandContext) -> None:
     if sub in ("show", "status", "info"):
         _show(ctx, home)
     elif sub in ("clear", "push"):
-        from surfaces.telegram.owner_ops import avatar_change
+        from tools.avatar_owner import avatar_change
         text, _img = await avatar_change(home, [sub] + args[1:])
         ctx.emit(text, title="avatar")
     elif sub == "set" and len(args) >= 2:
@@ -41,7 +41,7 @@ async def h_avatar(ctx: CommandContext) -> None:
 
 
 def _show(ctx, home) -> None:
-    from surfaces.telegram.owner_ops import avatar_reply
+    from tools.avatar_owner import avatar_reply
     text, img = avatar_reply(home, [])
     # A chat app sends the image; the terminal names the file.
     ctx.emit(text + (f"\nimage: {img}" if img else ""), title="avatar")

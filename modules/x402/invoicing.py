@@ -968,25 +968,44 @@ async def settled_unnotified_invoices(*, db=None) -> List[Dict[str, Any]]:
               AND json_extract(metadata, '$.wake_delivered') = 0""",
         tuple(PAYABLE_KINDS),
     )
-    out = []
-    for row in rows or []:
-        meta = _row_metadata(row)
-        out.append({
-            "request_id": row["id"],
-            "amount_usd": row.get("amount_usd"),
-            "transaction_hash": row.get("transaction_hash"),
-            "chain": row.get("chain"),
-            "asset_id": row.get("asset_id"),
-            "session_id": meta.get("session_id") or "",
-            "user_id": meta.get("tenant_id") or row.get("user_id") or "",
-            "purpose": meta.get("purpose") or "",
-            "correspondent_ref": meta.get("correspondent_ref") or None,
-            "subscription_id": meta.get("subscription_id") or None,
-            # 046: what this payment BOUGHT, when it bought something.
-            "kind": meta.get("kind") or INVOICE_KIND, "status": row.get("status"),
-            "room_action": meta.get("room_action") or None,
-        })
-    return out
+    return [_settled_view(row) for row in rows or []]
+
+
+async def settled_unnotified_invoice(request_id: str, *, db=None) -> Optional[Dict[str, Any]]:
+    """ONE row of :func:`settled_unnotified_invoices`, by id — or None when it is
+    not settled, not a payable kind, or its wake is already claimed. The `/pay`
+    route uses it to move an order at once (F11), in the watcher's own shape."""
+    database = await _resolve_db(db)
+    if database is None or not request_id:
+        return None
+    placeholders = ",".join("?" for _ in PAYABLE_KINDS)
+    row = await database.fetch_one(
+        f"""SELECT * FROM x402_payment_requests
+            WHERE id = ? AND status IN ('completed', 'settled_no_tx')
+              AND json_extract(metadata, '$.kind') IN ({placeholders})
+              AND json_extract(metadata, '$.wake_delivered') = 0""",
+        (request_id, *PAYABLE_KINDS),
+    )
+    return _settled_view(row) if row else None
+
+
+def _settled_view(row) -> Dict[str, Any]:
+    meta = _row_metadata(row)
+    return {
+        "request_id": row["id"],
+        "amount_usd": row.get("amount_usd"),
+        "transaction_hash": row.get("transaction_hash"),
+        "chain": row.get("chain"),
+        "asset_id": row.get("asset_id"),
+        "session_id": meta.get("session_id") or "",
+        "user_id": meta.get("tenant_id") or row.get("user_id") or "",
+        "purpose": meta.get("purpose") or "",
+        "correspondent_ref": meta.get("correspondent_ref") or None,
+        "subscription_id": meta.get("subscription_id") or None,
+        # 046: what this payment BOUGHT, when it bought something.
+        "kind": meta.get("kind") or INVOICE_KIND, "status": row.get("status"),
+        "room_action": meta.get("room_action") or None,
+    }
 
 
 async def expired_unnotified_invoices(*, db=None) -> List[Dict[str, Any]]:

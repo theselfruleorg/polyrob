@@ -114,3 +114,29 @@ def test_runtime_identity_names_product_and_instance_and_no_version(monkeypatch)
     block = next(_text(m) for m in mm.get_messages_for_llm() if "runtime-identity" in _text(m))
     assert "POLYROB," in block and get_version() not in block
     assert 'instance "demo-test"' in block
+
+
+def test_public_session_identity_names_no_model_or_provider():
+    """Owner 2026-11-20: a room or a correspondent session gets the product line only."""
+    mm = _mm()
+    mm.set_runtime_identity("z-ai/glm-5.2", "openrouter", public=True)
+    blocks = [_text(m) for m in mm.get_messages_for_llm() if "runtime-identity" in _text(m)]
+    assert len(blocks) == 1
+    assert "You are POLYROB" in blocks[0]
+    assert "glm" not in blocks[0] and "openrouter" not in blocks[0]
+    # A later refresh (a /model swap, a failover) keeps the public shape.
+    mm.set_runtime_identity("other-model", "other-provider", switched_from="z-ai/glm-5.2",
+                            cause="fallback", reason="503")
+    blocks = [_text(m) for m in mm.get_messages_for_llm() if "runtime-identity" in _text(m)]
+    assert "other-model" not in blocks[0] and "glm" not in blocks[0]
+
+
+def test_public_session_self_facts_name_no_model():
+    from types import SimpleNamespace
+    from agents.task.agent.core.state_delta import self_facts_text
+    mm = _mm()
+    mm.set_runtime_identity("m", "p", public=True)
+    agent = SimpleNamespace(model_name="secret-model", llm_provider="secret-prov",
+                            message_manager=mm, use_vision=False)
+    text = self_facts_text(agent, "fallback", "old-model")
+    assert "secret-model" not in text and "old-model" not in text and "secret-prov" not in text

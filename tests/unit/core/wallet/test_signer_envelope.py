@@ -253,7 +253,7 @@ def test_readouts_never_show_the_zero_clamp_as_a_signer_cap(tmp_path, monkeypatc
     $0 cap in signer.toml (the remedy is to start the signer)."""
     import core.wallet.config as cfg
     from cli.commands.wallet import _signer_bound
-    from surfaces.telegram.owner_ops import _signer_bound_lines
+    from tools.defi.owner_verbs.wallet import _signer_bound_lines
     _signer(monkeypatch, mode="remote", fail=True)
     monkeypatch.setattr(cfg, "configured_caps_now", lambda *a, **k: (3000.0, 7000.0))
     assert env_mod.signer_caps() == dict.fromkeys(env_mod.LEGS, 0.0)   # gate: closed

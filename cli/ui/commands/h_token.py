@@ -1,7 +1,7 @@
 """`/launch` and `/deploy` in the REPL (042b).
 
-Thin consumers of ``surfaces.telegram.token_ops`` — the SAME helpers the chat
-seat renders, so the two surfaces can never drift into different answers about
+Thin consumers of ``tools.defi.owner_verbs.token`` (and ``.lp``) — the SAME bodies
+the chat seat runs (proposal 125 S14), so the two surfaces can never drift into different answers about
 what a launch costs or what a deploy guarantees. That is the pattern
 ``core.mcp_admin`` established and the reason `/mcp` reads identically
 everywhere.
@@ -30,29 +30,29 @@ def _uid(ctx) -> str:
 
 async def h_launch(ctx) -> None:
     """REPL handler: /launch <SYMBOL> <name…> [buy <amount>] [go]."""
-    from surfaces.telegram import token_ops
+    from tools.defi.owner_verbs import token as token_ops
     from cli.ui.commands.h_money_verbs import _awaited
 
     args = list(getattr(ctx, "args", None) or [])
-    _render(ctx, await _awaited(token_ops.launch_reply(_uid(ctx), args)),
+    _render(ctx, await _awaited(token_ops.launch_reply(_uid(ctx), args, seat="repl")),
             title="launch")
 
 
 async def h_deploy(ctx) -> None:
     """REPL handler: /deploy <SYMBOL> <supply> <name…> [on <chain>] [go]."""
-    from surfaces.telegram import token_ops
+    from tools.defi.owner_verbs import token as token_ops
     from cli.ui.commands.h_money_verbs import _awaited
 
     args = list(getattr(ctx, "args", None) or [])
-    _render(ctx, await _awaited(token_ops.deploy_reply(_uid(ctx), args)),
+    _render(ctx, await _awaited(token_ops.deploy_reply(_uid(ctx), args, seat="repl")),
             title="deploy")
 
 
 async def h_lp(ctx):
-    from surfaces.telegram.lp_ops import lp_reply
+    from tools.defi.owner_verbs.lp import lp_reply
     from cli.ui.commands.h_money_verbs import _awaited
     _render(ctx, await _awaited(lp_reply(_uid(ctx),
-                                         list(getattr(ctx, "args", None) or []))),
+                                         list(getattr(ctx, "args", None) or []), seat="repl")),
             title="liquidity")
 
 

@@ -31,8 +31,8 @@ USER = "u_abc"
 def _not_the_owner(monkeypatch):
     """Every case here is a NON-owner sender: the owner short-circuits to True
     before the key is ever looked at, which would hide the defect."""
-    import surfaces.telegram.harness as h
-    monkeypatch.setattr(h, "_is_admin_owner", lambda uid: False)
+    import core.surfaces.lifecycle_verbs as lv   # the gate's home (proposal 125 S14)
+    monkeypatch.setattr(lv, "_is_owner", lambda uid: False)
 
 
 def _result(*, chat, user=USER, key, chat_type="dm", role=None, surface="telegram"):

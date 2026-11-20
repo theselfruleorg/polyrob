@@ -9,7 +9,7 @@ import asyncio
 
 import pytest
 
-from agents.task.goals.board import (
+from modules.goals.board import (
     ASK_FULFILLED, ASK_OPEN, GoalBoard, KIND_ASK, STATUS_BLOCKED, STATUS_READY,
 )
 

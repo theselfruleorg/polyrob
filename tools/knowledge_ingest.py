@@ -666,7 +666,7 @@ def _resolve_confinement_root(session_id: str, user_id: str) -> Path:
     CWD fallback; on the server the error propagates so the caller refuses.
     """
     try:
-        from agents.task.path import pm
+        from core.session_paths import pm
         path_manager = pm()
         workspace = path_manager.get_workspace_dir(session_id, user_id)
         return workspace.resolve()

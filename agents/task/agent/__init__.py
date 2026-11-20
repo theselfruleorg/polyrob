@@ -5,14 +5,14 @@ This module exposes the Agent, SessionManager, and other core components.
 """
 
 # Import centralized path manager first to avoid circular dependencies
-from agents.task.path import pm
+from core.session_paths import pm
 
 # Import core components
 from agents.task.agent.service import Agent
 from agents.task.agent.session import SessionManager
 from agents.task.agent.orchestrator import SessionOrchestrator
 from agents.task.agent.sub_agent_manager import SubAgentManager
-from agents.task.path import get_safe_singleton
+from core.session_paths import get_safe_singleton
 
 # Re-export core components
 __all__ = [

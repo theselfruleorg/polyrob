@@ -11,7 +11,7 @@
           "type": "integer"
         },
         "chain": {
-          "description": "Chain to update the agent URI on — CHOOSE IT DELIBERATELY, because the same address is a different token on a different chain. Chains that can move value: ethereum, base, robinhood, arbitrum, polygon. Gas differs by orders of magnitude, so a cent-scale trade can cost more in gas on ethereum than it is worth, while base is a fraction of a cent. Per-chain guidance: the `chain` parameter of defi_trade.swap.",
+          "description": "Chain to update the agent URI on — CHOOSE IT DELIBERATELY, because the same address is a different token on a different chain. Chains that can move value: ethereum, base, robinhood, arbitrum, polygon. Gas and per-chain guidance: the `chain` parameter of defi_trade.swap.",
           "type": "string"
         },
         "dry_run": {
@@ -22,6 +22,12 @@
           "default": 10.0,
           "exclusiveMinimum": 0,
           "type": "number"
+        },
+        "why": {
+          "default": null,
+          "description": "Why this act, now (one line). Required on an autonomous run; the owner reads it.",
+          "nullable": true,
+          "type": "string"
         }
       },
       "required": [

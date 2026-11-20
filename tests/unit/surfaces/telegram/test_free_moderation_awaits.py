@@ -15,7 +15,8 @@ import pytest
 
 from core.surfaces.envelopes import Identity, InboundMessage, SessionSource
 from core.surfaces.dispatcher import RouteDecision, RouteKind
-from surfaces.telegram import group_ops
+import surfaces.telegram.group_ops  # noqa: F401 — registers the Telegram room transport
+from cron import owner_rooms as group_ops  # the body (proposal 125 S14)
 from surfaces.telegram.inbound import InboundResult
 
 
@@ -75,7 +76,7 @@ def wired(monkeypatch):
         return _probe
 
     monkeypatch.setattr(group_ops, "_rights_fn", _rights)
-    monkeypatch.setattr(group_ops, "_bot", lambda ta: object())
+    monkeypatch.setattr(group_ops, "_connected", lambda ta, surface: True)
 
     async def _protection(container, surface, chat_id, target, requester, *,
                           eff, target_status_fn):

@@ -60,7 +60,7 @@ from typing import Optional, Tuple
 
 from tools.defi.trade_params import (  # noqa: F401 — re-exported (tests, packs, verbs)
     ApproveParams, BridgeParams, CallParams, ChainName, DeployContractParams,
-    DeployTokenParams, LpAddParams, LpCollectParams, LpRemoveParams,
+    DeployTokenParams, LaunchTokenParams, LpAddParams, LpCollectParams, LpRemoveParams,
     NftRevokeParams, NftTransferParams, RegisterAgentParams, RevokeParams,
     SetAgentUriParams, SolanaDeployTokenParams, SolanaSwapParams, SwapParams,
     TransferParams, UnwrapParams, WrapParams, _chain_field_description)
@@ -126,6 +126,24 @@ _DRY_RUN_HEAD = ("  RESULT: DRY RUN (simulation only — nothing was broadcast, 
 def _not_sent_text(lane: Optional[str]) -> str:
     """The NOT SENT result line for a refused guard decision on *lane*."""
     return _NOT_SENT_OWNER_QUEUE if lane == "owner_queue" else _NOT_SENT
+
+
+async def owner_lane_result(tool, ctx, *, text: str, lane: Optional[str], dry_run: bool,
+                            value_usd=None, why: str = "", metadata=None, tail: str = ""):
+    """126 wave 3: the result of a call the guard refused. On the owner lane of a LIVE
+    call the exact call becomes ONE owner card (``call_card_run.owner_lane_card``) and
+    the result names it; otherwise the plain NOT SENT line. ``tail`` follows it."""
+    if lane == "owner_queue" and not dry_run:
+        from tools.controller.call_card_run import owner_lane_card
+        card = await owner_lane_card(tool, ctx, value_usd=value_usd, why=why)
+        if card is not None:
+            meta = dict(metadata or {})
+            meta.update(card.metadata or {})
+            return tool._ar(content=text + _NOT_SENT + "\n" + str(card.extracted_content)
+                            + tail, metadata=meta)
+    content = text + _not_sent_text(lane) + tail
+    return tool._ar(content=content, metadata=metadata) if metadata is not None \
+        else tool._ar(content=content)
 
 
 def _shown_symbol(symbol: Optional[str], fallback: str) -> str:
@@ -402,6 +420,10 @@ class DefiTradeTool(SolanaRailMixin, WalletHolderMixin, BaseTool):
             slippage_bps=slippage_bps)
 
     def _price(self, chain, addr):
+        from tools.defi.launch_verb import bound_price
+        launched = bound_price(chain, addr)   # 122 W3: a running launch's own token
+        if launched is not None:
+            return launched
         if self._price_fn:
             return self._price_fn(chain, addr)
         # Only a trustworthy price may bound a cap — a thin, attacker-seedable
@@ -554,7 +576,7 @@ class DefiTradeTool(SolanaRailMixin, WalletHolderMixin, BaseTool):
             price_fn=self._price,
             fallback_price_fn=self._fallback_price,
             forged_fn=_is_forged_or_autonomous_turn,
-            autonomous_ok_fn=_is_autonomous_goal_turn, **guard_kw)
+            autonomous_ok_fn=_is_autonomous_goal_turn, dry_run=bool(dry_run), **guard_kw)
         header += (f"  simulated value: "
                    f"{'unknown' if decision.amount_usd is None else f'${decision.amount_usd:.4f}'}\n"
                    f"  guard: {decision.reason}\n  lane:  {decision.lane}\n")
@@ -563,8 +585,10 @@ class DefiTradeTool(SolanaRailMixin, WalletHolderMixin, BaseTool):
             # a "duplicate" result the agent then misreports.
             from tools.defi.refusal_repeat import REPEAT_NOTE, note_refusal
             repeat = note_refusal(execution_context, venue_action, intent, decision.reason)
-            return self._ar(content=header + _not_sent_text(decision.lane)
-                            + ("\n" + REPEAT_NOTE if repeat else ""))
+            return await owner_lane_result(
+                self, execution_context, text=header, lane=decision.lane, dry_run=bool(dry_run),
+                value_usd=decision.amount_usd, why=decision.reason,
+                tail=("\n" + REPEAT_NOTE if repeat else ""))
         # Size the gas limit from the simulation's gasUsed (§3a): the fixed
         # default out-of-gas-reverts a swap on-chain and burns the fee. Done
         # before the dry-run return so a sizing refusal shows up in a dry run.
@@ -580,7 +604,8 @@ class DefiTradeTool(SolanaRailMixin, WalletHolderMixin, BaseTool):
         if dry_run:
             return self._ar(content=header + (
                 _DRY_RUN_HEAD + " Re-run with dry_run=false to send."),
-                metadata={"valuation_basis": getattr(decision, "valuation_basis", "outflow")})
+                metadata={"valuation_basis": getattr(decision, "valuation_basis", "outflow"),
+                          "simulated_usd": decision.amount_usd, "allowed": True})
         try:
             tx_hash = await asyncio.to_thread(rail.sign_and_send, tx)
         except Exception as exc:
@@ -1090,6 +1115,21 @@ class DefiTradeTool(SolanaRailMixin, WalletHolderMixin, BaseTool):
         return await perform_deploy_token(self, params, execution_context)
 
     @BaseTool.action(
+        "Deploy a fixed-supply token AND create and seed its Uniswap v4 pool against "
+        "quote_token, in one act. The owner's act (card, owner turn, or a mandate naming it); "
+        "the launch.* limits bind. Read the token-launch skill first. dry_run defaults TRUE.",
+        param_model=LaunchTokenParams)
+    async def launch_token(self, params: LaunchTokenParams, execution_context=None):
+        """Thin delegator — the verb lives in ``tools/defi/launch_verb.py`` (122 W3)."""
+        from core.wallet.buy_target import acquisition_refusal
+        _why = acquisition_refusal(execution_context, chain=params.chain, token_out=None,
+                                   what="launch")
+        if _why:
+            return self._ar(error=_why)
+        from tools.defi.launch_verb import perform_launch_token
+        return await perform_launch_token(self, params, execution_context)
+
+    @BaseTool.action(
         "Deploy CALLER-SUPPLIED compiled bytecode as a new contract. For an "
         "ordinary token use deploy_token instead — this verb has no template to "
         "compare against, so it can only guarantee that the constructor moves no "
@@ -1176,7 +1216,7 @@ class DefiTradeTool(SolanaRailMixin, WalletHolderMixin, BaseTool):
 
     @BaseTool.action(
         "Call ANY contract with your own ABI-encoded calldata — the verb for a "
-        "protocol nobody integrated ahead of time (an Aave supply, an NFT mint, "
+        "protocol nobody integrated ahead of time (an Aave supply, a vault deposit, "
         "a staking deposit). You declare BOTH directions: at most this much "
         "leaves, AT LEAST this much must come back, and the simulation decides "
         "whether that held. Declare receive_token + receive_min_raw whenever the "
@@ -1226,21 +1266,23 @@ class DefiTradeTool(SolanaRailMixin, WalletHolderMixin, BaseTool):
         return await perform_call(self, params, execution_context)
 
     def _solana_turn_gate(self, execution_context, *, exit_shaped_fn, mandate_entry=None):
-        """tx_guard steps 1-2, mirrored for the SVM path (which has no EVM
-        transaction to route through ``tx_guard.authorize``).
+        """tx_guard steps 1-2 for the SVM path (which has no EVM transaction to
+        route through ``tx_guard.authorize``).
 
         Returns ``(refusal | None, autonomous_origin, monitor_exit)``. Fails
-        CLOSED on every probe error, exactly like the EVM guard.
+        CLOSED on every probe error, exactly like the EVM guard. The principal is
+        the guard's (``tx_guard._principal_refusal``); the turn origin, the mandate step and
+        the monitor-exit carve-out are the ONE function EVM step 2 asks
+        (``tx_guard_steps.turn.turn_origin_verdict``, 125 S6).
 
         086 W2: a swap passes ``mandate_entry={"token": mint, "usd": cost}`` so a
         mandate run's non-exit buy meets the kernel's mandate step (a send or a
         bridge passes nothing and is never mandate-gated).
         """
-        from core.wallet.authority import turn_refusal
-        principal_error = turn_refusal(execution_context)
+        from core.wallet import tx_guard
+        principal_error = tx_guard._principal_refusal(execution_context)
         if principal_error:
             return (principal_error, False, False)
-        from core.wallet import tx_guard
         # The pause bounds the agent's own work; a genuine owner turn passes it
         # (tx_guard step 0). A missing context is never the owner.
         from core.money.authority import owner_direct_turn
@@ -1286,50 +1328,24 @@ class DefiTradeTool(SolanaRailMixin, WalletHolderMixin, BaseTool):
             return (None, False, False)
         try:
             from tools.controller.action_registration import (
-                _is_autonomous_goal_turn, _is_forged_or_autonomous_turn)
-            forged = _is_forged_or_autonomous_turn(execution_context, self)
+                _is_autonomous_goal_turn, _is_forged_or_autonomous_turn as _forged_fn)
         except Exception as exc:
             return (f"refused: could not prove the turn is genuine ({exc})",
                     False, False)
-        if not forged:
-            return (None, False, False)
-        if tx_guard._autonomous_turn_allowed(execution_context, self,
-                                             _is_autonomous_goal_turn):
-            if mandate_entry is not None:
-                try:
-                    is_entry = not bool(exit_shaped_fn())
-                except Exception:
-                    is_entry = True
-                if is_entry:
-                    from core.money.authorize import SpendIntent, authorize_spend
-                    verdict = authorize_spend(
-                        SpendIntent(principal=False, leaf=False, pause=False, mandate=True,
-                                    entry=True, chain="solana",
-                                    token=mandate_entry.get("token"),
-                                    usd=mandate_entry.get("usd")),
-                        execution_context, forged_fn=_is_forged_or_autonomous_turn,
-                        autonomous_ok_fn=_is_autonomous_goal_turn, tool_self=self)
-                    if verdict.refused:
-                        return (verdict.reason, False, False)
-            return (None, True, False)
-        try:
-            exit_shaped = bool(exit_shaped_fn())
-        except Exception:
-            exit_shaped = False
+        mandate = False
+        if mandate_entry is not None:
+            try:
+                mandate = not bool(exit_shaped_fn())
+            except Exception:
+                mandate = True
         _meta = getattr(execution_context, "metadata", None)
         order_run = isinstance(_meta, dict) and str(_meta.get("mandate") or "").startswith("ord_")
-        if (tx_guard.monitor_exits_enabled() and not order_run
-                and not getattr(execution_context, "is_sub_agent", False)
-                and getattr(execution_context, "role", "leaf") == "orchestrator"
-                and exit_shaped):
-            # The exit-only carve-out (DEFI_MONITOR_EXITS): a forged MAIN-agent
-            # turn may CLOSE a position into the quote asset. It rides the
-            # autonomous origin so the daily-cap-required bar still applies,
-            # and the measured-inflow assertion runs after simulation.
-            return (None, True, True)
-        return (("refused: a forged/autonomous turn (self-wake, "
-                 "delegation-result, leaf, or autonomous run) cannot move "
-                 "funds"), False, False)
+        from core.wallet.tx_guard_steps.turn import turn_origin_verdict
+        return turn_origin_verdict(
+            execution_context, forged_fn=_forged_fn, autonomous_ok_fn=_is_autonomous_goal_turn,
+            tool_self=self, exit_shaped=exit_shaped_fn, chain="solana", mandate=mandate,
+            token=(mandate_entry or {}).get("token"), usd=(mandate_entry or {}).get("usd"),
+            order_run=order_run)
 
     def _route_sanity(self, chain, route, id_in, id_out, *,
                       slippage_bps=None, held_balance_raw=None,
@@ -1407,3 +1423,13 @@ class DefiTradeTool(SolanaRailMixin, WalletHolderMixin, BaseTool):
         except Exception:
             return ("UNAVAILABLE",
                     "route check: UNAVAILABLE — the route is unverified")
+
+
+def _register_card_context() -> None:
+    """122 W3: a launch's approval card shows the pin, the launch limits and LP_ETH_CAP."""
+    from tools.controller.grant_card import register_card_context
+    from tools.defi.launch_verb import card_context
+    register_card_context("defi_trade_launch_token", card_context)
+
+
+_register_card_context()

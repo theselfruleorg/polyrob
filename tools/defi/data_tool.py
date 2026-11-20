@@ -32,6 +32,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from tools.base_tool import BaseTool
 from tools.defi import wallet_intel as _wallet_intel
+from tools.defi.data_address import AddressReportMixin, AddressReportParams  # noqa: F401
 from tools.defi.data_chain_reads import ChainReadsMixin
 from tools.defi.data_holdings import HoldingsReadsMixin
 from tools.defi.data_lp import LpReadsMixin
@@ -47,7 +48,7 @@ from tools.defi.token_screen import quoted
 from tools.defi.data_params import (  # noqa: F401 — re-exported (tests, packs)
     _chain_field, ResolveParams, SwapQuoteParams, TokenRefParams, PortfolioParams,
     WalletHoldingsParams, ReconcileParams, PositionsParams, DiscoverParams,
-    OhlcvParams, ScanParams, ContractReadParams, NftHoldingsParams, NftInfoParams,
+    OhlcvParams, ScanParams, ContractReadParams, NftHoldingsParams, NftInfoParams, NftAccountParams,
     LpPositionsParams, LpPoolInfoParams, PoolMetricsParams, LpQuoteParams)
 from tools.defi.data_render import (  # noqa: F401 — re-exported (tests, verbs)
     _RESOLVE_ROWS_SHOWN, _BUDGET_ROWS_SHOWN, _budget_exhausted_lines,
@@ -223,7 +224,8 @@ def _discovery_unavailable(got):
 
 
 class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileReadsMixin,
-                   RetireReadsMixin, MarksReadsMixin, HoldingsReadsMixin, BaseTool):
+                   RetireReadsMixin, MarksReadsMixin, HoldingsReadsMixin, AddressReportMixin,
+                   BaseTool):
     """Read-only token sight. Seams are injectable so unit tests never hit the network."""
 
     def __init__(self, name: str = "defi_data", config=None, container=None, *,
@@ -1285,6 +1287,21 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
         return await asyncio.to_thread(self._nft_holdings_sync, params, execution_context)
 
     @BaseTool.action(
+        "Read ANY agent NFT's token-bound account straight from the chain: owner, account "
+        "address, open approvals (with coverage), lock or sale readiness, state, identity, "
+        "native balance, the sale phase. Read-only; safe in a group chat.",
+        param_model=NftAccountParams)
+    async def nft_account(self, params: NftAccountParams, execution_context=None):
+        from tools.agent_nft.core_verbs import inspect_text  # call-time: same tier
+        from core.wallet.onchain import _rpc, rpc_url_for_chain
+
+        def rpc_for(chain):
+            url = rpc_url_for_chain(chain)
+            return lambda method, p: _rpc(url, method, p, timeout=15.0)
+        text, err = await asyncio.to_thread(inspect_text, rpc_for, params.target)
+        return self._ar(error=err) if err else self._ar(content=text)
+
+    @BaseTool.action(
         "Read one NFT straight from the chain: who owns it, which standard it "
         "implements, and its metadata URI. Keyless and exact. A field that the "
         "node did not answer is reported as NOT CHECKED, never as a default.",
@@ -1353,8 +1370,9 @@ class DefiDataTool(QuoteReadsMixin, ChainReadsMixin, LpReadsMixin, ReconcileRead
         return await asyncio.to_thread(self._lp_quote_sync, params, execution_context)
 
     @BaseTool.action(
-        "Raw read-only eth_call against a contract. Returns the raw hex; any "
-        "decoding is best-effort and unverified. No state change.",
+        "Read-only eth_call against any contract: the args are ABI-encoded from the "
+        "signature (e.g. ownerOf(uint256) with [5]); give `returns` (e.g. 'address') "
+        "to decode the result. Returns the raw hex too. No state change.",
         param_model=ContractReadParams)
     async def contract_read(self, params: ContractReadParams, execution_context=None):
         # Blocking body on a worker thread — see the note on `token_info`.

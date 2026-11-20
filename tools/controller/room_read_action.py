@@ -23,7 +23,7 @@ group allowlist is refused WITH the list of real rooms — never a fake empty
 read, which would read exactly like "the room said nothing".
 
 ⚠️ Correspondent-taint: the room ledger carries the owner's own lines; the
-action name is enumerated in `correspondent_gate._HIGH_IMPACT_NAMES` so a
+action name is enumerated in `core.security.high_impact._HIGH_IMPACT_NAMES` so a
 tainted session cannot read it.
 
 ⚠️ Registry-closure landmine: NO `from __future__ import annotations` in

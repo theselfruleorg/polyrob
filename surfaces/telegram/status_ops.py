@@ -47,27 +47,6 @@ async def _status_reply(task_agent: Any, user_id: str, session_id: Optional[str]
 from core.status_render import SEAT_HEALTH_LIMIT as _STATUS_HEALTH_LIMIT  # noqa: E402
 
 
-async def _health_header(user_id: str, data_dir: str, task_agent: Any = None,
-                         limit: int = 4) -> list:
-    """The mandatory health block other read verbs (/mode, /recap, /goals)
-    prepend — a degraded instance renders first on EVERY seat. Cheap path (no
-    money, no balances). Never raises: a builder failure renders as its own
-    'unavailable' line rather than silently producing no header."""
-    try:
-        from core.status_snapshot import build_status_snapshot
-        from core.status_render import render_health_lines
-        from core.status_render import pause_headline
-        snap = await asyncio.to_thread(
-            build_status_snapshot, user_id, data_dir=data_dir, task_agent=task_agent,
-            include_money=False)
-        # 031: the pause state leads every seat, before health.
-        return [pause_headline(snap)] + render_health_lines(snap, prefix="• ", limit=limit,
-                                                            brief=True)
-    except Exception as e:
-        logger.warning("telegram health header failed: %s", e, exc_info=True)
-        return [f"Health: unavailable ({type(e).__name__}: {str(e)[:120]})"]
-
-
 def _pause_line(data_dir: str) -> str:
     """The cheap (no snapshot) pause line for verbs that build no header (/goals)."""
     try:
@@ -77,48 +56,6 @@ def _pause_line(data_dir: str) -> str:
     except Exception as e:
         logger.warning("telegram pause line failed: %s", e, exc_info=True)
         return f"autonomy: unavailable ({type(e).__name__}: {str(e)[:120]})"
-
-
-def _missed_reply(user_id: str, data_dir: str, args: list) -> str:
-    """`/missed [n]` — the owner notices the delivery rail could not send
-    live (durable ``owner_notice`` rows the rail writes instead of dropping
-    the text): suppressed by the daily cap, held by an owner pause, or
-    undelivered (no live sink / send failed) — newest first. 2026-08-28: 91
-    of 92 notices in 24h were capped and nothing let the owner read them; A7
-    (2026-09-14) widened this to every marker (it used to match the cap
-    marker only, so a paused/undelivered notice was unreadable). A thin
-    renderer over ``core.surfaces.missed.missed_notices`` — CLI/REPL reuse
-    the same query."""
-    try:
-        n = max(1, min(20, int(args[0]))) if args else 5
-    except (TypeError, ValueError):
-        return "Usage: /missed [n] (1-20, default 5)"
-    try:
-        from core.surfaces.missed import missed_notices
-        rows = missed_notices(user_id, data_dir, n)
-    except Exception as e:
-        return f"Missed messages: unavailable ({type(e).__name__}: {str(e)[:120]})"
-    if not rows:
-        return "No undelivered messages on record."
-    # D36: the SHARED renderer (`core.surfaces.missed.format_notice_lines`),
-    # which WRAPS. This seat used to hard-clip every notice at 240 characters —
-    # in the one verb that exists so the owner can recover text he never
-    # received, which makes the clip a second suppression of the same message.
-    from core.surfaces.missed import format_notice_lines
-    lines = [f"Last {len(rows)} undelivered message(s), newest first:"]
-    for r in rows:
-        lines.extend(format_notice_lines(
-            float(r.get("ts") or 0), str(r.get("kind") or "capped"),
-            str(r.get("text") or "").strip(), gutter="• ", width=_MISSED_WIDTH))
-    from core.surfaces.missed import cap_caused
-    if cap_caused(rows):
-        lines.append("Raise the cap: /config set delivery.daily_cap N")
-    return "\n".join(lines)
-
-
-#: A chat bubble re-wraps proportional text, so the terminal's 80 columns are
-#: the wrong measure here. Narrow enough that one notice line stays one line.
-_MISSED_WIDTH = 60
 
 
 def _cwd_reply() -> str:
@@ -152,16 +89,6 @@ def _cwd_reply() -> str:
     return "\n".join(lines)
 
 
-async def journey_reply(user_id: str, data_dir: str, task_agent: Any, args: list) -> str:
-    """`/journey [window]` on every seat (113 W4 item 3, D-2): the health
-    header, then the recap. The chat apps and the terminal both call this, so
-    one verb gives one text."""
-    header = await _health_header(user_id, data_dir, task_agent, limit=3)
-    from core.recap import recap_reply
-    return "\n".join(header) + "\n" + recap_reply(user_id, data_dir, args[0] if args else "24h",
-                                                 more_tenant=user_id)
-
-
 def _goals_reply(user_id: str, data_dir: str, board: Optional[Any] = None) -> str:
     """owner-UX P4 T2: goal board summary — counts by status + up to 5 most
     recent open/running goals.
@@ -169,7 +96,7 @@ def _goals_reply(user_id: str, data_dir: str, board: Optional[Any] = None) -> st
     ``board`` lets a caller share an already-open ``GoalBoard`` (see
     ``_status_reply``'s docstring); a bare call without one opens its own.
     """
-    from agents.task.goals.board import (
+    from modules.goals.board import (
         STATUS_READY, STATUS_RUNNING, STATUS_TRIAGE, GoalBoard)
     gb = board if board is not None else GoalBoard(goals_db_path(data_dir))
     # Counts over EVERY row and a newest-first open list, both in SQL. The old
@@ -192,9 +119,9 @@ def _seat_via(result: Any) -> str:
     """The seat a line ACTUALLY arrived on, for an audit `via`. This harness is
     the shared inbound actor (console, discord, slack … reach it too), so a
     literal "telegram" is a lie on every other seat (CLI14)."""
+    from core.surfaces.seat_names import seat_via
     src = getattr(getattr(getattr(result, "inbound", None), "identity", None), "source", None)
-    via = str(getattr(src, "surface_id", "") or "telegram")
-    return "console" if via == "webview" else via
+    return seat_via(getattr(src, "surface_id", ""))
 
 
 def _pause_reply(data_dir: str, cmd: str, args: list, *, via: str = "telegram") -> str:
@@ -219,20 +146,13 @@ def _pause_reply(data_dir: str, cmd: str, args: list, *, via: str = "telegram") 
     return render_pause_result(res, resume_hint="/resume")
 
 
-def _mode_reply(seat: str = "telegram", *, full: bool = False) -> str:
-    """`/mode` — the four answers a person needs (104 §2); `/mode all` adds the card.
-
-    The seat decides the first line and the "to change" line: a write the terminal may do
-    must not read "needs the server" there. A level name writes that level (104 §4)."""
-    try:
-        from core.config_policy.posture_card import build_answers, render_posture_card
-        lines = list(build_answers(seat))
-        if full:
-            lines += ["", "All settings behind this:"] + render_posture_card(prefix="• ")
-        else:
-            lines += ["", "/mode all shows every setting behind this."]
-    except Exception:
-        logger.debug("/mode answers failed", exc_info=True)
-        return ("I could not read my own settings. Ask me again in a "
-                "moment, or run `polyrob autonomy status` on my box.")
-    return "\n".join(lines)
+# 125 S14: /missed, /journey, /mode and the health header moved below the seats
+# (core/surfaces/owner_reads.py); the old names stay importable (the harness
+# re-exports them).
+from core.surfaces.owner_reads import (  # noqa: E402,F401
+    MISSED_WIDTH as _MISSED_WIDTH,
+    health_header as _health_header,
+    journey_reply,
+    missed_reply as _missed_reply,
+    mode_reply as _mode_reply,
+)

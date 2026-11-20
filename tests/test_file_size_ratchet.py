@@ -39,13 +39,13 @@ CEILINGS = {
     # (/signin, /profile, /settings, /admin*) moved to webview/posture_routes.py
     # as ONE posture table — they were seven hand-registered routes that
     # disagreed about what a denial looks like.
-    "webview/server.py": 2911,  # 043 A12/A29/A30: the full-tree session catalog, the per-session stats route and the four consumer-less socket emits deleted; 070 W0.10: the feed events route moved to webview/feed_routes.py; 070 W0.14: the workspace tree moved to webview/workspace_routes.py; 070 W0.17: socket joins through webview/socket_limits.py; 070 W0.18/E.34: the error handler delegates to webview/error_page.py
+    "webview/server.py": 2648,  # 2026-11-20: the dead session status/feed/workspace-status routes, /api/repair, leave_activity and the empty activity router mount deleted; 043 A12/A29/A30: the full-tree session catalog, the per-session stats route and the four consumer-less socket emits deleted; 070 W0.10: the feed events route moved to webview/feed_routes.py; 070 W0.14: the workspace tree moved to webview/workspace_routes.py; 070 W0.17: socket joins through webview/socket_limits.py; 070 W0.18/E.34: the error handler delegates to webview/error_page.py
     # S8 (2026-08-29): chat / delivery / lifecycle mixins + support helpers extracted
     # (agents/task/task_agent_{chat,delivery,lifecycle,support}.py).
     # Tightened 2026-09-08: the public session-control verbs (get_session_status /
     # cancel_session / pause_session / resume_session) moved to
     # agents/task/task_agent_control.py::TaskAgentControlMixin.
-    "agents/task_agent_lite.py": 978,
+    "agents/task_agent_lite.py": 975,
     # Tightened 2026-08-20: the module-level turn-origin policy helpers
     # (_is_forged_or_autonomous_turn et al.) moved to tools/controller/turn_origin.py
     # (re-exported for back-compat) after 098781b8 pushed the file past 2571.
@@ -60,7 +60,7 @@ CEILINGS = {
     # Tightened 2026-11-17 (120 W5): `contact_history` moved to
     # tools/controller/contact_history_action.py.
     "tools/controller/action_registration.py": 1296,
-    "api/task_http_api.py": 1876,
+    "api/task_http_api.py": 1867,
     # Re-baselined 2026-07-25 (0.9.0 release cut): +3 net for the AUTONOMY_ENABLED
     # master state in `/autonomy` + `doctor`. The extraction debt on this file
     # STANDS — it is an extraction candidate, not a designated SSOT.
@@ -107,19 +107,19 @@ CEILINGS = {
     # W2 (2026-10-10): every production file over DEFAULT_CEILING, frozen at its
     # live size. Each is a split candidate (structural review dim 3, W9); lower
     # the row in the commit that splits the file, delete it once <= the default.
-    "surfaces/telegram/harness.py":     2898,  # W9: admin verbs -> admin_verbs.py + *_ops.py
-    "core/wallet/tx_guard.py": 1579,  # W6: _authorize -> core/wallet/tx_guard_steps/
+    "surfaces/telegram/harness.py":     2431,  # the unused catalogue re-exports go; /start -> help_menu.start_reply; 126: a typed /approve <card id> is the card tap (surfaces/card_press.py); 125 S14: the command catalogue + lifecycle gate -> core/surfaces, CANCEL_REACH, the read replies, the background rule and the console seam left; S11: the owner-gate literal is derived; W9: admin verbs -> admin_verbs.py + *_ops.py
+    "core/wallet/tx_guard.py": 1377,  # W6: _authorize -> core/wallet/tx_guard_steps/
     "packs/x/polyrob_x/twitter_tool.py": 2731,
     "packs/markets/polyrob_markets/polymarket/service.py": 2184,
     "packs/markets/polyrob_markets/hyperliquid/service.py": 1907,
     "webview/pages_new.py": 1858,
     "cli/commands/wallet.py": 1841,
-    "webview/pages.py": 1841,
+    "webview/pages.py": 1737,  # 2026-11-20: the caller-less /positions and /pending/{kind}/{id}/{promote,reject} deleted
     "tools/browser/context.py": 1685,
     "cli/commands/owner.py": 1539,
     "agents/task/agent/core/next_action_internal.py": 1383,
     "tools/browser/browser.py": 1470,
-    "core/prefs.py": 1405,
+    "core/prefs.py": 1387,
     "tools/controller/registry/service.py": 1518,
     "api/admin_endpoints.py": 1328,
 }

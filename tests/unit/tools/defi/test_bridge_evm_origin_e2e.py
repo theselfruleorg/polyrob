@@ -571,6 +571,44 @@ def test_cr_l03_the_leg_is_authorized_again_after_the_owner_wait(rig, monkeypatc
     assert "RESULT: bridged" in (r.content or "")
 
 
+def _two_figures(monkeypatch, first, second):
+    calls = []
+
+    def _authorize(intent, tx, **kw):
+        calls.append(tx)
+        return SimpleNamespace(allowed=False, reason="owner approval required",
+                               lane="owner_queue",
+                               amount_usd=first if len(calls) == 1 else second,
+                               sim_gas_used=100_000)
+    monkeypatch.setattr("core.wallet.tx_guard.authorize", _authorize)
+    _approving(monkeypatch)
+
+
+def test_a_higher_re_prepare_after_the_owner_wait_is_checked_and_booked(rig, monkeypatch):
+    """Proposal 125 S9 B-M5: the leg re-prepared after the owner wait carries a
+    fresh spend-grade figure; a higher one (within 5% of what the owner approved)
+    is what the gate checks and books, never the figure from before the wait."""
+    _two_figures(monkeypatch, 93.6, 97.0)
+    tool = _Tool()
+    r = _run(tool, _params())
+    assert "RESULT: bridged" in (r.content or "")
+    inside = [c for c in tool.wallet.policy.checked if c["in_reserve"]]
+    assert inside[-1]["amount_usd"] == pytest.approx(97.0)
+    assert tool.wallet.policy.recorded[0]["amount_usd"] == pytest.approx(97.0)
+
+
+def test_a_re_prepare_above_the_approved_figure_plus_5pct_is_refused(rig, monkeypatch):
+    """Audit 2026-11-21 L-9: the owner approved $93.60; a fresh leg that books $150
+    is not what the owner approved, and it is refused before anything is sent."""
+    _two_figures(monkeypatch, 93.6, 150.0)
+    tool = _Tool()
+    r = _run(tool, _params())
+    assert "RESULT: NOT SENT" in (r.content or "")
+    assert "approved" in (r.content or "") and "$150.00" in (r.content or "")
+    assert all(i.sent is None for i in _Rail.instances)
+    assert not tool.wallet.policy.recorded
+
+
 def test_cr_l03_a_refusal_on_the_recheck_broadcasts_nothing(rig, monkeypatch):
     calls = []
 

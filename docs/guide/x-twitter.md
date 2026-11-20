@@ -27,9 +27,16 @@ image; `publish=false` keeps it a draft on X. Media and Article writes use the
 OAuth 1.0a keys. A tweet read returns the full text of a post over 280 characters,
 the Article it carries, and its media (type, URL, alt text, best video URL).
 
-Each mention carries `author_id` and `author_username`, so a reply goes to the
-account that wrote the mention. Each tweet read carries `reposts_and_quotes`
-(retweets plus quotes), the figure that X's app shows as reposts.
+Each mention carries `author_id`, `author_username` and its metrics (likes,
+replies, reposts), so a reply goes to the account that wrote the mention. Each
+tweet read carries `reposts_and_quotes` (retweets plus quotes), the figure that
+X's app shows as reposts.
+
+**Community opinion.** The agent can ask its community with a poll and read the
+replies. A vote, a reply or a quote is advice: the agent weighs it against its
+own analysis and then decides by itself. No vote runs an act. If the agent acts,
+the act goes through the same guard, pause and limits as any act it takes on its
+own, with its own reason, and the agent says publicly how the vote weighed in.
 
 `twitter` carries the agent's own X identity, so a helper cannot use it.
 

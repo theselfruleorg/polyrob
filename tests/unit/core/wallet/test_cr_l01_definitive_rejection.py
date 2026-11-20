@@ -24,6 +24,15 @@ def home(monkeypatch, tmp_path):
     monkeypatch.setenv('POLYROB_DATA_DIR', str(tmp_path))
 
 
+@pytest.fixture(autouse=True)
+def _authorized(monkeypatch):
+    """These tests pin the submission journal, not the guard: every transaction here
+    counts as authorized (125 S3; the guard record is pinned in
+    test_rail_requires_attestation.py)."""
+    from core.signer import attest
+    monkeypatch.setattr(attest, "peek", lambda tx, **_: "authorized")
+
+
 def _rail(monkeypatch, exc):
     signer = SimpleNamespace(address='0x' + '1' * 40, sign_transaction=lambda tx: RAW)
     r = EvmRail(chain='base', signer=signer)
@@ -44,7 +53,7 @@ def _rail(monkeypatch, exc):
 def test_a_definitive_rejection_is_not_sent_and_frees_the_interlock(monkeypatch, msg):
     r = _rail(monkeypatch, onchain.RpcError(f"eth_sendRawTransaction: {msg}"))
     with pytest.raises(BroadcastError, match='rejected'):
-        r.sign_and_send({'chainId': 8453, 'nonce': 1})
+        r.sign_and_send({'chainId': 8453, 'nonce': 1, 'gas': 21000, 'maxFeePerGas': 10 ** 9, 'type': 2})
     assert J.unresolved() == []
 
 
@@ -55,7 +64,7 @@ def test_a_definitive_rejection_is_not_sent_and_frees_the_interlock(monkeypatch,
 ])
 def test_an_ambiguous_failure_stays_unknown(monkeypatch, exc):
     r = _rail(monkeypatch, exc)
-    assert r.sign_and_send({'chainId': 8453, 'nonce': 1}) == HASH
+    assert r.sign_and_send({'chainId': 8453, 'nonce': 1, 'gas': 21000, 'maxFeePerGas': 10 ** 9, 'type': 2}) == HASH
     assert J.unresolved()[0]['tx_hash'] == HASH
 
 

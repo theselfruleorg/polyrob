@@ -257,7 +257,7 @@ async def test_the_breakdown_is_the_usage_verb_text(tmp_path, monkeypatch, _owne
     c = _owner_controller(monkeypatch)
     action = c.registry.registry.actions["usage_summary"]
     result = await action.function(action.param_model(days=1), execution_context=_Owner())
-    from surfaces.telegram.usage_ops import usage_reply
+    from cron.usage_reply import usage_reply
     assert result.error is None
     assert result.extracted_content == usage_reply("owner", str(tmp_path), ["1"])
     assert "AI cost, the last 24 h: $0.42" in result.extracted_content

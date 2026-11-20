@@ -88,18 +88,6 @@ class AgentState:
 		self.consecutive_failures += 1
 		self.total_failures += 1
 
-	def is_too_many_failures(self) -> bool:
-		"""Check if consecutive failures exceed maximum."""
-		return self.consecutive_failures >= self.max_failures
-
-	def increment_step(self) -> None:
-		"""Increment step counter."""
-		self.n_steps += 1
-
-	def increment_actions(self, count: int = 1) -> None:
-		"""Increment total actions count."""
-		self.total_actions_count += count
-
 	def update_activity_time(self) -> None:
 		"""Update last activity timestamp."""
 		self.last_activity_time = time.time()
@@ -264,12 +252,6 @@ class AgentState:
 			True if circuit breaker is open or too many provider failures
 		"""
 		return self.llm_circuit_breaker_open or len(self.llm_providers_failed) >= 3
-
-	def is_at_max_steps(self) -> bool:
-		"""Check if maximum steps reached."""
-		if self.max_steps is None:
-			return False
-		return self.n_steps >= self.max_steps
 
 	# PERSISTENCE: Session state save/load for app restart recovery
 

@@ -1,5 +1,5 @@
 """031 T4: an owner pause returns THIS worker's running goals to ready, no failure."""
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 
 
 def test_hold_running_returns_only_this_workers_rows_to_ready(tmp_path):
@@ -14,7 +14,7 @@ def test_hold_running_returns_only_this_workers_rows_to_ready(tmp_path):
     assert b.get(g2.id).status == "running"
     assert b.get(g1.id).consecutive_failures == 0
     kinds = [e["kind"] for e in b.events(g1.id)]
-    assert "held_by_pause" in kinds
+    assert "held" in kinds and "held_by_pause" not in kinds   # the legacy alias is gone
     assert b.hold_running(worker="goal-dispatch-1", reason="again") == []
 
 

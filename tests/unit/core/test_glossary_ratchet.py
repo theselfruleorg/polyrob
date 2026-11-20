@@ -36,14 +36,17 @@ CEILINGS = {
     # 080 WS-5: every prose line of docs/guide/ and the guide skill. Large on
     # purpose — technical guide prose uses "session", "tool", "config"; the
     # number only falls.
-    "guide_docs": 1668,
+    "guide_docs": 1657,
     "guide_skill": 234,
 }
 
 _INBOX_RENDER = ("core/surfaces/inbox_render.py", "core/surfaces/owner_admin.py")
 _TELEGRAM = tuple(f"surfaces/telegram/{m}.py" for m in (
-    "owner_ops", "history_ops", "send_ops", "token_ops", "identity_ops",
-    "job_ops"))
+    "owner_ops", "send_ops",
+    )) + ("cron/owner_jobs.py", "cron/owner_goals.py", "tools/avatar_owner.py", "core/surfaces/owner_reads.py") + tuple(f"tools/defi/owner_verbs/{m}.py" for m in (
+    # 125 S1/S14: the owner money verbs' text moved below the seats; it is still
+    # owner text, counted in the same corpus.
+    "_seat", "send", "identity", "wallet", "bridge", "token", "invoices"))
 _REPL = tuple(f"cli/ui/commands/{m}.py" for m in (
     "h_mode", "h_autonomy", "h_money_verbs", "h_inbox", "h_help",
     "handlers"))  # 113 T-02: the REPL registry and its replies

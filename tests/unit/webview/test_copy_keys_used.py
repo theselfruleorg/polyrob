@@ -30,6 +30,10 @@ def _dynamic_families() -> dict:
         "chat.run_head.": "chat_open.first_line_context (run_head.<creator>, 070 W0.12)",
         # pages.api_preferences: t(f"pref.{key}.label") / .help (113 W5, CP-1).
         "pref.": "pages.api_preferences (pref.<key>.label/help)",
+        # worklog_api.owner_words: work.log.kind.<kind>, .goal_state.<status>, .seat.<seat>.
+        "work.log.kind.": "worklog_api.owner_words",
+        "work.log.goal_state.": "worklog_api.owner_words",
+        "work.log.seat.": "worklog_api.owner_words",
         # pages_new: t(f"{current}.title") for the five destinations.
         **{f"{d}.title": "pages_new page title" for d in ("new", "inbox", "work", "money", "agent")},
     }

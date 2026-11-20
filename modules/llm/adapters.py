@@ -184,7 +184,7 @@ class LLMClientAdapter(BaseChatModel):
         if "<" not in content:
             return content
         try:
-            from modules.llm.think_scrubber import scrub_think_blocks
+            from core.think_scrubber import scrub_think_blocks
             scrubbed = scrub_think_blocks(content)
         except Exception as e:  # never break generation on a scrub bug
             self._logger.debug(f"think scrub skipped (error): {e}")
@@ -631,7 +631,7 @@ class LLMClientAdapter(BaseChatModel):
         scrubber = None
         if think_scrubber_enabled():
             try:
-                from modules.llm.think_scrubber import StreamingThinkScrubber
+                from core.think_scrubber import StreamingThinkScrubber
                 scrubber = StreamingThinkScrubber()
             except Exception:
                 scrubber = None

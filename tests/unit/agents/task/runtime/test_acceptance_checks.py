@@ -172,7 +172,7 @@ def test_check_crash_is_a_failed_check_not_an_exception():
 
 def test_dispatcher_fails_run_on_failed_check(tmp_path):
     from types import SimpleNamespace
-    from agents.task.goals.board import Goal, STATUS_READY
+    from modules.goals.board import Goal, STATUS_READY
     from agents.task.goals.dispatcher import GoalDispatcher
     from agents.task.loop_types.controller_types import ActionResult
 

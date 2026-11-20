@@ -8,7 +8,7 @@ import pytest
 
 from agents.task.agent.core import episodic_digest as ED
 from agents.task.agent.core import job_sheet as JS
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from core.event_log import TelemetryEventLog
 from cron.jobs import CronJob, CronJobStore
 from modules.memory.provider import EpisodeRecord
@@ -157,7 +157,7 @@ def test_an_unreadable_board_and_job_store_say_could_not_read(stores, monkeypatc
 
     def boom(*a, **k):
         raise sqlite3.OperationalError("unable to open database file")
-    monkeypatch.setattr("agents.task.goals.rail_answers.open_rail_asks", boom)
+    monkeypatch.setattr("modules.goals.rail_answers.open_rail_asks", boom)
     monkeypatch.setattr("core.sqlite_util.execute_retry", boom)
     out = _render(stores)
     assert "open asks: could not read" in out and "other jobs: could not read" in out

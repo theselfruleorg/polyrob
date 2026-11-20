@@ -2,7 +2,7 @@
 
 Lets an agent record durable, cross-session goals it (or a dispatcher) will pursue
 beyond the current turn — distinct from the session-scoped TODO (`task` tool) and
-from `cronjob` (time-triggered). Thin glue over :class:`agents.task.goals.board.GoalBoard`;
+from `cronjob` (time-triggered). Thin glue over :class:`modules.goals.board.GoalBoard`;
 all state/claim/breaker logic lives there.
 
 Off by default: registered only when ``GOALS_ENABLED=true`` and never in the default
@@ -26,63 +26,26 @@ from tools.model_tier import (MODEL_FIELD_DESCRIPTION, TIER_FIELD_DESCRIPTION,  
                               WHY_FIELD_DESCRIPTION, model_payload, notify_model_change,
                               tier_payload)
 from agents.task.loop_types.controller_types import ActionResult
-from agents.task.goals.board import DuplicateGoalError, GoalBoard
+from modules.goals.board import DuplicateGoalError, GoalBoard
 
 logger = logging.getLogger(__name__)
 
-# Proposal 001 (owner-approved option 2, 2026-07-01): tools an agent may request for its OWN
-# self-created goals, filtered to a safe allowlist so it can self-direct research/content/coding
-# (and — per owner — posting) but NOT self-grant money-SPEND (wallet/x402_pay/hyperliquid/
-# polymarket), code execution, cron, or meta goal/skill tools.
-# Proposal 009 (owner battle-test kickoff, 2026-07-13/14): the kickoff mission explicitly
-# sanctions email outreach, telegram group/channel posting (`message` — every send is still
-# gated by the owner outbound allowlist) and x402 INVOICING (receivables only, capped;
-# x402_pay/spend stays excluded), plus knowledge notes.
-# Proposal 029 R5 (2026-08-24): `defi_data` joins the allowlist. It is READ-only
-# token sight — it constructs no signer and broadcasts nothing, and it is not in
-# the capability table's `money` set — so excluding it was a tax on
-# reconnaissance rather than a safety property: every screening goal had to wait
-# for an operator-seeded cycle. `defi_trade` stays excluded, and that is exactly
-# where the line belongs. (`portfolio` remains separately gated by NAME while
-# correspondent-tainted; adding the tool here does not touch that.)
-# The ids live in core/config_policy/profiles.py as `ceiling:self_goal` (067 P1).
-from core.config_policy.profiles import profile as _profile  # noqa: E402
-
-_SELF_GOAL_ALLOWED_TOOLS = frozenset(_profile("ceiling:self_goal"))
-
-
-def allowed_self_goal_tools() -> frozenset:
-    """Tool ids an agent-created goal may request. Under effective autonomous mode
-    (AUTONOMY_MODE=autonomous on a single-owner instance) this expands to the full
-    AUTONOMOUS_MODE_TOOLS grant; money-spend/host tools are in NEITHER set."""
-    try:
-        from agents.task.constants import autonomous_mode_tools
-        from core.config_policy import full_autonomy_enabled
-        if full_autonomy_enabled():
-            # Folds in the defi rail when DEFI_AGENT_AUTONOMY is armed. ⚠️ That
-            # DOES mean a goal the agent writes itself can carry `defi_trade`
-            # once armed — deliberate, on the owner's 2026-09-12 directive. What
-            # bounds an injected goal is the CAP and the per-verb simulation, not
-            # the toolset: the per-tx ceiling, the rolling daily cap, the
-            # kill-switch, the 031 pause and the owner queue above
-            # DEFI_AUTONOMOUS_MAX_USD all still apply. Unarmed, this is the
-            # historical set exactly.
-            return frozenset(_SELF_GOAL_ALLOWED_TOOLS | set(autonomous_mode_tools()))
-    except Exception:
-        pass
-    return _SELF_GOAL_ALLOWED_TOOLS
+# U5 + A-9: the self-goal ceiling, its baseline and the text inference live in
+# core/tool_grants.py (the one grant predicate). Called through the module, so a
+# patch on the core function reaches every caller.
+from core import tool_grants as _grants  # noqa: E402
 
 
 def agent_rig_refusal(rig: Optional[str]) -> Optional[str]:
     """The error for a rig a turn that is not an owner seat may not request,
     else None — the same principal rule `tools=` follows
-    (:func:`allowed_self_goal_tools`). A rig whose ids leave the ceiling is
+    (:func:`core.tool_grants.allowed_self_goal_tools`). A rig whose ids leave the ceiling is
     REFUSED (not silently narrowed) so the agent learns which rigs it can use.
     `full` always passes — it means the caller's own default, which is no wider
     than omitting a rig.
     """
     from core.config_policy.rigs import rig_names, rig_tools, rig_ungrantable_ids
-    ceiling = allowed_self_goal_tools()
+    ceiling = _grants.allowed_self_goal_tools()
     blocked = rig_ungrantable_ids(rig, ceiling)
     if not blocked:
         return None
@@ -140,7 +103,7 @@ def owner_turn_goal_tools() -> frozenset:
     already pick. Host tools (shell/process/code_execution) and the payment
     tools outside the rig table stay excluded; they ride their own postures."""
     from core.config_policy.rigs import RIGS
-    return frozenset(allowed_self_goal_tools()
+    return frozenset(_grants.allowed_self_goal_tools()
                      | {t for ids in RIGS.values() for t in ids})
 
 
@@ -160,7 +123,7 @@ def money_spend_tools() -> frozenset:
     set minus the self-goal ceiling (``x402_invoice`` only receives; ``defi_data``
     only reads)."""
     from core.tool_capabilities import ids_with
-    return frozenset(ids_with("money")) - _SELF_GOAL_ALLOWED_TOOLS
+    return frozenset(ids_with("money")) - _grants.SELF_GOAL_ALLOWED_TOOLS
 
 
 def money_job_reasons(*, tools: Optional[List[str]] = None, rig: Optional[str] = None,
@@ -255,44 +218,13 @@ async def raise_job_card(tool: Any, execution_context, words: List[str], *, what
         include_in_memory=True)
 
 
-# Proposal 009 #1 (2026-07-14): whenever a self-created goal carries ANY tools payload, union in
-# this safe baseline so the dispatched session is never starved of basics (night-1 failure mode:
-# tools=['twitter'] sessions had no filesystem; text-only goals had no web_fetch to research).
-_SELF_GOAL_BASELINE_TOOLS = _profile("baseline:self_goal")
-
-# Proposal 009 option B: when the agent sets no `tools`, infer them from the goal's own text —
-# the night-1 blocked goals literally named their needed tool in title/acceptance ("Publish
-# queued OSS launch X thread" → twitter) but dispatched tool-starved. Substring match on
-# lowercased title+body+acceptance; result is still filtered through _SELF_GOAL_ALLOWED_TOOLS,
-# so inference can never grant more than an explicit request could.
-_TOOL_TEXT_TOKENS = {
-    "twitter": ("twitter", "tweet", "x thread", "x post", "x.com"),
-    "email": ("email", "e-mail", "mailbox", "imap", "smtp"),
-    "message": ("telegram", "t.me/", "channel"),
-    "x402_invoice": ("x402", "invoice", "invoicing"),
-    "web_fetch": ("web_fetch", "fetch", "http", "url", "website", "research", "browse"),
-    "knowledge": ("knowledge", "notes"),
-    "anysite": ("anysite",),
-    "coding": ("coding",),
-}
-
-
-def _infer_tools_from_text(*texts: Optional[str]) -> set:
-    blob = " ".join(t for t in texts if t).lower()
-    if not blob:
-        return set()
-    found = {tool for tool, tokens in _TOOL_TEXT_TOKENS.items()
-             if any(tok in blob for tok in tokens)}
-    return found & allowed_self_goal_tools()
-
-
 # 2026-08-18 (intel finding, MEDIUM-HIGH — recurred across x402/video/micro-app goal
 # families): self-created goals that EXPLICITLY narrow `tools` and carry an `http_ok`
 # acceptance check are structurally doomed — dispatcher._resolve_goal_tools returns
 # `payload.tools` VERBATIM the moment it's non-empty (agents/task/goals/dispatcher.py,
 # "if own: return own"), with NO widening for compute posture, and shell/process/
 # code_execution can NEVER be added via goal_create in the first place (deliberately
-# excluded from both _SELF_GOAL_ALLOWED_TOOLS and AUTONOMOUS_MODE_TOOLS — a security
+# excluded from both core.tool_grants.SELF_GOAL_ALLOWED_TOOLS and AUTONOMOUS_MODE_TOOLS — a security
 # boundary: host/compute tools ride AGENT_COMPUTE_POSTURE only, never a self-grant).
 # So there is nothing to auto-append here; the only tools that could serve an http_ok
 # check are the ones this function is forbidden from ever adding. The fix is to warn
@@ -320,7 +252,7 @@ def _dropped_tools_note(requested: Optional[List[str]]) -> str:
     """
     if not requested:
         return ""
-    allowed = allowed_self_goal_tools()
+    allowed = _grants.allowed_self_goal_tools()
     dropped = [t for t in requested if t not in allowed]
     if not dropped:
         return ""
@@ -726,7 +658,7 @@ class GoalTool(BaseTool):
         owner_turn = owner_seat_turn(execution_context)
         allowed: List[str] = []
         if params.tools:
-            _allowed_set = owner_turn_goal_tools() if owner_turn else allowed_self_goal_tools()
+            _allowed_set = owner_turn_goal_tools() if owner_turn else _grants.allowed_self_goal_tools()
             allowed = [t for t in params.tools if t in _allowed_set]
             dropped = [t for t in params.tools if t not in _allowed_set]
             if dropped:
@@ -748,11 +680,11 @@ class GoalTool(BaseTool):
                 _disclosure_on = False
             if not _disclosure_on:
                 # Proposal 009 option B: no (valid) explicit tools — infer from the goal's own text.
-                inferred = _infer_tools_from_text(params.title, params.body, params.acceptance)
+                inferred = _grants.infer_tools_from_text(params.title, params.body, params.acceptance)
                 if inferred:
                     logger.info("goal_create: inferred tools %s from goal text", sorted(inferred))
         if allowed or inferred:
-            payload["tools"] = sorted(set(allowed) | inferred | set(_SELF_GOAL_BASELINE_TOOLS))
+            payload["tools"] = sorted(set(allowed) | inferred | set(_grants.SELF_GOAL_BASELINE_TOOLS))
         if params.rig:
             # 057 WS-A. Validated HERE so an unknown name is refused with the
             # valid list rather than stored and silently ignored at dispatch.
@@ -775,7 +707,8 @@ class GoalTool(BaseTool):
             return ActionResult(error=_tier_err, include_in_memory=True)
         payload.update(_tier)
         _model, _model_err, _model_note, _model_notice = await model_payload(   # 121: any model, price-bounded
-            params.model, params.why, tier=params.tier, owner_turn=owner_turn, user_id=user_id)
+            params.model, params.why, tier=params.tier, owner_turn=owner_turn, user_id=user_id,
+            what="a goal")
         if _model_err:
             return ActionResult(error=_model_err, include_in_memory=True)
         payload.update({k: v for k, v in _model.items() if v is not None})
@@ -840,8 +773,8 @@ class GoalTool(BaseTool):
                 # 036 §3.3: the ONE predicate. The allowlist filter above and the
                 # board's grant check read the same ceiling, so they cannot drift.
                 actor="owner_seat" if owner_turn else "agent",
-                tool_ceiling=sorted(allowed_self_goal_tools()
-                                    | set(_SELF_GOAL_BASELINE_TOOLS)),
+                tool_ceiling=sorted(_grants.allowed_self_goal_tools()
+                                    | set(_grants.SELF_GOAL_BASELINE_TOOLS)),
             )
         except DuplicateGoalError as e:
             return ActionResult(
@@ -854,6 +787,7 @@ class GoalTool(BaseTool):
             # wrong kind) never leaves an orphan goal row — this surfaces as a
             # plain error result, same as any other create-time ValueError.
             return ActionResult(error=f"Cannot create goal: {e}", include_in_memory=True)
+        notify_model_change(self, _model_notice)   # L-12: a create too, once the row exists
         tool_note = f" tools={payload['tools']}" if payload.get("tools") else ""
         dep_note = f" depends_on={board.dependencies(goal.id)}" if params.depends_on else ""
         drop_note = _dropped_tools_note(params.tools)
@@ -1082,7 +1016,7 @@ class GoalTool(BaseTool):
         if params.acceptance is not None:
             patch["acceptance"] = params.acceptance
         if params.tools is not None:
-            _ceiling = owner_turn_goal_tools() if owner_turn else allowed_self_goal_tools()
+            _ceiling = owner_turn_goal_tools() if owner_turn else _grants.allowed_self_goal_tools()
             patch["tools"] = [t for t in params.tools if t in _ceiling]
             # 085 W3 (D3): a money grant on an owner turn waits for the owner's tap;
             # the other fields of this call do not wait for it.

@@ -13,7 +13,7 @@ class _FakePM:
         self.data_root = Path(root)
 
     def get_session_root(self, session_id, user_id=None):
-        # Canonical LIVE layout (agents/task/path.py): directly under the
+        # Canonical LIVE layout (core/session_paths.py): directly under the
         # user, NO "sessions" subdirectory — the fixture must match reality
         # or layout bugs in the assemble readers stay invisible (B-1/B-2).
         return self.data_root / (user_id or "anon") / session_id

@@ -18,6 +18,12 @@
           "description": "Ceiling for the transaction FEE. A registration sends nothing else.",
           "exclusiveMinimum": 0,
           "type": "number"
+        },
+        "why": {
+          "default": null,
+          "description": "Why this act, now (one line). Required on an autonomous run; the owner reads it.",
+          "nullable": true,
+          "type": "string"
         }
       },
       "required": [

@@ -31,7 +31,7 @@ def _agent(controller=None):
 
 
 def _pm_into(tmp_path, monkeypatch):
-    from agents.task import path as path_mod
+    from core import session_paths as path_mod
 
     class _PM:
         def create_file_path(self, session_id, subdir, filename, user_id=None):

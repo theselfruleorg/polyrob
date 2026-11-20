@@ -76,7 +76,7 @@ def test_third_party_seat_never_lists_or_loads_owner_or_ecosystem_skills(homes):
 
 
 def test_load_fallback_refuses_an_ecosystem_skill_the_scan_removed(homes, monkeypatch):
-    monkeypatch.setattr("modules.memory.task.threat_scan.is_suspicious",
+    monkeypatch.setattr("core.security.threat_scan.is_suspicious",
                         lambda text: "operator's own" in text)
     monkeypatch.setattr("core.security.threat_report.report_threat", lambda *a, **k: None)
     sm = SkillManager()

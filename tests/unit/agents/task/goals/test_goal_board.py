@@ -1,7 +1,7 @@
 """W4 — durable goal board: atomic claim, circuit breaker, reclaim, tenant scope."""
 import pytest
 
-from agents.task.goals.board import (
+from modules.goals.board import (
     GoalBoard, STATUS_READY, STATUS_RUNNING, STATUS_BLOCKED, STATUS_DONE, STATUS_CANCELLED,
 )
 

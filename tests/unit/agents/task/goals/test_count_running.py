@@ -1,7 +1,7 @@
 """Regression: GoalBoard.count_running is the cross-process in-flight count used
 to enforce GOAL_MAX_CONCURRENT under workers>1 (per-process self._inflight can't
 see other workers)."""
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 
 
 def _board(tmp_path):

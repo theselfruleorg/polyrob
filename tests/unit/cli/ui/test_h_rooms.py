@@ -2,7 +2,7 @@
 
 ``core.verbs`` has described ``/groups /mute /unmute /ban /unban /paid
 /cancel /new /start`` on every seat for months; the terminal had none of them.
-``h_rooms`` adds them as THIN calls into the SAME ``surfaces.telegram.group_ops``
+``h_rooms`` adds them as THIN calls into the SAME ``cron.owner_rooms``
 helpers, with an honest stand-in for the Telegram routing result they read.
 
 These tests pin the two things that could go wrong:
@@ -117,7 +117,7 @@ def test_paid_without_a_room_names_both_remedies():
 def test_room_verb_failure_is_an_honest_line_not_a_crash(monkeypatch):
     async def _boom(*a, **k):
         raise RuntimeError("store exploded")
-    monkeypatch.setattr("surfaces.telegram.group_ops.groups_reply", _boom)
+    monkeypatch.setattr("cron.owner_rooms.groups_reply", _boom)
     ctx, buf = _ctx(["list"])
     _run(h_rooms.h_groups(ctx))          # must not raise
     assert "groups unavailable" in buf.getvalue()
@@ -130,7 +130,7 @@ def test_room_reply_destination_is_named(monkeypatch):
 
     async def _reply(*a, **k):
         return CommandReply("price list", to_room=True)
-    monkeypatch.setattr("surfaces.telegram.group_ops.paid_reply", _reply)
+    monkeypatch.setattr("cron.owner_rooms.paid_reply", _reply)
     ctx, buf = _ctx(["prices", "--chat", "-100123"])
     _run(h_rooms.h_paid(ctx))
     out = buf.getvalue()
@@ -166,7 +166,7 @@ def test_cancel_interrupts_the_running_turn():
         ctx, buf = _ctx([])
         h_rooms.h_cancel(ctx)
         assert ctrl.interrupted
-        assert "Task cancelled." in buf.getvalue()
+        assert "Stopped." in buf.getvalue()
     finally:
         h_rooms._TURN.pop("ctrl", None)
 

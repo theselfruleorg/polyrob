@@ -42,6 +42,12 @@ class _Gate:
         return 1000.0
 
 
+def _facts(usd, params, **kw):
+    """The typed facts the send rails attach (125 S1)."""
+    return dict({"simulated_usd": usd, "sent_usd": None, "unverified": False,
+                 "allowed": True, "dry_run": params.dry_run}, **kw)
+
+
 class _Tool:
     def __init__(self, usd=2680.0):
         self.calls = []
@@ -57,7 +63,7 @@ class _Tool:
                     "  RESULT: DRY RUN (simulation only)")
         else:
             body = "transfer\n  RESULT: SENT tx 0xabc"
-        return SimpleNamespace(error=None, extracted_content=body)
+        return SimpleNamespace(error=None, extracted_content=body, metadata=_facts(self.usd, params))
 
 
 def test_bare_send_only_quotes_and_shows_the_caps_first():
@@ -164,7 +170,8 @@ def test_the_quote_speaks_to_the_owner_not_to_the_agent():
                     "  RESULT: DRY RUN (simulation only — nothing was broadcast, queued "
                     "or staged) — the guard would allow this. Re-run with "
                     "dry_run=false to send.")
-            return SimpleNamespace(error=None, extracted_content=body)
+            return SimpleNamespace(error=None, extracted_content=body,
+                                   metadata=_facts(self.usd, params))
 
     out = asyncio.run(send_ops.send_reply(
         "owner", ["1", "native", "to", ADDR, "on", "ethereum"], tool=_AgentWords()))

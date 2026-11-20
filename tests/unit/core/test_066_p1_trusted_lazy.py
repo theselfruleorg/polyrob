@@ -150,6 +150,58 @@ def test_the_pip_command_is_isolated_hashed_no_deps_and_wheel_only(tmp_path, fak
     assert not any("KEY" in k or "SEED" in k or k.startswith("PIP_") for k in env)
 
 
+def test_a_pip_failure_after_its_success_line_logs_stderr_and_the_exit_code(tmp_path, fake_feature):
+    # An experiment box, 2026-11-20: pip printed "Successfully installed" on stdout, then
+    # failed moving into --target; stderr (the cause) was cut off the log.
+    fake_feature[FAKE] = _closure("a" * 64)
+    cause = "shutil.Error: [Errno 1] Operation not permitted: '/x/lib/fakepkg'"
+    noise = "Successfully installed fakepkg-1.0 " + "x" * 2000
+
+    def run(cmd, **kw):
+        import subprocess
+        if "pip" in cmd:
+            return subprocess.CompletedProcess(cmd, 2, noise, "Traceback ...\n" + cause)
+        return subprocess.CompletedProcess(cmd, 0, "{}", "")
+
+    with pytest.raises(li.InstallRefused) as exc:
+        li.install(FAKE, root=tmp_path, wheel_only=True, run=run)
+    assert exc.value.kind == "pip_failed"
+    assert cause in str(exc.value) and "exit 2" in str(exc.value)
+
+
+def test_pip_temp_dir_is_on_the_mount_of_its_target(tmp_path, fake_feature, monkeypatch):
+    # pip --target builds in TMPDIR and MOVES into the target. Across two systemd
+    # ReadWritePaths bind mounts the move is a copy whose copystat chmods the
+    # setgid bit of <data home>/tmp, which RestrictSUIDSGID=true refuses (EPERM).
+    # pip's TMPDIR must be inside the install's own temp dir (a rename, no chmod).
+    monkeypatch.setenv("TMPDIR", str(tmp_path / "elsewhere"))
+    fake_feature[FAKE] = _closure("a" * 64)
+    seen = {}
+
+    def run(cmd, **kw):
+        import subprocess
+        if "pip" in cmd:
+            seen["tmpdir"] = kw["env"]["TMPDIR"]
+            seen["target"] = cmd[cmd.index("--target") + 1]
+            assert Path(seen["tmpdir"]).is_dir()
+            return subprocess.CompletedProcess(cmd, 1, "", "ERROR: THESE PACKAGES DO NOT MATCH THE HASHES")
+        return subprocess.CompletedProcess(cmd, 0, "{}", "")
+
+    with pytest.raises(li.InstallRefused):
+        li.install(FAKE, root=tmp_path / "pylibs", wheel_only=True, run=run)
+    assert Path(seen["tmpdir"]).parent == Path(seen["target"]).parent
+
+
+def test_the_real_install_leaves_no_pip_temp_dir(tmp_path, fake_feature):
+    links = tmp_path / "links"
+    links.mkdir()
+    whl = _wheel(links)
+    fake_feature[FAKE] = _closure(_sha(whl))
+    dest = li.install(FAKE, root=tmp_path / "pylibs", wheel_only=True,
+                      index_args=_offline(links), record_used=False)
+    assert sorted(p.name for p in dest.iterdir() if not p.name.startswith(li.COMPLETE)) == ["lib"]
+
+
 # --- request names ------------------------------------------------------------ #
 
 @pytest.mark.parametrize("name", ["../../etc/passwd", "evil;rm -rf /", "provider.evil", "", "PROVIDER.ANTHROPIC"])

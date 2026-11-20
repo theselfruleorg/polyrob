@@ -224,7 +224,7 @@ def step_is_message_only(actions: List[Dict[str, Any]]) -> bool:
 #: result.  Two or more present (or a ``current_state`` wrapper) ⇒ brain-state.
 #: One canonical set — a drifted local copy here was missing "phase", so a brain
 #: block whose only extra key was "phase" rendered as an agent bubble.
-from modules.llm.brain_scrubber import BRAIN_KEYS as _BRAIN_KEYS
+from core.brain_scrubber import BRAIN_KEYS as _BRAIN_KEYS
 
 #: Brain-state field values that carry no information for a planning line.
 _BRAIN_PLACEHOLDERS = frozenset({"", "pending", "n/a", "none", "synthesis pending"})

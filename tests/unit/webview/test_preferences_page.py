@@ -307,3 +307,14 @@ def _restore_server():
     yield
     import webview.server as server
     importlib.reload(server)
+
+
+def test_patch_answers_the_source_in_the_same_words_as_the_read(monkeypatch, tmp_path):
+    """Save redraws the Source cell from the PATCH answer: it must use the read's
+    words (``source_words``), never the raw ``default(…)`` resolver label."""
+    client, pages = _router_client(monkeypatch, tmp_path)
+    monkeypatch.setattr(pages, "display_effective",
+                        lambda key, uid, home: ("terse", "default(default (no bundle))"))
+    r = client.patch("/api/webgate/preferences",
+                     json={"key": "style.verbosity", "value": "terse"})
+    assert r.json()["source"] == "default (no bundle)"

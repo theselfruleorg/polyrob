@@ -8,6 +8,7 @@
  * failed says so. It re-reads on the console's live beat (`live.js::onLiveChange`).
  * Words come from `#workpane-shot-copy`.
  */
+import { getJson } from "./http.js";
 import { onLiveChange } from "./live.js";
 
 function el(tag, className, text) {
@@ -46,12 +47,11 @@ export function renderShot(root, body, copy, sessionId) {
   return "shot";
 }
 
-export async function loadShot(root, copy, sessionId, fetcher = fetch) {
+export async function loadShot(root, copy, sessionId, fetcher) {
   let body = null;
   try {
-    const resp = await fetcher(`/api/session/${encodeURIComponent(sessionId)}/screenshot`, { credentials: "include" });
-    body = await resp.json().catch(() => null);
-    if (!resp.ok) body = null;
+    const res = await getJson(`/api/session/${encodeURIComponent(sessionId)}/screenshot`, { fetcher });
+    body = res.ok ? res.body : null;
   } catch (err) {
     console.error("[workpane-shot] the screenshot read did not reach the console", err);
     body = null;

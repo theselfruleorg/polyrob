@@ -73,7 +73,7 @@ def test_board_lists_every_live_goal_of_the_tenant(monkeypatch, tmp_path, seeded
 
 
 def test_board_never_reads_the_dispatch_queue(monkeypatch, tmp_path, seeded):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
 
     def forbidden(self, *a, **k):
         raise AssertionError("GoalBoard.list() must never back a view")
@@ -103,7 +103,7 @@ def test_unreadable_board_is_an_error_not_an_empty_board(monkeypatch, tmp_path):
 
 
 def test_a_failed_side_read_is_named(monkeypatch, tmp_path, seeded):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
 
     def broken(self, **k):
         raise RuntimeError("edges unreadable")
@@ -129,7 +129,7 @@ def test_no_show_more_at_the_finished_cap(monkeypatch, tmp_path, seeded):
 
 
 def test_events_last_reads_only_the_newest_rows(tmp_path):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     board = GoalBoard(str(tmp_path / "goals.db"))
     g = board.create(user_id="u1", title="t")
     for i in range(5):
@@ -197,7 +197,7 @@ def test_detail_names_an_unreadable_run_log(monkeypatch, tmp_path, seeded):
     ("dropped", "drop", "cancelled"), ("recap", "pause", "paused"), ("digest", "stop", "cancelled"),
 ])
 def test_each_card_verb_is_the_existing_goal_verb(monkeypatch, tmp_path, seeded, name, verb, status):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     client = _client(monkeypatch, tmp_path)
     r = client.post(f"/api/webgate/goals/{seeded[name]}/{verb}")
     assert r.status_code == 200, r.text
@@ -205,7 +205,7 @@ def test_each_card_verb_is_the_existing_goal_verb(monkeypatch, tmp_path, seeded,
 
 
 def test_create_with_depends_on_waits(monkeypatch, tmp_path, seeded):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     client = _client(monkeypatch, tmp_path)
     r = client.post("/api/webgate/goals", json={"title": "Email the recap",
                                                 "depends_on": [seeded["recap"]]})
@@ -228,7 +228,7 @@ def test_an_ask_on_the_goal_rail_holds_it_on_the_board_and_in_the_detail(
         monkeypatch, tmp_path, seeded):
     """The board and the detail agree: an ask that names a goal only through its
     own ``goal:<id>`` rail holds that goal in both (the detail used to miss it)."""
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     b = GoalBoard(str(tmp_path / "goals.db"))
     q = b.create(user_id=OWNER, title="Queue the newsletter", force=True)
     ask = b.create_ask(user_id=OWNER, what="Which list gets the newsletter?",
@@ -244,7 +244,7 @@ def test_an_ask_on_the_goal_rail_holds_it_on_the_board_and_in_the_detail(
 def test_an_ask_does_not_hold_a_running_goal(monkeypatch, tmp_path, seeded):
     """The ``goal_owner_verbs.reason`` rule: only a ready or blocked goal waits
     on an answer; a running one that an old ask names is still running."""
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     GoalBoard(str(tmp_path / "goals.db")).create_ask(
         user_id=OWNER, what="Shorter digest?", blocks_goal_ids=[seeded["digest"]])
     client = _client(monkeypatch, tmp_path)
@@ -255,7 +255,7 @@ def test_an_ask_does_not_hold_a_running_goal(monkeypatch, tmp_path, seeded):
 
 
 def test_finished_goals_are_newest_by_when_they_ended(monkeypatch, tmp_path, seeded):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     b = GoalBoard(str(tmp_path / "goals.db"))
     from tests.unit.webview.goal_board_seed import force_status
     force_status(b, seeded["trade"], "done")       # created early, finished last

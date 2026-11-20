@@ -290,7 +290,10 @@ refused from a public room by default and has to be named room-safe in
 session carries none of the owner tenant's private state: no owner facts, no
 SOUL/SELF docs, no tenant memory prefetch or write, no episodic digest, no
 episode WRITTEN at the end either, no live-health note, no `<environment>` block,
-no project context. There is no `skip_memory` switch behind this — every one of
+no project context, and no name of the model or provider it runs on (it names only
+POLYROB and the agent's name). The one operator text it does get is the public knowledge,
+`<data_home>/identity/public.md` ([instances.md](instances.md#public-knowledge)).
+There is no `skip_memory` switch behind this — every one of
 those injectors asks `is_public_session()` and returns early, which is why the
 list can only grow by adding a guard, never by flipping a flag.
 
@@ -320,7 +323,8 @@ list can only grow by adding a guard, never by flipping a flag.
 
 **What IS reachable**, from the default room toolset: the room ledger's own
 context, `web_fetch` (results arrive untrusted-wrapped, same as everywhere
-else), the read-only `defi_data` market lookups that are not spend-adjacent, the
+else), the read-only `defi_data` lookups that are not spend-adjacent (market data, and
+network reads of any contract or NFT: `contract_read`, `nft_info`, `nft_account`), the
 `task` TODO tool, `send_message` into this room, and `load_skill` — the agent may
 *load* a skill the operator already installed, but it cannot write, patch,
 promote or install one, and it cannot load a tool.
@@ -727,3 +731,13 @@ profile*); the reference with a code anchor per row is
 The status snapshot (`/status all`, `polyrob doctor`, the console) carries a `groups`
 section: rooms served, mode, replies today, ledger size, last write, and who holds an admin
 role or bundle. A settings file it cannot read shows `bundles=UNKNOWN`.
+
+## Posting into a topic or as a reply
+
+When the agent sends a message on its own (a report, a notice, an answer to a room), it can aim
+it: `thread_id` posts into a thread or forum topic of that chat, `reply_to` answers one message.
+On Telegram (topic ids are numbers), Slack and Discord a thread or topic and a reply work; on
+any other surface the message is posted plainly in the chat. The same gates apply as for any send (the allowlist, the room's hourly limit,
+`/pause`); aiming a message gives it no new reach. A message held for quiet hours or queued for
+another process keeps its topic and reply.
+

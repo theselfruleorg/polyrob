@@ -106,7 +106,7 @@ def test_a_goal_group_unblocks_the_goal_and_wakes_nobody(st, monkeypatch):
             seen.append((goal_id, user_id))
             return True
 
-    monkeypatch.setattr("agents.task.goals.board.GoalBoard", _Board)
+    monkeypatch.setattr("modules.goals.board.GoalBoard", _Board)
     goals = st.db_path.replace("cards.db", "goals.db")
     open(goals, "w").close()
     gid = _settled_group(st, origin=G.ORIGIN_GOAL, ref="g123", session="sess-goal")

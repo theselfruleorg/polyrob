@@ -1,0 +1,91 @@
+{
+  "function": {
+    "description": "Deploy a fixed-supply token AND create and seed its Uniswap v4 pool against quote_token, in one act. The owner's act (card, owner turn, or a mandate naming it); the launch.* limits bind. Read the token-launch skill first. dry_run defaults TRUE.",
+    "name": "defi_trade_launch_token",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "chain": {
+          "description": "Chain to launch on — CHOOSE IT DELIBERATELY, because the same address is a different token on a different chain. Chains that can move value: ethereum, base, robinhood, arbitrum, polygon. Gas and per-chain guidance: the `chain` parameter of defi_trade.swap.",
+          "type": "string"
+        },
+        "dry_run": {
+          "default": true,
+          "description": "TRUE (default) checks and simulates the deploy; false runs every step.",
+          "type": "boolean"
+        },
+        "fee": {
+          "default": 10000,
+          "description": "Millionths: 100, 500, 3000 or 10000.",
+          "type": "integer"
+        },
+        "initial_price": {
+          "description": "The starting price: quote tokens per ONE new token.",
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "max_spend_usd": {
+          "description": "The most USD at risk: the seed at the launch price plus fees.",
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "name": {
+          "description": "Token name (printable ASCII, max 64).",
+          "type": "string"
+        },
+        "quote_amount": {
+          "default": 0.0,
+          "description": "Whole units of the quote token seeded; 0 = one-sided (a range above the price).",
+          "minimum": 0,
+          "type": "number"
+        },
+        "quote_token": {
+          "description": "The pool's other token (an address; the zero address = native). launch.pair, if pinned, decides it.",
+          "type": "string"
+        },
+        "range": {
+          "default": "full",
+          "description": "full, low,high (quote per token) or ticks:lo,hi.",
+          "type": "string"
+        },
+        "supply": {
+          "description": "Whole units, all minted to the wallet.",
+          "type": "string"
+        },
+        "symbol": {
+          "description": "Ticker (printable ASCII, max 16).",
+          "type": "string"
+        },
+        "tick_spacing": {
+          "default": 200,
+          "maximum": 32767,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "token_amount": {
+          "description": "Whole units of the new token seeded.",
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "why": {
+          "default": null,
+          "description": "Why this act, now (one line). Required on an autonomous run; the owner reads it.",
+          "nullable": true,
+          "type": "string"
+        }
+      },
+      "required": [
+        "chain",
+        "name",
+        "symbol",
+        "supply",
+        "quote_token",
+        "token_amount",
+        "initial_price",
+        "max_spend_usd"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

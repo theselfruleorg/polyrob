@@ -162,7 +162,7 @@ def _replace_atomically(path, root, fill, *, mode: int | None = None) -> None:
             if stat.S_ISDIR(info.st_mode):
                 raise UnsafePath(f"destination is a directory: {path}")
             if stat.S_ISREG(info.st_mode) and mode is None:
-                mode = stat.S_IMODE(info.st_mode)
+                mode = stat.S_IMODE(info.st_mode) & 0o777  # setuid/setgid: EPERM under the unit
         except FileNotFoundError:
             pass
         temporary = f".{name[:40]}.{secrets.token_hex(8)}.tmp"

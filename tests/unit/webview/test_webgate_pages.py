@@ -98,7 +98,7 @@ def test_goals_endpoint_calls_goalboard_list_recent(monkeypatch):
     client, pages = _router_client()
     monkeypatch.setattr(pages.AutonomyConfig, "goals_enabled", staticmethod(lambda: True))
 
-    from agents.task.goals.board import Goal
+    from modules.goals.board import Goal
 
     listed = {}
 
@@ -277,6 +277,18 @@ def test_identity_endpoint_reuses_core_instance(monkeypatch):
     assert body["self"] == "SELF TEXT"
     assert body["instance_id"] == "alice"
     assert body["owner"]
+
+
+def test_identity_endpoint_carries_the_character_persona_shows(monkeypatch):
+    """2026-11-20: the character the model speaks as is the /persona body, not
+    the rules document the owner writes (which the page called "the persona")."""
+    import agents.personality.persona_report as pr
+    client, pages = _router_client()
+    monkeypatch.setattr(pages, "load_self_context", lambda home: "")
+    monkeypatch.setattr(pages, "load_self_doc", lambda home, uid, iid: "")
+    monkeypatch.setattr(pr, "persona_report", lambda args=(): "Persona: character 'x'")
+    body = client.get("/api/webgate/identity").json()
+    assert body["character"] == "Persona: character 'x'"
 
 
 def test_identity_endpoint_null_when_absent(monkeypatch):

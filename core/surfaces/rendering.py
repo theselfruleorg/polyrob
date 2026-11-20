@@ -4,7 +4,11 @@ for free. Splitting prefers a newline, then a space, then a hard cut — and for
 never cuts in the middle of a '\\x' escape.
 
 Flavors:
-  "none"        - pass through (Discord/Slack render common markdown themselves)
+  "none"        - pass through (Discord renders common markdown itself)
+  "plain"       - agent markdown -> plain text (markers stripped; markdown_to_plain) for a
+                  surface that renders no markup (Signal)
+  "mrkdwn"      - agent markdown -> the single-marker chat markup Slack (mrkdwn) and
+                  WhatsApp share: *bold* _italic_ ~strike~ `code` (markdown_to_mrkdwn)
   "html"        - agent markdown -> Telegram HTML (the ONE converter; see markdown_to_html)
   "markdown_v2" - escape every reserved char (renders literally; kept for callers that
                   want a guaranteed-safe, formatting-free payload)
@@ -60,6 +64,12 @@ def markdown_to_html(text: str) -> str:
     # becomes "label: value" lines a phone can read; a wider one degrades to a
     # monospace <pre> block instead of a wall of literal pipes (096 W6).
     body = _stash_tables(body, _stash)
+    # 2026-11-20 UX review: a bare URL is not prose — stash it so `_x_` / `**` inside it
+    # never becomes a tag (a `[text](url)` target is left for the link rule).
+    body = _BARE_URL_RE.sub(lambda m: _stash(_esc(m.group(0))), body)
+    # A value the reader copies (an EVM address or hash, an absolute path) is a
+    # tap-to-copy <code> box on every reply, whether or not its writer added backticks.
+    body = _COPY_VALUE_RE.sub(lambda m: _stash(f"<code>{_esc(m.group(0))}</code>"), body)
 
     body = _esc(body)
 
@@ -109,6 +119,14 @@ def markdown_to_html(text: str) -> str:
 
     return re.sub(r"\x00(\d+)\x00", _restore, body)
 
+
+#: A bare http(s) URL that is not the target of a ``[text](url)`` link.
+_BARE_URL_RE = re.compile(r"(?<!\]\()\bhttps?://[^\s<>()\x00]+[^\s<>()\x00.,;:!?'\"]")
+#: A value to copy: an EVM address (40 hex) or hash (64 hex), or an absolute path with at
+#: least two parts (``/a/b``; a lone ``/verb`` is a command, not a path).
+_COPY_VALUE_RE = re.compile(
+    r"(?<![\w/`])0x(?:[0-9a-fA-F]{64}|[0-9a-fA-F]{40})(?![0-9a-zA-Z])"
+    r"|(?<![\w/:`.~])~?/(?:[\w.-]+/)+[\w.-]*\w")
 
 #: A markdown thematic break (``---`` / ``***`` / ``___``), on its own line.
 _RULE_RE = re.compile(r"^[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*$", re.MULTILINE)
@@ -415,6 +433,54 @@ def markdown_to_plain(text: str) -> str:
         return text
 
 
+#: Bold, held as a marker while the italic pass runs (a converted ``*b*`` must not
+#: read as italic).
+_BOLD_MARK = "\x02"
+
+
+def markdown_to_mrkdwn(text: str) -> str:
+    """The agent's markdown as Slack mrkdwn / WhatsApp markup — the two share the
+    single-marker form: ``**b**``/``__b__`` and a heading read ``*b*``, ``*i*`` reads
+    ``_i_``, ``~~s~~`` reads ``~s~``, code is kept as code, ``[t](url)`` reads
+    ``t (url)`` (both apps link a bare URL), bullets read ``•``. A command such as
+    ``/card_<id>_ok`` is never touched (``_`` italics need a word boundary). The
+    transport escapes ``& < >`` itself. Never raises; an empty input returns ``""``."""
+    if not text:
+        return ""
+    try:
+        stash: List[str] = []
+
+        def _keep(literal: str) -> str:
+            stash.append(literal)
+            return f"\x00{len(stash) - 1}\x00"
+
+        body = _FENCE_RE.sub(
+            lambda m: _keep("```\n" + m.group(2).strip("\n") + "\n```"), text)
+        body = _INLINE_CODE_RE.sub(lambda m: _keep(m.group(0)), body)
+        body = _PLAIN_LINK_RE.sub(
+            lambda m: m.group(1) if m.group(1) == m.group(2)
+            else f"{m.group(1)} ({m.group(2)})", body)
+        body = _RULE_RE.sub(_THIN_RULE, body)
+        body = _HEADING_RE.sub(
+            lambda m: f"{_BOLD_MARK}{m.group(1).replace('**', '')}{_BOLD_MARK}", body)
+        body = _BULLET_RE.sub(r"\1• ", body)
+        body = _BOLD_RE.sub(lambda m: f"{_BOLD_MARK}{m.group(1)}{_BOLD_MARK}", body)
+        body = _BOLD_US_RE.sub(lambda m: f"{_BOLD_MARK}{m.group(1)}{_BOLD_MARK}", body)
+        body = _STRIKE_RE.sub(r"~\1~", body)
+        body = _ITALIC_RE.sub(r"_\1_", body)
+        body = body.replace(_BOLD_MARK, "*")
+        return re.sub(r"\x00(\d+)\x00",
+                      lambda m: stash[int(m.group(1))] if int(m.group(1)) < len(stash)
+                      else m.group(0), body)
+    except Exception:
+        return text
+
+
+#: The flavors whose source is cut construct-aware, then converted chunk by chunk.
+_CONVERTED_FLAVORS = {"html": markdown_to_html, "plain": markdown_to_plain,
+                      "mrkdwn": markdown_to_mrkdwn}
+
+
 def _utf16_len(s: str) -> int:
     """Telegram meters message length in UTF-16 code units, not code points —
     astral-plane characters (most emoji) count double (030 L7b)."""
@@ -442,6 +508,8 @@ def split_for_flavor(text: str, flavor: str, limit: int) -> List[str]:
     limit = max(1, int(limit))
     if flavor == "html":
         return [c.strip("\n") for c in _split_utf16_safe(body, limit, split_markdown)]
+    if flavor in _CONVERTED_FLAVORS:
+        return [c.strip("\n") for c in split_markdown(body, limit)]
     return split_text(body, limit)
 
 
@@ -454,6 +522,11 @@ def render_for_flavor(text: str, flavor: str, limit: int) -> List[str]:
         # Conversion only shrinks visible text (markers become markup, and
         # Telegram's cap is measured after entity parsing), so chunks still fit.
         return [markdown_to_html(c) for c in split_for_flavor(body, flavor, limit)]
+    if flavor in _CONVERTED_FLAVORS:
+        # Plain text and mrkdwn only shrink the source (markers drop or halve; a
+        # link keeps its text and URL), so a source chunk still fits once converted.
+        convert = _CONVERTED_FLAVORS[flavor]
+        return [convert(c) for c in split_for_flavor(body, flavor, limit)]
     if flavor == "markdown_v2":
         body = _escape_markdown_v2(body)
     return split_text(body, limit)

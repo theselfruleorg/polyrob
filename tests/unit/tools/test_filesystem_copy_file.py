@@ -30,7 +30,7 @@ def _fs_tool():
 
 @pytest.fixture
 def _pm(tmp_path):
-    from agents.task.path import PathManager, set_path_manager
+    from core.session_paths import PathManager, set_path_manager
     pm = PathManager(data_root=str(tmp_path / "data"))
     set_path_manager(pm)
     return pm

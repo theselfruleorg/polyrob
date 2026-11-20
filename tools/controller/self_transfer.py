@@ -29,11 +29,44 @@ def owner_self_transfer_exemption(action_name: str, params: Dict[str, Any],
     return f"owner transfer to {label} — no third party is paid"
 
 
+def mandate_exemption(action_name: str, params: Dict[str, Any], context) -> Optional[str]:
+    """122 W5 / 124 W5: a live owner mandate covers this act of an autonomous main-agent run —
+    one use reserved, and the owner's grant stamped for this call so the money guard's card
+    rules (payout, an unpinned account, a nesting) read it as the owner's approval. The caps,
+    the pause and the simulation still bind."""
+    from core.wallet.standing_grant import exemption_for_turn
+    try:
+        from core.wallet.simulation import _default_rpc_for
+    except Exception:  # noqa: BLE001
+        _default_rpc_for = None
+    reason = exemption_for_turn(action_name, params, context, rpc_fn=_default_rpc_for)
+    if reason:
+        from tools.controller.approval import _stamp_owner_grant
+        _stamp_owner_grant(context, params or {}, action=action_name)
+        _name_the_mandate(context, reason)
+    return reason
+
+
+def _name_the_mandate(context, reason: str) -> None:
+    """Name the mandate on the grant: the guard holds the act to the autonomous ``why`` rule
+    and the act record names the mandate as its source (audit 2026-11-21 L-3)."""
+    import re
+    try:
+        from core.wallet.tx_guard import OWNER_GRANT_KEY
+        grant = (getattr(context, "metadata", None) or {}).get(OWNER_GRANT_KEY)
+        m = re.match(r"mandate (m_[0-9a-f]+)", str(reason or ""))
+        if isinstance(grant, dict) and m:
+            grant["mandate"] = m.group(1)
+    except Exception:  # noqa: BLE001 — a missing name never widens anything
+        pass
+
+
 def spend_exemption_with_turn(action_name: str, params: Dict[str, Any],
                               context=None) -> Optional[str]:
     from core.config_policy.spend_lane import spend_exemption
     return (spend_exemption(action_name, params)
-            or owner_self_transfer_exemption(action_name, params, context))
+            or owner_self_transfer_exemption(action_name, params, context)
+            or mandate_exemption(action_name, params, context))
 
 
 spend_exemption_with_turn.takes_context = True

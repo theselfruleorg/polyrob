@@ -130,7 +130,7 @@ def test_the_room_view_is_the_rows():
 
 
 def test_the_correspondent_view_is_the_rows():
-    from agents.task.agent.core.correspondent_gate import HIGH_IMPACT_TOOLS, _HIGH_IMPACT_NAMES
+    from core.security.high_impact import HIGH_IMPACT_TOOLS, _HIGH_IMPACT_NAMES
 
     assert _HIGH_IMPACT_NAMES == {
         r.name for r in vp.VERB_POLICY.values() if r.correspondent_blocked}

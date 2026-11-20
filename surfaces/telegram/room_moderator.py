@@ -3,7 +3,8 @@
 Both callers go through it, so they can never diverge:
 
 * `core.surfaces.room_actions.apply` — the paid path, after settlement;
-* `surfaces.telegram.group_ops._apply_free` — the owner/admin path, no invoice.
+* `cron.owner_rooms._apply_free` — the owner/admin path, no invoice, through the
+  Telegram room transport (`surfaces.telegram.group_ops.TelegramRoomTransport.apply`).
 
 Before this existed, the free path called ``restrict_member`` directly and
 rendered "muted" whatever verb was resolved, and the paid path could reach no
@@ -128,8 +129,14 @@ class RoomModerator:
 def install_room_moderator(container: Any, surface: Any) -> bool:
     """Register the moderator on *container*. Idempotent, fail-open.
 
-    Returns True when the service is present afterwards.
+    Returns True when the service is present afterwards. Also registers the
+    Telegram room transport (``core.surfaces.room_transport``), which the room
+    verbs' body asks for the Bot API calls.
     """
+    try:
+        import surfaces.telegram.group_ops  # noqa: F401 — registers the room transport
+    except Exception as e:
+        logger.warning("room actions: the telegram room transport did not register (%s)", e)
     try:
         if container is None:
             return False

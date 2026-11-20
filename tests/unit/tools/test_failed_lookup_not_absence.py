@@ -22,7 +22,7 @@ async def _noop():
 
 @pytest.fixture
 def tool(tmp_path, monkeypatch):
-    from agents.task.path import PathManager, set_path_manager
+    from core.session_paths import PathManager, set_path_manager
     set_path_manager(PathManager(data_root=str(tmp_path / "data")))
     monkeypatch.setattr(FileSystem, "ensure_initialized", lambda self: _noop(), raising=False)
     monkeypatch.delenv("AUTONOMOUS_READ_PAGE_LINES", raising=False)

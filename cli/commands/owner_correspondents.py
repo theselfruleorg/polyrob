@@ -21,7 +21,7 @@ _NOT_BOUND = {
 def _session_id(session_id: str) -> str:
     """The id as typed. The cleaner replaces a short id with a generated one and strips a
     role prefix, and a binding to a value the owner never typed is the fault this verb had."""
-    from agents.task.path import pm
+    from core.session_paths import pm
     try:
         cleaned = pm().clean_session_id(session_id)
     except ValueError:

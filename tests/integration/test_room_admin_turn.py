@@ -311,7 +311,7 @@ def test_stop_and_new_touch_only_the_speakers_session(container):
 
 # --- the real file tool ------------------------------------------------------
 def test_the_file_tool_stays_inside_the_session_workspace(tmp_path, monkeypatch):
-    from agents.task.path import pm
+    from core.session_paths import pm
     from tools.filesystem import FileSystem
     from core.exceptions import ServiceError  # noqa: F401
     tool = FileSystem.__new__(FileSystem)
@@ -632,7 +632,7 @@ def test_a_migrated_service_job_reads_the_supergroup_type(container):
 def test_two_sessions_writing_at_once_keep_their_own_files():
     """One FileSystem serves every session: an owner's file must not land in an admin's
     workspace because another call arrived during the write."""
-    from agents.task.path import pm
+    from core.session_paths import pm
     from tools.filesystem import FileSystem
     tool = FileSystem.__new__(FileSystem)
     tool.logger = __import__("logging").getLogger("t")

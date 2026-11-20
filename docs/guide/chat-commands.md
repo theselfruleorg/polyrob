@@ -9,8 +9,14 @@ one that is refused inside a group room.
 You never have to use a command. Plain words work ("schedule a check every
 morning at 9", "what did you spend this week"), and the agent uses its own tools.
 
-- `/help` lists the commands of your seat, grouped as below.
+- `/help` on Telegram is a short menu: the daily commands, then one button per group.
+  `/help <group>` (for example `/help money`) lists that group; `/help all` lists every
+  command. The terminal and the console list every command at once.
 - `/help <verb>` explains one command, with its current syntax and examples.
+- On Telegram, many replies carry buttons for the next step: `/model` (models, reasoning,
+  reset), `/chats` (switch, new chat), `/jobs` and `/goals` (open, run, pause, stop),
+  `/start` and a failed-job notice. A button runs the command it names, as if you typed
+  it, and someone who is not the owner gets no button for a command only the owner may run. An address, a hash or a value in `backticks` is a box you tap to copy.
 - A command a pack adds (such as `/x`) exists only while that pack is loaded.
 - In a Telegram group, `/admin <what to do>` runs what the owner granted: see [Group chats](groups.md#admin-abilities-admin).
 
@@ -86,7 +92,7 @@ column is a summary, and `/help <verb>` on your seat is the full form.
 | `/bridge <from> <to> <amount> [from usdc] [as <asset>] [go]` | Move value between chains: ETH/native or USDC in; native, WETH or USDC out | every seat |
 | `/launch <SYMBOL> <name…> [logo <url>] [desc <text>] [buy <amount>] [go]` | Launch a token on the launchpad | every seat |
 | `/deploy <SYMBOL> <supply> <name…> [on <chain>] [decimals <n>] [go]` | Deploy a fixed-supply token | every seat |
-| `/lp positions\|pool\|quote\|add\|remove\|collect\|seed\|move` | Liquidity positions: inspect, quote, add, remove, collect fees, declare a new pool, or move a position | every seat |
+| `/lp positions\|pool\|quote\|add\|remove\|collect\|seed\|move\|launch` | Liquidity positions: inspect, quote, add, remove, collect fees, declare a new pool, move a position, or see and grant token launches | every seat |
 | `/claim <token> [go]` | Collect the creator fees a launchpad already owes me | every seat |
 | `/nft [send <id> <to> [go]]\|list\|info <contract> <id>\|account [<id>]\|transfer <contract> <id> <to> [go]\|revoke <contract> <operator> [go]\|trust <collection>\|untrust <collection>\|ready <id>\|unready <id>` | Collectibles I hold: look, trust a collection, send one, make one ready for sale, or revoke an approval | every seat |
 | `/dapp list\|revoke <id>` | Web pages my wallet is connected to, and how to cut one off | every seat |
@@ -161,7 +167,7 @@ column is a summary, and `/help <verb>` on your seat is the full form.
 | `/mcp [add <id> <url>\|remove <id>\|test <id>]` | MCP servers I can use: add, remove, or test | every seat, not in a room |
 | `/model [<name> [default] [reasoning=<level>] \| reset \| aliases \| heavy <name> \| light <name> \| choice free\|listed]` | The model this chat runs on — switch it live, set your default, pick reasoning; set the heavy and light models and what the agent may choose | every seat, not in a room |
 | `/auth` | The provider keys I have, and how to connect one | terminal |
-| `/persona [name-or-text]` | The personas, and the one new chats use | terminal |
+| `/persona [name-or-text]` | The personas, and the one new chats use | every seat, not in a room |
 | `/profile` | Which agent this terminal runs, and where its files live | terminal |
 | `/toolset [name]` | The ability sets, and the one new chats use | terminal |
 | `/x` | My X account: renew its login, or see its state | every seat, `x` pack |
@@ -190,7 +196,9 @@ column is a summary, and `/help <verb>` on your seat is the full form.
 
 **Deciding and approving.** `/inbox` is everything waiting on a decision from
 you. `/approve <id>` and `/reject <id>` decide one of the items that `/pending`
-lists — the same decider on every seat, over the same list. Approval *policy*
+lists — the same decider in Telegram, the terminal and the console, over the same list. A money call that waits
+on you is ONE approval holding that exact call (`/pending` lists these first): tap its
+Confirm, or type `/approve <card id>`; `/reject <card id>` cancels it. Approval *policy*
 (which actions need your approval at all) is `/gates`. When the terminal asks
 you to approve an action, answer with a slash token: `/once`, `/session`,
 `/always`, `/deny` or `/never`. Plain text is chat, not an answer.
@@ -210,8 +218,10 @@ title you stopped with `--forever`. Background work:
 
 **Next-session settings.** `/toolset` and `/persona` set the default for the
 **next** session; they do not change the tools or the voice of the session you
-are in. `/model` changes the model of the running session at once; add
-`default` to keep it for new sessions too.
+are in. `/persona` shows the voice: the character file, what the model receives and a
+filled field it never sees. `/persona <name>` sets the voice of every new chat, in each chat
+app and the terminal; `/persona reset` goes back to the default. `/model` changes the model of this chat at once, and the chat keeps it
+until `/new`, also after a quiet period; add `default` to keep it for new chats too.
 
 **The agent's own model choices.** The agent can start a helper, a goal or a scheduled job
 on a model that it names, and it gives its reason. `/model heavy <name>` and

@@ -12,12 +12,14 @@ sticky file, and the wrapper-bin dir.
 """
 import os
 import shutil
+import stat as _stat_mod
 import sys
 from datetime import date
 from pathlib import Path
 
 import click
 
+from core import fs_copy
 from cli.commands._grouped import GroupedGroup
 from cli.commands._options import json_option, yes_option
 
@@ -210,8 +212,17 @@ def create_profile(name: str, *, from_profile: str = None, from_project: str = N
             f"profile '{name}' already exists at {home} (use `polyrob profile "
             f"show {name}` or pick another name)")
     if from_project:
-        _refuse_retired_identity_aliases(
-            Path(from_project).expanduser().resolve() / ".polyrob" / ".env")
+        legacy_env = Path(from_project).expanduser().resolve() / ".polyrob" / ".env"
+        if legacy_env.is_symlink() or (legacy_env.exists() and not legacy_env.is_file()):
+            raise click.ClickException(
+                f"refused to migrate '{from_project}': .polyrob/.env is a link or not a "
+                f"plain file/dir; replace it with a real file and retry")
+        _refuse_retired_identity_aliases(legacy_env)
+
+    if from_profile and not (profiles_root() / from_profile).is_dir():
+        # Before anything is made: a missing source left a half profile behind,
+        # and the retry said "already exists".
+        raise ProfileNotFoundError(from_profile, profiles_root() / from_profile)
 
     copied = []
     home.mkdir(parents=True)
@@ -227,55 +238,325 @@ def create_profile(name: str, *, from_profile: str = None, from_project: str = N
     if from_profile:
         src = profiles_root() / from_profile
         if not src.is_dir():
+            shutil.rmtree(home, ignore_errors=True)
             raise ProfileNotFoundError(from_profile, src)
-        for fname in _CLONE_CONFIG_FILES:
-            f = src / fname
-            if f.is_file():
-                shutil.copy2(f, home / fname)
-                copied.append(fname)
-        for dname in _CLONE_SUBDIRS:
-            d = src / dname
-            if d.is_dir() and any(d.iterdir()):
-                shutil.copytree(d, home / dname, dirs_exist_ok=True)
-                copied.append(dname + "/")
+        try:
+            copied.extend(_clone_profile_nofollow(src, home))
+        except _LinkInSource as exc:
+            shutil.rmtree(home, ignore_errors=True)   # root-owned, not handed over yet
+            raise click.ClickException(
+                f"refused to clone '{from_profile}': {exc} is a link or not a plain "
+                f"file/dir; replace it with a real file and retry") from None
         # A clone is a NEW instance — same voice, its own identity axis.
         _upsert_env_file(home / ".env", {"POLYROB_INSTANCE_ID": name})
 
     if from_project:
         src_data = Path(from_project).expanduser().resolve() / ".polyrob"
         if not src_data.is_dir():
+            shutil.rmtree(home, ignore_errors=True)
             raise click.ClickException(
                 f"no legacy data dir at {src_data} — nothing to migrate")
-        env_keys = _read_env_file(src_data / ".env")
-        if (src_data / "identity").is_dir():
-            shutil.copytree(src_data / "identity", home / "data" / "identity",
-                            dirs_exist_ok=True)
+        try:
+            copied.extend(_migrate_project_nofollow(src_data, home, include_data))
+        except _LinkInSource as exc:
+            shutil.rmtree(home, ignore_errors=True)   # root-owned, not handed over yet
+            raise click.ClickException(
+                f"refused to migrate '{from_project}': {exc} is a link or not a plain "
+                f"file/dir; replace it with a real file and retry") from None
+
+    _hand_to_service_user(home)
+    return {"home": home, "copied": copied}
+
+
+class _LinkInSource(Exception):
+    """A clone source entry is a symlink, a hard link or not a file/dir."""
+
+
+_NOFOLLOW_DIR = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW
+
+
+def _clone_file_at(src_dir_fd: int, name: str, dst_dir_fd: int, rel: str) -> None:
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=src_dir_fd)
+    except OSError as exc:
+        raise _LinkInSource(rel) from exc
+    try:
+        st = os.fstat(fd)
+        # A hard link reads another file through a name the source owner made.
+        if not _stat_mod.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            raise _LinkInSource(rel)
+        out = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                      fs_copy.perm_bits(st.st_mode), dir_fd=dst_dir_fd)
+        try:
+            while True:
+                chunk = os.read(fd, 1024 * 1024)
+                if not chunk:
+                    break
+                view = memoryview(chunk)
+                while view:
+                    view = view[os.write(out, view):]
+            os.fchmod(out, fs_copy.perm_bits(st.st_mode))   # the umask is not the source
+        finally:
+            os.close(out)
+    finally:
+        os.close(fd)
+
+
+def _clone_dir_at(src_dir_fd: int, dst_dir_fd: int, rel: str) -> None:
+    for entry in os.scandir(src_dir_fd):
+        child = f"{rel}/{entry.name}"
+        if entry.is_symlink():
+            raise _LinkInSource(child)
+        if entry.is_dir(follow_symlinks=False):
+            try:
+                sfd = os.open(entry.name, _NOFOLLOW_DIR, dir_fd=src_dir_fd)
+            except OSError as exc:
+                raise _LinkInSource(child) from exc
+            try:
+                mode = fs_copy.perm_bits(os.fstat(sfd).st_mode) | 0o700
+                try:
+                    os.mkdir(entry.name, mode, dir_fd=dst_dir_fd)
+                except FileExistsError:
+                    pass
+                dfd = os.open(entry.name, _NOFOLLOW_DIR, dir_fd=dst_dir_fd)
+                try:
+                    _clone_dir_at(sfd, dfd, child)
+                finally:
+                    os.close(dfd)
+            finally:
+                os.close(sfd)
+        else:
+            _clone_file_at(src_dir_fd, entry.name, dst_dir_fd, child)
+
+
+def _clone_subdir_at(src_fd: int, name: str, dst_parent_fd: int, dst_name: str,
+                     *, skip_empty: bool = False) -> bool:
+    """Clone ``src_fd/name`` into ``dst_parent_fd/dst_name`` no-follow. False when
+    the source is absent (or empty with *skip_empty*); a link refuses."""
+    try:
+        st = os.lstat(name, dir_fd=src_fd)
+    except FileNotFoundError:
+        return False
+    if _stat_mod.S_ISLNK(st.st_mode):
+        raise _LinkInSource(name)
+    if not _stat_mod.S_ISDIR(st.st_mode):
+        return False
+    try:
+        sfd = os.open(name, _NOFOLLOW_DIR, dir_fd=src_fd)
+    except OSError as exc:
+        raise _LinkInSource(name) from exc
+    try:
+        if skip_empty and not os.listdir(sfd):
+            return False
+        try:
+            os.mkdir(dst_name, 0o755, dir_fd=dst_parent_fd)
+        except FileExistsError:
+            pass
+        dfd = os.open(dst_name, _NOFOLLOW_DIR, dir_fd=dst_parent_fd)
+        try:
+            _clone_dir_at(sfd, dfd, name)
+        finally:
+            os.close(dfd)
+    finally:
+        os.close(sfd)
+    return True
+
+
+def _pinned_dir(dir_fd: int, path: Path) -> Path:
+    """A path that reaches the directory *dir_fd* holds, for a reader that opens by path
+    (SQLite, the env-file parser). On Linux ``/proc/self/fd/<n>`` resolves to the
+    opened directory itself, so a parent renamed or swapped after the no-follow checks
+    cannot send the read elsewhere (audit 2026-11-21 H-3). Elsewhere (no procfs; root
+    never hands a tree over there) the checked path."""
+    proc = Path(f"/proc/self/fd/{dir_fd}")
+    try:
+        if proc.is_dir() and os.path.samestat(os.stat(proc), os.fstat(dir_fd)):
+            return proc
+    except OSError:
+        pass
+    return path
+
+
+def _open_src_dir(path: Path) -> int:
+    try:
+        return os.open(path, _NOFOLLOW_DIR)
+    except OSError as exc:
+        raise _LinkInSource(path.name) from exc
+
+
+def _migrate_project_nofollow(src_data: Path, home: Path, include_data: bool) -> list:
+    """``create --from-project`` through the same no-follow descriptors as a
+    profile clone (audit 2026-11-21 H-3): the legacy folder may belong to the
+    agent, and root hands the result to it."""
+    copied = []
+    src_fd = _open_src_dir(src_data)
+    home_fd = os.open(home, _NOFOLLOW_DIR)
+    data_fd = os.open("data", _NOFOLLOW_DIR, dir_fd=home_fd)
+    try:
+        env_keys = {}
+        try:
+            env_st = os.lstat(".env", dir_fd=src_fd)
+        except FileNotFoundError:
+            env_st = None
+        if env_st is not None:
+            if not _stat_mod.S_ISREG(env_st.st_mode) or env_st.st_nlink != 1:
+                raise _LinkInSource(".env")
+            env_keys = _read_env_file(_pinned_dir(src_fd, src_data) / ".env")
+        if _clone_subdir_at(src_fd, "identity", data_fd, "identity"):
             copied.append("identity/")
-        if (src_data / "characters").is_dir() and any((src_data / "characters").iterdir()):
-            shutil.copytree(src_data / "characters", home / "characters",
-                            dirs_exist_ok=True)
+        if _clone_subdir_at(src_fd, "characters", home_fd, "characters", skip_empty=True):
             copied.append("characters/")
         lifted = {k: v for k, v in env_keys.items() if k in _IDENTITY_ENV_KEYS}
         if lifted:
             _upsert_env_file(home / ".env", lifted)
             copied.extend(sorted(lifted))
         if include_data:
-            from cli.update.snapshot import _sqlite_backup
+            import fnmatch
+            from core.update_snapshot.snapshot import _sqlite_backup
+            names = sorted(os.listdir(src_fd))
             for pattern in _DATA_DB_GLOBS:
-                for db in sorted(src_data.glob(pattern)):
-                    with open(db, "rb") as fh:
-                        is_sqlite = fh.read(16) == b"SQLite format 3\x00"
-                    if is_sqlite:  # online backup: a file copy loses rows still in -wal
-                        _sqlite_backup(db, home / "data" / db.name)
-                    else:
-                        shutil.copy2(db, home / "data" / db.name)
-                    copied.append(db.name)
-            if (src_data / "sessions").is_dir():
-                shutil.copytree(src_data / "sessions", home / "data" / "sessions",
-                                dirs_exist_ok=True)
+                for db in (n for n in names if fnmatch.fnmatchcase(n, pattern)):
+                    copied.append(_migrate_db(src_fd, src_data, db, data_fd, home,
+                                              _sqlite_backup))
+            if _clone_subdir_at(src_fd, "sessions", data_fd, "sessions"):
                 copied.append("sessions/")
+    finally:
+        os.close(data_fd)
+        os.close(home_fd)
+        os.close(src_fd)
+    return copied
 
-    return {"home": home, "copied": copied}
+
+def _migrate_db(src_fd: int, src_data: Path, db: str, data_fd: int, home: Path,
+                sqlite_backup) -> str:
+    """A live SQLite DB goes through the online backup (a file copy loses rows
+    still in -wal), which opens by PATH: the file and its sidecars are checked
+    no-follow first, the path goes through the pinned source dir
+    (:func:`_pinned_dir`, so a swapped parent is not followed) and the file's
+    inode is checked again after, so a swap refuses instead of copying its target."""
+    for sidecar in (db + "-wal", db + "-shm", db + "-journal"):
+        try:
+            if _stat_mod.S_ISLNK(os.lstat(sidecar, dir_fd=src_fd).st_mode):
+                raise _LinkInSource(sidecar)
+        except FileNotFoundError:
+            pass
+    try:
+        fd = os.open(db, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=src_fd)
+    except OSError as exc:
+        raise _LinkInSource(db) from exc
+    try:
+        st = os.fstat(fd)
+        if not _stat_mod.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            raise _LinkInSource(db)
+        is_sqlite = os.pread(fd, 16, 0) == b"SQLite format 3\x00"
+    finally:
+        os.close(fd)
+    if not is_sqlite:
+        _clone_file_at(src_fd, db, data_fd, db)
+        return db
+    sqlite_backup(_pinned_dir(src_fd, src_data) / db, home / "data" / db)
+    after = os.lstat(db, dir_fd=src_fd)
+    if (after.st_dev, after.st_ino) != (st.st_dev, st.st_ino) or not _stat_mod.S_ISREG(after.st_mode):
+        raise _LinkInSource(db)
+    return db
+
+
+def _clone_profile_nofollow(src: Path, home: Path) -> list:
+    """Clone the config files and subdirs of *src* into *home* through no-follow
+    descriptors (audit 2026-11-21 H-3): root runs this on a server, the source
+    belongs to ``polyrob-agent``, and the copy is handed to it — a followed link
+    would hand it any root-readable file. Any link refuses the whole clone."""
+    copied = []
+    src_fd = _open_src_dir(src)
+    home_fd = os.open(home, _NOFOLLOW_DIR)
+    try:
+        for fname in _CLONE_CONFIG_FILES:
+            try:
+                st = os.lstat(fname, dir_fd=src_fd)
+            except FileNotFoundError:
+                continue
+            if _stat_mod.S_ISLNK(st.st_mode):
+                raise _LinkInSource(fname)
+            if not _stat_mod.S_ISREG(st.st_mode):
+                continue
+            try:
+                os.unlink(fname, dir_fd=home_fd)    # the fresh .env is replaced
+            except FileNotFoundError:
+                pass
+            _clone_file_at(src_fd, fname, home_fd, fname)
+            copied.append(fname)
+        for dname in _CLONE_SUBDIRS:
+            if not _clone_subdir_at(src_fd, dname, home_fd, dname, skip_empty=True):
+                continue
+            copied.append(dname + "/")
+    finally:
+        os.close(home_fd)
+        os.close(src_fd)
+    return copied
+
+
+#: The identity a server's polyrob@<profile> unit runs as (deployment/polyrob@.service).
+_SERVICE_USER, _SERVICE_GROUP = "polyrob-agent", "polyrob-data"
+
+
+def _hand_to_service_user(home: Path) -> None:
+    """A profile made by ROOT on a server belongs to the unit that runs it.
+
+    `--service` needs root (it writes /etc), so the tree was born root-owned
+    (dirs 2755, `.env` 0644): `polyrob@<name>` runs as polyrob-agent and could not
+    write its own `data/`, and the deploy's ownership pass skips `profiles/`
+    (runtime-sandbox review 2026-11-20). Not root, or no service user: unchanged."""
+    if not hasattr(os, "geteuid") or os.geteuid() != 0:
+        return
+    try:
+        import grp
+        import pwd
+        uid = pwd.getpwnam(_SERVICE_USER).pw_uid
+        gid = grp.getgrnam(_SERVICE_GROUP).gr_gid
+    except (ImportError, KeyError):
+        return
+    # Bottom-up through descriptors (audit 2026-11-21 M-8): every entry is
+    # opened relative to its parent's fd, never by a path the new owner could
+    # have re-pointed, and a directory goes over only after everything under
+    # it — the top LAST, so the agent never owns a dir root still walks.
+    for _dirpath, _dirnames, filenames, dirfd in os.fwalk(home, topdown=False,
+                                                          follow_symlinks=False):
+        # A link to a dir is listed in dirnames but never descended; it is skipped.
+        for name in filenames:
+            _hand_entry(home, os.path.join(_dirpath, name), uid, gid,
+                        name=name, dir_fd=dirfd)
+        _hand_fd(home, _dirpath, dirfd, uid, gid, is_dir=True)
+
+
+def _hand_entry(home: Path, path: str, uid: int, gid: int, *, name: str, dir_fd: int) -> None:
+    # A link (to a file or a dir) fails the no-follow open: never followed.
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
+    except OSError:
+        return
+    try:
+        _hand_fd(home, path, fd, uid, gid, is_dir=False)
+    finally:
+        os.close(fd)
+
+
+def _hand_fd(home: Path, path: str, fd: int, uid: int, gid: int, *, is_dir: bool) -> None:
+    """Mode BEFORE owner, on the descriptor."""
+    try:
+        st = os.fstat(fd)
+        if is_dir:
+            os.fchmod(fd, 0o2770)     # root, outside any unit: setgid is allowed
+        elif _stat_mod.S_ISREG(st.st_mode):
+            keep_exec = st.st_mode & 0o100
+            os.fchmod(fd, 0o600 if os.path.basename(path) == ".env"
+                      else 0o660 | (0o110 if keep_exec else 0))
+        else:
+            return
+        os.fchown(fd, uid, gid)
+    except OSError as exc:
+        raise click.ClickException(
+            f"profile created, but handing {path} to {_SERVICE_USER}:{_SERVICE_GROUP} "
+            f"failed ({exc}); fix it with: chown -R {_SERVICE_USER}:{_SERVICE_GROUP} {home}")
 
 
 # D7 (proposal 030): sectioned --help instead of one flat alphabetical wall.

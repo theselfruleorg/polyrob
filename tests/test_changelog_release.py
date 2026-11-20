@@ -97,6 +97,13 @@ def test_new_release_sections_name_no_internal_work_items():
             f"item (RELEASING.md): {hits[:3]}")
 
 
+def test_unreleased_names_no_internal_work_items():
+    """The release cut copies [Unreleased] as written, so the rule binds it first."""
+    hits = [line.strip() for line in _unreleased_body().splitlines() if WORK_ITEM.search(line)]
+    assert not hits, (
+        f"[Unreleased]: describe the shipped change, not the work item (RELEASING.md): {hits[:3]}")
+
+
 #: A bullet is at most 3 lines and about 40 words (RELEASING.md). Both caps apply to
 #: ``[Unreleased]`` and to every release section after ``STYLE_RULES_AFTER``.
 MAX_BULLET_LINES = 3

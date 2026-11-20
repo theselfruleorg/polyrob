@@ -36,7 +36,8 @@ it again before you act on it.
 ## 3. One layer per kind — never mix them
 | What | Where |
 |---|---|
-| A rule the owner states ("never post X") | `owner_doc_manage` (a draft the owner confirms) |
+| A rule for all your work ("never post X") | `owner_doc_manage` |
+| How to do one task or job — its steps, criteria, lists (who to ban, what to post) | that task's skill (`skill_manage`); the job text names the skill, never copies it |
 | A job's on/off state, schedule, id or progress | the job itself (`cronjob_*`), never `owner_doc_manage` |
 | A typed setting (reply length, digest, quotas) | `preferences(operation="set", …)` |
 | What YOU learned about your own work | `self_context_manage` |
@@ -44,7 +45,8 @@ it again before you act on it.
 | A fact or document to find later | a workspace file, or `knowledge_kb_ingest` |
 
 A rule is not a skill, a skill is not a memory note, and a preference is not a
-rule. Write each once, in its own layer.
+rule. Write each once, in its own layer: a report or workspace file is a record
+and never restates a rule.
 
 ## 4. Honest reads
 - An unreadable store is not an empty one. When a search or a list fails, say

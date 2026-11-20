@@ -93,6 +93,46 @@ async def credit_billing_required(container, user_id) -> bool:
     return tier_manager is None or await tier_manager.get_user_tier(user_id) != 'admin'
 
 
+async def bind_request_limits(container, request, user_id, session_id) -> bool:
+    """The ONE limit check of a new session (125 S33, D11): ``/api``, A2A and the
+    lite agent all reach it through ``create_session``.
+
+    A billed tenant is validated as before (an out-of-range ``max_steps`` raises).
+    Every other tenant that is not the owner and not admin tier has ``max_steps``
+    CLAMPED (no error) to the interactive budget, or to the autonomous cap for an
+    autonomous session — a box with no credit billing no longer lets a stranger ask
+    for 100000 steps. A missing tier manager cannot grant the exemption.
+
+    Returns whether the request is credit-billed (the session metadata stamp)."""
+    credit_billed = await credit_billing_required(container, user_id)
+    validate_billed_request(request, required=credit_billed, session_id=session_id)
+    if credit_billed or is_billed():
+        return credit_billed
+    from core.surfaces.owner_address import is_owner_tenant
+    if is_owner_tenant(user_id):
+        return False
+    tier_manager = container.get_service('tier_manager') if container is not None else None
+    if tier_manager is not None:
+        try:
+            if await tier_manager.get_user_tier(user_id) == 'admin':
+                return False
+        except Exception:
+            pass  # an unreadable tier grants nothing: clamp
+    from agents.task.session_class import is_autonomous_session
+    if session_id and is_autonomous_session(session_id):
+        from core.config_policy import AutonomyConfig
+        ceiling = AutonomyConfig.autonomous_max_steps()
+    else:
+        ceiling = interactive_max_steps()
+    steps = request.max_steps
+    try:
+        steps = int(steps) if not isinstance(steps, bool) else ceiling
+    except (TypeError, ValueError):
+        steps = ceiling
+    request.max_steps = min(max(steps, 1), ceiling)
+    return False
+
+
 @asynccontextmanager
 async def session_compute(info, user_id, container):
     """Fresh liability and saved limits also bind non-HTTP chat continuations."""

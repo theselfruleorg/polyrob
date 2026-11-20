@@ -25,14 +25,19 @@ export function settingControl(spec, copy, { flag = false, fetcher, bare = false
   const key = spec.key || spec.name;
   root.dataset.settingKey = key;
   const label = spec.label || spec.description || key;
+  // The value the control starts with. A preference row sends `control_value`
+  // apart from its display `value`: an unset default is display words ("not
+  // set (any pair)"), and a control that took them counted as changed, so Save
+  // wrote settings the owner never touched.
+  const start = Object.hasOwn(spec, 'control_value') ? spec.control_value : spec.value;
   // 113 W6: a list editor holds entries only. A value that is not a list (the
   // catalog's "empty" word, a raw env line) is never put in the box, so Save
   // can never store it as an entry.
   const shown = (v) => (Array.isArray(v) ? v.join('\n')
     : spec.type === 'list' ? '' : String(v ?? ''));
   let input;
-  let boolValue = spec.value === true || /^(true|1|on|yes)$/i.test(String(spec.value));
-  const knownBool = /^(true|false|1|0|on|off|yes|no)$/i.test(String(spec.value));
+  let boolValue = start === true || /^(true|1|on|yes)$/i.test(String(start));
+  const knownBool = /^(true|false|1|0|on|off|yes|no)$/i.test(String(start));
   if (spec.type === 'bool' && !knownBool) {
     input = node('select');
     for (const v of ['', 'true', 'false']) {
@@ -52,13 +57,13 @@ export function settingControl(spec, copy, { flag = false, fetcher, bare = false
     input.addEventListener('click', () => { boolValue = !boolValue; draw(); cancelConfirm(); });
   } else if (spec.type === 'enum') {
     input = node('select');
-    if (spec.value == null || !(spec.enum_values || []).includes(spec.value)) {
+    if (start == null || !(spec.enum_values || []).includes(start)) {
       const unknown = node('option', '', '—'); unknown.value = ''; unknown.disabled = true;
       unknown.selected = true; input.append(unknown);
     }
     (spec.enum_values || []).forEach(value => {
       const option = node('option', '', value); option.value = value;
-      option.selected = value === spec.value; input.append(option);
+      option.selected = value === start; input.append(option);
     });
   } else {
     input = node(spec.type === 'list' ? 'textarea' : 'input');
@@ -67,7 +72,7 @@ export function settingControl(spec, copy, { flag = false, fetcher, bare = false
       if (spec.min != null) input.min = spec.min;
       if (spec.max != null) input.max = spec.max;
     } else if (spec.type !== 'list') input.type = 'text';
-    input.value = shown(spec.value);
+    input.value = shown(start);
   }
   input.setAttribute('aria-label', label);
   if (spec.type !== 'bool' || !knownBool) input.addEventListener('input', () => cancelConfirm());
@@ -96,7 +101,7 @@ export function settingControl(spec, copy, { flag = false, fetcher, bare = false
     // Keep scalar strings: server coercion is authoritative and rejects blank numbers.
     return input.value;
   }
-  let saved = shown(spec.type === 'bool' && knownBool ? boolValue : spec.value);
+  let saved = shown(spec.type === 'bool' && knownBool ? boolValue : start);
   const current = () => (spec.type === 'bool' && !knownBool && !input.value ? saved : shown(value()));
   async function write(confirmed) {
     if (spec.type === 'bool' && !knownBool && !input.value) return { ok: false };
@@ -117,7 +122,8 @@ export function settingControl(spec, copy, { flag = false, fetcher, bare = false
             : `${copy.control_saved || status.textContent} ${(res.body.applies && copy[`control_applies_${String(res.body.applies).replace('-', '_')}`]) || ''}`.trim();
           const effective = root.closest('td')?.querySelector('[data-effective]');
           if (effective) effective.textContent = Array.isArray(res.body.value) && !res.body.value.length
-            ? (copy.set_list_none || '') : JSON.stringify(res.body.value);
+            ? (copy.set_list_none || '')
+            : (Array.isArray(res.body.value) ? res.body.value.join(', ') : String(res.body.value ?? ''));
           const source = root.closest('tr')?.querySelector('[data-source]');
           if (source && res.body.source != null) source.textContent = String(res.body.source);
           if (key === 'ui.show_avatar') document.body.dataset.showAvatar = String(res.body.value);

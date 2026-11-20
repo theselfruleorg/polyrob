@@ -62,6 +62,18 @@ def _terminal_error_text(result) -> Optional[str]:
 class SessionExecutionMixin:
     """Agent creation + session execution for SessionOrchestrator."""
 
+    async def _resolve_session_persona(self) -> str:
+        """The persona for this session, resolved once and cached on the
+        orchestrator. Never raises: a broken character must not stop a run."""
+        try:
+            from agents.personality.persona_resolver import resolve_persona
+            persona = await resolve_persona(container=getattr(self, 'container', None))
+        except Exception as e:
+            self.logger.warning(f"persona not resolved for session {self.session_id}: {e}")
+            persona = ""
+        self._persona_block = persona or ""
+        return self._persona_block
+
     async def create_agent(self,
                           task: str,
                           llm: Any = None,
@@ -141,7 +153,14 @@ class SessionExecutionMixin:
         # S1/S2 (chat consolidation): forward the chat-mode persona block set on
         # the orchestrator (by TaskAgent.chat_once) into AgentConfig so the agent's
         # SystemPrompt <identity> carries the character. None => byte-identical.
+        # Every OTHER session — a chat surface, a cron or goal run, an A2A task —
+        # comes through create_session, which sets nothing: before this the
+        # character reached the model only on /v1 and the CLI. Resolve it here,
+        # once per orchestrator (a sub-agent reuses it), through the ONE resolver;
+        # the gate off or no character resolves to "" (byte-identical prompt).
         _persona = getattr(self, '_persona_block', None)
+        if _persona is None:
+            _persona = await self._resolve_session_persona()
         if _persona:
             agent_config["persona_block"] = _persona
 

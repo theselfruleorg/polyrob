@@ -35,7 +35,7 @@
  * 4. **It decides nothing itself.** A write is a POST/DELETE to an existing
  *    route (`http.js`), and the row says back exactly what the server answered.
  */
-import { postJson, readJson } from "./http.js";
+import { deleteJson, postJson, readJson } from "./http.js";
 import { groupSave, settingControl } from "./settings-control.js";
 import { stateBlock } from "./state.js";
 import { loadEpisodes, renderEpisodes, skillDetail } from "./agent-detail.js";
@@ -374,6 +374,16 @@ export function renderIdentity(root, data, copy, opts = {}) {
   const faceSec = section(copy && copy.id_face_title, copy && copy.id_face_body);
   root.appendChild(faceSec);
 
+  // The character the model speaks as — read-only, the same report /persona
+  // gives on every chat seat (the file it came from, what the model receives).
+  if (data.character) {
+    const charSec = section(copy && copy.id_character_title, copy && copy.id_character_aside);
+    const entry = el("div", "entry");
+    entry.appendChild(el("pre", "section-content", String(data.character)));
+    charSec.appendChild(entry);
+    root.appendChild(charSec);
+  }
+
   // The persona you wrote — READ-ONLY. It is the one document the agent never edits.
   // WV2: a failed read of either document is "could not read" with its reason
   // — never "nothing written yet", which reads as an empty document.
@@ -653,8 +663,11 @@ export function renderNotes(root, data, copy, opts = {}) {
       "mem_notes_unavailable_why"));
     return "unavailable";
   }
-  if (data && data.notes_error) {
-    sec.appendChild(dashedEntry(data.notes_error, copy, "mem_notes_error",
+  // A refused or failed read (`readJson` resolves `{error}`) is "could not
+  // read", never "no notes".
+  const notesError = data && (data.notes_error || data.error);
+  if (notesError) {
+    sec.appendChild(dashedEntry(String(notesError), copy, "mem_notes_error",
       "mem_notes_error_why"));
     return "error";
   }
@@ -714,8 +727,9 @@ export function renderRecall(root, data, copy) {
       "mem_notes_unavailable_why"));
     return "unavailable";
   }
-  if (data && data.recall_error) {
-    sec.appendChild(dashedEntry(data.recall_error, copy, "mem_recall_error",
+  const recallError = data && (data.recall_error || data.error);
+  if (recallError) {
+    sec.appendChild(dashedEntry(String(recallError), copy, "mem_recall_error",
       "mem_recall_error_why"));
     return "error";
   }
@@ -1059,18 +1073,11 @@ export async function addNote(content, copy, opts = {}) {
 /** Forget one curated note (a soft archive). Returns `{ok, message}`. */
 export async function forgetNote(noteId, copy, opts = {}) {
   try {
-    const call = opts.fetcher || fetch;
-    const resp = await call("/api/webgate/memory", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({ note_id: noteId }),
-    });
-    let body = null;
-    try { body = await resp.json(); } catch (err) { body = null; }
+    const { ok, body } = await deleteJson("/api/webgate/memory", { note_id: noteId },
+      { fetcher: opts.fetcher });
     const message = (body && body.message)
-      || (resp.ok ? (copy && copy.mem_forgotten) : (copy && copy.mem_forget_failed)) || "";
-    return { ok: Boolean(resp.ok && body && body.ok), message };
+      || (ok ? (copy && copy.mem_forgotten) : (copy && copy.mem_forget_failed)) || "";
+    return { ok: Boolean(ok && body && body.ok), message };
   } catch (err) {
     console.error("[agent] the forget did not reach the console", err);
     return { ok: false, message: (copy && copy.unreachable) || "" };

@@ -109,3 +109,20 @@ async def test_owner_login_and_admin_wallet_paths_are_unchanged(db, monkeypatch)
     req = _request("user")
     req.state.wallet_address = "0xADMINWALLET"
     assert await admin.require_admin(req) is True
+
+
+# ── L-27 (audit 2026-11-21): the `admin` tier is the owner's to give ─────────
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("actor,allowed", [("admin", False), ("owner", True)])
+async def test_only_the_owner_sets_the_admin_tier(db, actor, allowed):
+    db.fetch_one.return_value = {"role": "user", "tier": "free", "wallet_address": None}
+    call = admin.set_user_tier(_request(actor), "tenant", admin.SetTierRequest(tier="admin"))
+    if allowed:
+        assert (await call)["success"]
+        db.execute.assert_awaited_once()
+    else:
+        with pytest.raises(HTTPException) as exc:
+            await call
+        assert exc.value.status_code == 403
+        db.execute.assert_not_awaited()

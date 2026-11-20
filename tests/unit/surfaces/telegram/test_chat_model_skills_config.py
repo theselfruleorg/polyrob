@@ -88,7 +88,7 @@ def test_model_verb_failure_is_a_reply_not_a_crash(monkeypatch):
 
 def test_skills_lists_the_catalog(monkeypatch):
     import agents.task.agent.skill_manager as sm
-    from surfaces.telegram.skills_ops import skills_reply
+    from agents.task.skills_owner import skills_reply
     skills = [SimpleNamespace(skill_id="x-post", description="Post on X"),
               SimpleNamespace(skill_id="digest", description="The daily digest")]
     monkeypatch.setattr(sm, "get_skill_manager", lambda: SimpleNamespace(
@@ -102,7 +102,7 @@ def test_skills_lists_the_catalog(monkeypatch):
 
 def test_skills_names_an_unreadable_store(monkeypatch):
     import agents.task.agent.skill_manager as sm
-    from surfaces.telegram.skills_ops import skills_reply
+    from agents.task.skills_owner import skills_reply
 
     def boom():
         raise OSError("disk")
@@ -115,7 +115,7 @@ def test_skills_names_an_unreadable_store(monkeypatch):
 
 def test_config_get_and_explain_read_the_one_describer(monkeypatch, tmp_path):
     import core.runtime_paths as rp
-    from surfaces.telegram.prefs_ops import _config_reply
+    from core.prefs_reply import config_reply as _config_reply
     monkeypatch.setattr(rp, "prefs_home_dir", lambda: str(tmp_path))
     out = _config_reply("u1", str(tmp_path), "i", ["get", "delivery.daily_cap"])
     assert out.startswith("delivery.daily_cap = ") and "applies:" in out

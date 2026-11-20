@@ -104,7 +104,7 @@ def _scan_folder(folder: Path) -> None:
     — injection patterns AND zero-width/bidi smuggling), not the plain
     ``is_suspicious``: a ``references/*.md`` served by ``read_skill_resource`` is
     read by the model exactly like the body."""
-    from modules.memory.task.threat_scan import is_skill_content_suspicious
+    from core.security.threat_scan import is_skill_content_suspicious
 
     for p in sorted(folder.rglob("*")):
         if not p.is_file() or p.suffix.lower() not in _TEXT_SUFFIXES:
@@ -187,7 +187,7 @@ def install_local(src: Path, *, user_id: str, trust: str = "prompt", source: str
     if pending.exists():
         shutil.rmtree(pending)
     pending.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(src, pending)  # whole folder incl. resources
+    fs_copy.copy_tree(src, pending)  # whole folder incl. resources
     # Record the TRUE origin alongside the staged skill so a later `skill approve`
     # (Task 24) — which only knows the skill NAME, not how it got quarantined —
     # can audit the real source/sha instead of a hardcoded "local" guess.
@@ -553,7 +553,7 @@ def _port_resources(pending_dir: Path, active_dir: Path) -> None:
         if dest_real != active_real and not dest_real.startswith(active_real + os.sep):
             continue  # confinement guard — never write outside the active dir
         if item.is_dir():
-            shutil.copytree(item, dest, dirs_exist_ok=True)
+            fs_copy.copy_tree(item, dest, dirs_exist_ok=True)
         else:
             shutil.copy2(item, dest)
 
@@ -950,6 +950,7 @@ def skill_remove_cmd(skill_id: str, user_id: Optional[str]):
 
 
 # 067 P6: tap / search / update (cli/commands/skill_hub.py — stdlib+click at import).
+from core import fs_copy
 from cli.commands.skill_hub import register_hub_commands  # noqa: E402
 
 register_hub_commands(skill)

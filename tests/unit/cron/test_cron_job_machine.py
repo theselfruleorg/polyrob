@@ -5,7 +5,7 @@ from datetime import datetime
 import pytest
 
 import cron.jobs as jobs_mod
-from cron.job_machine import CRON_JOB_MACHINE
+from core.cron_store import CRON_JOB_MACHINE
 from cron.jobs import CronJob, CronJobStore
 from core.sqlite_util import execute_retry
 

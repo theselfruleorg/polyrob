@@ -3,9 +3,9 @@ import asyncio
 
 import pytest
 
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from agents.task.goals.dispatcher import GoalDispatcher
-from agents.task.goals.machines import GOAL_MACHINE
+from modules.goals.machines import GOAL_MACHINE
 from core.goal_owner_verbs import pause_goal, retry_goal
 from core.state.machine import IllegalTransition
 
@@ -107,7 +107,7 @@ def test_reclaim_skips_a_claim_refreshed_after_the_read(tmp_path, monkeypatch):
     g = board.create(user_id="u", title="work")
     run = board.claim(g.id, "w", ttl_seconds=10)
     clock["t"] += 60
-    import agents.task.goals.board as bm
+    import modules.goals.board as bm
     real = bm.execute_retry
 
     def heartbeat_lands(db_path, sql, params=(), **kw):

@@ -28,8 +28,16 @@ def self_facts_text(agent, cause: str, previous_model: Optional[str]) -> str:
     model = getattr(agent, "model_name", None) or "unknown"
     provider = (getattr(agent, "llm_provider", None)
                 or getattr(agent, "provider_name", None) or "unknown")
-    line = f'Model now: "{model}" via provider "{provider}"'
-    if previous_model and previous_model != model:
+    # A room or a correspondent session: the model is not named (see set_runtime_identity).
+    mm = getattr(agent, "message_manager", None)
+    try:
+        from agents.task.agent.messages.foundation_layers import identity_hidden
+        hidden = mm is not None and identity_hidden(mm)
+    except Exception:
+        hidden = True
+    line = ("Your model changed (not named in this chat)" if hidden
+            else f'Model now: "{model}" via provider "{provider}"')
+    if previous_model and previous_model != model and not hidden:
         who = {"owner": "the owner switched it", "api": "an API request switched it",
                "fallback": "a provider failover, not the owner",
                "restore": "restored after a failover"}.get(cause, cause)
@@ -57,7 +65,9 @@ def _sources(agent):
     iid = resolve_instance_id()
     root = self_tier_root(home, uid, iid)
     return home, uid, iid, (preferences_path(home, uid, iid),
-                            root / "owner.md", root / "self.md")
+                            root / "owner.md", root / "self.md",
+                            # 127 W3: a draft written or rejected moves only this file.
+                            root / ".pending" / "owner.md")
 
 
 def _mtime(path) -> float:
@@ -65,6 +75,51 @@ def _mtime(path) -> float:
         return path.stat().st_mtime_ns if path is not None else 0
     except OSError:
         return 0
+
+
+#: 127 W3: over this, the owner-rules part carries the changed lines, not the doc
+#: (the state-delta part cap is 4000 chars; owner.md may hold 24000).
+_OWNER_PART_FULL_MAX = 3200
+
+
+def _owner_rules_part(agent, owner: str, uid, home, iid) -> str:
+    """The rules as they are now, headed by whether a draft waits (127 W3): the owner
+    decides outside the agent's turn, and an old tool result in the history still
+    says "tap to approve". A long doc sends what changed plus a pointer."""
+    try:
+        from core.status_rules import owner_draft_status
+        status = owner_draft_status(uid, home_dir=home, instance_id=iid)
+    except Exception:
+        status = "Owner-rule drafts: unreadable — say you cannot tell."
+    seen = getattr(agent, "_owner_rules_seen", None)
+    last = getattr(agent, "_owner_rules_part_last", None)
+    if seen == owner and isinstance(last, tuple) and last[:2] == (owner, status):
+        # Nothing in the rules or the draft moved (a preferences write woke the check):
+        # the same text, so the part is not pushed again as "(no rule line changed)".
+        return last[2]
+    text = _render_owner_rules_part(owner, status, seen)
+    try:
+        agent._owner_rules_seen = owner
+        agent._owner_rules_part_last = (owner, status, text)
+    except Exception:
+        logger.debug("owner rules part not cached", exc_info=True)
+    return text
+
+
+def _render_owner_rules_part(owner: str, status: str, seen) -> str:
+    if len(owner) <= _OWNER_PART_FULL_MAX or seen is None:
+        body = owner if len(owner) <= _OWNER_PART_FULL_MAX else (
+            "(the full rules are in the ## Owner rules block of your context; "
+            "owner_doc_manage action='read' shows them)")
+        return f"## Owner rules (current)\n{status}\n\n{body}"
+    from core.doc_claims import changed_lines
+    added, removed = changed_lines(seen, owner), changed_lines(owner, seen)
+    lines = ["## Owner rules (changed)", status, ""]
+    lines += [f"+ {l}" for l in added[:20]] + [f"- {l}" for l in removed[:20]]
+    if not (added or removed):
+        lines.append("(no rule line changed)")
+    lines.append("All rules: owner_doc_manage action='read'.")
+    return "\n".join(lines)
 
 
 def self_context_parts(agent) -> dict:
@@ -78,7 +133,7 @@ def self_context_parts(agent) -> dict:
     return {
         "style_prefs": "The owner's reply style now (it overrides any earlier style "
                        f"line or reply-length budget):\n{style}",
-        "owner_rules": f"## Owner facts (current)\n\n{owner}",
+        "owner_rules": _owner_rules_part(agent, owner, uid, home, iid),
         "self_notes": f"Your self notes (current):\n{notes}",
     }
 

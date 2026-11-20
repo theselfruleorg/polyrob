@@ -63,7 +63,7 @@ def test_a_pending_rule_is_named_as_not_in_effect(tmp_path):
 
 
 def test_written_but_not_loaded_is_critical(tmp_path, monkeypatch):
-	import modules.memory.task.threat_scan as ts
+	import core.security.threat_scan as ts
 	monkeypatch.setattr(ts, "is_identity_suspicious", lambda _t: True)
 	root = self_tier_root(tmp_path, UID, "alice")
 	root.mkdir(parents=True, exist_ok=True)

@@ -98,13 +98,23 @@ async def test_typo_gets_a_did_you_mean_suggestion(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_start_gets_a_welcome_not_the_help_wall(tmp_path):
+async def test_start_gets_a_welcome_not_the_help_wall(tmp_path, monkeypatch):
     agent = _Agent(str(tmp_path))
+    from core.surfaces.command_reply import reply_actions, reply_text
+    # A non-owner: no button and no line for a verb only the owner may run.
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "someone-else")
+    reply = await _handle_command(agent, _cmd("/start", "/start"), spawn=None)
+    assert "/help" in reply_text(reply) and "/inbox" not in reply_text(reply)
+    assert [a.label for a in reply_actions(reply)] == ["Help"]
+    # The owner: the daily reads as buttons.
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     reply = await _handle_command(agent, _cmd("/start", "/start"), spawn=None)
     assert reply is not None
-    assert "/help" in reply
+    assert "/help" in reply_text(reply)
     # The welcome is a short first-contact message, not the full verb catalog.
-    assert "/settle" not in reply
+    assert "/settle" not in reply_text(reply)
+    assert [a.label for a in reply_actions(reply)] == ["What needs me", "Status", "My goals",
+                                                       "Help"]
 
 
 # --- 030 WS-C4: grouped /help + /help <verb> --------------------------------
@@ -113,7 +123,7 @@ async def test_start_gets_a_welcome_not_the_help_wall(tmp_path):
 async def test_help_is_grouped(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")   # the owner's /help (F-05)
     agent = _Agent(str(tmp_path))
-    reply = await _handle_command(agent, _cmd("/help", "/help"), spawn=None)
+    reply = await _handle_command(agent, _cmd("/help", "/help all"), spawn=None)
     # D34: the sections ARE `core.verbs.GROUP_ORDER`, rendered — not a second
     # grouping this module invented beside the table.
     from core.verbs import GROUP_ORDER, grouped

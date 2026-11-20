@@ -35,9 +35,9 @@ def _anchor_session_root() -> None:
     """
     if (os.environ.get("DATA_ROOT") or "").strip():
         return
-    if (os.environ.get("POLYROB_DATA_DIR") or "").strip():
+    from core.runtime_paths import pinned_data_home, resolve_data_home
+    if pinned_data_home() is not None:
         return
-    from core.runtime_paths import resolve_data_home
     os.environ["DATA_ROOT"] = str(resolve_data_home() / "sessions")
 
 

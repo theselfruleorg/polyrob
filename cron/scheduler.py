@@ -14,10 +14,6 @@ import logging
 import os
 import time
 
-try:
-    import fcntl
-except ImportError:  # pragma: no cover — no flock on this platform: the lock is a no-op
-    fcntl = None
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Awaitable, Callable, List, Optional
@@ -25,7 +21,9 @@ from typing import Awaitable, Callable, List, Optional
 from core.cron_outcome import (FAILED_OUTCOMES, FAILURE_STREAK_BY, FAILURE_STREAK_LIMIT,
                                LATE_AFTER_SECONDS, LATE_MONEY_SKIP_SECONDS, span_text)
 from core.cron_slots import MODEL_FREE_KEYS
-from cron.jobs import CronJob, CronJobStore
+from core.async_bridge import off_loop, run_off_loop, shielded
+from core.file_lock import TickLock
+from core.cron_store import RUN_CAP_CEILING_SECONDS, CronJob, CronJobStore
 from cron.schedule import parse_schedule, ScheduleError
 
 logger = logging.getLogger(__name__)
@@ -45,7 +43,6 @@ MONEY_RUN_FLOOR_SECONDS = 900
 #: 116 W2.3: a ONE-SHOT job held by an open owner question looks again this often
 #: (a recurring job simply waits for its next slot). An approval re-arms it at once.
 HELD_ONE_SHOT_RECHECK_SECONDS = 900
-RUN_CAP_CEILING_SECONDS = 1800
 
 
 def effective_cap_seconds(job: CronJob) -> float:
@@ -144,61 +141,6 @@ def _job_name(job: CronJob) -> str:
     return " ".join(str(payload.get("name") or job.task or "").split())[:60]
 
 
-class TickLock:
-    """Exclusive cross-process lock: a non-blocking ``flock`` on *lock_path*.
-
-    The kernel drops the lock when its holder dies, so there is no stale-steal. The
-    old O_EXCL pid file judged a lock stale by its age and stole it by unlink and
-    re-create: two workers could both steal it, or a live long tick could lose it.
-    The file stays on disk; only the lock on it is held. (``core.state.files.file_lock``
-    is the same flock, but it blocks; a tick must skip, not wait.)"""
-
-    def __init__(self, lock_path: str):
-        self.lock_path = lock_path
-        self._fd: Optional[int] = None
-
-    def acquire(self) -> bool:
-        if self._fd is not None:
-            return False  # one TickLock object is one hold
-        parent = os.path.dirname(self.lock_path)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        fd = os.open(self.lock_path, os.O_RDWR | os.O_CREAT, 0o600)
-        try:
-            if fcntl is not None:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            os.close(fd)
-            return False
-        try:
-            os.ftruncate(fd, 0)
-            os.write(fd, str(os.getpid()).encode())  # for a person who reads the file
-        except OSError:
-            pass
-        self._fd = fd
-        return True
-
-    def refresh(self) -> None:
-        """Bump the lock-file mtime, so a reader sees a live tick. The lock itself
-        never goes stale while its holder lives."""
-        try:
-            os.utime(self.lock_path, None)
-        except OSError:
-            pass
-
-    def release(self) -> None:
-        if self._fd is None:
-            return
-        try:
-            if fcntl is not None:
-                fcntl.flock(self._fd, fcntl.LOCK_UN)
-        except OSError:
-            pass
-        finally:
-            os.close(self._fd)
-            self._fd = None
-
-
 @dataclass
 class TickResult:
     ran: List[str] = field(default_factory=list)
@@ -251,6 +193,17 @@ def release_scope_paused(store, now: datetime) -> List[str]:
 
 
 class CronScheduler:
+    # 125 S18b (B-H1): a store call from async code awaits through the store pool.
+    # Properties, so a test that swaps ``self.store`` is still the one called.
+    @property
+    def _store_io(self):
+        return off_loop(self.store)
+
+    @property
+    def _store_final(self):
+        """A terminal write: a cancel lets it finish, then goes on."""
+        return off_loop(self.store, shield=True)
+
     def __init__(self, store: CronJobStore, runner: Runner, *, lock_path: str):
         self.store = store
         self.runner = runner
@@ -318,7 +271,7 @@ class CronScheduler:
         """107 WS-3: a run that a crash or a shutdown cut does not repeat an outward
         effect. One path for both, so the owner hears of it from the next process too."""
         try:
-            candidates = self.store.cut_runs()
+            candidates = await self._store_io.cut_runs()
         except Exception:
             logger.warning("cron: cut runs unreadable", exc_info=True)
             return
@@ -330,15 +283,15 @@ class CronScheduler:
 
     async def _settle_cut_run(self, candidate: CronJob, now: datetime) -> None:
         if cut_run_may_repeat(candidate):
-            self.store.clear_cut_run(candidate.id)
+            await self._store_io.clear_cut_run(candidate.id)
             return
-        job = self.store.claim_for_run(candidate.id)
+        job = await self._store_io.claim_for_run(candidate.id)
         if job is None:
             return
-        self.store.clear_cut_run(job.id)
+        await self._store_io.clear_cut_run(job.id)
         by = "an owner pause" if (job.payload or {}).get("cut_run") == "pause" else "a restart"
-        words = self._end_without_run(job, now, f"cut by {by}", outcome="cut",
-                                      last_run_at=now)
+        words = await shielded(run_off_loop(self._end_without_run, job, now, f"cut by {by}", outcome="cut",
+                                      last_run_at=now))
         await self._tell_owner(
             job, f"⚠ Job {job.id[:8]} \"{_job_name(job)}\" was cut by {by}. It did not "
                  f"repeat by itself, because it could post or spend twice. Check what it did. "
@@ -354,8 +307,8 @@ class CronScheduler:
             return False
         span = span_text(late)
         self._terminal_ev(job, "skipped", "late")
-        words = self._end_without_run(job, now, f"{span} late, so it did not run",
-                                      outcome="skipped", last_run_at=job.last_run_at)
+        words = await shielded(run_off_loop(self._end_without_run, job, now, f"{span} late, so it did not run",
+                                      outcome="skipped", last_run_at=job.last_run_at))
         await self._tell_owner(
             job, f"⏭ Job {job.id[:8]} \"{_job_name(job)}\" was {span} late and did not run, "
                  f"because it can move money. {words}", now)
@@ -370,7 +323,7 @@ class CronScheduler:
         note = {"by": FAILURE_STREAK_BY, "via": "scheduler", "at": now.isoformat(),
                 "reason": str(reason)[:200]}
         try:
-            if not self.store.pause(job.id, user_id=None, note=note):
+            if not await self._store_io.pause(job.id, user_id=None, note=note):
                 return False
         except Exception:
             logger.warning("cron job %s: failure limit pause failed", job.id, exc_info=True)
@@ -419,10 +372,12 @@ class CronScheduler:
                 return []  # a human turn outranks every rail (D2)
             from cron.jobs import job_preempts
             # A job that gives up this slot must not cancel a goal for it.
-            due = [j for j in self.store.due(now) if job_preempts(j)
+            due = [j for j in await self._store_io.due(now) if job_preempts(j)
                    and not (j.payload or {}).get("cut_run")
-                   and not _is_late_money_job(j, _seconds_past(now, j.next_run_at))
-                   and self._held_by_question(j) is None]  # 116 W2.3: a held job runs nothing
+                   and not _is_late_money_job(j, _seconds_past(now, j.next_run_at))]
+            # 116 W2.3: a held job runs nothing. The hold reads goals.db: off the loop.
+            due = await run_off_loop(
+                lambda: [j for j in due if self._held_by_question(j) is None])
             if not due:
                 return []
             job = due[0]
@@ -458,7 +413,7 @@ class CronScheduler:
             pressure = await asyncio.to_thread(
                 current_hold, os.path.dirname(self.store.db_path) or ".")
             if pressure is not None:
-                due = self.store.due(now)
+                due = await self._store_io.due(now)
                 if due:
                     note_hold("cron", pressure, waiting=len(due))
                 return TickResult(skipped_pressure=True)
@@ -516,20 +471,21 @@ class CronScheduler:
         # Reclaim crash-orphaned 'running' jobs here — we hold the TickLock, so any
         # 'running' row is genuinely stale (a live run always writes a terminal status
         # after itself). This replaces the unsafe reclaim-in-__init__.
-        self.store.reclaim_stale_running()
+        await self._store_io.reclaim_stale_running()
         await self._settle_cut_runs(now)
         # 0011: a job created while `/pause cron` was on is stored paused; once
         # the owner lifts the pause it runs (one CAS per row, idempotent).
-        release_scope_paused(self.store, now)
-        for candidate in self.store.due(now):
+        await run_off_loop(release_scope_paused, self.store, now)
+        for candidate in await self._store_io.due(now):
             # Atomic claim: only run if WE flipped it scheduled->running. Guards against
             # ever double-running a job (defense-in-depth alongside the TickLock).
-            job = self.store.claim_for_run(candidate.id, now=now,
+            job = await self._store_io.claim_for_run(candidate.id, now=now,
                                             preempting_only=preempting_only)
             if job is None:
                 continue
             at = now + timedelta(seconds=int(time.monotonic() - tick_started))
-            if self._defer_held(job, now, at):
+            # Off the loop: the hold reads goals.db and the deferral writes cron.db.
+            if await shielded(run_off_loop(self._defer_held, job, now, at)):
                 result.deferred.append(job.id)
                 continue
             late = _seconds_past(at, job.next_run_at)
@@ -544,11 +500,11 @@ class CronScheduler:
                 # tick $0-skips it and then reschedules it) and the tick stops
                 # here — nothing else starts. A run that completed before the
                 # cancel landed (success=True) is recorded normally.
-                self.store.set_status(job.id, "scheduled")
+                await self._store_io.set_status(job.id, "scheduled")
                 if not cut_run_may_repeat(job):
                     # 107 WS-3: a pause cut is a cut too. Lifted before the next tick,
                     # the run would start again from the top and post or spend twice.
-                    self.store.mark_cut_run(job.id, by="pause")
+                    await self._store_io.mark_cut_run(job.id, by="pause")
                 self._pause_cancelled = False
                 break
             self._pause_cancelled = False
@@ -559,7 +515,7 @@ class CronScheduler:
                 # attempt consumes. The tick CONTINUES (unlike a pause): one job
                 # waiting on the owner says nothing about the next.
                 self._approval_deferred = False
-                self._record(job, now, False, deferred=True)
+                await shielded(run_off_loop(self._record, job, now, False, deferred=True))
                 result.deferred.append(job.id)
                 continue
             self._approval_deferred = False
@@ -567,7 +523,7 @@ class CronScheduler:
             # interval counted from the tick start left a job behind a long one only
             # minutes before its next run. Whole seconds keep a fast run on the tick's time.
             ended = now + timedelta(seconds=int(time.monotonic() - tick_started))
-            streak = self._record(job, now, success, ended=ended)
+            streak = await shielded(run_off_loop(self._record, job, now, success, ended=ended))
             if not await self._stop_failing_job(job, ended, streak):
                 await self._tell_failure(job, ended, success)
             (result.ran if success else result.failed).append(job.id)
@@ -621,8 +577,8 @@ class CronScheduler:
             # `/autonomy off`) gives the row back at once — it stayed
             # `running` until its lease ran out (max_duration + slack).
             try:
-                self.store.set_status(job.id, "scheduled")
-                self.store.mark_cut_run(job.id)
+                await self._store_final.set_status(job.id, "scheduled")
+                await self._store_final.mark_cut_run(job.id)
             except Exception:
                 logger.debug("cron requeue after cancel failed for %s", job.id, exc_info=True)
             raise
@@ -704,10 +660,10 @@ class CronScheduler:
 
     def _answered_during_run(self, job: CronJob, started: datetime) -> bool:
         """An approved answer to this job's ask landed after the run started
-        (``agents/task/goals/rail_answers.py``). Fail-open (False)."""
+        (``modules/goals/rail_answers.py``). Fail-open (False)."""
         try:
-            from agents.task.goals.board import GoalBoard
-            from agents.task.goals.rail_answers import answered_during_run
+            from modules.goals.board import GoalBoard
+            from modules.goals.rail_answers import answered_during_run
             from core.runtime_paths import goals_db_path
             goals_db = goals_db_path(os.path.dirname(os.path.abspath(self.store.db_path)))
             if not os.path.exists(goals_db):

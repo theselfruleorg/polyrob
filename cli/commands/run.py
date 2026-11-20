@@ -302,7 +302,7 @@ async def _run_session(
         # machinery a warm-but-evicted session uses) instead of creating a new one;
         # run_session then transitions its status (suspended/completed → resumed →
         # running) and continues it.
-        from agents.task.path import pm as _pm
+        from core.session_paths import pm as _pm
         session_id = _pm().clean_session_id(resume_id)
         info = task_agent.session_manager.get_session_info(session_id)
         if not info:
@@ -420,7 +420,7 @@ async def _run_session(
     # the event reaches the renderer, so the completion panel shows real totals.
     session_dir: Optional[Path] = None
     try:
-        from agents.task.path import pm
+        from core.session_paths import pm
         session_dir = pm().get_session_root(session_id, user_id)
     except Exception:
         session_dir = None

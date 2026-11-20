@@ -94,6 +94,10 @@ def chat_pin_for(user_id: Optional[str], home_dir=None) -> Optional[Dict]:
     return owner_default(user_id, home_dir) if user_id else None
 
 
+#: The ``source`` of :func:`chat_runtime_for` when the operator's ``DEFAULT_MODEL`` decides.
+OPERATOR_SOURCE = "the operator's default"
+
+
 def chat_runtime_for(user_id: Optional[str], env=None, home_dir=None):
     """094, the CHAT tier: ``(provider, model, reasoning, source)`` a NEW owner chat
     starts on — the owner's default (``/model <name> default``) > the operator pin
@@ -108,7 +112,7 @@ def chat_runtime_for(user_id: Optional[str], env=None, home_dir=None):
         return (canonicalize_provider(pin["provider"]) or pin["provider"], pin["model"],
                 pin.get("reasoning"), "your default (/model <name> default)")
     provider, model = resolve_default_provider(env)[:2]
-    source = "DEFAULT_MODEL (operator env)" if operator_model_pin(env) else "the provider default"
+    source = OPERATOR_SOURCE if operator_model_pin(env) else "the provider default"
     _data, err = load(user_id, home_dir) if user_id else ({}, "")
     if err:  # an unreadable store is not an empty one: say so where a person reads it
         source += f" — ⚠️ your default could not be read: {err}"

@@ -86,7 +86,7 @@ async def test_invoices_accepts_every_status_the_store_can_hold(monkeypatch):
     `refund_due` is the one that means the agent owes somebody money.
     """
     from modules.x402.invoicing import INVOICE_STATUSES
-    from surfaces.telegram import owner_ops
+    from tools.defi.owner_verbs import invoices as invoice_verbs
 
     asked = []
 
@@ -96,7 +96,7 @@ async def test_invoices_accepts_every_status_the_store_can_hold(monkeypatch):
 
     monkeypatch.setattr("modules.x402.invoicing.list_payment_requests", _list)
     for status in INVOICE_STATUSES:
-        out = await owner_ops.invoices_reply("u1", [status])
+        out = await invoice_verbs.invoices_reply("u1", [status])
         assert "Usage:" not in out, f"{status} was refused as unknown"
     assert asked == list(INVOICE_STATUSES)
 
@@ -104,9 +104,9 @@ async def test_invoices_accepts_every_status_the_store_can_hold(monkeypatch):
 @pytest.mark.asyncio
 async def test_an_unknown_status_names_every_real_one(monkeypatch):
     from modules.x402.invoicing import INVOICE_STATUSES
-    from surfaces.telegram import owner_ops
+    from tools.defi.owner_verbs import invoices as invoice_verbs
 
-    out = await owner_ops.invoices_reply("u1", ["nonsense"])
+    out = await invoice_verbs.invoices_reply("u1", ["nonsense"])
     assert out.startswith("Usage:")
     for status in INVOICE_STATUSES:
         assert status in out
@@ -116,7 +116,7 @@ async def test_an_unknown_status_names_every_real_one(monkeypatch):
 async def test_a_refund_row_in_the_listing_says_it_is_owed(monkeypatch):
     """A `refund_due` row under the same "Mark one paid" remedy as a pending
     receivable reads as income. It is the opposite."""
-    from surfaces.telegram import owner_ops
+    from tools.defi.owner_verbs import invoices as invoice_verbs
 
     async def _list(*, user_id, status=None, limit=20, db=None):
         return [{"request_id": "r1", "status": "refund_due", "amount_usd": 4.0,
@@ -125,7 +125,7 @@ async def test_a_refund_row_in_the_listing_says_it_is_owed(monkeypatch):
                  "purpose": "a report"}]
 
     monkeypatch.setattr("modules.x402.invoicing.list_payment_requests", _list)
-    out = await owner_ops.invoices_reply("u1", [])
+    out = await invoice_verbs.invoices_reply("u1", [])
     assert "REFUNDS I owe" in out
     assert "$4.00" in out
     assert "/invoices refund_due" in out

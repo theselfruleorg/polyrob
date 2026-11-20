@@ -747,7 +747,7 @@ def _paused_mandate(tmp_path, monkeypatch):
         seen.append(k)
         return real(*a, **{**k, "path": mpath, "book_path": book})
     monkeypatch.setattr(mg, "entry_refusal", gate)
-    monkeypatch.setattr(_tg, "_autonomous_turn_allowed", lambda ctx, ts, fn: True)
+    monkeypatch.setattr(_tg, "_autonomous_turn_allowed", lambda ctx, ts, fn, **kw: True)
     monkeypatch.setattr(ar, "_is_forged_or_autonomous_turn", lambda c, t: True)
     monkeypatch.setattr(to, "_is_forged_or_autonomous_turn", lambda c, t: True)
     monkeypatch.setattr(wa, "turn_refusal", lambda ctx: None)

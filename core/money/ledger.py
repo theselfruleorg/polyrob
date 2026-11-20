@@ -337,8 +337,14 @@ class SpendLedger:
                account: Optional[str] = None,
                native_raw: Optional[int] = None,
                receipt_state: Optional[str] = None,
-               deferred_positions: Optional[list] = None) -> None:
+               deferred_positions: Optional[list] = None,
+               income_raw: Optional[int] = None) -> None:
         """Record one completed spend.
+
+        ``income_raw`` (122 W4) stamps the native wei an act RECEIVED — a launch fee
+        claim's owed balance, the inflow the guard asserted — so the income allocation
+        rule (``core/wallet/income_rule.py``) reads the income from this one record.
+        ``None`` (default) writes byte-identical entries to before.
 
         ``receipt_state`` (098 TS-23): ``"pending_receipt"`` when the verb booked
         the broadcast before its receipt was known (an interrupted or timed-out
@@ -405,6 +411,8 @@ class SpendLedger:
             entry["native_raw"] = int(native_raw)
         if receipt_state:
             entry["receipt_state"] = str(receipt_state)
+        if income_raw is not None:
+            entry["income_raw"] = int(income_raw)
         if deferred_positions:
             self._stamp_deferred(entry, deferred_positions, account)
         self._audit.append(entry)
@@ -462,11 +470,13 @@ class SpendLedger:
 
     def note_receipt(self, entry: dict, state: str, *, block: Optional[int] = None) -> bool:
         """098 TS-23: append the ONE receipt resolution of a ``pending_receipt``
-        entry (call under :meth:`reserve`). False when it is already resolved or
-        the table forbids the edge. Moves no money; a ``reverted`` receipt only
-        takes the entry out of the rolling caps."""
+        entry (call under :meth:`reserve`). False when it is already resolved,
+        the table forbids the edge, or the shared ledger cannot be synced.
+        Moves no money; a ``reverted`` receipt only takes the entry out of the
+        rolling caps."""
         from core.money.receipt_state import receipt_entry, receipt_states
-        self._sync_shared_ledger()
+        if not self._sync_shared_ledger():
+            return False   # an unsynced view cannot say the entry is still pending
         from core.money.receipt_state import PENDING
         current = receipt_states(self._audit).get(str(entry.get("result_ref")))
         if current != PENDING:

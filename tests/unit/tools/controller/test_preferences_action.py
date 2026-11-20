@@ -358,7 +358,7 @@ async def test_sub_agent_refuses_set(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_leaf_exclusion_present_in_delegation_exclusions_for_child():
-    from tools.controller.delegation import (
+    from core.delegation_policy import (
         LEAF, ORCHESTRATOR, delegation_exclusions_for_child,
     )
     assert "preferences" in delegation_exclusions_for_child(LEAF)
@@ -370,7 +370,7 @@ def test_leaf_exclusion_present_in_delegation_exclusions_for_child():
 # ---------------------------------------------------------------------------
 
 def test_correspondent_gate_high_impact_set_contains_preferences():
-    from agents.task.agent.core.correspondent_gate import is_high_impact
+    from core.security.high_impact import is_high_impact
     assert is_high_impact("preferences")
 
 

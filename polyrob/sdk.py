@@ -23,6 +23,9 @@ _EXPORTS: Dict[str, str] = {
     # --- turn origin: the ownership / forged-turn security predicate ---------
     "is_forged_or_autonomous_turn":
         "tools.controller.action_registration:_is_forged_or_autonomous_turn",
+    # --- the money kernel: the refusals in ONE fixed order (125 S7) ----------
+    "authorize_spend": "core.money.authorize:authorize_spend",
+    "SpendIntent": "core.money.authorize:SpendIntent",
     # W5: the ONE owner-turn definition and the ONE taint view
     "is_genuine_owner_turn": "core.security.owner_turn:is_genuine_owner_turn",
     "is_leaf_or_forged": "core.security.owner_turn:is_leaf_or_forged",
@@ -79,6 +82,11 @@ _EXPORTS: Dict[str, str] = {
     "offer_of": "core.commerce.thread:offer_of",
     "storefront_thread_line": "modules.commerce.storefront:thread_line",
     "record_external_write": "core.effects:record_external_write",
+    # --- HTTP routes a pack contributes (125 S28) -----------------------------
+    "get_user_id": "api.dependencies:get_user_id",
+    # L-16: the TRUSTED address (X-Forwarded-For only from a trusted proxy)
+    "get_client_ip": "api.dependencies:trusted_client_ip",
+    "require_service": "api.dependencies:require_service",
     # --- the pack contract ---------------------------------------------------
     # W4: a pack derives its verb lists from its own policy rows (pack.toml)
     "action_ids_where": "core.verb_policy:ids_where",
@@ -92,6 +100,10 @@ _EXPORTS: Dict[str, str] = {
     "ToolCategory": "tools.descriptors:ToolCategory",
     "register_optional_tool": "tools.descriptors:register_optional_tool",
     "ActionResult": "agents.task.loop_types.controller_types:ActionResult",
+    # --- the goal board (125 S29) --------------------------------------------
+    "ASK_OPEN": "core.goal_vocab:ASK_OPEN",
+    # --- session paths (125 S29): the ONE path manager ------------------------
+    "pm": "core.session_paths:pm",
 }
 
 __all__ = sorted(_EXPORTS)

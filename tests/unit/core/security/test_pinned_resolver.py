@@ -46,7 +46,7 @@ async def test_any_other_host_raises_and_never_looks_up(monkeypatch):
 
 def test_web_fetch_and_x402_and_mcp_use_the_shared_resolver():
     from tools.mcp.protocol import _PinnedResolver as mcp_r
-    from tools.web_fetch.fetcher import _PinnedResolver as wf_r
+    from core.security.safe_fetch import _PinnedResolver as wf_r
     assert issubclass(mcp_r, PinnedResolver) and issubclass(wf_r, PinnedResolver)
     import inspect
     from tools.x402 import discovery
@@ -61,7 +61,7 @@ async def test_web_fetch_idn_url_connects_to_the_pinned_ip_end_to_end(monkeypatc
     hit the pin rather than real DNS (which would fail: .test never resolves)."""
     from aiohttp import web
 
-    from tools.web_fetch.fetcher import safe_fetch
+    from core.security.safe_fetch import safe_fetch
 
     def _no_dns(*a, **k):
         raise AssertionError("real DNS lookup attempted")

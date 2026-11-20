@@ -1,5 +1,5 @@
-"""Console seat for the durable app service (032): read the registry, approve /
-reject / kill / start / remove, and the Apps page. Mounted next to the webgate pages router."""
+"""Console seat for the durable app service (032): read the registry, kill /
+start / remove (an app is approved or rejected in the Inbox, `inbox.py`), and the Apps page. Mounted next to the webgate pages router."""
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
@@ -40,22 +40,11 @@ async def _decide(request: Request, slug: str, verb: str):
     # which is a refusal that points at the wrong screen.
     pages._owner_console_required(t("inbox.owner_console"))
     user_id = pages._effective_user_id(request)
-    fn = {"approve": owner_ops.approve, "reject": owner_ops.reject, "kill": owner_ops.kill,
-          "start": owner_ops.start, "remove": owner_ops.remove}[verb]
+    fn = {"kill": owner_ops.kill, "start": owner_ops.start, "remove": owner_ops.remove}[verb]
     ok, msg = fn(_registry(), slug, user_id, via="webview")
     if not ok:
         raise HTTPException(status_code=409, detail=msg)
     return JSONResponse({"ok": True, "message": msg})
-
-
-@router.post("/api/webgate/apps/{slug}/approve", dependencies=webgate.MUTATION_DEPS)
-async def api_apps_approve(request: Request, slug: str):
-    return await _decide(request, slug, "approve")
-
-
-@router.post("/api/webgate/apps/{slug}/reject", dependencies=webgate.MUTATION_DEPS)
-async def api_apps_reject(request: Request, slug: str):
-    return await _decide(request, slug, "reject")
 
 
 @router.post("/api/webgate/apps/{slug}/kill", dependencies=webgate.MUTATION_DEPS)

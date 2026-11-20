@@ -30,7 +30,7 @@ from polyrob_x.twitter_tool import (
 def _pm(tmp_path):
     """A real PathManager so media-path workspace resolution has somewhere to
     resolve against (mirrors tests/unit/tools/test_filesystem_write_verbatim.py)."""
-    from agents.task.path import PathManager, set_path_manager
+    from core.session_paths import PathManager, set_path_manager
     pm = PathManager(data_root=str(tmp_path / "data"))
     set_path_manager(pm)
     return pm
@@ -738,7 +738,7 @@ async def test_unrecorded_tainted_or_delegated_cron_still_needs_the_owner(monkey
 # and the tool said "approval denied". The post now WAITS for the tap.
 
 def _real_queue(monkeypatch, tmp_path, wait_s=0.6):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from tools.controller import approval_queue as aq
     import tools.controller.approval as approval
     board = GoalBoard(str(tmp_path / "goals.db"))

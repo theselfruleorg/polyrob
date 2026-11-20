@@ -56,7 +56,7 @@ def test_wallet_reads_run_off_the_event_loop(env, monkeypatch):
         seen["thread"] = threading.get_ident()
         return "balances"
 
-    monkeypatch.setattr("surfaces.telegram.owner_ops.wallet_reply", _wallet_reply)
+    monkeypatch.setattr("tools.defi.owner_verbs.wallet.wallet_reply", _wallet_reply)
 
     async def _run():
         seen["loop_thread"] = threading.get_ident()

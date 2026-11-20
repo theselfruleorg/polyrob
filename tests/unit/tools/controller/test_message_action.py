@@ -152,7 +152,7 @@ def test_media_path_traversal_component_is_rejected(monkeypatch, tmp_path):
 
 def test_media_path_inside_workspace_is_sent_to_router(monkeypatch, tmp_path):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path / "data_root"))
-    from agents.task.path import pm
+    from core.session_paths import pm
     ws = pm().get_workspace_dir("sess1", "alice")
     inside = Path(ws) / "card.png"
     inside.write_bytes(b"x")
@@ -170,7 +170,7 @@ def test_media_path_inside_workspace_is_sent_to_router(monkeypatch, tmp_path):
 
 def test_media_on_nonmedia_surface_carries_honest_note_and_still_sends_text(monkeypatch, tmp_path):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path / "data_root"))
-    from agents.task.path import pm
+    from core.session_paths import pm
     ws = pm().get_workspace_dir("sess1", "alice")
     inside = Path(ws) / "card.png"
     inside.write_bytes(b"x")
@@ -268,7 +268,7 @@ def test_forged_and_nonallowlisted_refusals_hold_with_media_paths(monkeypatch, t
 def test_media_oversize_file_is_rejected(monkeypatch, tmp_path):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path / "data_root"))
     monkeypatch.setenv("MESSAGE_MEDIA_MAX_MB", "0.001")  # 1 KB cap (message-tool cap)
-    from agents.task.path import pm
+    from core.session_paths import pm
     ws = pm().get_workspace_dir("sess1", "alice")
     big = Path(ws) / "big.bin"
     big.write_bytes(b"x" * 4096)
@@ -284,7 +284,7 @@ def test_media_oversize_file_is_rejected(monkeypatch, tmp_path):
 
 def test_media_secret_shaped_file_is_rejected(monkeypatch, tmp_path):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path / "data_root"))
-    from agents.task.path import pm
+    from core.session_paths import pm
     ws = pm().get_workspace_dir("sess1", "alice")
     env_file = Path(ws) / "polyrob.env"
     env_file.write_text("OPENAI_API_KEY=sk-secret")
@@ -304,7 +304,7 @@ def test_media_send_result_acknowledges_attachment(monkeypatch, tmp_path):
     couldn't tell the file went, retried ~12x and declared BLOCKED. The result
     must NAME the attached files."""
     monkeypatch.setenv("DATA_ROOT", str(tmp_path / "data_root"))
-    from agents.task.path import pm
+    from core.session_paths import pm
     ws = pm().get_workspace_dir("sess1", "alice")
     inside = Path(ws) / "note.md"
     inside.write_text("hello")

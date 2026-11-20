@@ -595,7 +595,7 @@ class TestConfinementRoot:
         """On the server (not local mode), if pm() can't resolve the workspace root,
         refuse rather than silently confining to the process CWD."""
         import tools.knowledge_ingest as ki_mod
-        import agents.task.path as path_mod
+        import core.session_paths as path_mod
         import core.config_policy as policy_mod
 
         def boom(*a, **k):
@@ -610,7 +610,7 @@ class TestConfinementRoot:
     def test_failopen_to_cwd_under_local_mode(self, monkeypatch, tmp_path):
         """Under local mode the CWD fallback is acceptable (single-user)."""
         import tools.knowledge_ingest as ki_mod
-        import agents.task.path as path_mod
+        import core.session_paths as path_mod
         import core.config_policy as policy_mod
 
         def boom(*a, **k):

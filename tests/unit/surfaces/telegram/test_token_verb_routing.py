@@ -9,7 +9,7 @@ import pytest
 
 from core.surfaces.dispatcher import _COMMANDS
 from surfaces.telegram.harness import _HELP_BODY, _OWNER_ADMIN_COMMANDS
-from surfaces.telegram import token_ops
+from tools.defi.owner_verbs import token as token_ops
 
 OWNER = "owner-1"
 
@@ -210,7 +210,7 @@ def test_the_REPL_handler_renders_the_same_helper():
                             (h_token.h_deploy, "deploy_reply")):
         src = inspect.getsource(handler)
         assert "token_ops" in src and helper in src, (
-            f"{handler.__name__} must render surfaces.telegram.token_ops."
+            f"{handler.__name__} must render tools.defi.owner_verbs.token."
             f"{helper}, not its own copy")
 
 

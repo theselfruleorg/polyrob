@@ -133,37 +133,43 @@ async def test_cancel_all_orders_succeeds_while_halted(monkeypatch):
 # ---- (c) R16: switches on + HALTED + a genuine AGENT-LOOP turn -------------------
 
 @pytest.mark.asyncio
-async def test_cancel_order_refused_while_halted_for_a_genuine_agent_turn(monkeypatch):
-    """R16: a genuine, non-forged main-agent turn (role='orchestrator') gets ZERO
-    relaxation from the kill-switch — only a literal owner-direct call (no
-    execution_context) does."""
+async def test_cancel_order_passes_the_pause_while_paused_for_a_genuine_owner_turn(monkeypatch):
+    """125 S7 (D2): a genuine owner turn (role='orchestrator', not forged) is the owner
+    acting — the autonomy pause bounds the agent's own work, not the owner, so the
+    risk-reducing cancel passes the pause. A forged turn stays refused
+    (test_trade_gate_kernel.py)."""
     _clear_trading_env(monkeypatch)
     monkeypatch.setenv("CRYPTO_TRADE_LIVE_ENABLED", "true")
     monkeypatch.setenv("POLYMARKET_TRADING_ENABLED", "true")
     _halt(monkeypatch)
     tool, client = _make_tool(monkeypatch)
-    ctx = ActionExecutionContext(role="orchestrator")
+    reached = []
+    from polyrob_markets.trade_gate import TradeGateDecision
+    monkeypatch.setattr("polyrob_markets.trade_gate.evaluate_live_mutation",
+                        lambda *a, **k: reached.append(True) or TradeGateDecision(False, "stop here"))
+    ctx = ActionExecutionContext(user_id="local", role="orchestrator")
     res = await tool.cancel_order(CancelOrderParams(order_id="o1"), execution_context=ctx)
-    assert res["success"] is False
-    assert client.cancel_calls == []
-    assert "autonomy pause" in res["error"].lower()
+    assert reached == [True], res          # past trade_turn_refusal, at the M10 gate
 
 
 @pytest.mark.asyncio
-async def test_cancel_all_orders_refused_while_halted_for_a_genuine_agent_turn(monkeypatch):
-    """R16: same as above for cancel_all_orders — this is the exact verb the review
-    proved the regression against (success=True, exchange reached, while halted, for
-    a plain role="orchestrator" context)."""
+async def test_cancel_all_orders_passes_the_pause_while_paused_for_a_genuine_owner_turn(monkeypatch):
+    """125 S7 (D2): a genuine owner turn (role='orchestrator', not forged) is the owner
+    acting — the autonomy pause bounds the agent's own work, not the owner, so the
+    risk-reducing cancel passes the pause. A forged turn stays refused
+    (test_trade_gate_kernel.py)."""
     _clear_trading_env(monkeypatch)
     monkeypatch.setenv("CRYPTO_TRADE_LIVE_ENABLED", "true")
     monkeypatch.setenv("POLYMARKET_TRADING_ENABLED", "true")
     _halt(monkeypatch)
     tool, client = _make_tool(monkeypatch)
-    ctx = ActionExecutionContext(role="orchestrator")
+    reached = []
+    from polyrob_markets.trade_gate import TradeGateDecision
+    monkeypatch.setattr("polyrob_markets.trade_gate.evaluate_live_mutation",
+                        lambda *a, **k: reached.append(True) or TradeGateDecision(False, "stop here"))
+    ctx = ActionExecutionContext(user_id="local", role="orchestrator")
     res = await tool.cancel_all_orders(CancelAllOrdersParams(), execution_context=ctx)
-    assert res["success"] is False
-    assert client.cancel_all_calls == []
-    assert "autonomy pause" in res["error"].lower()
+    assert reached == [True], res          # past trade_turn_refusal, at the M10 gate
 
 
 @pytest.mark.asyncio

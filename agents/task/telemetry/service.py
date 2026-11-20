@@ -34,8 +34,8 @@ from agents.task.telemetry.views import (
 from agents.task.telemetry.sequence import SequenceGenerator, generate_event_id, get_timestamp_ms
 from core.file_lock import SafeFileLock
 from core.data_perms import apply_birth_mode
-from agents.task.path import get_safe_singleton
-from agents.task.path import pm
+from core.session_paths import get_safe_singleton
+from core.session_paths import pm
 
 # First try to import filelock package (no longer needed as we use SafeFileLock)
 # The existing FileLock class is removed since we use SafeFileLock from utils
@@ -426,7 +426,7 @@ class ProductTelemetry:
 		
 		# CRITICAL FIX: Clean session ID once we've extracted it
 		if session_id:
-			from agents.task.path import pm
+			from core.session_paths import pm
 			try:
 				session_id = pm().clean_session_id(session_id)
 			except Exception as e:

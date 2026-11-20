@@ -42,12 +42,11 @@ from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-MAX_GAS_FLAG = "AGENT_NFT_REVEAL_MAX_GAS_USD"
+from core.wallet.collection_reveal import MAX_GAS_FLAG, max_gas_usd  # noqa: E402
 #: The guard prices the WORST case: simulated gas × 1.5 × maxFeePerGas, and the rail's
 #: maxFeePerGas is 2 × base fee + tip (``EvmRail._finish_tx``; a zero tip reads as 0.1 gwei).
 #: On 4663 (base ≈ 0.024 gwei) ``reveal(10)`` is then ≈ 555k × 0.148 gwei ≈ 8.2e-5 ETH
 #: ≈ $0.33 at $4,000/ETH, while the fee actually paid is ≈ 370k × 0.024 gwei ≈ $0.04.
-DEFAULT_MAX_GAS_USD = 1.0
 #: The ids per run when the node cannot estimate the batch AND no price sizes it — the old fixed
 #: default. The verb normally sizes the batch to the fee cap (:func:`batch_size`).
 DEFAULT_MAX_IDS = 10
@@ -73,16 +72,6 @@ _SEL_GET_BLOCK_NUMBER = "0x42cbb15c"   # Multicall3.getBlockNumber()
 
 class RevealError(RuntimeError):
     """A reveal run that cannot proceed; the text is the reason shown."""
-
-
-def max_gas_usd() -> float:
-    """``AGENT_NFT_REVEAL_MAX_GAS_USD`` — the most USD of FEE one reveal transaction may cost
-    (default 1.00). The guard prices the worst-case fee (simulated gas × 1.5 × maxFeePerGas)
-    and refuses above it. A non-finite or non-positive value disables the verb (0)."""
-    import math
-    from core.env import float_env
-    v = float_env(MAX_GAS_FLAG, DEFAULT_MAX_GAS_USD)
-    return v if (math.isfinite(v) and v > 0) else 0.0
 
 
 def _selectors():
@@ -206,21 +195,10 @@ def batch_size(*, limit: int, probe_ids: int = 0, probe_gas: Optional[int] = Non
 
 
 def native_usd(chain: str, price_fn) -> Optional[float]:
-    """The native coin's spend price as the GUARD reads it (the chain's wrapped native through
-    the same valueless-testnet rule and the same no-zero rule), so the batch is sized against
-    the figure that will be checked. None = unpriced."""
-    try:
-        from core.wallet import chains
-        from core.wallet.tx_guard import _valueless_price_fn
-        from core.wallet.tx_guard_steps.value import _spend_price
-        row = chains.get(chain)
-        proxy = getattr(row, "wrapped_native", None) if row else None
-        if not proxy:
-            return None
-        priced = _valueless_price_fn(chain, price_fn)
-        return _spend_price(priced(chain, proxy) if priced else None, chain)
-    except Exception:  # noqa: BLE001 — an unread price sizes nothing; the guard still decides
-        return None
+    """The native coin's spend price as the GUARD reads it — the one reader,
+    ``tools.defi.price_sources.native_spend_price`` (125 S8). None = unpriced."""
+    from tools.defi.price_sources import native_spend_price
+    return native_spend_price(chain, price_fn)
 
 
 def _explicit_max_ids(params) -> Optional[int]:
@@ -287,15 +265,13 @@ def pinned_collection(chain: str, requested: Optional[str] = None) -> str:
     from core.wallet import collection_reveal as R
     try:
         pinned = R.pinned_collections(chain)
-    except Exception as exc:  # noqa: BLE001 — an untrusted registry pins nothing
-        raise RevealError(f"the owner's collection registry cannot be trusted ({exc})") from exc
-    if not pinned:
-        raise RevealError(f"no collection with the reveal capability is pinned on {chain} (the "
-                          f"owner's collection registry is empty by default)")
-    if requested:
-        if requested.lower() not in pinned:
-            raise RevealError(f"{requested} is not a pinned collection on {chain}")
+    except Exception:  # noqa: BLE001 — 124 section 5.5: an unreadable pin store is no pin
+        pinned = ()
+    if requested:   # 124 W4: any collection; an unpinned one is the owner's card in the guard
         return requested.lower()
+    if not pinned:
+        raise RevealError(f"name the collection to reveal (`collection`) — none with the reveal "
+                          f"capability is pinned on {chain}")
     if len(pinned) > 1:
         raise RevealError(f"{len(pinned)} collections are pinned on {chain}; name one "
                           f"(`collection`)")
@@ -420,7 +396,7 @@ async def run(tool, params, execution_context):
             execution_context=execution_context, tool_self=tool,
             price_fn=price_fn,
             forged_fn=_is_forged_or_autonomous_turn, autonomous_ok_fn=_is_autonomous_goal_turn,
-            account_rpc=rpc)
+            account_rpc=rpc, dry_run=bool(params.dry_run))
         usd = "unknown" if decision.amount_usd is None else f"${decision.amount_usd:.4f}"
         header += (f"  cost:     {usd} — the worst-case gas fee\n"
                    f"  guard:    {decision.reason}\n  lane:     {decision.lane}\n")

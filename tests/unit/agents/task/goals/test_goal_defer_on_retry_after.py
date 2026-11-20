@@ -11,7 +11,7 @@ import types
 
 import pytest
 
-from agents.task.goals.board import GoalBoard, STATUS_READY
+from modules.goals.board import GoalBoard, STATUS_READY
 
 
 @pytest.fixture

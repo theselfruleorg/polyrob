@@ -57,14 +57,14 @@ async def test_unquarantine_undoes_a_quarantine(_stores):
 
 
 def test_wallet_tokens_and_trust_ride_the_wallet_verb(_stores, monkeypatch):
-    from surfaces.telegram import owner_ops
+    from tools.defi.owner_verbs import wallet as wallet_verbs
     monkeypatch.setattr("core.wallet.authority.owner_refusal", lambda uid: None)
-    text = owner_ops.wallet_reply(["tokens"], user_id="alice", data_dir=str(_stores))
+    text = wallet_verbs.wallet_reply(["tokens"], user_id="alice", data_dir=str(_stores))
     assert "Tokens I trust" in text
-    text = owner_ops.wallet_reply(["trust", "robinhood", REAL, "TKN"], user_id="alice",
+    text = wallet_verbs.wallet_reply(["trust", "robinhood", REAL, "TKN"], user_id="alice",
                                   data_dir=str(_stores))
     assert "Confirm" in text and token_pins.all_pins() == []
-    owner_ops.wallet_reply(["trust", "robinhood", REAL, "TKN", "go"], user_id="alice",
+    wallet_verbs.wallet_reply(["trust", "robinhood", REAL, "TKN", "go"], user_id="alice",
                            data_dir=str(_stores))
     assert token_pins.owner_pin("robinhood", REAL)["source"] == "owner_approved"
 

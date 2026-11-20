@@ -99,6 +99,6 @@ def unpriced_sell_owner_queue(verdict: str, max_spend_usd: float, *,
     return ("owner approval required: no independent price checks this sell's "
             f"route and the token sold is not trusted, so a sell above "
             f"${UNVERIFIED_UNCHECKED_MAX_USD:.2f} needs the owner to confirm it "
-            "(a thin pool can be pushed down just before an exit). Propose the "
-            "/swap to the owner with propose_action, or the owner runs it. "
+            "(a thin pool can be pushed down just before an exit). A live call "
+            "puts this exact swap to the owner as one card. "
             "lane: owner_queue. RESULT: NOT SENT — nothing was broadcast.")

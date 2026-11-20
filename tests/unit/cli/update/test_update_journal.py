@@ -3,7 +3,7 @@ mid-way is rolled back by the next `polyrob update` or start."""
 import json
 import sqlite3
 
-from cli.update.context import UpdateContext
+from core.update_snapshot.context import UpdateContext
 from cli.update.engine import UpdateRunners, apply_update
 from cli.update.journal import (JOURNAL_NAME, failed_rollback, recover_open_update,
                                 update_journal)

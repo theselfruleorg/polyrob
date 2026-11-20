@@ -19,7 +19,7 @@ def test_load_from_disk_uses_subdir_name_kwarg(monkeypatch):
             captured.update(kwargs)
             return Path("/nonexistent/message_history.json")  # .exists() -> False, early return
 
-    monkeypatch.setattr("agents.task.path.pm", lambda: _PM())
+    monkeypatch.setattr("core.session_paths.pm", lambda: _PM())
 
     host = _Host()
     # Must NOT raise TypeError (the bug); returns False because the path doesn't exist.

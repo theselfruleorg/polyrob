@@ -25,7 +25,7 @@ channel>, task="Run the rule conflict check and report what it finds.")`.
 1. Call `owner_doc_manage(action='sweep_all')`. It compares every active rule with enabled job
    text, live goal text and pinned skills, and returns each candidate with both quotes. It is
    code: it costs no model call.
-   If that action is unavailable, read the `## Owner facts` block in your context, then
+   If that action is unavailable, read the `## Owner rules` block in your context, then
    `cronjob_list` and `cronjob_show` for the job texts, and `load_skill` for each pinned skill.
 2. Read each candidate. A candidate shares words, so it may not be a conflict. Keep it only when
    following one text means breaking the other. Use `cronjob_show` or `load_skill` for the text

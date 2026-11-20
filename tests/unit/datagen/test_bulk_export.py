@@ -129,7 +129,7 @@ def test_bulk_export_limit_and_user_filter(tmp_path):
 
 def _mk_session_direct(data_root, user_id, session_id, *, messages=None):
     """Canonical live layout: <data_root>/<user_id>/<session_id>/ — sessions
-    are created DIRECTLY under the user (agents/task/path.py
+    are created DIRECTLY under the user (core/session_paths.py
     get_session_root: no "sessions" subdirectory)."""
     sdir = data_root / user_id / session_id
     hist = sdir / "memory" / "message_history.json"

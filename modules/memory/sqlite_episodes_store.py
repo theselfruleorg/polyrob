@@ -7,6 +7,7 @@ module ``logger``; ``SqliteMemoryProvider`` composes it and calls ``_init_episod
 ``_init_schema`` inside the same connection.
 """
 import logging
+from core.async_bridge import offloaded
 from core.sqlite_util import execute_retry, wal_connect
 from typing import Optional
 import json
@@ -130,7 +131,9 @@ class EpisodeStoreMixin:
         if len(serialized) > cap:
             return "{}"
         return serialized
-    async def record_episode(self, episode, *, session_id: str, user_id=None) -> None:
+
+    @offloaded
+    def record_episode(self, episode, *, session_id: str, user_id=None) -> None:
         if self._anon_blocked(user_id):
             return
         norm = self._norm_user(user_id)
@@ -155,7 +158,9 @@ class EpisodeStoreMixin:
             )
         except Exception as e:
             logger.warning("record_episode failed: %s", e)
-    async def recall_episodes(self, *, user_id=None, since_ts=None, until_ts=None,
+
+    @offloaded
+    def recall_episodes(self, *, user_id=None, since_ts=None, until_ts=None,
                               kind=None, thread_key=None, limit=20, order="newest",
                               exclude_surfaced: bool = False,
                               raise_errors: bool = False) -> list:

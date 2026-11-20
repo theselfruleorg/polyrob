@@ -69,7 +69,7 @@ def write_private_file(path: Union[str, Path], data: Union[str, bytes], *,
     except FileNotFoundError:
         old = None
     if mode is None:
-        mode = (old.st_mode & 0o7777) if old is not None else 0o644
+        mode = (old.st_mode & 0o777) if old is not None else 0o644  # never setuid/setgid (EPERM in the unit)
     payload = data.encode("utf-8") if isinstance(data, str) else bytes(data)
     fd, tmp = tempfile.mkstemp(dir=str(target.parent), prefix=f".{target.name}.", suffix=".tmp")
     try:

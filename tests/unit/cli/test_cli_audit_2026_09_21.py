@@ -256,7 +256,7 @@ def test_todos_empty_state_names_the_file_and_the_repl_twin(tmp_path):
 # --- C58: an unreadable security list is UNKNOWN, never empty ----------------
 
 def test_subagents_info_says_unknown_when_the_policy_cannot_be_read(monkeypatch):
-    import tools.controller.delegation as D
+    import core.delegation_policy as D
     from cli.commands.subagents import subagents
 
     def _boom():

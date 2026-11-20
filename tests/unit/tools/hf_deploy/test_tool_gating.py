@@ -263,7 +263,7 @@ def test_first_publish_still_queues_for_a_genuine_owner_turn_under_full_autonomy
         board = tool._approval_provider._board()
         for _ in range(200):
             await asyncio.sleep(0.01)
-            from agents.task.goals.board import ASK_OPEN
+            from modules.goals.board import ASK_OPEN
             asks = board.asks(user_id="owner-1", status=ASK_OPEN)
             if asks:
                 board.decide_ask(asks[0].id, user_id="owner-1", approved=True)

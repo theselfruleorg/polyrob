@@ -1203,7 +1203,7 @@ def unset_pref(key: str, *, user_id: Optional[str], home_dir,
     value, so its removal can only widen it. An env flag is not a preference
     (:func:`unset_value`). An unreadable file refuses (``locked_write``)."""
     from core.prefs import (PREF_ALIASES, PREF_SCHEMA, SENSITIVITY_GUARDED, _CACHE,
-                            _render_toml, load_preferences, preferences_path)
+                            _parse_flat, _render_toml, load_preferences, preferences_path)
     from core.prefs_io import REMOVE, locked_write
     key = PREF_ALIASES.get(str(key or "").strip(), str(key or "").strip())
     spec = PREF_SCHEMA.get(key)
@@ -1223,9 +1223,7 @@ def unset_pref(key: str, *, user_id: Optional[str], home_dir,
         return SetResult(False, "invalid", str(exc))
     if key not in stored:
         return SetResult(False, "invalid", f"{key} is not set in {path}; nothing to remove")
-    ok, err = locked_write(
-        path, lambda: load_preferences(home_dir, user_id, instance_id, strict=True),
-        key, REMOVE, _render_toml, _CACHE)
+    ok, err = locked_write(path, _parse_flat, key, REMOVE, _render_toml, _CACHE)
     if not ok:
         return SetResult(False, "invalid", err)
     from core.prefs_hooks import notify  # a live agent re-reads it

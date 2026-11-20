@@ -145,7 +145,7 @@ def discard_absorbed(result: Any, session_id: str) -> None:
     if not stored:
         return
     try:
-        from agents.task.path import pm
+        from core.session_paths import pm
         from core.security.workspace_io import unlink
         workspace_dir = str(pm().get_workspace_dir(session_id, inbound.identity.user_id))
         for m in stored:
@@ -202,7 +202,7 @@ async def absorb_for_session(task_agent: Any, result: Any, session_id: str,
                      session_id, e)
 
     try:
-        from agents.task.path import pm
+        from core.session_paths import pm
         from core.surfaces.inbound_attachments import absorb_inbound_media
 
         workspace_dir = str(pm().get_workspace_dir(

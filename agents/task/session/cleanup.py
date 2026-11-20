@@ -12,7 +12,7 @@ import json
 import logging
 import time
 from datetime import datetime
-from agents.task.path import pm
+from core.session_paths import pm
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -578,7 +578,7 @@ class SessionCleanupMixin:
 
                         # Save agent state
                         if hasattr(agent, 'state') and hasattr(agent.state, 'save_to_file'):
-                            from agents.task.path import pm
+                            from core.session_paths import pm
                             state_file = pm().create_file_path(
                                 session_id=self.session_id,
                                 subdir_name="data",
@@ -896,7 +896,7 @@ class SessionCleanupMixin:
                     from datetime import datetime
                     import os
 
-                    from agents.task.path import pm
+                    from core.session_paths import pm
                     metadata_path = pm().create_file_path(self.session_id, ".", ".session_metadata.json")
                     metadata = {
                         "session_id": self.session_id,

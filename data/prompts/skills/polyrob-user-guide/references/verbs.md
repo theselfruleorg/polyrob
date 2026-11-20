@@ -59,7 +59,7 @@ from this list; never invent a verb that is not on it. Pack verbs (such as
 - `/bridge` — Move value between chains: ETH/native or USDC in; native, WETH or USDC out
 - `/launch` — Launch a token on the launchpad
 - `/deploy` — Deploy a fixed-supply token
-- `/lp` — Liquidity positions: inspect, quote, add, remove, collect fees, declare a new pool, or move a position
+- `/lp` — Liquidity positions: inspect, quote, add, remove, collect fees, declare a new pool, move a position, or see and grant token launches
 - `/claim` — Collect the creator fees a launchpad already owes me
 - `/nft` — Collectibles I hold: look, trust a collection, send one, make one ready for sale, or revoke an approval
 - `/dapp` — Web pages my wallet is connected to, and how to cut one off
@@ -126,7 +126,7 @@ from this list; never invent a verb that is not on it. Pack verbs (such as
 - `/mcp` — MCP servers I can use: add, remove, or test (not inside a group)
 - `/model` — The model this chat runs on — switch it live, set your default, pick reasoning; set the heavy and light models and what the agent may choose (not inside a group)
 - `/auth` — The provider keys I have, and how to connect one (only in the terminal REPL)
-- `/persona` — The personas, and the one new chats use (only in the terminal REPL)
+- `/persona` — The personas, and the one new chats use (not inside a group)
 - `/profile` — Which agent this terminal runs, and where its files live (only in the terminal REPL)
 - `/toolset` — The ability sets, and the one new chats use (only in the terminal REPL)
 

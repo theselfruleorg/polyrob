@@ -83,3 +83,10 @@ class GuardContext:
     valuation_basis: str = "outflow"
     #: step 7: a send valued below spend grade — step 9 lets only the owner run it.
     owner_only: bool = False
+    #: 124 (N4, W4): why only the owner may run this — ``[(LABEL, line)]`` (an NFT nested into
+    #: an account the agent holds; an act through an UNPINNED collection's account). Step 9
+    #: queues it for the owner's card; an owner-asked act carries the lines as notes.
+    card_reasons: list = field(default_factory=list)
+    #: 124 M1 (D5): a move between the treasury and an NFT account it holds — no cap use (the
+    #: fee only), not a spend, not income; every other guard step still ran.
+    internal_move: bool = False

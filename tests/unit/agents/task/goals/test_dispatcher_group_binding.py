@@ -18,7 +18,7 @@ import logging
 import time
 from types import SimpleNamespace
 
-from agents.task.goals.board import Goal, STATUS_READY
+from modules.goals.board import Goal, STATUS_READY
 from agents.task.goals.dispatcher import GoalDispatcher
 from core.surfaces.group_ledger import GroupLedger, LedgerRow
 from core.surfaces.room_policy import room_tool_ids

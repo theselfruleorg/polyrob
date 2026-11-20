@@ -203,7 +203,7 @@ def test_describe_plain_words():
     assert describe_stop_reason("max_steps", 30, 30) == "stopped at the step limit (30/30)"
     assert describe_stop_reason(StopReason.FAILURES, 4, 30) == (
         "stopped after too many consecutive failed steps (4/30)")
-    assert describe_stop_reason("wall_clock", 7, None) == "cut by the wall-clock cap (step 7)"
+    assert describe_stop_reason("wall_clock", 7, None) == "stopped at its time limit (step 7)"
     assert describe_stop_reason(None) == "stop reason unknown"
     assert describe_stop_reason("bogus", 1, 2) == "stop reason 'bogus' (1/2)"
 

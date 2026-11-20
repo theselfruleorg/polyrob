@@ -149,3 +149,33 @@ async def test_pay_invalid_payment_402(monkeypatch):
             await ep.pay_invoice("inv_x", _fake_request(payment_header="hdr"))
     assert ei.value.status_code == 402
     revert.assert_awaited_once()  # claim reverted -> invoice stays payable
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind,moved", [("offer_order", True), ("agent_invoice", False)])
+async def test_pay_moves_an_order_now_without_the_watcher(monkeypatch, kind, moved):
+    """F11: a completed ORDER invoice pays its order in the /pay request itself, so
+    the order moves with API_AUTONOMY_RUNTIME off (no settlement watcher here)."""
+    monkeypatch.setenv("X402_INVOICE_ENABLED", "true")
+    row = {"status": "pending", "amount_usd": 5.0, "chain": "base",
+           "recipient": "0xt", "purpose": "svc", "kind": kind}
+    move = AsyncMock()
+    with patch("modules.x402.invoicing.get_payment_request",
+               new=AsyncMock(return_value=row)), \
+         patch("modules.x402.invoicing.claim_for_settlement", new=AsyncMock(return_value=True)), \
+         patch("modules.x402.invoicing.settle_payment_request", new=AsyncMock(return_value=True)), \
+         patch.object(ep, "_verify_and_settle_invoice",
+                      new=AsyncMock(return_value=(True, "0xtx", None))), \
+         patch.object(ep, "_move_paid_order", new=move):
+        resp = await ep.pay_invoice("inv_x", _fake_request(payment_header="hdr"))
+    assert resp.status_code == 200
+    assert move.await_count == (1 if moved else 0)
+
+
+@pytest.mark.asyncio
+async def test_move_paid_order_never_fails_the_paid_request():
+    """The money is recorded; a failure to move the order now is logged and left
+    to the watcher, never turned into an error for a payer who paid."""
+    with patch("modules.x402.settlement_watcher.SettlementWatcher.settle_order_now",
+               new=AsyncMock(side_effect=RuntimeError("store down"))):
+        await ep._move_paid_order("inv_x")

@@ -122,7 +122,7 @@ class CodeExecutionTool(BaseTool):
         try:
             sid = getattr(execution_context, "session_id", None) or getattr(self, "session_id", None)
             if sid:
-                from agents.task.path import pm
+                from core.session_paths import pm
                 return str(pm().get_workspace_dir(sid))
         except Exception:
             pass

@@ -36,13 +36,9 @@
 {% endfor %}</pre>
                 {% endif %}
                 {% if checked_dir %}<pre class="section-content">{{ checked_dir }}</pre>{% endif %}
-                {% if session_id %}
-                <button id="repair-session" class="action-btn" data-session-id="{{ session_id }}">{{ t('error.repair') }}</button>
-                {% endif %}
             </details>
         </div>
     </div>
 </div>
 
-<script src="/static/js/error-page.js" type="module"></script>
 {% endblock %}

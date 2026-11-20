@@ -17,7 +17,8 @@ from surfaces.signal.surface import SignalSurface, parse_envelope
 
 def SignalSink(client: SignalClient) -> TextSink:  # noqa: N802 — kept name
     """cron/delivery sink: send a raw text to a number/group (best-effort)."""
-    return TextSink(client.send, label="SignalSink", surface_id="signal")
+    return TextSink(client.send, label="SignalSink", surface_id="signal",
+                    flavor=SignalSurface(client).capabilities.markdown_flavor)
 
 
 class SignalHarness(BaseHarness):

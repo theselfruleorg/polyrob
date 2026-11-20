@@ -161,8 +161,10 @@ user-enumeration and username/password timing oracles.
 
 `POST /owner-login` verifies the submitted credentials and, on success, mints
 a session cookie (`issue_owner_session_cookie`) — a JWT signed with
-`JWT_SECRET_KEY`, 24-hour expiry, `httponly`/`samesite=strict`, `secure` when
-`ENVIRONMENT=production` (the console's default), except under `local`. It carries `role=owner`, `tier=admin`,
+`JWT_SECRET_KEY`, 24-hour expiry, `httponly`/`samesite=strict`, and `secure`
+unless the environment is explicitly development (`ENVIRONMENT`, `POLYROB_ENV`,
+`CONFIG_ENV` or `ENV` set to `development`) or the posture is `local`. A box with
+no environment name gets a `secure` cookie. It carries `role=owner`, `tier=admin`,
 `payment_method=None`. This is the **same cookie name, algorithm, and
 `request.state` contract** the wallet-JWT path uses (`api/auth_state.py`), so
 the rest of the app (session ownership, socket auth, etc.) treats an owner

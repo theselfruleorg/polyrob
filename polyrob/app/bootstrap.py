@@ -305,7 +305,7 @@ async def build_bot(
     await bot.initialize()
 
     if not bot.container.has_service("path_manager"):
-        from agents.task.path import get_path_manager
+        from core.session_paths import get_path_manager
         bot.container.register_service("path_manager", get_path_manager(
             data_root=str(_server_session_data_root()),
         ))
@@ -422,7 +422,7 @@ def _cli_extra_gate(name: str) -> bool:
         (ANYSITE_TOOL_ENABLED, default on), the X pack's ``twitter`` (X API
         credentials configured) and ``x_browser`` (X_BROWSER_ENABLED)): registered
         only while the gate is on. ``mcp`` registers its gate in
-        ``tools/mcp/config.py`` (093 A1).
+        ``core/mcp_config.py`` (093 A1; ``core.config`` imports it at load).
 
     Every other tool returns True — its presence in the init order already IS its gate
     (the optional ones are only inserted when enabled; the remaining static ones are
@@ -704,7 +704,7 @@ async def build_cli_container(
 
     # Project-scoped paths: cwd is the workspace, .polyrob/sessions holds artifacts.
     from pathlib import Path
-    from agents.task.path import get_path_manager, set_path_manager
+    from core.session_paths import get_path_manager, set_path_manager
     # Isolation switch: POLYROB_DATA_DIR set (headless/server) → data home OUTSIDE the
     # code tree + workspace under it; unset (local dev) → <polyrob_home>/data + workspace==cwd.
     cli_data_dir, _ws_is_project_root, _project_root = _resolve_cli_data_home()

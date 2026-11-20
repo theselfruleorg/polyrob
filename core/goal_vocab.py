@@ -1,6 +1,6 @@
 """The goal board's vocabulary — status, kind and ask literals.
 
-The board (``agents/task/goals/board.py``) owns the semantics; the LITERALS
+The board (``modules/goals/board.py``) owns the semantics; the LITERALS
 live here, in the core tier, because five modules below and beside it need
 them and ``core/`` may not import ``agents.*``: the status snapshot and the
 board renderer re-declared them by hand (pinned equal by a contract test),

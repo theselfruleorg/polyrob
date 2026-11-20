@@ -4,7 +4,7 @@ import pytest
 from click.testing import CliRunner
 
 import cli.commands.goals as goals_mod
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from cli.commands.goals import goals
 
 

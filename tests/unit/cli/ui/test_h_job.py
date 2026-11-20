@@ -1,6 +1,6 @@
 """``/jobs`` and ``/job …`` in the REPL (cli/ui/commands/h_job.py, 080 WS-2).
 
-The REPL runs the SAME handler as Telegram (``surfaces.telegram.job_ops``)
+The REPL runs the SAME handler as Telegram (``cron.owner_jobs``)
 through the ONE owner/admin home seam (``cli._admin_home``). Hermetic:
 ``POLYROB_DATA_DIR`` points the seam at a temp dir.
 
@@ -124,7 +124,7 @@ def test_unknown_sub_shows_usage(_home, _on):
 def test_fail_open_on_store_error(_home, _on, monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("db locked")
-    monkeypatch.setattr("surfaces.telegram.job_ops.jobs_reply", boom)
+    monkeypatch.setattr("cron.owner_jobs.jobs_reply", boom)
     _seed(_home)
     assert "unavailable" in _run(h_jobs, user_id="local").lower()
 

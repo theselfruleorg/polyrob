@@ -110,7 +110,7 @@ async def _httpx_fetch(url, *, method="GET", body=None, timeout=None, headers=No
     The connection is pinned to ``pinned_ip`` (the IP the SSRF validator already
     resolved and cleared) so a DNS rebind between validate and connect cannot
     redirect the socket to an internal address — the same defense web_fetch uses
-    (``tools/web_fetch/fetcher.py::_PinnedResolver``). The read is bounded to
+    (``core/security/safe_fetch.py::_PinnedResolver``). The read is bounded to
     ``MAX_PROBE_BYTES`` and the whole request to a TOTAL timeout so a hostile
     body (giant / gzip bomb / slow-drip) can't OOM or hang the worker.
     """
@@ -171,7 +171,7 @@ async def _validate(url: str, validator) -> tuple[Optional[str], Optional[str]]:
     skipped by that exception.
     """
     try:
-        from tools.shell.loopback_allow import is_loopback_allowed
+        from core.security.loopback_allow import is_loopback_allowed
         if is_loopback_allowed(url):
             return None, "127.0.0.1"
     except Exception:
@@ -193,7 +193,7 @@ async def _validate(url: str, validator) -> tuple[Optional[str], Optional[str]]:
 def _empty_row(url: str, method: str) -> dict:
     return {"url": url, "method": method.upper(), "status": None, "error": None,
             "challenge_parseable": False, "price_usd": None, "network": None,
-            "asset": None, "pay_to": None, "accepts": []}
+            "asset": None, "pay_to": None, "accepts": [], "pay_method": None}
 
 
 async def probe_endpoint(
@@ -264,6 +264,13 @@ async def probe_endpoint(
                     "asset": asset,
                     "scheme": entry.get("scheme") or entry.get("paymentScheme") or "?",
                 })
+                # x402 v1 `outputSchema.input.method`: the method the price is
+                # for. A POST-only paywall (A2A JSON-RPC) prices its POST on a GET.
+                schema = entry.get("outputSchema")
+                inp = schema.get("input") if isinstance(schema, dict) else None
+                pay_method = inp.get("method") if isinstance(inp, dict) else None
+                if isinstance(pay_method, str) and row["pay_method"] is None:
+                    row["pay_method"] = pay_method.upper()
         except Exception:
             # A broken challenge is already reflected by challenge_parseable.
             logger.debug("probe: could not summarise accepts for %s", url)

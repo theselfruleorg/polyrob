@@ -11,12 +11,12 @@ from fastapi import HTTPException
 
 @pytest.mark.parametrize("sid", ["money", "inbox", "activity", "Money", "INBOX"])
 def test_reserved_ids(sid):
-    from agents.task.path import is_reserved_session_id
+    from core.session_paths import is_reserved_session_id
     assert is_reserved_session_id(sid)
 
 
 def test_ordinary_id_is_not_reserved():
-    from agents.task.path import is_reserved_session_id
+    from core.session_paths import is_reserved_session_id
     assert not is_reserved_session_id("money-plan-1")
     assert not is_reserved_session_id("")
 

@@ -25,7 +25,7 @@ def test_the_no_self_grant_warning_survives():
 
 def test_under_the_armed_regime_the_remedy_says_a_goal_can_carry_it(monkeypatch):
     """When the self-goal ceiling holds the tool, the remedy names the real path."""
-    monkeypatch.setattr("tools.goal_tools.allowed_self_goal_tools",
+    monkeypatch.setattr("core.tool_grants.allowed_self_goal_tools",
                         lambda: frozenset({"defi_trade", "filesystem"}))
     remedy = _money_remedy()
     assert "NEVER carry" not in remedy

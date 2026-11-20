@@ -4,7 +4,7 @@
 chat `/approve` decides any item of the pending union, and the shell twin of that was
 `owner promote KIND ID`. Now `owner approve <id>` (or `all`) decides by the id
 `owner pending` shows, through the same resolver the chat verb uses
-(``approval_queue.resolve_pending_target``) and the same decider `owner promote` uses
+(``approval_target.resolve_decision_target``) and the same decider `owner promote` uses
 (``approval_queue.decide_pending`` / ``decide_all_pending``). The person form is
 `owner person-approve`; the old `approve <surface> <address>` and `approve --all`
 still run it, with a note.
@@ -51,16 +51,17 @@ def approve(ctx, target, address, user, approve_all, thread, all_tenants):
     if target.lower() == "all":
         _decide_all_and_echo(True, tenant)
         return
-    from tools.controller.approval_queue import (all_pending, decide_pending,
-                                                 resolve_pending_target, strip_tap_prefix)
+    from tools.controller.approval_queue import all_pending, decide_pending
+    from tools.controller.approval_target import resolve_decision_target
     home = _data_dir(write=True)
     pending = all_pending(user_id=tenant, home_dir=home, instance_id=_instance_id(),
                           board=_goal_board(), correspondent_registry=_registry(home))
-    match = resolve_pending_target(target, pending)
-    if match is None and strip_tap_prefix(target) is not None:
-        # A tool approval that left the open queue: only its lane can say whether it
-        # was decided, expired or never existed (the chat verb does the same).
-        match = {"kind": "tool_approval", "id": target}
+    # The ONE seat resolver: a gone `tap-<id>` reaches its lane, a shared id is named.
+    hit = resolve_decision_target(target, pending)
+    if hit.refusal:
+        click.echo(click.style(hit.refusal, fg="yellow"))
+        raise SystemExit(1)
+    match = hit.item
     if match is None:
         msg = f"no pending item '{target}' for tenant {tenant} — see `polyrob owner pending`"
         if pending.unavailable:

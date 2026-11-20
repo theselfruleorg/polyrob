@@ -1,4 +1,4 @@
-"""Task 5 — Socket.IO activity room gating (join_activity / leave_activity).
+"""Task 5 — Socket.IO activity room gating (join_activity; a socket leaves on disconnect).
 
 The global stream is cross-tenant, so join_activity is owner/admin-gated in
 every non-local posture, and the hub starts lazily / stops when the room
@@ -88,7 +88,7 @@ async def test_own_ops_owner_allowed_joins_the_room(monkeypatch):
     assert activity.get_hub().started is True
 
     # last client leaves → hub stops
-    await server.leave_activity("sid-o")
+    await server.disconnect("sid-o")
     assert activity.get_hub().started is False
 
 
@@ -112,7 +112,7 @@ async def test_local_open_and_flag_off_denied(monkeypatch):
     assert any(evt == "error" for evt, _ in fake2.emitted)
 
     # drain the hub inside this test's loop (no pending-task warnings)
-    await server.leave_activity("sid-l")
+    await server.disconnect("sid-l")
 
 
 @pytest.mark.asyncio

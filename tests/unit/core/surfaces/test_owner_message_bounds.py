@@ -31,7 +31,7 @@ _OWNER_TENANT = LocalIdentity.USER_ID
 
 def _ws(monkeypatch, tmp_path, session_id="sess-b", user_id=_OWNER_TENANT):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path / "data_root"))
-    from agents.task.path import pm
+    from core.session_paths import pm
     return pm().get_workspace_dir(session_id, user_id)
 
 
@@ -108,7 +108,7 @@ def test_paths_render_as_code_not_links(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_goal_completion_push_fits_one_telegram_message(monkeypatch, tmp_path):
-    from agents.task.goals.board import Goal
+    from modules.goals.board import Goal
     from agents.task.goals.deliverables import build_deliverables
     from agents.task.goals.dispatcher import GoalDispatcher
 

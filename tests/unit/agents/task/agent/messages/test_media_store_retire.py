@@ -18,7 +18,7 @@ from agents.task.agent.messages.filters import (
     strip_historical_media,
 )
 from agents.task.agent.prompts import SystemPrompt
-from agents.task.path import get_path_manager, set_path_manager
+from core.session_paths import get_path_manager, set_path_manager
 from core.surfaces.inbound_attachments import IMAGE_PATH_MARKER
 from modules.llm.messages import HumanMessage
 from tests.support.prefix_cache import common_prefix_len, serialize_messages
@@ -166,7 +166,7 @@ def test_an_image_in_the_tail_counts_and_the_store_does_not_flap():
 
 
 def test_retirement_reaches_the_saved_history(tmp_data_root):
-    from agents.task.path import pm
+    from core.session_paths import pm
     mm = _mm()
     size = 256 * 1024
     for step in range(20):

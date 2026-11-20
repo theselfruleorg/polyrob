@@ -43,9 +43,12 @@ def render_blocks(text: str, actions: Optional[list]) -> List[dict]:
     acts = acts[:_BUTTONS_MAX]
     if not acts:
         return []
+    # The text is already Slack mrkdwn (core.surfaces.rendering); a block is not
+    # escaped by the client, so & < > are escaped here.
+    from html import escape
     blocks: List[dict] = [{"type": "section",
-                           "text": {"type": "plain_text", "text": text or " ",
-                                    "emoji": False}}]
+                           "text": {"type": "mrkdwn",
+                                    "text": escape(text or " ", quote=False) or " "}}]
     for i in range(0, len(acts), _ROW_MAX):
         elements = []
         for j, a in enumerate(acts[i:i + _ROW_MAX], start=i):

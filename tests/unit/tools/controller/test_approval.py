@@ -57,3 +57,20 @@ def test_get_provider_by_name():
 def test_unknown_provider_raises():
     with pytest.raises(ValueError):
         get_approval_provider("nope")
+
+
+def test_the_owners_tap_on_a_reveal_grants_the_operators_fee_cap(monkeypatch):
+    """The rig (CW2, 2026-11-20): a reveal names no ``max_spend_usd`` (its cap is
+    AGENT_NFT_REVEAL_MAX_GAS_USD), so the owner's tap stamped no grant and the guard queued
+    the approved reveal again: it never landed. Any other verb with no bound gets no grant."""
+    from types import SimpleNamespace
+
+    from tools.controller.approval import _stamp_owner_grant
+    from core.wallet.tx_guard import OWNER_GRANT_KEY
+    monkeypatch.setenv("AGENT_NFT_REVEAL_MAX_GAS_USD", "0.6")
+    ctx = SimpleNamespace(metadata={})
+    _stamp_owner_grant(ctx, {"chain": "robinhood"}, action="agent_nft_collection_reveal")
+    assert ctx.metadata[OWNER_GRANT_KEY] == {"approved": True, "max_spend_usd": 0.6}
+    other = SimpleNamespace(metadata={})
+    _stamp_owner_grant(other, {"chain": "robinhood"}, action="agent_nft_collection_mint")
+    assert OWNER_GRANT_KEY not in other.metadata

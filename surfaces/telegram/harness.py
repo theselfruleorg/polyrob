@@ -141,342 +141,24 @@ def _is_conflict_error(exc: Exception) -> bool:
 
 _DEFAULT_WEBHOOK_PATH = "/telegram/webhook"
 
-def _agent_name() -> str:
-    """The instance's own name for user-facing help — never a hardcoded bot name."""
-    try:
-        from core.instance import resolve_instance_id
-        return resolve_instance_id()
-    except Exception:
-        return "the agent"
-
-
-# ---------------------------------------------------------------------------
-# /help — RENDERED FROM THE ONE VERB TABLE (D34)
-#
-# ⚠️ This used to be a hand-written wall of text: a SECOND grouping of the same
-# verbs, with its own section names and its own sentences, beside
-# ``core/verbs.py``. Nothing pinned the two together, so `/missed` said one
-# thing here and another in the palette, `/start` had no line at all (and
-# `/help start` therefore answered "unknown command"), and `/groups use`
-# existed for weeks with no documentation anywhere.
-#
-# The table owns WHAT a verb is (``Verb.help``) and its SECTION (``Verb.group``,
-# rendered in ``GROUP_ORDER``). This module owns only the two things a core-tier
-# table may not carry: the ARGUMENT GRAMMAR (``_USAGE``) and this seat's own
-# elaborations (``_DETAIL`` continuation lines and ``_SUBVERBS``). A contract
-# test (tests/unit/surfaces/telegram/test_help_is_verb_table.py) pins every
-# command line's description against ``VERB_TABLE``.
-# ---------------------------------------------------------------------------
-
-#: verb -> the argument grammar rendered after the name. A verb absent here
-#: takes no arguments.
-_USAGE = {
-    "/pause": "[word…] [for 6h]",
-    "/resume": "[word…]",
-    "/missed": "[n]",
-    "/run": "[pause|resume|stop <n>]",
-    "/inbox": "[all|n]",
-    "/more": "<token>",
-    "/asks": "[<id>]",
-    "/skills": "[words | <id>]",
-    "/fulfill": "<id> [what you want to tell the run]",
-    "/job": "[list|new|show|edit|pause|resume|run|stop] …",
-    "/goal": "new <what> · <show|retry|pause|stop [--forever]|allow> <id>",
-    "/apps": "[list|show|approve|reject|kill|start|remove|logs <slug>]",
-    "/mcp": "[add <id> <url>|remove <id>|test <id>]",
-    "/journey": "[window]",
-    "/new": "[name]", "/chat": "<number or name>", "/rename": "<name>",
-    "/close": "[number or name]",
-    "/wallet": "[balances|tokens|signed [n]]",
-    "/writeoff": "<chain> <address> [go] [reason]",
-    "/unquarantine": "<chain> <address> [go]",
-    "/invoices": "[status] | refunded <id> [tx]",
-    "/settle": "<id> [tx]",
-    "/trade": "start|status|pause|resume|stop|release", "/offer": "list|show|orders|quote|resolve|pause|resume|retire",
-    "/bridge": "<from> <to> <amount> [from usdc] [as <asset>] [go]",
-    "/lp": "positions|pool|quote|add|remove|collect|seed|move",
-    "/launch": "<SYMBOL> <name…> [logo <url>] [desc <text>] [buy <amount>] [go]",
-    "/deploy": "<SYMBOL> <supply> <name…> [on <chain>] [decimals <n>] [go]",
-    "/claim": "<token> [go]",
-    "/pay": "<url> [max_usd] [go] [id=<name>]",
-    "/send": "<amount> <native|token-address> to <address> on <chain> [max <usd>] [go]",
-    "/swap": "<amount> <native|token> to <token> on <chain> [slippage <bps>] [max <usd>] [go]",
-    "/cards": "[<id> [ok|no|re|1-6]]",
-    "/nft": "[send <id> <to> [go]]|list|info <contract> <id>|account [<id>]|transfer <contract> <id> <to> [go]|"
-            "revoke <contract> <operator> [go]|trust <collection>|untrust <collection>|ready <id>|unready <id>",
-    "/dapp": "list|revoke <id>",
-    "/contacts": "[<surface> <address>]",
-    "/why": "[n]",
-    "/thread": "[n | <hours>h]",
-    "/identity": "register|set-uri [go]",
-    "/allow": "<surface> <target>",
-    "/deny": "<surface> <target>", "/pair": "[list|approve <surface> <code>|revoke <surface> <id>]",
-    "/groups": "<allow|deny|list|use|mode|set|role|roles|tools|audit|tail|service|admins> "
-               "here|<surface> <chat_id> [...]",
-    "/mute": "here|<surface> <chat_id> <duration>",
-    "/ban": "<duration> IN REPLY to a message",
-    "/unmute": "IN REPLY to a message",
-    "/unban": "IN REPLY to a message",
-    "/paid": "<status|enable|disable|price <verb> <usd>|asset <id>|offers|"
-             "cancel <id>>",
-    "/prefs": "[all]",
-    "/config": "[list | get|explain <key> | search <words> | set <key> <value> | check]",
-    "/model": ("[<name> [default] [reasoning=<level>] | reset | aliases | heavy <name> | "
-               "light <name> | choice free|listed]"),
-    "/usage": "[days]",
-    "/kb": "[list [collection] | search <query> | <words>]",
-    "/files": "[n]",
-    "/help": "[verb]",
-}
-
-#: verb -> extra INDENTED lines under its command line. They never start with
-#: "/" so ``help_commands`` skips them, and ``_help_for`` returns them with the
-#: verb they belong to.
-_DETAIL = {
-    "/pause": ("   everything, or: trading, background, messages, deploying "
-               "— or a scope",),
-    "/mute": ("   with a duration IN REPLY to a message it mutes that MEMBER "
-              "— free for you and room admins, a paid action for a member",),
-    "/unmute": ("   the muted member may COUNTER-PAY their own",),
-    "/unban": ("   the banned member may COUNTER-PAY their own",),
-    "/config": ("   safe keys write immediately; guarded keys queue for "
-                "/pending review",),
-    "/mcp": ("   https only; loads in every new session",),
-    "/journey": ("   default 24h, e.g. 30m/24h/7d",),
-    "/bridge": ("   quote only without `go`; your own `/bridge … go` passes the "
-                "autonomous ceiling and the pause — the per-tx and daily caps "
-                "still bind. A bridge I start above the ceiling asks you first",),
-    "/launch": ("   quote only without `go`; a launch with no logo and no "
-                "description looks abandoned",),
-    "/deploy": ("   quote only without `go`; no mint function, no owner",),
-    "/claim": ("   collects creator fees the launchpad escrow already owes me",),
-    "/pay": ("   price only without `go`; pays in USDC on Base, never above max_usd",),
-    "/identity": ("   mints THIS instance's ERC-8004 identity from my own "
-                  "wallet; refuses if one already exists",),
-}
-
-#: verb -> extra full command lines for its SUBVERBS. A subverb is not a
-#: ``_COMMANDS`` row, so it has no table entry and its words live here.
-_SUBVERBS = {
-    "/wallet": ("/wallet autonomous <usd> — how much runs without asking you",
-                "/wallet tokens — which tokens I trust, and what is quarantined",
-                "/wallet trust|untrust <chain> <address> [go] — your word on one token"),
-}
-
-#: The two verbs DELIBERATELY absent from the table (``core.verbs.
-#: PALETTE_EXCLUDED`` — the console drops them from /help). Telegram still
-#: documents them, so they are rendered here with their own words, in the
-#: section they belong to.
-_LOCAL_ROWS = {
-    "talk": (
-        ("/task", "<goal>", "The old form of /new: a separate chat that starts with your goal"),
-    ),
-}
-
-
-def _help_line(name: str, usage: str, text: str) -> str:
-    return f"{name}{(' ' + usage) if usage else ''} — {text}"
-
-
-#: This seat's id in ``core.verbs.Verb.seats``.
-_SEAT = "telegram"
-
-
-def _build_help_body() -> str:
-    """The `/help` body, rendered from :data:`core.verbs.VERB_TABLE`.
-
-    ⚠️ Filtered to the verbs THIS seat can run. A REPL-local verb (`/gates`,
-    `/meter`) never reaches a Telegram message at all, so listing it here would
-    answer "unknown command" to anyone who tried it.
-    """
-    from core.verbs import GROUP_ORDER, empty_group_hints, grouped
-    body = dict(grouped(_SEAT))
-    hints = dict(empty_group_hints(_SEAT))    # 067 P5a: "install the wallet pack"
-    lines = []
-    for group in GROUP_ORDER:
-        verbs = body.get(group, ())
-        rows = [f"  {hints[group]}"] if group in hints else []
-        for verb in verbs:
-            rows.append(_help_line(verb.name, _USAGE.get(verb.name, ""),
-                                   verb.help))
-            rows.extend(_DETAIL.get(verb.name, ()))
-            rows.extend(_SUBVERBS.get(verb.name, ()))
-        for name, usage, text in _LOCAL_ROWS.get(group, ()):
-            rows.append(_help_line(name, usage, text))
-            rows.extend(_DETAIL.get(name, ()))
-        if not rows:
-            continue
-        lines.append(f"— {group[:1].upper()}{group[1:]} —")
-        lines.extend(rows)
-    lines.append("Or just send a message to talk to {name}.")
-    return "\n".join(lines)
-
-
-#: SSOT for /help AND the setMyCommands menu (help_commands() parses the "/"
-#: lines; section headers and indented detail lines are skipped).
-_HELP_BODY = _build_help_body()
-
-#: G11: the slash list is not the whole control surface — the agent can act
-#: through its own tools when asked in prose ("schedule a check every morning at
-#: 9", "add a goal to …"). That path predates the slash verbs and is strictly
-#: wider than them, but nothing ever told the owner it existed, so /help read as
-#: an exhaustive list of what was possible.
-_HELP_PROSE_NOTE = (
-    "\n\nYou don't have to use a command. Ask me in plain words — "
-    "\"schedule a check every morning at 9\", \"add a goal to …\", "
-    "\"what did you spend this week\" — and I'll use my own tools."
+# Proposal 125 S14: the chat seats' command catalogue (/help, the "/" menu, the
+# unknown-verb answer, the owner-verb set, the room refusals) lives in
+# core/surfaces/command_catalog.py, below the seats; the old names stay here.
+from core.surfaces.command_catalog import (  # noqa: E402,F401
+    DETAIL as _DETAIL, LOCAL_ROWS as _LOCAL_ROWS,
+    OWNER_ADMIN_COMMANDS as _OWNER_ADMIN_COMMANDS, SEAT as _SEAT, SUBVERBS as _SUBVERBS,
+    ROOM_REFUSED_SUBVERBS as _ROOM_REFUSED_SUBVERBS, USAGE as _USAGE,
+    agent_name as _agent_name, build_help_body as _build_help_body,
+    build_room_refused as _build_room_refused, help_body, help_commands,
+    help_for as _help_for, help_line as _help_line, help_text as _help_text,
+    owner_verbs as _owner_verbs, room_refused as _room_refused,
+    room_refused_line as _room_refused_line, unknown_text as _unknown_command_text,
 )
 
-
-def _help_text() -> str:
-    name = _agent_name()
-    return f"{name} commands:\n" + _HELP_BODY.format(name=name) + _HELP_PROSE_NOTE
-
-
-def _help_for(verb: str) -> str:
-    """`/help <verb>` (030 WS-C4): the verb's line(s) from the SSOT — its
-    command line, its indented detail, and its subverb lines like
-    `/wallet tokens` — without triggering the verb.
-
-    ⚠️ D42: an ALIAS resolves through the table too, so `/help h` answers for
-    `/help`. And `/start` now has a row, so `/help start` is no longer the
-    "unknown command" reply for a verb the bot itself sends on first contact.
-
-    ⚠️ A SEAT-LOCAL verb (`/gates`, `/meter` — `core.verbs.Verb.seats`) is
-    deliberately absent from this seat's body, so it found no line and fell
-    through to "Unknown command". That is a confident lie about a verb that
-    exists: the honest answer names the seat it runs on. Asking about
-    something real must never be answered as if it were a typo.
-    """
-    from core.verbs import verb_for
-    raw = "/" + verb.strip().lstrip("/").lower()
-    canonical = verb_for(raw)
-    v = canonical.name if canonical is not None else raw
-    if canonical is not None and not canonical.runs_on(_SEAT):
-        return _unknown_command_text(v)
-    out: list = []
-    collecting = False
-    for ln in _HELP_BODY.splitlines():
-        if ln.startswith("/"):
-            collecting = (ln.split(" ")[0] == v)
-            if collecting:
-                out.append(ln)
-            continue
-        if collecting and ln.startswith(" "):
-            out.append(ln)
-            continue
-        collecting = False
-    if not out:
-        return _unknown_command_text(v)
-    return "\n".join(out)
-
-
-def _welcome_text() -> str:
-    """First-contact reply for /start (030 L9) — short, not the verb catalog."""
-    name = _agent_name()
-    return (
-        f"👋 I'm {name}. Send a message in plain words to give me a task, "
-        "or /help for the command list."
-    )
-
-
-def _unknown_command_text(cmd: str) -> str:
-    """A slash line no handler here owns: a retired verb, a verb of another seat, or
-    a typo with its closest verbs (``surfaces/telegram/unknown_verb.py``)."""
-    from surfaces.telegram.unknown_verb import unknown_command_text
-    return unknown_command_text(cmd, [f"/{name}" for name, _ in help_commands()], _SEAT)
-
-_OWNER_ADMIN_COMMANDS = ("/inbox", "/book",
-                         "/pending", "/approve", "/reject", "/asks", "/fulfill",
-                         "/allow", "/deny", "/allowlist", "/pair",
-                         "/groups", "/mute",  # 044 T18: room presence admin
-                         "/paid",             # 046: paid room actions
-                         "/unmute", "/ban", "/unban",   # 046 phase 2
-                         "/resume", "/pause", "/run",
-                         "/job", "/goal", "/wallet", "/invoices", "/settle",
-                         "/trade", "/offer", "/bridge", "/launch", "/deploy", "/lp",
-                         "/claim", "/pay", "/nft", "/dapp", "/identity", "/contacts", "/thread",
-                         "/why",
-                         "/status", "/mode", "/journey", "/goals", "/prefs", "/config",
-                         "/avatar", "/cwd",
-                         "/missed", "/apps", "/mcp",
-                         "/more", "/rules",  # 096 W5: reads (the rest of a cut; owner rules)
-                         "/kb", "/files", "/self", "/memory",  # 113 G-6
-                         "/model", "/skills",  # 080 D8
-                         "/usage",  # 2026-10-14 D6: the owner spend view
-                         "/restart", "/update",  # 077: drained restart / update
-                         "/cards")  # 2026-09-27: action cards (core/surfaces/cards.py)
-
-#: 044 I10 (spec §6.1 P9/P10): owner verbs that may NOT execute from inside a
-#: room, whoever is watching. Money (`/trade /wallet /bridge /deploy /launch
-#: /invoices /settle`), autonomy control
-#: (`/pause /halt /resume /approve /reject`), and access/configuration (`/allow
-#: /deny /config /prefs /mcp /apps`). Redirecting the REPLY to the owner's DM was
-#: never enough: the ACTION ran, so a member who talked the owner into typing one
-#: got it, and the room is the one place a shoulder-surfer is guaranteed.
-#:
-#: What STAYS reachable from a room — read-only or room-scoped, and answered in
-#: the owner's DM: `/status /help /groups /mute /paid /cancel /new /goals
-#: /recap /journey /missed`. A verb in NEITHER list is unchanged (it was never
-#: a room hazard; adding one here is a deliberate act).
-#:
-#: ⚠️ `/paid` (046) is deliberately ABSENT: it configures THIS room and nothing
-#: else, its writes are the room's own overlay, and it names no money the agent
-#: can move. Refusing it from the room would send an admin to a DM to configure
-#: the room he is standing in.
-#: D43: `/job`, `/goal` and `/fulfill` were MISSING. Each of them MUTATES
-#: durable autonomous work — scheduling a recurring run, cancelling a goal,
-#: declaring an owner ask satisfied — from inside a room where a member can
-#: read the ids off the screen and talk the owner into typing one. The
-#: ratchet (tests/unit/surfaces/telegram/test_room_refusal_ratchet.py) now
-#: derives the requirement instead of trusting this list to be remembered.
-#:
-#: `/contacts` is here too: a transcript with a third party is private
-#: correspondence, and the room is the one place a shoulder-surfer is
-#: guaranteed. The new money verbs (`/claim`, `/nft`, `/dapp`, `/identity`)
-#: join `/trade` and the rest for the same reason they did.
-#: W4: DERIVED — every routed verb whose ``core.verbs`` row is room-refused (a
-#: core row's ``room_refused`` flag, or a contributed verb its contributor did not
-#: name room-safe). The per-verb reasons live beside the rows.
-def _build_room_refused() -> frozenset:
-    from core.surfaces.dispatcher import _COMMANDS
-    from core.verbs import room_refused
-    return frozenset(n for n in _COMMANDS if room_refused(n))
-
-
+from surfaces.telegram import group_ops as _group_ops  # noqa: E402,F401 — room transport before /help
+_HELP_BODY = help_body()
 _ROOM_REFUSED_COMMANDS = _build_room_refused()
 
-
-#: TG7 (audit 2026-10-03): a room-reachable READ verb whose SUBVERBS write.
-#: `/avatar` shows the face from a room; `/avatar set|clear|push` changes it, and
-#: like every other owner write never runs from a room.
-_ROOM_REFUSED_SUBVERBS = {
-    "/avatar": frozenset({"set", "clear", "push"}),
-    "/book": frozenset({"retire"}),  # 086 W0: the book read stays; a retire writes
-}
-
-
-def _room_refused_line(cmd: str, text: str) -> bool:
-    """The room refusal for one LINE: the verb, or a refused subverb of it."""
-    if _room_refused(cmd):
-        return True
-    words = (text or "").split()
-    sub = words[1].lower() if len(words) > 1 else ""
-    return sub in _ROOM_REFUSED_SUBVERBS.get(cmd, frozenset())
-
-
-def _owner_verbs() -> frozenset:
-    """The owner verbs this seat runs: its own tuple plus every verb a pack
-    contributed (``core.verbs.register_verbs``, 067 P5a)."""
-    from core.verbs import routed_names
-    return frozenset(_OWNER_ADMIN_COMMANDS) | routed_names()
-
-
-def _room_refused(cmd: str) -> bool:
-    """044 I10: the ``core.verbs`` row decides (a pack verb registered after
-    import included)."""
-    from core.verbs import room_refused
-    return room_refused(cmd)
 
 _TURN_KINDS = frozenset({RouteKind.STEER, RouteKind.TASK_AGENT,
                          RouteKind.CORRESPONDENT_DATA,
@@ -486,18 +168,6 @@ _TURN_KINDS = frozenset({RouteKind.STEER, RouteKind.TASK_AGENT,
 def _route_is_turn(decision) -> bool:
     """044 T3: only a routed TURN may produce a visible side effect (bubble, echo)."""
     return getattr(decision, "kind", None) in _TURN_KINDS
-
-
-def help_commands() -> list:
-    """``(command, description)`` pairs for Telegram's ``setMyCommands`` "/" menu.
-
-    064 F2: rendered by the ONE pure menu function, ``core.verbs.menu_entries``,
-    from the same table and local rows as ``/help`` — so the menu can never drift
-    from it, and a duplicate name (which makes ``setMyCommands`` reject the WHOLE
-    menu) is dropped there, first occurrence kept.
-    """
-    from core.verbs import menu_entries
-    return menu_entries(_SEAT, _LOCAL_ROWS)
 
 
 def _menu_chat_ids() -> list:
@@ -687,7 +357,7 @@ async def _run_and_deliver(task_agent: Any, user_id: str, session_id: str, deliv
         return
     # T1.1: a RUN_BUDGET_USD halt ends a continued turn before any new step;
     # run_session's return IS the honest halt text — deliver it and stop.
-    from agents.task.agent.core.run_budget import RUN_BUDGET_MARKER
+    from agents.task.public import RUN_BUDGET_MARKER
     if failed and RUN_BUDGET_MARKER in status:
         try:
             await _deliver_owner_aware(task_agent, notice_key, deliver, f"⚠️ {status}")
@@ -724,7 +394,7 @@ async def _run_and_deliver(task_agent: Any, user_id: str, session_id: str, deliv
         try:
             from core.surfaces.error_notices import notice_for_texts
             from core.surfaces.llm_outage_notice import (
-                OUTAGE_NOTICE_TEXT, looks_like_llm_outage, should_send_llm_outage_notice)
+                looks_like_llm_outage, outage_notice_text, should_send_llm_outage_notice)
             last_err = _last_error_text(task_agent, session_id)
             if looks_like_llm_outage(status, last_err):
                 if not should_send_llm_outage_notice(notice_key or session_id):
@@ -732,7 +402,8 @@ async def _run_and_deliver(task_agent: Any, user_id: str, session_id: str, deliv
                                 "(flag off or cooldown)", session_id)
                     return
                 phrase = notice_for_texts(status, last_err)
-                notice = f"{OUTAGE_NOTICE_TEXT}\n{phrase}" if phrase else OUTAGE_NOTICE_TEXT
+                head = outage_notice_text(owner=not room and _is_admin_owner(user_id))
+                notice = f"{head}\n{phrase}" if phrase else head
         except Exception:
             logger.debug("llm outage notice classification failed (fail-open)",
                          exc_info=True)
@@ -970,7 +641,7 @@ async def _start_task_session(task_agent: Any, result: InboundResult, spawn, del
     _pin = None
     if room_turn is None and tool_ids is not None:
         from agents.task.model_switch_service import owner_chat_pin
-        _pin = owner_chat_pin(result.decision.session_key, session_user_id)
+        _pin = owner_chat_pin(result.decision.session_key, session_user_id, task_agent)
     _request = request_text
     if _pin or room_admin is not None:
         from agents.task.task_agent_support import SessionRequest
@@ -1105,114 +776,26 @@ def _is_admin_owner(user_id: str) -> bool:
     return is_owner_uid(user_id, allow_local=False)
 
 
-#: The ONE denial string for "you may not act here" — shared by the DENIED
-#: routing branch (`_act_on_inbound_locked`) and the lifecycle gate below, so
-#: the wording can never drift between the two.
-_UNAUTHORIZED_TEXT = "🔒 I'm not allowed to talk to you — my owner has not approved you."
-
-
-def _lifecycle_permitted(result: InboundResult) -> bool:
-    """Gate for the lifecycle verbs `/cancel` and `/new` (043 A10).
-
-    A lifecycle verb is NOT owner-only — a permitted non-owner DM user must
-    still be able to cancel or restart THEIR OWN session. Allow when the
-    sender is the owner, OR the sender is in a DM (`chat_type == "dm"`) whose
-    `decision.session_key` was built from the sender's OWN chat.
-
-    A Telegram private chat is 1:1 with its sender, and
-    `core/surfaces/session_chat_registry.py::build_session_key` embeds that in
-    the DM shape `agent:main:{surface}:dm:{chat_id}:{user_id}` — so the key
-    naming THIS sender's own chat AND this sender confirms the session is
-    theirs to act on. See `_owns_dm_session_key`.
-
-    044 T16: a room's session is shared by every member, so a member is still
-    denied there — but a room ADMIN the owner promoted may cancel or restart the
-    room's own session. The role is the one resolved at the routing boundary
-    (`identity.chat_role`), never re-derived here.
-    """
-    identity = result.inbound.identity
-    if _is_admin_owner(identity.user_id):
-        return True
-    chat_type = getattr(identity.source, "chat_type", "dm") or "dm"
-    if chat_type != "dm":
-        return getattr(identity, "chat_role", None) == "admin"
-    return _owns_dm_session_key(result.decision.session_key,
-                                getattr(identity.source, "chat_id", None),
-                                identity.user_id,
-                                getattr(identity.source, "surface_id", None))
-
-
-def _owns_dm_session_key(session_key: Optional[str], chat_id: Any,
-                         user_id: Any, surface_id: Any = None) -> bool:
-    """Is *session_key* exactly the DM key for this (surface, chat, sender)? (043 T4)
-
-    ⚠️ This was `f":dm:{chat_id}:" in key` — a SUBSTRING search, which asks
-    whether the key CONTAINS a shape rather than whether the key IS this
-    sender's session. A session key is an ADDRESS, not a haystack: its writer
-    is `core/surfaces/session_chat_registry.py::build_session_key`, which
-    joins `agent:main:{surface}:{chat_type}:{chat_id}[:{user_id}]
-    [:thread:{thread_id}]` on `:`. So `:dm:12:` also matches a group key whose
-    own payload carries those bytes in a later segment (e.g. a chat id or
-    thread id), and nothing at all checked WHO the key belonged to.
-
-    Parsed instead: the surface/chat_type/chat_id through the builder's own
-    inverse (`row_from_session_key`), then the DM's user segment positionally —
-    the inverse does not expose it, and that segment is the half that answers
-    "is this sender's session".
-
-    ⚠️ The SURFACE is checked against THIS INBOUND's surface, never against the
-    literal `"telegram"`: this module is the SHARED inbound actor (registered
-    via `core/surfaces/act.py::register_inbound_actor`), so discord, slack,
-    signal, x — every `surfaces/_shared.py::route_and_act` caller — and the
-    email/webhook path reach these lifecycle verbs too. Pinning the string
-    would deny `/cancel` to every non-telegram DM user. Comparing the two
-    closes the same hole (an `agent:main:email:dm:555:u` key cannot satisfy a
-    telegram sender) and is right on all of them.
-
-    Fail-CLOSED: anything that is not exactly a DM key for this triple (a
-    missing user segment, a foreign surface, an unparseable key) is a denial. A
-    lifecycle verb cancels a running task; a maybe is a no.
-    """
-    row = None
-    try:
-        from core.surfaces.session_chat_registry import row_from_session_key
-        row = row_from_session_key(str(session_key or ""))
-    except Exception:
-        logger.debug("lifecycle: session key parse failed", exc_info=True)
-        return False
-    if not row or row.get("chat_type") != "dm":
-        return False
-    if not surface_id or str(row.get("surface_id") or "") != str(surface_id):
-        return False
-    if not chat_id or str(row.get("chat_id") or "") != str(chat_id):
-        return False
-    # Segment 5 is the DM's user_id (`build_session_key` appends it only for a
-    # dm with a user_id). Its absence means the key does not name an owner, so
-    # it cannot name THIS one.
-    parts = str(session_key or "").split(":")
-    return bool(user_id) and len(parts) >= 6 and parts[5] == str(user_id)
+# Proposal 125 S14: the lifecycle gate and `/cancel` live in core/surfaces/lifecycle_verbs.py.
+from core.surfaces.lifecycle_verbs import (  # noqa: E402,F401
+    UNAUTHORIZED_TEXT as _UNAUTHORIZED_TEXT, cancel_reply as _cancel_reply,
+    lifecycle_permitted as _lifecycle_permitted, owns_dm_session_key as _owns_dm_session_key,
+)
 
 
 # W9 (2026-10-10): the owner reply helpers moved to their own modules. They are
 # re-exported here because the REPL seats and the tests import them from the
-# harness (`_mode_reply`, `_prefs_reply`, `_files_reply`, `_pending_set` …).
+# harness (`_mode_reply`, `_prefs_reply`, `_pending_set` …).
 from surfaces.telegram.status_ops import (  # noqa: E402,F401
     _STATUS_HEALTH_LIMIT, _cwd_reply, _goals_reply, _health_header, _missed_reply,
     _mode_reply, _pause_line, _pause_reply, _seat_via, _status_reply,
 )
-from surfaces.telegram.prefs_ops import (  # noqa: E402,F401
-    _config_reply, _is_configured_source, _prefs_home, _prefs_reply,
-)
-from surfaces.telegram.kb_ops import _files_reply, _kb_reply  # noqa: E402,F401
 from surfaces.telegram.storefront_ops import _storefront, _stranger_door  # noqa: E402,F401
 from surfaces.telegram.approval_ops import (  # noqa: E402,F401
     _correspondent_decision, _decide_pending_item, _pending_set,
 )
 
-#: A16/O17: what `/cancel` reaches. It stops the task bound to THIS chat; the
-#: goal and cron loops are separate runs and keep going. Shared by the REPL.
-CANCEL_REACH = ("This stops this chat's task only; goals and scheduled runs keep "
-                "going — /pause stops those.")
+from core.surfaces.lifecycle_verbs import CANCEL_REACH  # noqa: E402,F401 — A16/O17, every seat
 
 
 #: The one-token command grammar lives in ``core.surfaces.tappable`` — the
@@ -1257,7 +840,7 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
     if not _is_admin_owner(user_id):
         return "🔒 Owner only."
     from core.instance import resolve_instance_id
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     data_dir = _admin_data_dir(task_agent)
     instance_id = resolve_instance_id()
     args = result.inbound.text.strip().split()[1:]
@@ -1269,7 +852,7 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
     # 067 P5a: a verb a pack contributed WITH a Telegram handler runs here, after
     # the owner gate (convention: ``core.verbs`` KNOWN_SEATS). Today's money
     # verbs carry no reference, so the built-in table below still runs them.
-    from core.verbs import handler_ref
+    from surfaces.telegram.seat_handlers import handler_ref
     _ref = handler_ref(_SEAT, cmd)
     if _ref is not None:
         return await _run_contributed(_ref, user_id=user_id, data_dir=data_dir, args=args,
@@ -1291,28 +874,10 @@ from surfaces.telegram.reply_spill import (  # noqa: E402,F401 — 096 W5/W8
     record_undelivered_reply as _record_undelivered_reply)
 
 
-#: TG2 (audit 2026-10-03): every owner money verb whose `go` form waits on a
-#: chain receipt (up to 120 s) or on the owner's own tap. Awaited on the poll
-#: loop, any of them froze the bot — `/cancel` included — for the whole wait.
-#: W4: the verbs are the ``core.verbs`` rows with a ``background`` word, the word
-#: the "started" reply names (``core.verbs.background_word``).
-
-
 def _runs_in_background(cmd: str, result: InboundResult) -> bool:
-    """An owner verb that may wait minutes: an EXECUTING money verb
-    (a ``core.verbs`` row with a ``background`` word — it waits for a receipt, or on the
-    owner's tap). Only with a `go` word: the bare form is a quote and answers
-    inline. A card confirm re-enters here with the line the card carries, so
-    it follows the same rule. Also `/avatar set`, which fetches an image (or
-    an NFT's metadata) off the box, and `/avatar push`, which calls each platform."""
-    words = (result.inbound.text or "").split()
-    if cmd == "/avatar":  # `/avatar set <url|nft:…>` fetches over the network
-        return len(words) > 1 and words[1].lower() in ("set", "push")
-    from core.verbs import background_word
-    if not background_word(cmd):
-        return False
-    from core.surfaces.cards import executes
-    return executes(words[1:])
+    """The one rule (``core.surfaces.cards.runs_in_background``), over this inbound."""
+    from core.surfaces.cards import runs_in_background
+    return runs_in_background(cmd, result.inbound.text)
 
 
 async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver=None,
@@ -1321,6 +886,16 @@ async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver
     if cmd:   # an old name (/halt, /recap, /jobs) is its row — also for a caller that did not route
         from core.surfaces.dispatcher import _command_token
         cmd = _command_token(cmd)
+    from core.surfaces.nav import is_nav_token, resolve
+    if is_nav_token(cmd):
+        # A button that carries a whole line (core.surfaces.nav): run the stored line
+        # as if the owner typed it, so it meets every gate below again.
+        line, refusal = resolve(result.inbound.identity.user_id, cmd)
+        if line is None:
+            return refusal
+        result.inbound.text = line
+        result.decision.command = line.split()[0].lower()
+        return await _handle_command(task_agent, result, spawn, deliver, fetch_media)
     if cmd == "/help":
         args = (result.inbound.text or "").split()[1:]
         # A room MEMBER and a room ADMIN each read what THEY can do here, never
@@ -1331,11 +906,21 @@ async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver
         from surfaces.telegram.help_scope import scoped_help   # 113 W7 F-05
         if (_scoped := scoped_help(result)) is not None:
             return _scoped
+        _uid = result.inbound.identity.user_id
+        _seat = getattr(result.inbound.identity.source, "surface_id", None) or "telegram"
+        topic = " ".join(args).strip().lower()
+        if topic == "all":
+            return _help_text(_seat)
+        from surfaces.telegram import help_menu
+        if topic in dict(help_menu.groups(_seat)):
+            return help_menu.group_reply(topic, _uid, _seat)
         if args:
-            return _help_for(args[0])
-        return _help_text()
-    if cmd == "/start":
-        return _welcome_text()
+            return _help_for(args[0], _seat)
+        return help_menu.menu_reply(_uid, _agent_name(), _seat)
+    if cmd == "/start":   # the owner's buttons only for the owner
+        from surfaces.telegram import help_menu
+        _uid = result.inbound.identity.user_id
+        return help_menu.start_reply(_uid, _is_admin_owner(_uid))
     if cmd == "/admin":
         return room_help.admin_elsewhere(result)
     if cmd not in _owner_verbs():
@@ -1394,6 +979,8 @@ async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver
         from core.surfaces.card_list import started_line
         from core.verbs import background_word
         return started_line(cmd, result.inbound.text, background_word(cmd) or "Bridge")
+    if cmd in ("/approve", "/reject") and card_ops.typed_card_tap(result):
+        cmd = "/cards"     # 126: `/approve <call card id>` IS its Confirm, off the loop
     if cmd == "/cards":
         # Owner-gated inside; a confirm re-enters this function with the line
         # the card carries, so it meets every gate above and below again.
@@ -1410,28 +997,7 @@ async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver
             # paths/DB errors/provider bodies, and it is unbounded.
             return f"Command failed: {str(e)[:200]} (details in the server log)"
     if cmd == "/cancel":
-        if not _lifecycle_permitted(result):
-            return _UNAUTHORIZED_TEXT
-        words = (result.inbound.text or "").split()[1:]
-        if words and _is_admin_owner(result.inbound.identity.user_id):
-            # `/cancel <card id>` / `/cancel cards`: a CARD, not the task.
-            from core.surfaces.card_list import cancel_reply
-            card_reply = cancel_reply(result.inbound.identity.user_id, words)
-            if card_reply is not None:
-                return card_reply
-        sid = result.decision.session_id
-        if sid:
-            # A16/O17: name the reach, and never claim a stop that did not happen.
-            try:
-                stopped = await task_agent.cancel_session_by_id(sid, force=True)
-            except Exception as e:
-                logger.warning("telegram /cancel failed: %s", e, exc_info=True)
-                return (f"I could not stop the task ({type(e).__name__}); it may still "
-                        f"be running. {CANCEL_REACH}")
-            if stopped is False:
-                return f"Nothing was running in this chat to stop. {CANCEL_REACH}"
-            return f"Task cancelled. {CANCEL_REACH}"
-        return f"No active task to cancel. {CANCEL_REACH}"
+        return await _cancel_reply(task_agent, result)
     if chat_ops.is_chat_command(cmd):   # 113: the person's own chats
         if not _lifecycle_permitted(result):
             return _UNAUTHORIZED_TEXT
@@ -2676,14 +2242,12 @@ class TelegramHarness:
         # (COMMAND/STEER redirect, DENIED-in-room suppression) instead of
         # re-deriving the raw room chat id — otherwise these replies would
         # still leak into (or be silently dropped from) the room incorrectly.
-        from core.surfaces.command_reply import (reply_media, reply_text,
+        from core.surfaces.command_reply import (reply_buttons, reply_media, reply_text,
                                                   reply_to_room)
         reply_chat_id = _deliver_chat_id
         if reply_to_room(reply) and _room_chat_id:
             reply_chat_id = _room_chat_id
         if reply_chat_id:
-            from core.surfaces.actions import (DECISION_LIST_COMMANDS,
-                                               actions_from_text)
             from surfaces.telegram import card_ops
             _cmd = getattr(result.decision, "command", None)
             _uid = result.inbound.identity.user_id
@@ -2697,9 +2261,8 @@ class TelegramHarness:
             try:
                 _mid = await _send_telegram_text(  # 064 F2: /pending's own tokens as buttons
                     self.bot, reply_chat_id, send_text,
-                    actions=(card_ops.reply_actions(reply)
-                             or (actions_from_text(full_text)
-                                 if _cmd in DECISION_LIST_COMMANDS else None)),
+                    actions=(reply_buttons(reply, _cmd, getattr(result.inbound, "text", ""))
+                             or None),
                     **room_help.topic_of(result, reply, _room_chat_id))
             except Exception as e:
                 # 101: an admin's DM refused: a short room note, never /missed.
@@ -2862,4 +2425,4 @@ def build_telegram_harness(container, task_agent, *, token, webhook_base=None, b
 # core.surfaces.inbound_webhook can delegate without importing the surface tier.
 from core.surfaces.act import register_inbound_actor  # noqa: E402
 
-register_inbound_actor(act_on_inbound)
+register_inbound_actor(act_on_inbound, command=_handle_command)  # 126: + run_owner_line

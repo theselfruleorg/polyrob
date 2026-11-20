@@ -19,12 +19,12 @@ logger = logging.getLogger(__name__)
 
 from core.security.encryption import (  # noqa: E402,F401  (re-exported for tools-tier callers + tests)
     _KEY_FILE_PATH,
-    _is_production,
     _key_file_path,
     _load_or_generate_key,
     MCPEncryption,
     get_encryption,
 )
+from core.env import is_production_env as _is_production  # noqa: E402,F401  (alias; the one predicate)
 
 
 from core.security.url_policy import MCPURLValidator, get_url_validator  # noqa: E402,F401

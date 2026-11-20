@@ -127,7 +127,7 @@ def test_resume_reports_env_halt_honestly(_halt_env, monkeypatch):
 
 
 def _board(tmp_path):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     return GoalBoard(str(tmp_path / "goals.db"))
 
 
@@ -159,7 +159,7 @@ def test_asks_empty_and_excludes_tool_approval(tmp_path, monkeypatch):
 
 
 def test_fulfill_marks_ask_fulfilled(tmp_path, monkeypatch):
-    from agents.task.goals.board import ASK_FULFILLED
+    from modules.goals.board import ASK_FULFILLED
     from cli.ui.commands.h_owner import h_fulfill
 
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
@@ -289,7 +289,7 @@ def test_invoices_terminal_text_is_the_chat_text(_invoice_db, monkeypatch):
     import os
 
     from cli.ui.commands.h_owner import h_invoices
-    from surfaces.telegram.owner_ops import invoices_reply
+    from tools.defi.owner_verbs.invoices import invoices_reply
     monkeypatch.setattr("cli.ui.commands.h_owner._tenant", lambda ctx: "u1")
 
     async def chat():

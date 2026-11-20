@@ -240,7 +240,7 @@ class SelfContextWriter:
         Returns a rejection result, or None when the body is clean. This is the ONE
         shared gate for all three identity-doc writers."""
         try:
-            from modules.memory.task.threat_scan import is_identity_suspicious
+            from core.security.threat_scan import is_identity_suspicious
         except Exception as e:
             logger.warning("%s write rejected (scanner unavailable, fail-closed): %s: %s",
                            self._LOG_LABEL, uid, e)

@@ -70,7 +70,7 @@ def test_h_journey_handler_emits(monkeypatch):
     async def fake_reply(user_id, data_dir, task_agent, args):
         return f"RENDERED:{user_id}:{args[0]}"
 
-    monkeypatch.setattr("surfaces.telegram.status_ops.journey_reply", fake_reply)
+    monkeypatch.setattr("core.surfaces.owner_reads.journey_reply", fake_reply)
     monkeypatch.setattr("cli._admin_home.admin_owner_tenant", lambda uid=None: uid)
     emitted = {}
     ctx = SimpleNamespace(

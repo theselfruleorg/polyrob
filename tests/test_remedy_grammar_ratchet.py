@@ -24,7 +24,7 @@ ALLOWED = {
     "polyrob/app/initialization.py": 2,
     "core/llm_auth/flows/registry.py": 1,
     "tools/browser/browser.py": 1,
-    "tools/controller/delegation.py": 1,
+    "core/delegation_policy.py": 1,
     "tools/defi/spl_deploy_verb.py": 1,
     "tools/defi/trade_tool.py": 3,
     "tools/filesystem.py": 1,

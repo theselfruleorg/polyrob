@@ -11,7 +11,7 @@ untouched — approval still re-arms, rejection still leaves it alone.
 """
 import pytest
 
-from agents.task.goals.board import ASK_OPEN, GoalBoard, STATUS_READY
+from modules.goals.board import ASK_OPEN, GoalBoard, STATUS_READY
 
 
 @pytest.fixture
@@ -122,7 +122,7 @@ def test_one_malformed_ask_row_holds_nothing_and_freezes_no_goal(board, raw, cap
 
 
 def test_a_failed_ask_read_is_recorded_for_status_once_per_window(board, monkeypatch):
-    from agents.task.goals import board_asks
+    from modules.goals import board_asks
     from core.event_kinds import GOAL_HOLD_UNREADABLE
     seen = []
     monkeypatch.setattr(board_asks, "_emit_event",

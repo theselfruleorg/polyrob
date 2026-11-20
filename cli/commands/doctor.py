@@ -237,6 +237,12 @@ def setup_lines(env: dict) -> list[str]:
         out.append(_service_line())
     except Exception:
         out.append("service: unknown")
+    # server provisioning parity (runtime-sandbox contract): a missing step is named
+    try:
+        from core.box_parity import parity_lines
+        out.extend(parity_lines())
+    except Exception:
+        out.append("box: unknown")
     return out
 
 
@@ -408,7 +414,16 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
     ``local_absent_means_on`` — see :func:`local_flag_on`; the webview's System
     page passes False so its report reflects the server process, not the CLI.
     """
-    resolved_env = env.get("CONFIG_ENV") or env.get("ENV") or "development"
+    # Audit 2026-11-21 L-24: the name the ONE predicates resolve (core.env), not the
+    # env-file name — a box named only by ENVIRONMENT/PRODUCTION is production.
+    from core.env import is_development_env, is_production_env
+    _file_env = env.get("CONFIG_ENV") or env.get("ENV")
+    if is_production_env(_file_env):
+        resolved_env = "production"
+    elif is_development_env(_file_env):
+        resolved_env = "development"
+    else:
+        resolved_env = "unnamed (production refusals off, development relaxations off)"
     lines: list[str] = [f"POLYROB doctor — resolved env: {resolved_env}",
                         "provider credentials:"]
     # The CLI (build_cli_container) does os.environ.setdefault("POLYROB_LOCAL", "1"),

@@ -60,19 +60,21 @@ def _resolve_job_id(svc, job_id: str, tenant: str) -> str:
 
     `cron list` prints 8-char ids, so that is what an operator types back;
     `edit <8 chars>` used to fail with a message that blamed the rig (maint,
-    2026-09-21 00:50Z). Exact match wins; an ambiguous prefix names the
-    candidates; no match is "no job".
+    2026-09-21 00:50Z). Exact match wins; a prefix resolves through
+    ``core.short_id.resolve_prefix``: an ambiguous one is an error, never a guess.
     """
+    from core.short_id import resolve_prefix   # the ONE short-id resolver (125 S14)
     job_id = job_id.strip()
-    if svc.store.get(job_id, user_id=tenant) is not None:
+    if job_id and svc.store.get(job_id, user_id=tenant) is not None:
         return job_id
-    hits = [j for j in svc.list_jobs(user_id=tenant) if j.id.startswith(job_id)]
-    if len(hits) == 1:
-        return hits[0].id
-    if len(hits) > 1:
-        raise click.ClickException(
-            f"ambiguous job id {job_id!r} — matches: " + ", ".join(sorted(j.id for j in hits)))
-    raise click.ClickException(f"no job {job_id!r} for this tenant")
+    ids = [j.id for j in svc.list_jobs(user_id=tenant)]
+    full, err = resolve_prefix(job_id, ids)
+    if full:
+        return full
+    hits = sorted(i for i in ids if job_id and i.startswith(job_id))
+    if len(hits) > 1:   # the shell names the candidates the chat seats only count
+        raise click.ClickException(f"ambiguous job id {job_id!r} — matches: " + ", ".join(hits))
+    raise click.ClickException(f"no job {job_id!r} for this tenant ({err})")
 
 
 def _warn_if_cron_off() -> None:

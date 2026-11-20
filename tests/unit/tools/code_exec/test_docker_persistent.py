@@ -452,17 +452,21 @@ async def test_run_persistent_host_backstop_timeout_exceeds_in_container_timeout
 # 5. _resolve_persistent_workdir fallback (no real pm() dependency for this branch)
 # --------------------------------------------------------------------------
 
-def test_resolve_persistent_workdir_falls_back_to_tempdir_on_path_manager_failure(tmp_path, monkeypatch):
+def test_resolve_persistent_workdir_falls_back_to_a_dir_the_daemon_sees(tmp_path, monkeypatch):
+    """Not the private /tmp (the rootless daemon would mount an empty dir there):
+    a stable dir under <data home>/sandbox_installs/_scratch (runtime-sandbox contract)."""
     def _boom():
         raise RuntimeError("no path manager available in this test context")
 
-    monkeypatch.setattr("agents.task.path.pm", _boom)
-    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    import core.runtime_paths as rp
+    monkeypatch.setattr("core.session_paths.pm", _boom)
+    monkeypatch.setattr(rp, "effective_data_home", lambda: tmp_path)
 
     b = DockerBackend(session_id="fallback-check")
     workdir = b._resolve_persistent_workdir()
 
-    assert workdir == str(tmp_path / "polyrob_docker_persistent_fallback-check")
+    assert workdir.startswith(str(tmp_path / "sandbox_installs" / "_scratch" / "persistent-fallback-check-"))
+    assert b._resolve_persistent_workdir() == workdir
     import os
     assert os.path.isdir(workdir)
 

@@ -1,5 +1,14 @@
 """Tests that resolve_cli_persona() (used by polyrob run) honours the gate and template."""
+import pytest
+
 from cli.persona import resolve_cli_persona
+
+
+@pytest.fixture(autouse=True)
+def _own_data_home(tmp_path, monkeypatch):
+    """The owner's persona setting (agents/personality/persona_setting.py) is read
+    from the data home: give every test its own, never a shared or real one."""
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
 
 
 def test_run_persona_empty_when_gate_off(monkeypatch):

@@ -2,7 +2,8 @@
 import pytest
 
 from core.surfaces.command_reply import reply_text, reply_to_room
-from surfaces.telegram import group_ops
+import surfaces.telegram.group_ops  # noqa: F401 — registers the Telegram room transport
+from cron import owner_rooms as group_ops  # the body (proposal 125 S14)
 
 
 # --- async-seam shim (2026-09-15) -------------------------------------------

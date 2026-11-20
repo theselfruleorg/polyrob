@@ -240,7 +240,7 @@ async def test_no_surface_running(home):
 def test_room_and_taint_gated():
     from core.surfaces.room_policy import is_room_denied_call
     assert is_room_denied_call("room_moderate", None)
-    from agents.task.agent.core.correspondent_gate import is_high_impact_call
+    from core.security.high_impact import is_high_impact_call
     assert is_high_impact_call("room_moderate", None)
 
 

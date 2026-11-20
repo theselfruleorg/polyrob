@@ -1,9 +1,8 @@
 """The core-owned bodies of ``agent_nft_snapshot`` / ``_inspect`` / ``_journal`` / ``_bind_identity``
-(C20 — moved from the agent-NFT package, which keeps only a collection's own parts).
+(C20; 123 S4 removed the last package seam).
 
-They need no package. A collection's own lines (its face, its reveal state) come from the
-package's optional hook ``verbs.extend_view(view, rpc) -> list[str]``; a hook that fails is
-named on the result, never fatal.
+They need no package (123 S4: there is none). A collection's own lines are general: its
+``tokenURI`` and, when it answers, ``revealBlock`` (:func:`_extend`).
 
 * snapshot — the account view of the NFT this treasury works from, plus its journal (count,
   head, where: on chain with a pinned ``journal_log``, else the local file);
@@ -29,14 +28,28 @@ def anchor_key(held) -> str:
     return f"{(held.journal_prefix or 'agent').lower()}.journal"
 
 
-def _extend(tool, view, rpc) -> List[str]:
-    hook = getattr(tool._impl(), "extend_view", None) if tool._impl() is not None else None
-    if hook is None:
-        return []
+def _extend(view, rpc) -> List[str]:
+    """123 D2: the collection's own lines are core's and general — the ERC-721 ``tokenURI`` and,
+    when the collection answers it, ``revealBlock(id)``. No package hook (123 S4)."""
+    from core.wallet import abi
+    out: List[str] = []
     try:
-        return [str(x) for x in (hook(view, rpc) or [])]
-    except Exception as exc:  # noqa: BLE001 — a collection's own lines are never fatal
-        return [f"  (the agent-NFT package's lines failed: {exc})"]
+        raw = rpc("eth_call", [{"to": view.collection, "data": abi.encode_call(
+            "tokenURI", [{"type": "uint256"}], [int(view.token_id)])}, "latest"])
+        uri = str(abi.decode([{"type": "string"}], raw)[0])
+        # The collection wrote it: capped and fenced as untrusted (audit 2026-11-21 L-15).
+        from tools.defi.nft_verbs import uri_for_model
+        out.append("  tokenURI:  " + uri_for_model(uri))
+    except Exception:  # noqa: BLE001 — a collection without metadata: no line
+        pass
+    try:
+        raw = rpc("eth_call", [{"to": view.collection, "data": abi.encode_call(
+            "revealBlock", [{"type": "uint256"}], [int(view.token_id)])}, "latest"])
+        block = int(abi.decode([{"type": "uint256"}], raw)[0])
+        out.append(f"  reveal:    {'at block ' + str(block) if block else 'not scheduled'}")
+    except Exception:  # noqa: BLE001 — no reveal view: no line
+        pass
+    return out
 
 
 def _sale(v, rpc, profile, treasury=None) -> List[str]:
@@ -57,7 +70,8 @@ async def snapshot(tool, params, execution_context) -> Any:
     try:
         held, signer = _held(tool, params, execution_context)
         rpc = tool.rpc_for(held.chain)
-        profile = collection_registry.profile_for(held.chain_id, held.collection)
+        from core.wallet.nft_account import profile_of
+        profile = profile_of(held)
         v = V.build_view(rpc, held.chain, profile, held.token_id, treasury=signer.address)
     except (NftAccountError, V.ViewError) as exc:
         return tool._ar(error=str(exc))
@@ -69,18 +83,25 @@ async def snapshot(tool, params, execution_context) -> Any:
     except Exception as exc:  # noqa: BLE001 — an unreadable history is not an empty one
         journal = f"  journal:   UNREADABLE ({exc})"
     return tool._ar(content=V.render(v, extra=[journal, *_sale(v, rpc, profile, signer.address),
-                                               *_extend(tool, v, rpc)]))
+                                               *_extend(v, rpc)]))
+
+
+def inspect_text(rpc_for, target: str):
+    """``(text, None)`` or ``(None, error)``: the read-only view of ANY agent NFT. ONE body for
+    ``agent_nft_inspect`` and the room-safe ``defi_data_nft_account`` (2026-11-20). Sync."""
+    from tools.agent_nft import view as V
+    try:
+        chain, profile, token_id = V.resolve_target(target)
+        rpc = rpc_for(chain)
+        v = V.build_view(rpc, chain, profile, token_id)
+    except V.ViewError as exc:
+        return None, str(exc)
+    return V.render(v, extra=[*_sale(v, rpc, profile), *_extend(v, rpc)]), None
 
 
 async def inspect(tool, params, execution_context) -> Any:
-    from tools.agent_nft import view as V
-    try:
-        chain, profile, token_id = V.resolve_target(params.target)
-        rpc = tool.rpc_for(chain)
-        v = V.build_view(rpc, chain, profile, token_id)
-    except V.ViewError as exc:
-        return tool._ar(error=str(exc))
-    return tool._ar(content=V.render(v, extra=[*_sale(v, rpc, profile), *_extend(tool, v, rpc)]))
+    text, err = inspect_text(tool.rpc_for, params.target)
+    return tool._ar(error=err) if err else tool._ar(content=text)
 
 
 def _registration_intent(chain: str, *, expects_mint: bool, max_spend_usd: float):
@@ -116,7 +137,8 @@ async def journal(tool, params, execution_context) -> Any:
         entries = journal_write.history(tool, held)
         if not entries:
             raise V.ViewError("the entry is not in the history yet")
-        profile = collection_registry.profile_for(held.chain_id, held.collection)
+        from core.wallet.nft_account import profile_of
+        profile = profile_of(held)
         agent_id = V.identity_agent_id(rpc, held.chain, held.account, profile.deploy_block,
                                        int(rpc("eth_blockNumber", []), 16))
     except Exception as exc:  # noqa: BLE001
@@ -143,7 +165,8 @@ def _account_agent_id(rpc, held):
     when unreadable (never "none")."""
     from core.wallet import collection_registry, erc8004_reputation
     from tools.defi.agent_registration import read_agent_id
-    profile = collection_registry.profile_for(held.chain_id, held.collection)
+    from core.wallet.nft_account import profile_of
+    profile = profile_of(held)
     version = profile.version_for_account(int(held.token_id), held.account)
     if version is not None and version.kind.collection_iface:
         own = erc8004_reputation.agent_id_of(rpc, held.collection, int(held.token_id))

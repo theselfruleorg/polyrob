@@ -76,7 +76,7 @@ def test_server_default_tools_autonomous_excludes_goal_and_cronjob(monkeypatch):
 
 def test_allowed_self_goal_tools_supervised_matches_frozen_set(monkeypatch):
     monkeypatch.delenv("AUTONOMY_MODE", raising=False)
-    from tools.goal_tools import allowed_self_goal_tools, _SELF_GOAL_ALLOWED_TOOLS
+    from core.tool_grants import SELF_GOAL_ALLOWED_TOOLS as _SELF_GOAL_ALLOWED_TOOLS, allowed_self_goal_tools
     assert allowed_self_goal_tools() == _SELF_GOAL_ALLOWED_TOOLS
     assert "goal" not in allowed_self_goal_tools()
     assert "cronjob" not in allowed_self_goal_tools()
@@ -84,7 +84,7 @@ def test_allowed_self_goal_tools_supervised_matches_frozen_set(monkeypatch):
 
 def test_allowed_self_goal_tools_autonomous_expands(monkeypatch):
     _enable_full(monkeypatch)
-    from tools.goal_tools import allowed_self_goal_tools
+    from core.tool_grants import allowed_self_goal_tools
     tools = allowed_self_goal_tools()
     assert "goal" in tools and "cronjob" in tools
     assert MONEY_AND_HOST.isdisjoint(tools)
@@ -93,7 +93,7 @@ def test_allowed_self_goal_tools_autonomous_expands(monkeypatch):
 def test_allowed_self_goal_tools_never_includes_money_or_host(monkeypatch):
     for mode_setup in (lambda mp: mp.delenv("AUTONOMY_MODE", raising=False), _enable_full):
         mode_setup(monkeypatch)
-        from tools.goal_tools import allowed_self_goal_tools
+        from core.tool_grants import allowed_self_goal_tools
         assert MONEY_AND_HOST.isdisjoint(allowed_self_goal_tools())
 
 
@@ -101,7 +101,7 @@ def test_goal_create_filters_goal_tool_supervised(monkeypatch):
     """Regression: a goal_create requesting 'goal'/'cronjob' is filtered out under
     supervised mode exactly as today (uses the module-level constant, unaffected)."""
     monkeypatch.delenv("AUTONOMY_MODE", raising=False)
-    from tools.goal_tools import _SELF_GOAL_ALLOWED_TOOLS
+    from core.tool_grants import SELF_GOAL_ALLOWED_TOOLS as _SELF_GOAL_ALLOWED_TOOLS
     requested = ["filesystem", "goal", "cronjob", "twitter"]
     allowed = [t for t in requested if t in _SELF_GOAL_ALLOWED_TOOLS]
     assert "goal" not in allowed and "cronjob" not in allowed

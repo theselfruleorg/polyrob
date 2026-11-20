@@ -11,7 +11,7 @@ middleware (:func:`may_read_session_path`), the socket ``join_session`` and
 """
 
 
-from agents.task.path import is_reserved_session_id  # noqa: F401 — WEB-1, one rule
+from core.session_paths import is_reserved_session_id  # noqa: F401 — WEB-1, one rule
 
 
 def session_path_id(path):
@@ -41,7 +41,7 @@ def may_read_session_path(path, user_id, path_manager):
     if not user_id or not session_id:
         return False
     try:
-        from agents.task.path import require_canonical_session_id
+        from core.session_paths import require_canonical_session_id
         clean_id = require_canonical_session_id(session_id, path_manager=path_manager)
         return owner_may_open(user_id, path_manager.get_session_user(clean_id))
     except Exception:
@@ -54,7 +54,7 @@ def session_room(session_id: str) -> str:
 
 
 def http_session_id(session_id: str, path_manager) -> str:
-    from agents.task.path import require_canonical_session_id
+    from core.session_paths import require_canonical_session_id
     from fastapi import HTTPException
     from webview.copy import t
     try:

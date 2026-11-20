@@ -3,12 +3,20 @@
 Moved from ``agents/task/utils.py`` (W7) so the core tier (``core.interactive_gate``)
 can take the lock without importing the agents tier. Uses the ``filelock`` package
 when it is installed, else a simple ``O_EXCL`` lock file.
+
+``TickLock`` is the non-blocking flock a periodic tick takes (cron, the goal
+dispatcher, the curator, the retention sweep): a held lock means skip, not wait.
 """
 import logging
 import os
 import threading
 import time
-from typing import Any
+from typing import Any, Optional
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover — no flock on this platform: the lock is a no-op
+    fcntl = None
 
 from core.state.proc import ProcIdentity, is_alive, process_identity
 
@@ -300,3 +308,61 @@ def get_safe_file_lock(lock_file: str, timeout: float = 60.0) -> Any:
         SafeFileLock instance
     """
     return SafeFileLock(lock_file, timeout)
+
+
+class TickLock:
+    """Exclusive cross-process lock: a non-blocking ``flock`` on *lock_path*.
+
+    The kernel drops the lock when its holder dies, so there is no stale-steal. The
+    old O_EXCL pid file judged a lock stale by its age and stole it by unlink and
+    re-create: two workers could both steal it, or a live long tick could lose it.
+    The file stays on disk; only the lock on it is held. (``core.state.files.file_lock``
+    is the same flock, but it blocks; a tick must skip, not wait.) Non-blocking:
+    ``acquire()`` returns False when another holder has it. Moved from
+    ``cron/scheduler.py`` so the curator, the goal dispatcher and the retention
+    sweep take it without an upward import."""
+
+    def __init__(self, lock_path: str):
+        self.lock_path = lock_path
+        self._fd: Optional[int] = None
+
+    def acquire(self) -> bool:
+        if self._fd is not None:
+            return False  # one TickLock object is one hold
+        parent = os.path.dirname(self.lock_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        fd = os.open(self.lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            if fcntl is not None:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            return False
+        try:
+            os.ftruncate(fd, 0)
+            os.write(fd, str(os.getpid()).encode())  # for a person who reads the file
+        except OSError:
+            pass
+        self._fd = fd
+        return True
+
+    def refresh(self) -> None:
+        """Bump the lock-file mtime, so a reader sees a live tick. The lock itself
+        never goes stale while its holder lives."""
+        try:
+            os.utime(self.lock_path, None)
+        except OSError:
+            pass
+
+    def release(self) -> None:
+        if self._fd is None:
+            return
+        try:
+            if fcntl is not None:
+                fcntl.flock(self._fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        finally:
+            os.close(self._fd)
+            self._fd = None

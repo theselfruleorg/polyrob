@@ -10,7 +10,7 @@ from datetime import datetime
 
 import pytest
 
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from core.cron_expect import holding_ask, job_held_by
 from cron.jobs import CronJob, CronJobStore
 from cron.scheduler import CronScheduler

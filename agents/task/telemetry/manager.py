@@ -23,7 +23,7 @@ from agents.task.telemetry.views import (
     SessionCompletionTelemetryEvent,
     MultiAgentRelationshipEvent
 )
-from agents.task.path import get_safe_singleton, pm
+from core.session_paths import get_safe_singleton, pm
 
 # Import logger
 from agents.task.logging_config import get_task_logger

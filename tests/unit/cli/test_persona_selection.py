@@ -212,11 +212,13 @@ def test_persona_listing_names_the_character_flag(local_gate, chars_home, tmp_pa
     from cli.ui.commands.handlers import _h_persona
 
     _write_character(chars_home, "analyst")
-    ctx = _ctx([], tmp_path / "prefs")
+    ctx = _ctx(["list"], tmp_path / "prefs")
     _h_persona(ctx)
     combined = "\n".join(ctx._out)  # type: ignore
-    assert "PERSONALITY_DEFAULT_CHARACTER" in combined
-    assert "POLYROB_PERSONA" in combined
+    # Owner copy names the verb, never an env flag.
+    assert "/persona <name>" in combined
+    assert "PERSONALITY_DEFAULT_CHARACTER" not in combined
+    assert "POLYROB_PERSONA" not in combined
 
 
 def test_persona_listing_shows_bios_from_the_search_dirs(local_gate, chars_home, tmp_path,
@@ -226,7 +228,7 @@ def test_persona_listing_shows_bios_from_the_search_dirs(local_gate, chars_home,
 
     _write_character(chars_home, "analyst", bio="Reads numbers carefully.")
     monkeypatch.chdir(tmp_path)  # NOT the repo root — the old code found nothing here
-    ctx = _ctx([], tmp_path / "prefs")
+    ctx = _ctx(["list"], tmp_path / "prefs")
     _h_persona(ctx)
     assert "Reads numbers carefully." in "\n".join(ctx._out)  # type: ignore
 
@@ -239,7 +241,7 @@ def test_persona_listing_marks_the_active_character(local_gate, chars_home, tmp_
     _write_character(chars_home, "analyst")
     _write_character(chars_home, "writer")
     monkeypatch.setenv("PERSONALITY_DEFAULT_CHARACTER", "writer")
-    ctx = _ctx([], tmp_path / "prefs")
+    ctx = _ctx(["list"], tmp_path / "prefs")
     _h_persona(ctx)
     combined = "\n".join(ctx._out)  # type: ignore
     assert "active" in combined.lower()

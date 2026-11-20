@@ -143,6 +143,15 @@ class StatusParams(BaseModel):
     limit: int = Field(10, ge=1, le=50)
 
 
+def _speaks_for() -> List[str]:
+    """124 S3: the held NFT accounts this signature also speaks for (ERC-1271)."""
+    try:
+        from core.wallet.nft_rules import signature_speaks_for
+        return [f"⚠️ {line}" for line in signature_speaks_for()]
+    except Exception:  # noqa: BLE001 — a note, never a reason not to answer
+        return []
+
+
 def _https_host(url: str) -> Tuple[Optional[str], str]:
     """``(error, host)`` — only an https URL with a host passes."""
     from urllib.parse import urlsplit
@@ -354,7 +363,7 @@ class WalletSignTool(WalletHolderMixin, BaseTool):
         if self._fetch_fn is not None:
             return await self._fetch_fn(url, method=method, json_body=body,
                                         extra_headers=headers)
-        from tools.web_fetch.fetcher import safe_fetch
+        from core.security.safe_fetch import safe_fetch
         # No redirect, ever: a redirected POST would re-send a signature, and a redirected
         # GET would carry the credential header to whatever host the Location names.
         return await safe_fetch(url, method=method, json_body=body, extra_headers=headers,
@@ -535,7 +544,7 @@ class WalletSignTool(WalletHolderMixin, BaseTool):
         except Exception as exc:  # noqa: BLE001
             return self._ar(error=self._refusal_text(exc))
         lines = [f"Signed a {verdict.decoded.get('kind')} for {host} with {signer.address} "
-                 f"({scheme}, digest {verdict.digest[:18]}…)."]
+                 f"({scheme}, digest {verdict.digest[:18]}…)."] + _speaks_for()
         meta = {"origin": host, "address": signer.address, "scheme": scheme,
                 "digest": verdict.digest}
         keys = [str(k) for k in challenge] if isinstance(challenge, dict) else []
@@ -691,8 +700,9 @@ class WalletSignTool(WalletHolderMixin, BaseTool):
             return self._ar(error=self._refusal_text(exc))
         host = origin_host(params.origin)
         return self._ar(
-            content=(f"Signed a {verdict.decoded.get('kind')} for {host} with "
-                     f"{signer.address} ({scheme}).\nsignature: {signature}"),
+            content="\n".join([f"Signed a {verdict.decoded.get('kind')} for {host} with "
+                               f"{signer.address} ({scheme})."] + _speaks_for()
+                              + [f"signature: {signature}"]),
             metadata={"origin": host, "address": signer.address, "scheme": scheme,
                       "digest": verdict.digest})
 

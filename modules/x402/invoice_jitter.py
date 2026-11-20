@@ -23,6 +23,7 @@ import asyncio
 import logging
 import secrets
 import sqlite3
+import weakref
 from typing import Dict, Optional
 
 from modules.x402.invoice_assets import INVOICE_KIND, atomic_amount
@@ -40,14 +41,19 @@ logger = logging.getLogger(__name__)
 # `UVICORN_WORKERS=1` deployment model — see the session-registry SQLite
 # backend for the cross-process class of this problem, which is out of scope
 # here); a module-level dict is fine since treasuries are few and long-lived.
-_treasury_locks: Dict[str, asyncio.Lock] = {}
+# One lock per treasury PER event loop: an asyncio.Lock that a waiter bound to one
+# loop raises on another (the bridge loop; since bot.db statements yield, 125 S18c,
+# the lock is really contended).
+_treasury_locks: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, Dict[str, asyncio.Lock]]" = (
+    weakref.WeakKeyDictionary())
 
 
 def _treasury_lock(recipient: str) -> asyncio.Lock:
-    lock = _treasury_locks.get(recipient)
+    per_loop = _treasury_locks.setdefault(asyncio.get_running_loop(), {})
+    lock = per_loop.get(recipient)
     if lock is None:
         lock = asyncio.Lock()
-        _treasury_locks[recipient] = lock
+        per_loop[recipient] = lock
     return lock
 
 

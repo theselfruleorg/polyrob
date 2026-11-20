@@ -21,10 +21,10 @@ Telegram or email.
 
 It is for people who want an agent that keeps working between messages and whose data stays on
 their own box. The agent loop and the LLM layer are native code (no third-party agent framework),
-memory and state are local SQLite files, and anything that spends money waits behind caps and your
-approval.
+memory and state are local SQLite files, and anything that spends money stays inside the caps you
+set; a move over a cap waits for your approval.
 
-> **Self-hosted, not a SaaS.** There is no hosted version. Your keys, your data, your machine;
+> **Self-hosted, not a SaaS.** A hosted cloud is coming soon; today you run it yourself. Your keys, your data, your machine;
 > only the LLM calls (and the tools you turn on) leave it.
 
 ---

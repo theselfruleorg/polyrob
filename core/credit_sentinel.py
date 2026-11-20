@@ -76,11 +76,8 @@ def _sentinel_path() -> str:
         # order — DATA_ROOT is the SESSION-tree axis, and a sentinel latched there
         # is a safety gate reading a different file than the agent writes
         # (structural audit T3, 2026-07-16).
-        try:
-            from core.runtime_paths import resolve_data_home
-            base = str(resolve_data_home())
-        except Exception:
-            base = os.getenv("POLYROB_DATA_DIR") or "data"
+        from core.runtime_paths import resolve_data_home
+        base = str(resolve_data_home())
     return os.path.join(base, SENTINEL_FILENAME)
 
 

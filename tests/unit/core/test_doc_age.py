@@ -19,12 +19,12 @@ def test_counts_dated_undated_and_stale():
 
 def test_header_names_last_write_and_undated_and_holds_as_days_pass():
     text = "a [from: m 2026-09-19]\nb [from: m 2026-01-01]\nc"
-    h = render_age_header("Owner facts", text, now=NOW)
-    assert h.startswith("## Owner facts (")
+    h = render_age_header("Owner rules", text, now=NOW)
+    assert h.startswith("## Owner rules (")
     assert "last write 2026-09-19" in h
     assert "older than" not in h
     later = date(NOW.year + 2, NOW.month, NOW.day)
-    assert render_age_header("Owner facts", text, now=later) == h
+    assert render_age_header("Owner rules", text, now=later) == h
     assert "undated" in h
 
 
@@ -32,19 +32,19 @@ def test_the_stale_count_is_a_tail_note_per_dated_block():
     old = "a [from: m 2026-01-01]\nb [from: m 2026-09-19]"
     blocks = (("owner_rules", old), ("self_doc", old), ("soul", old))
     assert stale_lines_note(blocks, now=NOW) == (
-        "Owner facts: 1 line(s) older than 30 days.\nSelf notes: 1 line(s) older than 30 days.")
+        "Owner rules: 1 line(s) older than 30 days.\nSelf notes: 1 line(s) older than 30 days.")
     assert stale_lines_note((("owner_rules", "b [from: m 2026-09-19]"),), now=NOW) == ""
 
 
 def test_all_undated_says_undated_not_fresh():
-    h = render_age_header("Owner facts", "a\nb", now=NOW)
+    h = render_age_header("Owner rules", "a\nb", now=NOW)
     assert "undated" in h
     assert "last write" not in h
 
 
 def test_empty_doc_renders_the_bare_heading():
-    assert render_age_header("Owner facts", "", now=NOW) == "## Owner facts"
-    assert render_age_header("Owner facts", "\n \n", now=NOW) == "## Owner facts"
+    assert render_age_header("Owner rules", "", now=NOW) == "## Owner rules"
+    assert render_age_header("Owner rules", "\n \n", now=NOW) == "## Owner rules"
 
 
 def test_never_raises_on_garbage():

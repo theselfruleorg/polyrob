@@ -2,9 +2,9 @@
 answer to its OWN ask, whatever its status, and keeps reading it on later runs."""
 import pytest
 
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from agents.task.goals.context import build_goal_run_task
-from agents.task.goals.rail_answers import decision_note
+from modules.goals.rail_answers import decision_note
 
 
 @pytest.fixture

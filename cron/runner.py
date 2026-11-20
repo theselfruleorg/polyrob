@@ -79,23 +79,9 @@ def _delivery_ev(job, outcome: str, target: str, session_id: Optional[str] = Non
 
 def _cron_ev(job, outcome: str, reason: Optional[str] = None, *,
              session_id: Optional[str] = None, **extra) -> None:
-    """Emit a cron_run event to the durable event log (fail-open). Makes cron
-    lifecycle queryable in the uniform autonomy/governance stream, not just the
-    episodes table (telemetry audit 2026-07-04). A run that started a session
-    carries its ``session_id`` in the row's own column (2026-10-14 review D-4)."""
-    from core.event_log import emit, event_log_enabled
-    if not event_log_enabled():
-        return
-    try:
-        from core.cron_expect import verified_attrs  # 108 W5
-        extra.update(verified_attrs(job, outcome, session_id))
-    except Exception:
-        logger.debug("cron_run verified attrs skipped (job %s)",
-                     getattr(job, "id", None), exc_info=True)
-    emit("cron_run", source="cron", user_id=getattr(job, "user_id", ""),
-         session_id=str(session_id or ""),
-         attrs={"job_id": getattr(job, "id", None), "outcome": outcome, "reason": reason,
-                **extra})
+    """Emit a cron_run event (``core.cron_store.emit_cron_run_event``, fail-open)."""
+    from core.cron_store import emit_cron_run_event
+    emit_cron_run_event(job, outcome, reason, session_id=session_id, **extra)
 
 
 def run_ev_attrs(run: Any, session_id: Optional[str], data_dir: Optional[str]) -> dict:
@@ -110,7 +96,7 @@ def run_ev_attrs(run: Any, session_id: Optional[str], data_dir: Optional[str]) -
     if isinstance(_stop, str) and _stop:
         out["stop_reason"] = _stop
     try:
-        from agents.task.agent.core.episodic_digest import did_something, run_record_facts
+        from agents.task.public import did_something, run_record_facts
         out["useful"] = bool(did_something(run_record_facts(run)))
     except Exception:
         logger.debug("cron run useful flag skipped", exc_info=True)
@@ -487,7 +473,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
     async def _record(job: CronJob, session_id, outcome: str, *, run=None, reason: str = "",
                       error: str = "", summary=None) -> None:
         """The job's run record for one exit path (2026-10-13 review R3)."""
-        from agents.task.agent.core.episodic_digest import record_run
+        from agents.task.public import record_run
         from core.cron_expect import verified_attrs
         stored = await record_run(regime=_CRON_REGIME, kind="cron", session_id=session_id,
                                   user_id=job.user_id, rail_id=f"cron:{job.id}", task=job.task,
@@ -497,7 +483,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                                   mandate=(job.payload or {}).get("mandate"))
         # 095 W13: the reviewer runs AFTER the run, outside its budget and cap.
         try:
-            from agents.task.agent.core.background_review import schedule_review_after_run
+            from agents.task.public import schedule_review_after_run
             from core.config_policy.rigs import pinned_skills
             schedule_review_after_run(task_agent, regime=_CRON_REGIME, session_id=session_id,
                                       user_id=job.user_id, rail_id=f"cron:{job.id}",
@@ -531,7 +517,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                     run.stop_reason = StopReason.WALL_CLOCK.value  # the cap, not the loop
                 reason = (f"{describe_stop_reason(StopReason.WALL_CLOCK)} "
                           f"({cap_s:g}s) before done()")
-            from agents.task.agent.core.episodic_digest import (
+            from agents.task.public import (
                 did_something, run_record_facts)
             outcome = "partial" if did_something(run_record_facts(run)) else idle_outcome
             await asyncio.wait_for(_record(job, session_id, outcome, run=run,
@@ -612,7 +598,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
         record_stored_tier(kind="job", payload=payload, model=model, absent=_tiered,
                            user_id=job.user_id, ref=job.id)  # 112 W2
         # 061 WS-3: the owner's answer to what THIS job asked last time rides
-        # into this run (`agents/task/goals/rail_answers.py`). Fail-open.
+        # into this run (`modules/goals/rail_answers.py`). Fail-open.
         # 2026-10-13 review B4: READ here, CONSUMED only after a run that
         # completed — a refused, failed or cut run used to lose "DECLINED, do
         # not re-ask" and the job asked again.
@@ -624,8 +610,8 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
         _task_text = _job_text
         _answers, _answer_board, _answer_ids = "", None, []
         try:
-            from agents.task.goals.board import GoalBoard
-            from agents.task.goals.rail_answers import peek_rail_answers
+            from modules.goals.board import GoalBoard
+            from modules.goals.rail_answers import peek_rail_answers
             from core.runtime_paths import goals_db_path
             _answer_board = GoalBoard(goals_db_path(data_dir))
             _answers, _answer_ids = peek_rail_answers(
@@ -639,7 +625,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
             if not _answer_ids or _answer_board is None:
                 return
             try:
-                from agents.task.goals.rail_answers import mark_rail_answers_consumed
+                from modules.goals.rail_answers import mark_rail_answers_consumed
                 mark_rail_answers_consumed(_answer_board, _answer_ids,
                                            run_id=f"cron_run:{job.id}:{int(time.time())}")
             except Exception:
@@ -650,7 +636,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
         # between the owner's decisions and the job text.
         _rail = f"cron:{job.id}"
         try:
-            from agents.task.agent.core.episodic_digest import render_previous_runs
+            from agents.task.public import render_previous_runs
             _prev = await render_previous_runs(user_id=job.user_id, rail_id=_rail,
                                                regime=_CRON_REGIME, data_dir=data_dir)
             if _prev:
@@ -844,7 +830,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                 # C-03: a run that bought and THEN ran out of steps did real
                 # work; it is PARTIAL with a summary of what happened, never a
                 # bare "failed" the next run cannot learn from.
-                from agents.task.agent.core.episodic_digest import (
+                from agents.task.public import (
                     did_something, run_record_facts)
                 _partial = did_something(run_record_facts(run))
                 from agents.task.runtime.stop_reason import label_last_report

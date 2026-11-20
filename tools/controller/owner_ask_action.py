@@ -11,7 +11,7 @@ know which session it is in:
 - ``question=…`` otherwise: a durable, deduplicated ask on the board, stamped with
   the rail that asked (``payload.rail_id``), and the owner is told ONCE through the
   delivery rail (recorded in the owner thread with the ask id). The answer rides
-  the rail's next run (``agents/task/goals/rail_answers.py``) or the dependent
+  the rail's next run (``modules/goals/rail_answers.py``) or the dependent
   goal's ``owner_unblocked``. ``blocks_goal_ids`` holds goals until the answer.
 - ``answer=…`` (a GENUINE owner turn of the owner tenant only — H04) decides the ask — the "anything from
   the chat" directive applied to asks: typing "A" works, ``/fulfill`` stays.
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 def _board(controller):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from core.runtime_paths import container_data_home, goals_db_path
     return GoalBoard(goals_db_path(container_data_home(getattr(controller, "container", None))))
 
@@ -340,7 +340,7 @@ def register_owner_ask_action(controller) -> None:
             if params.holds_this_job and (ask.payload or {}).get("rail_id") == rail_id:
                 # 116 W2.3: the cron twin of blocks_goal_ids; a refreshed ask gets it too.
                 from core.cron_expect import HOLD_VIA_ASK
-                from agents.task.goals.rail_answers import mark_holds_rail
+                from modules.goals.rail_answers import mark_holds_rail
                 if mark_holds_rail(board.db_path, ask.id, via=HOLD_VIA_ASK):
                     job_held = ("This job is HELD (no run) until the owner answers or the ask "
                                 "expires. ")
@@ -412,7 +412,7 @@ def register_owner_ask_action(controller) -> None:
         if not ok:
             return ActionResult(error=f"Ask `{target.id}` could not be decided (already closed?).",
                                 include_in_memory=True)
-        from agents.task.goals.rail_answers import decision_note
+        from modules.goals.rail_answers import decision_note
         return ActionResult(
             extracted_content=(f"Recorded the owner's {'answer' if params.approved else 'decline'} on ask "
                                f"`{target.id[:12]}` ({target.title[:100]})"

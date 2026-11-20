@@ -7,6 +7,7 @@ module ``logger``; ``SqliteMemoryProvider`` composes it and calls ``_init_curate
 ``_init_schema`` inside the same connection.
 """
 import logging
+from core.async_bridge import offloaded
 from core.sqlite_util import execute_retry, wal_connect
 import json
 import os
@@ -75,7 +76,9 @@ class CuratedNotesStoreMixin:
         empty content, over-char-cap, or over-entry-cap (so the tool can report
         the reason). Delegates to note_create (C1)."""
         return (await self.note_create(user_id, content)) is not None
-    async def curated_read(self, user_id) -> str:
+
+    @offloaded
+    def curated_read(self, user_id) -> str:
         """Return this tenant's ACTIVE curated notes as newline-joined "- {content}"
         (or "" = none). Pre-C1 rows have status NULL and read as active. A read
         failure raises (D14)."""
@@ -118,7 +121,9 @@ class CuratedNotesStoreMixin:
         if isinstance(tags, str):
             return [t.strip() for t in tags.split(",") if t.strip()]
         return [str(t).strip() for t in tags if str(t).strip()]
-    async def note_create(self, user_id, content: str, *, title: str = None,
+
+    @offloaded
+    def note_create(self, user_id, content: str, *, title: str = None,
                           tags=None, source: str = None, created_by: str = "agent",
                           status: str = "active"):
         """Create a note; returns its id or None (anon/empty/over-cap/error).
@@ -161,7 +166,8 @@ class CuratedNotesStoreMixin:
     # `active`; `archived` is the reject / soft-delete sink (A27). The states
     # and edges are :data:`CURATED_NOTE`.
 
-    async def note_update(self, user_id, note_id, *, content: str = None,
+    @offloaded
+    def note_update(self, user_id, note_id, *, content: str = None,
                           title: str = None, tags=None) -> bool:
         """Update a note's content/title/tags (tenant-scoped). Content updates
         recompute links. Returns False when the note isn't this tenant's, or is
@@ -198,16 +204,20 @@ class CuratedNotesStoreMixin:
         except Exception as e:
             logger.warning("note_update failed: %s", e)
             return False
-    async def note_archive(self, user_id, note_id) -> bool:
+
+    @offloaded
+    def note_archive(self, user_id, note_id) -> bool:
         """Archive (never delete) a note: ``active|pending -> archived``. False
         when not this tenant's or already archived (a second archive is a no-op)."""
         return self._note_move(user_id, note_id, ("active", "pending"), "archived")
 
-    async def note_promote(self, user_id, note_id) -> bool:
+    @offloaded
+    def note_promote(self, user_id, note_id) -> bool:
         """``pending -> active`` (the owner accepted a background draft)."""
         return self._note_move(user_id, note_id, ("pending",), "active")
 
-    async def note_restore(self, user_id, note_id) -> bool:
+    @offloaded
+    def note_restore(self, user_id, note_id) -> bool:
         """``archived -> active``."""
         return self._note_move(user_id, note_id, ("archived",), "active")
 
@@ -230,7 +240,9 @@ class CuratedNotesStoreMixin:
         except Exception as e:
             logger.warning("note %s -> %s failed: %s", note_id, to, e)
             return False
-    async def note_list(self, user_id, *, status: str = "active", tag: str = None,
+
+    @offloaded
+    def note_list(self, user_id, *, status: str = "active", tag: str = None,
                         limit: int = 200) -> list:
         """List this tenant's notes by status (newest updated first), optionally
         filtered by tag. [] on anon-block or error."""
@@ -253,7 +265,9 @@ class CuratedNotesStoreMixin:
             logger.warning("note_list failed: %s", e)
             raise
         return [self._note_row_to_dict(r) for r in (rows or [])]
-    async def note_get(self, user_id, note_id, *, bump_access: bool = True):
+
+    @offloaded
+    def note_get(self, user_id, note_id, *, bump_access: bool = True):
         """Fetch one note (tenant-scoped). By default bumps access_count — the
         AGENT-reuse signal the consolidation pass keys staleness on. Passive
         viewers (the read-only webview) pass ``bump_access=False`` so browsing
@@ -360,7 +374,9 @@ class CuratedNotesStoreMixin:
         except Exception as e:
             logger.warning("consolidate_notes dupe pass failed: %s", e)
         return out
-    async def note_backlinks(self, user_id, title: str) -> list:
+
+    @offloaded
+    def note_backlinks(self, user_id, title: str) -> list:
         """Notes whose links list contains `title` (the wiki backlink set)."""
         if self._anon_blocked(user_id) or not (title or "").strip():
             return []
@@ -378,7 +394,9 @@ class CuratedNotesStoreMixin:
         # LIKE over the JSON is a pre-filter; confirm against the parsed list.
         out = [self._note_row_to_dict(r) for r in (rows or [])]
         return [n for n in out if str(title).strip() in n["links"]]
-    async def curated_remove(self, user_id, substring: str) -> int:
+
+    @offloaded
+    def curated_remove(self, user_id, substring: str) -> int:
         """Delete this tenant's curated notes containing `substring`. Returns count."""
         if self._anon_blocked(user_id):
             return 0

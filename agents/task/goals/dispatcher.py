@@ -11,6 +11,7 @@ lifespan starts/stops exactly like the cron ticker. Gated ``GOALS_ENABLED``.
 """
 from __future__ import annotations
 
+from core.async_bridge import run_off_loop
 from core.runtime_paths import cron_db_path, data_dir_or_home, goals_db_path
 import asyncio
 import logging
@@ -20,7 +21,7 @@ import time
 from pathlib import Path
 from typing import Any, List, Optional
 
-from agents.task.goals.board import (  # noqa: F401 — STATUS_* read by goal_run via this module
+from modules.goals.board import (  # noqa: F401 — STATUS_* read by goal_run via this module
     GoalBoard, Goal, STATUS_BLOCKED, STATUS_DONE, STATUS_READY,
 )
 from agents.task.goals.goal_run import GoalRunMixin
@@ -346,7 +347,7 @@ def _deliverables_root() -> Optional[Path]:
     project-root workspace (CLI/headless project mode) exactly like
     ``effective_goal_concurrency``'s clamp above. Fail-open to None."""
     try:
-        from agents.task.path import pm
+        from core.session_paths import pm
         if pm().is_project_root_workspace:
             return pm().project_root
     except Exception:
@@ -371,12 +372,16 @@ def effective_goal_concurrency(user_id: Optional[str] = None, home_dir=None) -> 
     """
     cap = effective_goal_max_concurrent(user_id, home_dir)
     try:
-        from agents.task.path import pm
+        from core.session_paths import pm
         if pm().is_project_root_workspace:
             return min(cap, 1)
     except Exception:
         pass
     return cap
+
+
+#: The heartbeat's clock (a seam for tests; the loop's own clock stays real).
+_hb_clock = time.monotonic
 
 
 def _heartbeat_interval(ttl: int) -> int:
@@ -426,7 +431,7 @@ class GoalDispatcher(GoalRunMixin):
         self._paused_seen = False
         self._quota_logged = False
         # AG-17: an owner pause/cancel stops this process's run at once.
-        from agents.task.goals.run_cancel import register as _reg_cancel
+        from modules.goals.run_cancel import register as _reg_cancel
         if getattr(board, "db_path", None):
             _reg_cancel(board.db_path, self)
 
@@ -498,10 +503,10 @@ class GoalDispatcher(GoalRunMixin):
         # AU-F4.3: reclaim expired claims BEFORE the enabled-gate so a crashed
         # `running` row doesn't stay stuck forever just because GOALS_ENABLED was
         # (temporarily) flipped off. reclaim_stale is a self-contained retry-safe SQL
-        # UPDATE (agents/task/goals/board.py) -- it needs no external tick-lock /
+        # UPDATE (modules/goals/board.py) -- it needs no external tick-lock /
         # workspace-lock precondition, so it's safe to run unconditionally here.
         try:
-            self.board.reclaim_stale()
+            await self._board_io.reclaim_stale()
         except Exception:
             logger.warning("goal dispatch: reclaim_stale failed", exc_info=True)
         # §5.3: age ancient blocked goals out VISIBLY (-> cancelled, logged)
@@ -509,7 +514,7 @@ class GoalDispatcher(GoalRunMixin):
         try:
             max_age = AutonomyConfig.goal_blocked_max_age_days()
             if max_age > 0:
-                aged = self.board.age_out_blocked(max_age_days=max_age)
+                aged = await self._board_io.age_out_blocked(max_age_days=max_age)
                 if aged:
                     logger.info("goal dispatch: aged out %d ancient blocked goal(s)", aged)
         except Exception:
@@ -521,7 +526,7 @@ class GoalDispatcher(GoalRunMixin):
         # doesn't stay stuck forever just because GOALS_ENABLED was
         # temporarily flipped off). Self-contained retry-safe SQL, cheap.
         try:
-            reconciled = self.board.reconcile_waiting()
+            reconciled = await self._board_io.reconcile_waiting()
             if reconciled:
                 logger.info("goal dispatch: reconciled %d stranded waiting goal(s)", reconciled)
         except Exception:
@@ -529,14 +534,14 @@ class GoalDispatcher(GoalRunMixin):
         # 095 W8 (SC-11): an operator config_change ask closes once its setting
         # is in effect (or expires) — it used to stay open forever.
         try:
-            settled = self.board.close_settled_config_asks()
+            settled = await self._board_io.close_settled_config_asks()
             if settled:
                 logger.info("goal dispatch: closed %d settled config_change ask(s)", settled)
         except Exception:
             logger.debug("config_change ask sweep skipped", exc_info=True)
         # 098 TS-14: an owner ask past its `expires_at` closes as obsolete.
         try:
-            expired = self.board.expire_open_asks()
+            expired = await self._board_io.expire_open_asks()
             if expired:
                 logger.info("goal dispatch: closed %d expired owner ask(s)", expired)
         except Exception:
@@ -591,8 +596,15 @@ class GoalDispatcher(GoalRunMixin):
                     self._sentinel_logged = True
                 return 0
             self._sentinel_logged = False
+            self._provider_check_logged = False
         except Exception:
-            pass
+            # 125 S16 (D9): fail closed — a provider check that raises dispatches
+            # nothing this tick (a paid run against an unknown provider state).
+            if not getattr(self, "_provider_check_logged", False):
+                logger.warning("goal dispatch held: the provider check failed",
+                               exc_info=True)
+                self._provider_check_logged = True
+            return 0
 
         from core.interactive_gate import is_interactive_busy, read_turn_marker
         from core.lifecycle import draining as _draining
@@ -613,7 +625,7 @@ class GoalDispatcher(GoalRunMixin):
 
         lock = None
         if self.lock_path:
-            from cron.scheduler import TickLock
+            from core.file_lock import TickLock
             lock = TickLock(self.lock_path)
             if not lock.acquire():
                 return 0
@@ -643,14 +655,14 @@ class GoalDispatcher(GoalRunMixin):
             # runs) so a backlog can't grow concurrent agent sessions without bound
             # — under workers>1 the per-process count let total reach cap x workers.
             try:
-                running = self.board.count_running()
+                running = await self._board_io.count_running()
             except Exception:
                 running = len(self._inflight)  # fail-open to per-process count
             slots = max(0, limit - running)
             quota = effective_goal_quota(_owner_uid, _home_dir)
             if quota > 0:
                 try:
-                    used = self.board.count_started_since(86400)
+                    used = await self._board_io.count_started_since(86400)
                 except Exception:
                     used = 0  # fail-open: never let quota accounting kill dispatch
                 headroom = max(0, quota - used)
@@ -665,7 +677,7 @@ class GoalDispatcher(GoalRunMixin):
                 slots = min(slots, headroom)
             if slots == 0:
                 return 0
-            ready = self._ready_for_dispatch(slots)
+            ready = await run_off_loop(self._ready_for_dispatch, slots)
             # A due cron rail goes first: on the shared workspace a goal run would
             # mark the process busy and hold that rail for its whole runtime.
             # Checked only when something is actually ready (an empty board must
@@ -710,7 +722,7 @@ class GoalDispatcher(GoalRunMixin):
                                     "goal %s not claimed: it would run into rail %s"
                                     % (g.id[:8], _blocker), goal=g)
                         continue
-                claimed = self.board.claim(g.id, worker, ttl_seconds=ttl)
+                claimed = await self._board_io.claim(g.id, worker, ttl_seconds=ttl)
                 if claimed is None:
                     continue  # another worker won the race
                 # A paused-then-retried goal can be re-claimed while its old run
@@ -786,18 +798,29 @@ class GoalDispatcher(GoalRunMixin):
         ``reclaim_stale`` and DOUBLE-dispatched. Ping the claim every ttl/3.
         """
         interval = _heartbeat_interval(ttl)
+        last_ok = _hb_clock()
         try:
             while True:
                 await asyncio.sleep(interval)
                 try:
-                    if not self.board.heartbeat(goal_id, worker, ttl_seconds=ttl,
+                    if not await self._board_io.heartbeat(goal_id, worker, ttl_seconds=ttl,
                                                 claim_token=claim_token):
                         logger.warning("goal %s lost its claim; stopping the old run", goal_id)
                         if run_task is not None:
                             run_task.cancel()
                         return
-                except Exception as e:  # never let heartbeat kill the run
+                    last_ok = _hb_clock()
+                except Exception as e:  # one failed beat does not kill the run
                     logger.warning("goal %s heartbeat failed: %s", goal_id, e)
+                    # 125 S31: when the claim cannot be renewed before the next beat
+                    # its TTL runs out, another worker reclaims the goal and it runs
+                    # twice. Stop this run first (the "lost its claim" path).
+                    if _hb_clock() - last_ok + interval >= ttl:
+                        logger.warning("goal %s: the claim could not be renewed before "
+                                       "its TTL; stopping the run", goal_id)
+                        if run_task is not None:
+                            run_task.cancel()
+                        return
         except asyncio.CancelledError:
             pass
 
@@ -895,12 +918,12 @@ class GoalDispatcher(GoalRunMixin):
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
             try:
-                held = self.board.hold_running(worker=self._worker, reason=reason,
+                held = await self._board_io.hold_running(worker=self._worker, reason=reason,
                                                goal_ids=want, reason_kind=reason_kind)
             except Exception:
                 logger.warning("hold_inflight: board hold failed", exc_info=True)
                 return []
-            self._record_hold_endings(held, reason, reason_kind)
+            await run_off_loop(self._record_hold_endings, held, reason, reason_kind)
             return held
         finally:
             for gid in marked:
@@ -984,15 +1007,15 @@ class GoalDispatcher(GoalRunMixin):
         for gid in held:
             sid = self._goal_sessions.get(gid)
             try:
-                self.board.merge_payload(gid, {
-                    "resume_note": self._resume_note(gid, jtask, jid, stamp)})
+                await self._board_io.merge_payload(gid, {
+                    "resume_note": await run_off_loop(self._resume_note, gid, jtask, jid, stamp)})
                 if sid:
-                    self.board.stamp_session(gid, sid)
-                self.board._event(gid, "yielded", {"job_id": jid, "task": jtask})
+                    await self._board_io.stamp_session(gid, sid)
+                await self._board_io._event(gid, "yielded", {"job_id": jid, "task": jtask})
             except Exception:
                 logger.debug("yield note failed for %s", gid, exc_info=True)
             try:
-                _goal_ev(self.board.get(gid) or _goal_ref(gid), "yielded",
+                _goal_ev(await self._board_io.get(gid) or _goal_ref(gid), "yielded",
                          reason=jid, job_task=jtask, session_id=sid or "",
                          step=self._current_step(sid), grace_sec=grace)
             except Exception:
@@ -1058,11 +1081,11 @@ class GoalDispatcher(GoalRunMixin):
         try:
             from core.config_policy.rigs import rig_tools
             from core.tool_grants import dispatch_recheck
-            from tools.goal_tools import _SELF_GOAL_BASELINE_TOOLS, allowed_self_goal_tools
+            from core.tool_grants import SELF_GOAL_BASELINE_TOOLS, allowed_self_goal_tools
             declared = payload.get("tools") or rig_tools(payload.get("rig")) or []
             kept, refused = dispatch_recheck(
                 tools, payload, declared=declared,
-                agent_ceiling=set(allowed_self_goal_tools()) | set(_SELF_GOAL_BASELINE_TOOLS))
+                agent_ceiling=set(allowed_self_goal_tools()) | set(SELF_GOAL_BASELINE_TOOLS))
         except Exception as e:   # fail closed: no gated id on an unjudgeable row
             logger.warning("goal %s: tool re-check failed (%s); gated ids dropped", goal.id, e)
             from core.tool_grants import gated_ids
@@ -1128,8 +1151,8 @@ class GoalDispatcher(GoalRunMixin):
         # Same allowlisted inference goal_create applies at create time; a goal whose text
         # names no known tool resolves byte-identically to the plain default.
         try:
-            from tools.goal_tools import _infer_tools_from_text
-            inferred = _infer_tools_from_text(getattr(goal, "title", None),
+            from core.tool_grants import infer_tools_from_text
+            inferred = infer_tools_from_text(getattr(goal, "title", None),
                                               getattr(goal, "body", None),
                                               payload.get("acceptance"))
         except Exception:
@@ -1160,14 +1183,14 @@ class GoalDispatcher(GoalRunMixin):
         if agent_reported:
             try:
                 from agents.task.goals import escalation as _escalation
-                _escalation.mark_stop_told(self.board, goal.id)
+                await run_off_loop(_escalation.mark_stop_told, self.board, goal.id)
             except Exception:
                 logger.debug("stop mark skipped", exc_info=True)
         # §7.2b / T2-03 / T4-04: ALWAYS leave a TRACKED ask for a blocked goal so the
         # need survives. The ask is silent + durable + tenant-scoped and create_ask
         # dedup-refreshes, so it is safe unconditionally.
         try:
-            from agents.task.goals.board import STATUS_BLOCKED
+            from modules.goals.board import STATUS_BLOCKED
             if getattr(goal, "status", None) == STATUS_BLOCKED:
                 # T2.1 Task 3 (review-fixed): stamp the CALLER's own
                 # classification first (only_if_absent — never clobbers a more
@@ -1177,18 +1200,18 @@ class GoalDispatcher(GoalRunMixin):
                 # is set. Both stamps are only_if_absent, so this NEVER clobbers.
                 if block_kind_hint:
                     try:
-                        self.board.stamp_block_kind(
+                        await self._board_io.stamp_block_kind(
                             goal.id, block_kind_hint, only_if_absent=True)
                     except Exception:
                         logger.debug("block_kind hint stamp skipped for %s",
                                      goal.id, exc_info=True)
                 try:
-                    self.board.stamp_block_kind(
+                    await self._board_io.stamp_block_kind(
                         goal.id, "needs_input", only_if_absent=True)
                 except Exception:
                     logger.debug("needs_input stamp skipped for %s", goal.id, exc_info=True)
-                from agents.task.goals.board_asks import create_auto_unblock_ask
-                create_auto_unblock_ask(self.board, goal)
+                from modules.goals.board_asks import create_auto_unblock_ask
+                await run_off_loop(create_auto_unblock_ask, self.board, goal)
         except Exception:
             logger.debug("blocked-goal ask creation skipped", exc_info=True)
 

@@ -12,8 +12,8 @@ function makeThread() {
   return document.getElementById("chat-messages");
 }
 
-const kept = (ts, text, line) => ({ type: "command_reply", timestamp: ts,
-  data: { text, line, inline: true } });
+const kept = (ts, text, line, actions) => ({ type: "command_reply", timestamp: ts,
+  data: { text, line, inline: true, ...(actions ? { actions } : {}) } });
 
 describe("a kept verb answer", () => {
   it("is drawn on reload with the line it answers", () => {
@@ -35,7 +35,8 @@ describe("a kept verb answer", () => {
 
   it("brings its card buttons back", () => {
     const tx = new Transcript(makeThread(), { card_ok: "Confirm", card_no: "Cancel" });
-    tx.applyAll([kept(5, "Send 1 USDC? /card_0123456789_ok /card_0123456789_no", "/send 1 USDC to x")]);
+    tx.applyAll([kept(5, "Send 1 USDC? /card_0123456789_ok /card_0123456789_no", "/send 1 USDC to x",
+      [{ label: "Confirm", command: "/card_0123456789_ok" }, { label: "Cancel", command: "/card_0123456789_no" }])]);
     expect(tx.thread.querySelectorAll("[data-card-taps] button").length).toBeGreaterThan(0);
   });
 });

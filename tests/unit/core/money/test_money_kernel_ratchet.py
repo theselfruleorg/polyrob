@@ -27,16 +27,10 @@ ALLOWED = {
         "entry_paused_fn — the signer and tests inject them), an exit-shaped "
         "entry-pause exemption keyed on the TxIntent, and sentences the golden "
         "pins (tests/unit/core/wallet/tx_guard_golden.json)")),
-    "packs/markets/polyrob_markets/trade_gate.py": (2, (
-        "trade_turn_refusal refuses a forged turn BEFORE the principal; the kernel "
-        "runs the principal first. Decisions are identical (162 combinations "
-        "checked) but a forged turn of a non-owner would read the principal "
-        "sentence, and tests pin the forged one. Its halt/entry bars keep the "
-        "owner-only risk_reducing carve-out and the legacy kill-switch sentence")),
-    "tools/defi/trade_tool.py": (2, (
+    "tools/defi/trade_tool.py": (1, (
         "the non-route grant gate prefixes the principal sentence with its own "
-        "cause, and _solana_turn_gate is the SVM mirror of tx_guard steps 1-2 "
-        "(same reason as tx_guard)")),
+        "cause (_solana_turn_gate asks tx_guard's principal and turn_origin_verdict, "
+        "125 S6)")),
     "tools/defi/data_tool.py": (1, (
         "_operator_read_refusal gates a READ of the operator wallet, not a spend")),
 }

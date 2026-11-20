@@ -87,7 +87,7 @@ def _cost(goal: Any) -> Optional[float]:
 
 
 def _ask_keys(ask: Any) -> List[str]:
-    from agents.task.goals.board_types import _ask_goal_keys
+    from modules.goals.board_types import _ask_goal_keys
     p = ask.payload or {}
     return sorted(_ask_goal_keys(p.get("blocks_goal_ids") or [], p))
 
@@ -117,14 +117,14 @@ def _ask_dict(ask: Any) -> dict:
 
 
 def _card(goal: Any, *, held: List[Any], deps: List[str], blocks: List[str],
-          last: Optional[float]) -> dict:
+          last: Optional[float], goals_on: bool = True) -> dict:
     from core.goal_legibility import status_reason
     row = _pages()._goal_dict(goal)
     row.pop("result", None)        # the detail carries it; the board need not
     row.update(_origin(goal))
     row.update({
         "kind": "goal",
-        "status_reason": status_reason(goal, held),
+        "status_reason": status_reason(goal, held, goals_on=goals_on),
         "parent_id": goal.parent_id,
         "started_at": goal.started_at,
         "last_activity": last,
@@ -201,7 +201,8 @@ async def api_goal_board(request: Request, finished: Optional[str] = None):
 
     def card(g):
         return _card(g, held=_holds(g, held), deps=deps.get(g.id, []),
-                     blocks=blocks.get(g.id, []), last=last.get(g.id))
+                     blocks=blocks.get(g.id, []), last=last.get(g.id),
+                     goals_on=bool(enabled))
 
     goals = [card(g) for g in live]
     finished_rows = [card(g) for g in done]
@@ -336,8 +337,12 @@ async def api_goal_detail(request: Request, goal_id: str):
             sessions.append(str(sid))
 
     from core.goal_legibility import status_reason
+    try:
+        goals_on = bool(pages.AutonomyConfig.goals_enabled())
+    except Exception:  # an unread gate is not "off": the plain words stay
+        goals_on = True
     body = _card(goal, held=held, deps=[d["id"] for d in deps],
-                 blocks=[b["id"] for b in blocks], last=None)
+                 blocks=[b["id"] for b in blocks], last=None, goals_on=goals_on)
     body.update({
         "ok": True,
         "body": goal.body,
@@ -347,7 +352,7 @@ async def api_goal_detail(request: Request, goal_id: str):
         "result": goal.result,
         "last_failure_error": goal.last_failure_error,
         "attempts": attempts[-5:],
-        "status_reason": status_reason(goal, held),
+        "status_reason": status_reason(goal, held, goals_on=goals_on),
         "events": [{"kind": e.get("kind"), "ts": e.get("created_at"),
                     "payload": e.get("payload") or {}}
                    for e in reversed(events[-EVENTS_CAP:])],

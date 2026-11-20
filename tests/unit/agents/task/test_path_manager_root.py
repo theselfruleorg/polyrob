@@ -1,6 +1,6 @@
 """PathManager honors an injected root + project-as-workspace (R1)."""
 from pathlib import Path
-from agents.task.path import PathManager, get_path_manager
+from core.session_paths import PathManager, get_path_manager
 
 
 def test_default_construction_unchanged(tmp_path):

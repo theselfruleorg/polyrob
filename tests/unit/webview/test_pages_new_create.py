@@ -49,7 +49,7 @@ def test_tenant_cannot_create_owner_authored_work(monkeypatch, tmp_path, endpoin
 # --- goal create ------------------------------------------------------------ #
 
 def test_create_goal_writes_owner_tenant_and_unfiltered_tools(monkeypatch, tmp_path):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
 
     client = _client(monkeypatch, tmp_path, user_id="u1")
     r = client.post("/api/webgate/goals",

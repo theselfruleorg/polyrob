@@ -320,7 +320,7 @@ def test_the_plain_sweep_alone_misses_that_line(tmp_path, writer):
 
 def test_an_unreadable_doc_is_not_a_clean_check(tmp_path, writer, monkeypatch):
     _active(writer, "- A rule.\n")
-    monkeypatch.setattr("modules.memory.task.threat_scan.is_identity_suspicious", lambda _t: True)
+    monkeypatch.setattr("core.security.threat_scan.is_identity_suspicious", lambda _t: True)
     res = _check(tmp_path, [("job00001", "Publish the rule.", 1)])
     assert "could not read" in render_conflict_check(res)
     assert res["counts"]["rules"] == 0

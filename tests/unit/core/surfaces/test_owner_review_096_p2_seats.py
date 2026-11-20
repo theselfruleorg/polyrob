@@ -10,7 +10,7 @@ from surfaces.telegram import approval_ops
 @pytest.fixture
 def opened(monkeypatch, tmp_path):
     def _open(match, container=None):
-        monkeypatch.setattr("tools.controller.approval_queue.resolve_pending_target",
+        monkeypatch.setattr("tools.controller.approval_target.resolve_pending_target",
                             lambda target, pending: match)
         c = types.SimpleNamespace(user_id="alice", data_dir=str(tmp_path),
                                   instance_id="agent1", container=container)

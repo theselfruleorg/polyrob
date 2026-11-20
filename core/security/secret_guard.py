@@ -177,7 +177,7 @@ CREDENTIAL_NAME_GLOBS: tuple[str, ...] = (
     # attacker's address until the agent restarts. Trailing `*` catches the
     # atomic-write temp file too.
     "wallet/public_identity.json*",
-    # M2 (2026-07-15): `cli/update/snapshot.py` backs up config files and dirs
+    # M2 (2026-07-15): `core/update_snapshot/snapshot.py` backs up config files and dirs
     # under `<data_home>/snapshots/<ts>_<ver>/{config,dirs}/` with a NUMERIC
     # INDEX PREFIX on the copy name (`config/00_.env.production`,
     # `dirs/00_wallet/`). That prefix defeats every basename-exact / adjacent-
@@ -233,9 +233,12 @@ def is_protected_config_path(path: Path) -> bool:
     secrets anywhere) with a location rule for absolute system config the self_env
     tool could otherwise reach.
 
-    Also protects ``preferences.toml`` and ``contract.md`` files under any
+    Also protects ``identity.md``, ``operating.md`` and ``public.md`` directly under
+    an ``identity/`` directory, and ``preferences.toml`` and ``contract.md`` files under any
     ``identity/`` path segment (owner-UX P1 T6) — these files are only writable
-    through gated action/CLI/webview seams, never by agent file tools.
+    through gated action/CLI/webview seams, never by agent file tools. The same holds
+    for a persona file (``*.character.json``) in the data or config home's
+    ``characters/``.
     """
     try:
         s = str(path)
@@ -258,6 +261,27 @@ def is_protected_config_path(path: Path) -> bool:
     if basename in ("preferences.toml", "contract.md"):
         parts_lower = [part.lower() for part in path.parts]
         if "identity" in parts_lower:
+            return True
+
+    # The operator's SOUL tier and public knowledge (identity/identity.md,
+    # operating.md, public.md, directly under an identity/ segment): written only by
+    # the operator (`polyrob soul`, an instance kit). public.md renders in every
+    # room, so an agent write there is a write to what strangers read. Only the
+    # data home's identity/ (the one the loaders read): a project's own
+    # docs/identity/public.md stays the agent's to read and edit.
+    if basename in ("identity.md", "operating.md", "public.md"):
+        same = _is_operator_identity_dir(path.parent)
+        if same or (same is None and path.parent.name.lower() == "identity"):
+            return True
+
+    # Audit 2026-11-21 M-1: the persona (``<data_dir>/characters/*.character.json`` and
+    # the profile's ``<config home>/characters``) renders in every session, so an agent
+    # write there is a stored instruction in every owner, cron, goal and room prompt. It
+    # changes only through the operator's persona seams. The repo-shipped and packaged
+    # sets are code, outside this rule.
+    if basename.endswith(".character.json") and path.parent.name.lower() == "characters":
+        same = _is_persona_dir(path.parent)
+        if same or same is None:
             return True
 
     # 031: the owner pause record + its legacy facet files are the owner's stop
@@ -286,6 +310,47 @@ def is_protected_config_path(path: Path) -> bool:
         pass
 
     return False
+
+
+def _is_operator_identity_dir(parent: Path) -> "bool | None":
+    """True when *parent* is ``<data home>/identity`` — the directory the SOUL and
+    public-knowledge loaders read (``prefs_home_dir()``, construction.py). The same
+    directory by inode when both exist (a link or a case-insensitive spelling),
+    else by realpath. None when it cannot tell: the caller then protects any
+    directory NAMED identity (fail-closed)."""
+    import os
+    try:
+        from core.runtime_paths import prefs_home_dir
+        home_identity = Path(prefs_home_dir()) / "identity"
+        if parent.exists() and home_identity.exists():
+            return os.path.samefile(parent, home_identity)
+        return os.path.realpath(str(parent)) == os.path.realpath(str(home_identity))
+    except Exception:
+        return None
+
+
+def _is_persona_dir(parent: Path) -> "bool | None":
+    """True when *parent* is a characters directory the persona loader reads from the
+    data or config home (``agents/personality/persona_resolver.character_search_dirs``,
+    items 1-2). None when it cannot tell: the caller then protects it (fail-closed)."""
+    import os
+    try:
+        from core.paths import polyrob_home
+        from core.runtime_paths import data_dir_or_home
+        homes = [Path(polyrob_home()) / "characters"]
+        data_dir = data_dir_or_home(None)
+        if data_dir:
+            homes.insert(0, Path(data_dir) / "characters")
+        real = os.path.realpath(str(parent))
+        for home in homes:
+            if parent.exists() and home.exists():
+                if os.path.samefile(parent, home):
+                    return True
+            elif real == os.path.realpath(str(home)):
+                return True
+        return False
+    except Exception:
+        return None
 
 
 def _configured_llm_auth_paths() -> "tuple[str, ...]":

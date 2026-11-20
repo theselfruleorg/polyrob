@@ -5,7 +5,7 @@ existence marker to workspace-relative path-shaped tokens so the agent sees
 what's ACTUALLY on disk rather than trusting stale memory. Wired into
 `build_goal_run_task` (goal title/body/acceptance, opt-in via `workspace_root`).
 """
-from agents.task.goals.board import GoalBoard
+from modules.goals.board import GoalBoard
 from agents.task.goals.context import build_goal_run_task, stamp_artifact_references
 
 

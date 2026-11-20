@@ -19,7 +19,7 @@ def _orch(reason, cap=50, steps=None, bound=False, error=None, summary=None, spo
     result = types.SimpleNamespace(error=error, extracted_content=None)
     agent = types.SimpleNamespace(
         _is_sub_agent=False,
-        # An action step: "Last tool error" quotes action results only (L1).
+        # An action step: "Last error" quotes action results only (L1).
         history=types.SimpleNamespace(history=[types.SimpleNamespace(
             model_output=types.SimpleNamespace(action=[object()]), result=[result])]),
         state=types.SimpleNamespace(stop_reason=reason, max_steps=cap,
@@ -82,7 +82,7 @@ async def test_a_bound_turn_that_hit_the_cap_and_said_nothing_says_why(thread):
     sent = await _turn(ta)
     assert len(sent) == 1
     assert "stopped at the step limit (50/50)" in sent[0]
-    assert "Last tool error: cronjob_edit: Nothing to change" in sent[0]
+    assert "Last error: cronjob_edit: Nothing to change" in sent[0]
     assert "continue" in sent[0]
     assert thread and thread[0][1]["source"] == "turn_fallback" and thread[0][1]["via"] == "telegram"
 
@@ -98,7 +98,7 @@ async def test_the_owner_turn_runs_on_the_interactive_budget(thread):
 @pytest.mark.asyncio
 async def test_a_loop_stop_says_so(thread):
     sent = await _turn(_Agent(_orch("loop", steps=9, bound=True)))
-    assert len(sent) == 1 and "repeated the same tool call (9/50)" in sent[0]
+    assert len(sent) == 1 and "repeated the same step (9/50)" in sent[0]
 
 
 @pytest.mark.asyncio

@@ -205,3 +205,43 @@ def logs_tail(data_dir: Optional[str], user_id: str, slug: str, n: int = 50) -> 
     n = max(1, min(int(n), 400))
     with open(path, "r", encoding="utf-8", errors="replace") as fh:
         return "".join(fh.readlines()[-n:]) or "(empty)"
+
+
+def apps_reply(user_id: str, data_dir: str, args: List[str],
+               via: str = "telegram") -> str:
+    """``/apps [list|show|approve|reject|kill|start|remove|logs <slug>]`` — one
+    reply for every owner seat (Telegram, the console chat box, the REPL;
+    proposal 125 S14 moved it here from the Telegram seat).
+
+    ``via`` is the SEAT that ran the verb, and it lands in the audit trail beside
+    the decision — the one field whose whole job is to say WHERE an owner
+    decision was made."""
+    from core.app_service.registry import AppServiceRegistry, default_app_services_db
+    reg = AppServiceRegistry(default_app_services_db())
+    sub = (args[0].lower() if args else "list")
+    rest = args[1:]
+    if sub in ("list", "ls"):
+        return "\n".join(list_lines(reg, user_id))
+    if sub in ("show", "approve", "reject", "kill", "start", "remove", "logs") and not rest:
+        return f"Usage: /apps {sub} <slug>"
+    if sub == "show":
+        return "\n".join(show_lines(reg, user_id, rest[0]))
+    if sub == "approve":
+        return approve(reg, rest[0], user_id, via=via)[1]
+    if sub == "reject":
+        return reject(reg, rest[0], user_id, via=via)[1]
+    if sub == "kill":
+        return kill(reg, rest[0], user_id, via=via)[1]
+    if sub == "start":
+        return start(reg, rest[0], user_id, via=via)[1]
+    if sub == "remove":
+        return remove(reg, rest[0], user_id, via=via)[1]
+    if sub == "logs":
+        n = 30
+        if len(rest) > 1:
+            try:
+                n = max(1, min(200, int(rest[1])))
+            except ValueError:
+                pass
+        return logs_tail(data_dir, user_id, rest[0], n)
+    return "Usage: /apps [list|show|approve|reject|kill|start|remove|logs <slug>]"

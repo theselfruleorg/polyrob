@@ -14,7 +14,7 @@ from typing import Optional
 import click
 
 from cli.commands._options import json_option
-from agents.task.goals.board import (
+from modules.goals.board import (
     KIND_GOAL,
     STATUS_BLOCKED,
     STATUS_CANCELLED,

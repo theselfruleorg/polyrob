@@ -76,7 +76,7 @@ def test_step_context_and_both_swap_verbs_read_it():
     import inspect
     from agents.task.agent.core import step_execution
     from tools.defi import solana_swap_verb  # W9: the verb bodies moved
-    from tools.defi.swap_verb import perform_swap
+    from tools.defi.swap_verb import _swap as perform_swap  # 126 W4: the body is _swap
     assert '"money_target"' in inspect.getsource(step_execution)
     for verb, send in ((perform_swap, "_run_guarded"),
                        (solana_swap_verb, "_solana_quote")):

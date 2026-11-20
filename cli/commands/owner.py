@@ -581,7 +581,7 @@ def reject(kind, item_id, user):
 def _goal_board():
     """The board under the SAME home ``_data_dir()`` adopts — the asks and the
     correspondents of one `pending` listing must come from one data home."""
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     return GoalBoard(goals_db_path(_data_dir(write=None)))
 
 
@@ -598,7 +598,7 @@ def asks(user, as_json):
     `polyrob owner pending` / `owner promote tool_approval <id>` — and are
     excluded here so one isn't shown twice under two different id shapes.
     """
-    from agents.task.goals.board import ASK_OPEN
+    from modules.goals.board import ASK_OPEN
     tenant = _owner_tenant(user)
     from core.goal_vocab import has_own_surface
     rows = [a for a in _goal_board().asks(user_id=tenant, status=ASK_OPEN)
@@ -634,7 +634,7 @@ def fulfill(ask_id, answer, user):
     said, not only that it may go on.
     """
     tenant = _owner_tenant(user)
-    from agents.task.goals.rail_answers import decision_note
+    from modules.goals.rail_answers import decision_note
     board = _goal_board()
     ok, unblocked = board.decide_ask(
         ask_id, user_id=tenant, approved=True, answer=" ".join(answer).strip())

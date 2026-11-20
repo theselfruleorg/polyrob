@@ -51,7 +51,7 @@ def test_note_empty_when_flag_off(monkeypatch):
 def test_grantable_matches_mode(monkeypatch):
     monkeypatch.delenv("AUTONOMY_MODE", raising=False)
     supervised = set(ta.grantable_autonomous_tools())
-    assert "twitter" in supervised  # _SELF_GOAL_ALLOWED_TOOLS already allows requesting it
+    assert "twitter" in supervised  # core.tool_grants.SELF_GOAL_ALLOWED_TOOLS already allows requesting it
     monkeypatch.setenv("AUTONOMY_MODE", "autonomous")
     monkeypatch.setenv("POLYROB_LOCAL", "1")
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")

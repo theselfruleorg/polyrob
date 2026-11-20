@@ -8,7 +8,7 @@
  * live, resolve and retire stay on the cards and the `/offer` verb. A store that will
  * not read is its own entry, never "no offers". Words come from `#money-offers-copy`.
  */
-import { postJson } from "./http.js";
+import { getJson, postJson } from "./http.js";
 import { stateBlock } from "./state.js";
 
 function el(tag, className, text) {
@@ -116,19 +116,18 @@ export async function act(id, verb, fetcher) {
   }
 }
 
-export async function loadOffers(root, copy, fetcher = fetch) {
+export async function loadOffers(root, copy, fetcher) {
   let body = null;
   try {
-    const resp = await fetcher("/api/webgate/offers", { credentials: "include" });
-    body = await resp.json().catch(() => null);
-    if (!resp.ok) body = { readable: false, error: (body && (body.detail || body.error)) || String(resp.status) };
+    const res = await getJson("/api/webgate/offers", { fetcher });
+    body = res.body;
+    if (!res.ok) body = { readable: false, error: (body && (body.detail || body.error)) || String(res.status) };
   } catch (err) {
     console.error("[money-offers] the offers read did not reach the console", err);
     body = { readable: false, error: String((err && err.message) || err) };
   }
-  const post = fetcher === fetch ? undefined : fetcher;
   return renderOffers(root, body, copy, async (id, verb) => {
-    const out = await act(id, verb, post);
+    const out = await act(id, verb, fetcher);
     if (out.ok) await loadOffers(root, copy, fetcher).then(() => {
       const status = root.querySelector("[role=status]");
       if (status) status.textContent = out.message;

@@ -18,6 +18,7 @@ from pydantic_settings import (
 from core.config_policy import _mode_capability_default  # noqa: F401 — patched by tests
 from core.config_policy.members import member_flag as _member_flag
 from core.env import parse_bool
+import core.mcp_config  # noqa: E402,F401 — U13: registers the `mcp` tool gate at load
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +121,6 @@ class AgentConfig(BaseSettings):
 
     # Base settings — internal (code root), never read from the env.
     base_dir: str = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    environment: str = Field(default="development", alias='ENVIRONMENT')
 
     # Data paths. 080 WS-1 (one data dir): unset = the data home
     # (``core.runtime_paths.effective_data_home``), resolved in
@@ -466,7 +466,7 @@ class ServerConfig(AgentConfig):
         if self.mcp is not None:
             return
 
-        from tools.mcp.config import get_default_mcp_config, MCPConfig, load_local_mcp_servers
+        from core.mcp_config import get_default_mcp_config, MCPConfig, load_local_mcp_servers
 
         # An explicit MCP_ENABLED=false (POLYROB_OVERRIDES) wins over every
         # enable signal below, the operator's own server file included.
@@ -539,9 +539,9 @@ class ServerConfig(AgentConfig):
         # that tree up BEFORE any mkdir below, or bot.db opens empty.
         # Also with POLYROB_DATA_DIR unset (a managed user-mode install): the
         # home is the one effective_data_home() resolves, for every process.
-        _home_env = (os.getenv("POLYROB_DATA_DIR") or "").strip()
+        # (effective_data_home() IS the pinned POLYROB_DATA_DIR when one is set.)
         from core.legacy_data_tree import converge_legacy_data_tree
-        converge_legacy_data_tree(Path(_home_env or data_anchor).expanduser().resolve(),
+        converge_legacy_data_tree(Path(data_anchor).expanduser().resolve(),
                                   data_dir=self.data_dir, db_path=self.db_path)
 
         # Convert relative paths to absolute FIRST (so the mkdirs below never
@@ -566,11 +566,6 @@ class ServerConfig(AgentConfig):
                 Path(self.data_dir, subdir).mkdir(parents=True, exist_ok=True)
         except OSError as e:
             logging.getLogger("core.config").warning("could not create data dirs: %s", e)
-
-    @property
-    def is_development(self) -> bool:
-        """Check if environment is development."""
-        return self.environment.lower() == 'development'
 
     # Validators
     @field_validator('twitter_api_key', 'twitter_api_secret_key', 

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import agents.task.agent.service  # noqa: F401 (import order)
-import agents.task.path as path_mod
+import core.session_paths as path_mod
 from agents.task.agent.message_manager.service import MessageManager
 from agents.task.agent.prompts import SystemPrompt
 

@@ -22,7 +22,7 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setenv("POLYROB_POSTURE", "local")
     monkeypatch.setenv("ENV", "development")
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    import agents.task.path as pth
+    import core.session_paths as pth
     pth.reset_path_manager()
     import webview.webgate as wg
     importlib.reload(wg)
@@ -36,7 +36,7 @@ def client(monkeypatch, tmp_path):
 
 
 def _ws(sid):
-    import agents.task.path as pth
+    import core.session_paths as pth
     from core.identity import ANON_USER_ID
     clean = pth.pm().clean_session_id(sid)
     ws = pth.pm().get_workspace_dir(clean, user_id=ANON_USER_ID)
@@ -121,7 +121,7 @@ def test_shared_flag_follows_project_root_mode(client, monkeypatch):
     http, _ = client
     _ws("tree-shared")
     assert _get(http, "tree-shared").json()["shared"] is False
-    import agents.task.path as pth
+    import core.session_paths as pth
     monkeypatch.setattr(type(pth.pm()), "is_project_root_workspace", property(lambda self: True))
     assert _get(http, "tree-shared").json()["shared"] is True
 

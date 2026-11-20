@@ -235,7 +235,8 @@ def test_pref_list_addition_that_did_not_persist_is_not_success(monkeypatch, tmp
     client, pages = _owner_client(monkeypatch, tmp_path)
     ok, err = write_preference(tmp_path, "u1", "approvals.require", ["x402_request", "git_push"])
     assert ok, err
-    monkeypatch.setattr(pages, "write_preference", lambda *a, **k: (False, "disk full"))
+    import core.prefs_lists as prefs_lists  # 125 S20: the list add is one locked step
+    monkeypatch.setattr(prefs_lists, "add_list_entries", lambda *a, **k: (False, "disk full", []))
     r = client.patch("/api/webgate/preferences",
                      json={"key": "approvals.require", "value": ["x402_request", "email_send"],
                            "confirm": True})
@@ -252,8 +253,11 @@ def test_pending_decide_on_a_refusing_store_is_not_a_500(monkeypatch, tmp_path):
         raise sqlite3.OperationalError("database is locked")
 
     monkeypatch.setattr(pages, "_decide_pending", _locked)
-    for verb in ("promote", "reject"):
-        r = client.post(f"/api/webgate/pending/ask/g1/{verb}")
+    import webview.inbox as inbox  # the console decides through the Inbox routes
+    monkeypatch.setattr(inbox, "unbound_console", lambda: None)
+    client.app.include_router(inbox.router)
+    for verb in ("decide", "reject"):
+        r = client.post(f"/api/webgate/inbox/pref_change/g1/{verb}")
         assert r.status_code == 200, verb
         body = r.json()
         assert body["ok"] is False and "locked" in body["error"]

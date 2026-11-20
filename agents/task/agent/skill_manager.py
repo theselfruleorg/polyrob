@@ -556,7 +556,7 @@ class SkillManager(SkillWriterMixin):
         hit written with no tenant is readable by no owner seat at all.
         """
         try:
-            from modules.memory.task.threat_scan import is_suspicious
+            from core.security.threat_scan import is_suspicious
         except Exception:
             return False  # scanner unavailable → fail-open
         try:

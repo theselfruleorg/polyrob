@@ -5,7 +5,7 @@ import asyncio
 
 
 def test_goal_create_stores_typed_checks(tmp_path):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from tools.goal_tools import GoalTool, GoalCreateAction
 
     board = GoalBoard(str(tmp_path / "goals.db"))
@@ -24,7 +24,7 @@ def test_goal_create_stores_typed_checks(tmp_path):
 
 
 def test_goal_create_without_checks_is_accepted(tmp_path):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from tools.goal_tools import GoalTool, GoalCreateAction
 
     board = GoalBoard(str(tmp_path / "goals.db"))
@@ -36,7 +36,7 @@ def test_goal_create_without_checks_is_accepted(tmp_path):
 
 
 def test_goal_create_rejects_malformed_checks(tmp_path):
-    from agents.task.goals.board import GoalBoard
+    from modules.goals.board import GoalBoard
     from tools.goal_tools import GoalTool, GoalCreateAction
 
     board = GoalBoard(str(tmp_path / "goals.db"))

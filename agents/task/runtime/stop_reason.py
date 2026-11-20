@@ -45,8 +45,8 @@ _TEXT = {
     StopReason.CONVERSATIONAL_EXIT: "ended after reply-only steps",
     StopReason.CONTROL: "stopped by a stop control",
     StopReason.CANCELLED: "cancelled",
-    StopReason.WALL_CLOCK: "cut by the wall-clock cap",
-    StopReason.LOOP: "stopped because it repeated the same tool call",
+    StopReason.WALL_CLOCK: "stopped at its time limit",
+    StopReason.LOOP: "stopped because it repeated the same step",
 }
 
 
@@ -82,7 +82,7 @@ OWNER_EXPLAIN = {
     StopReason.WALL_CLOCK: (
         "The run reached its time limit.", "for a goal, `/goal retry <id>`"),
     StopReason.LOOP: (
-        "The same tool call repeated, so the harness stopped the run.",
+        "The same step repeated, so the run stopped.",
         "say continue with a hint, or `/why`"),
 }
 
@@ -110,8 +110,12 @@ QUIET_STOPS = frozenset({StopReason.DONE.value, StopReason.AWAITING_REPLY.value,
                          StopReason.CANCELLED.value, StopReason.CONTROL.value,
                          StopReason.CONVERSATIONAL_EXIT.value})
 
-#: The last line of every turn-end notice.
+#: The last line of a turn-end notice that a "continue" can resume.
 CONTINUE_HINT = "Say continue and I pick up where I stopped."
+#: The stops a "continue" resumes (2026-11-20 UX review H10): any other stop names
+#: its own next step (:data:`OWNER_EXPLAIN`), because a continue cannot fix it.
+RESUMABLE_STOPS = frozenset({StopReason.MAX_STEPS.value, StopReason.STALL.value,
+                             StopReason.LOOP.value})
 
 
 def _one_line(text: Any, limit: int = 200) -> str:
@@ -131,9 +135,21 @@ def turn_end_notice(reason: Any, steps: Optional[int] = None,
     if report:
         lines.append(report)
     if (last_error or "").strip():
-        lines.append(f"Last tool error: {_one_line(last_error)}")
-    lines.append(CONTINUE_HINT)
+        lines.append(f"Last error: {_one_line(last_error)}")
+    lines.append(next_step_line(reason))
     return "\n".join(lines)
+
+
+def next_step_line(reason: Any) -> str:
+    """The last line of a turn-end notice: "say continue" for a stop a continue
+    resumes, else the stop's own next step from :data:`OWNER_EXPLAIN`."""
+    value = _value(reason)
+    if value in RESUMABLE_STOPS or value is None:
+        return CONTINUE_HINT
+    for key, (_why, hint) in OWNER_EXPLAIN.items():
+        if key.value == value:
+            return f"Next: {hint}."
+    return CONTINUE_HINT
 
 
 def _value(reason: Any) -> Optional[str]:

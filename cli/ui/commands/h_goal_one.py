@@ -2,7 +2,7 @@
 
 The WRITE counterpart to the read-only ``/goals``: new / show / retry /
 pause / stop [--forever] / allow (080 WS-2). Thin over the
-SAME ``surfaces.telegram.owner_ops.goal_reply`` the phone calls, so a goal
+SAME ``cron.owner_goals.goal_reply`` the phone calls, so a goal
 transition reads and behaves identically on both seats.
 
 ⚠️ REACH, never policy (043 global constraint): every transition is the goal
@@ -17,14 +17,14 @@ from cli.ui.commands.h_owner import _admin_data_dir, _tenant
 async def h_goal(ctx) -> None:
     """``/goal new <what>`` · ``/goal <show|retry|pause|stop [--forever]|allow> <id>``.
 
-    ``async`` + ``_awaited``: the ``owner_ops`` helpers are migrating to async
+    ``async`` + ``_awaited``: the owner-verb helpers are migrating to async
     one verb at a time (D12), and a seat that hard-codes one shape emits a
     coroutine's repr as if it were the answer the moment its helper flips.
     """
-    from surfaces.telegram import owner_ops
+    from cron.owner_goals import goal_reply
     from cli.ui.commands.h_money_verbs import _awaited
     ctx.emit(
-        await _awaited(owner_ops.goal_reply(
+        await _awaited(goal_reply(
             _tenant(ctx), _admin_data_dir(write=True), list(ctx.args or []))),
         title="goal",
     )

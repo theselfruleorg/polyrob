@@ -23,6 +23,15 @@ def build_session_key(source: SessionSource, user_id: Optional[str] = None) -> s
     return base
 
 
+def direct_session_key(surface_id: str, chat_id: str, thread_id: Optional[str] = None) -> str:
+    """The synthetic key of a PROACTIVE send (no inbound session behind it).
+
+    ``direct:{surface}:{chat}``, plus ``:thread:{id}`` when the send targets a thread
+    or forum topic — the same tail every surface already reads a thread from."""
+    base = f"direct:{surface_id}:{chat_id}"
+    return f"{base}:thread:{thread_id}" if thread_id else base
+
+
 def admin_session_key(room_key: str, raw_uid: object) -> str:
     """The room+admin session (101). ⚠️ ``:admin:`` goes BEFORE ``:thread:``:
     ``message_router`` splits on ``:thread:`` and takes the tail as the thread id."""
@@ -68,7 +77,8 @@ def chat_id_from_session_key(session_key: str) -> str:
     """
     parts = session_key.split(":")
     if parts and parts[0] == "direct":
-        return parts[-1]
+        # a proactive send aimed at a thread: ``direct:{surface}:{chat}:thread:{id}``
+        return session_key.partition(":thread:")[0].split(":")[-1]
     if len(parts) >= 5:
         return parts[4]
     return parts[-1] if parts else session_key

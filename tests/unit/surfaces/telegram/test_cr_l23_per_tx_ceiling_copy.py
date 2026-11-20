@@ -1,7 +1,7 @@
 """CR-L23: since 2026-09-18 an owner-approved budget.wallet_per_tx_usd can RAISE
 the per-transaction ceiling (clamped to the daily cap). The /wallet autonomous
 copy must not tell the owner it is env-only or not settable from chat."""
-from surfaces.telegram.owner_ops import _set_autonomous_ceiling
+from tools.defi.owner_verbs.wallet import set_autonomous_ceiling as _set_autonomous_ceiling
 
 
 def test_usage_names_the_per_tx_pref_not_env_only():

@@ -195,7 +195,9 @@ def state_bases(data_dir: Optional[str]) -> List[str]:
     them is a pause the runtime may never see.
     """
     bases: List[str] = []
-    for base in (data_dir, os.getenv("POLYROB_DATA_DIR"), os.getenv("DATA_ROOT")):
+    from core.runtime_paths import pinned_data_home
+    pinned = pinned_data_home()
+    for base in (data_dir, str(pinned) if pinned else None, os.getenv("DATA_ROOT")):
         if base and str(base) not in bases:
             bases.append(str(base))
     home = _resolved_home()
@@ -344,6 +346,8 @@ def _atomic_write(path: str, obj: dict) -> None:
             json.dump(obj, fh, indent=1, sort_keys=True)
             fh.flush()
             os.fsync(fh.fileno())
+        from core.fs_copy import shared_file_mode
+        os.chmod(tmp, shared_file_mode(os.path.dirname(path) or "."))  # mkstemp births 0600
         os.replace(tmp, path)
     except BaseException:
         _remove_quiet(tmp)
