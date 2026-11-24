@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from core.config_policy.members import flag_raw, member_display_default  # noqa: I001
 from core.key_suggest import did_you_mean, flag_hint
 from core.prefs_launch import build_launch_specs
+from core.prefs_self import build_self_specs
 
 logger = logging.getLogger(__name__)
 
@@ -206,12 +207,11 @@ PREF_SCHEMA: dict[str, PrefSpec] = _AliasedSchema((
                       "(local time), e.g. '23-08'. Enforced on the user-delivery "
                       "rail: sends inside the window are held and released at "
                       "window-end (018 P0.3)"),
-    # 122 W1: which of the agent's own acts reach the owner beside the money notices.
     _spec("report.acts", "enum", SENSITIVITY_SAFE, "override", "live",
           enum_values=("every_act", "money_only", "digest"), default_display="money_only",
           description="Acts the agent takes on its own: every_act = each other act in an hourly report, "
                       "money_only = money notices only, digest = one daily report"),
-    *build_launch_specs(_spec, SENSITIVITY_GUARDED),  # 122 W3: core/prefs_launch.py
+    *build_launch_specs(_spec, SENSITIVITY_GUARDED), *build_self_specs(_spec, SENSITIVITY_GUARDED),
     _spec("owner.timezone", "str", SENSITIVITY_SAFE, "override", "live",
           default_display="server clock",
           description="Your IANA timezone, e.g. 'Europe/Berlin': quiet hours, the "

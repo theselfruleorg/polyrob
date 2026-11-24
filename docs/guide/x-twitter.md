@@ -174,6 +174,25 @@ durable hourly budget shared by the API and the browser rail, and DMs take a sep
 write. Autonomous posts also keep a minimum gap (`TWITTER_POST_COOLDOWN_SEC`, one
 hour by default).
 
+## A post states an act only with its receipt
+
+Every public post (API or browser) is checked before it goes out: text that states an act —
+a mint, a funding, a trade, a sale — **as done** must name the transaction hash of that
+act, and the agent must have read that receipt **in the same turn**
+(the result must show it landed; an unconfirmed or failed hash does not count, and a hash
+somebody else's post or a web page quotes is not your agent's receipt). Text that
+announces a future act ("we will mint…", "we are minting tomorrow") is refused outright:
+the agent never posts what has not happened. A refusal names the word it refused and the
+remedy — read the receipt, then post naming its hash — and the agent can do that and
+post again in the same turn. This holds even on your own turn: your instruction makes
+the post allowed, it cannot make a claim true.
+
+Limits, honestly: the check reads act verbs (minted / funded / traded / sold and their
+future forms), not bare nouns — "the sale opens Friday" or "mint complete" is a schedule
+or a state your rules should cover, the guard does not catch it; only EVM transaction
+hashes (`0x` + 64 hex) count as receipts; and a scheduled result that is **delivered** to X,
+or a reply to a buyer (rather than a post the agent itself sends), does not cross this guard.
+
 ## Browser rail
 
 The optional `x_browser` tool drives the X web app with a captured login. It is

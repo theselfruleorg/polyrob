@@ -420,6 +420,16 @@ REFUSAL_KINDS: Dict[str, RefusalKind] = {
     "repeat_act": _k(
         "", "agent", "next-turn", "another post", False,
         "already replied to this post on {date}{ref}; skip it"),
+    # 0023: the post-claim guard (core/public_claims.py, the claim_guard stage).
+    "post_claim": _k(
+        "public_claim", "agent", "now",
+        "read the receipt this turn, then post naming its tx hash", True,
+        "this public post states an act ('{claim}') as {state} with no receipt read this "
+        "turn: name an act as done only in a post that carries a transaction hash a tool "
+        "result of THIS turn showed landed, and never announce an act that has not "
+        "happened",
+        "the agent's post was held: it states an act ('{claim}') as {state} with no "
+        "receipt read this turn"),
     "retry_wall": _k(
         "", "agent", "next-turn", "change the call, or the owner's next message", False,
         "you made the SAME call {attempts} times in this turn and it failed each time. "

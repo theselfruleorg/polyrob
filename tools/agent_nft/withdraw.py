@@ -134,6 +134,7 @@ async def sweep(tool, params, execution_context) -> Any:
     from core.wallet.nft_account import NftAccountError, parse_nft
     from core.wallet.tx_guard import TxIntent
     from tools.agent_nft.guarded import guarded_call
+    import asyncio
     if params.to:
         return tool._ar(error="a sweep goes to this treasury only — leave `to` out. Nothing was "
                               "broadcast.")
@@ -142,7 +143,9 @@ async def sweep(tool, params, execution_context) -> Any:
         collection, token_id = parse_nft(params.nested)
         if collection is None:
             raise NftAccountError("name the nested NFT as <collection>#<id>")
-        owner = read_owner(tool.rpc_for(held.chain), collection, int(token_id))
+        # off the event loop: the ownerOf read is a sync RPC round trip
+        owner = await asyncio.to_thread(read_owner, tool.rpc_for(held.chain), collection,
+                                        int(token_id))
         if owner.lower() != str(held.account).lower():
             raise NftAccountError(f"{collection} #{token_id} is not held by the account "
                                   f"{held.account} (its owner is {owner})")
@@ -169,6 +172,8 @@ def read_owner(rpc, collection: str, token_id: int) -> str:
 
 
 async def revoke_all(tool, params, execution_context) -> Any:
+    import asyncio
+
     from core.wallet import abi, erc6551
     from core.wallet import collection_registry
     from core.wallet.nft_account import NftAccountError
@@ -179,12 +184,15 @@ async def revoke_all(tool, params, execution_context) -> Any:
         from core.wallet.nft_account import profile_of
         profile = profile_of(held)
         rpc = tool.rpc_for(params.chain)
-        head = int(rpc("eth_blockNumber", []), 16)
-        rows = erc6551.open_approvals(rpc, held.account, profile.deploy_block, to_block=head)
+        # off the event loop: every read below is a sync RPC round trip
+        head = int(await asyncio.to_thread(rpc, "eth_blockNumber", []), 16)
+        rows = await asyncio.to_thread(erc6551.open_approvals, rpc, held.account,
+                                       profile.deploy_block, to_block=head)
         if rows:
-            owners = erc6551.nft_owners(rpc, held.collection, held.token_id, profile.deploy_block, head)
+            owners = await asyncio.to_thread(erc6551.nft_owners, rpc, held.collection,
+                                             held.token_id, profile.deploy_block, head)
             owners.add(_signer.address.lower())
-            rows = erc6551.attribute(rpc, rows, owners)
+            rows = await asyncio.to_thread(erc6551.attribute, rpc, rows, owners)
     except NftAccountError as exc:
         return tool._ar(error=f"{exc}. Nothing was broadcast.")
     except Exception as exc:  # noqa: BLE001 — an unreadable table is not an empty one

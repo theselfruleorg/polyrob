@@ -9,6 +9,8 @@ bounds (the guard's ``sale.max_price_wei``); any other collection is bounded by 
 """
 from __future__ import annotations
 
+import asyncio
+
 from typing import Any, Optional
 
 
@@ -50,7 +52,8 @@ async def mint(tool, params, execution_context) -> Any:
         collection = _collection(chain, params.collection)
         rpc = tool.rpc_for(chain)
         try:
-            facts = collection_sale.read_sale(rpc, collection)
+            # off the event loop: read_sale is several sync HTTPS RPC round trips
+            facts = await asyncio.to_thread(collection_sale.read_sale, rpc, collection)
         except ValueError as exc:
             raise MintError(str(exc)) from exc
         _check_pin(chain, collection, facts.sale)
@@ -68,7 +71,9 @@ async def mint(tool, params, execution_context) -> Any:
             if not params.allowance or params.proof is None:
                 raise MintError("the sale is in its whitelist phase: pass the treasury's allowance "
                                 "and proof (or wait for the public phase)")
-            if collection_sale.read_wl_minted(rpc, facts.sale, payer) + qty > int(params.allowance):
+            wl_minted = await asyncio.to_thread(collection_sale.read_wl_minted, rpc,
+                                                facts.sale, payer)
+            if wl_minted + qty > int(params.allowance):
                 raise MintError(f"the whitelist allowance is {params.allowance}; this mint would pass it")
             data = collection_mint.encode_mint_wl(payer, qty, min_out, int(params.allowance),
                                                   list(params.proof))

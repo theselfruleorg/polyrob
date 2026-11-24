@@ -311,7 +311,8 @@ polyrob run -p openai -m gpt-5 "…"                      # per run
 ```
 
 The pinned model serves every run on the pinned provider — chat, scheduled jobs,
-goals. `DEFAULT_MODEL` never applies to a different provider: a job picks
+goals — until the owner picks a model with `/model <name>`: that saved model then runs
+every chat, goal and job nobody pinned, and `/model reset` returns to the pin. `DEFAULT_MODEL` never applies to a different provider: a job picks
 another model with its own `payload.model`. The old `CHAT_PROVIDER`/`CHAT_MODEL`
 names are retired; set alone, POLYROB refuses to start and names the
 `DEFAULT_` name to use.

@@ -553,7 +553,10 @@ turned on alongside custody, use a sandbox-capable backend; keep `CODING_LSP_ENA
 no sandbox at all (§3b); review `config/mcp_config.json` and remove any server
 whose binary you wouldn't run with the agent's own host privileges (its env is
 allowlisted now, but any secret you configure for it in that file is handed over
-verbatim).
+verbatim). Set the host baseline first: key-only SSH, a deny-by-default firewall,
+automatic security updates, units enabled (not only started), and no old env-file copies
+after a key rotation — [self-hosting.md](self-hosting.md#host-baseline-a-vps).
+`polyrob doctor` names each of these that the host has lost.
 
 **Multi-tenant server** — never set `POLYROB_LOCAL=1` (it collapses several
 independent trust decisions to "operator == owner"); `sandbox_guard.py` already

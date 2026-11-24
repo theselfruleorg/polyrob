@@ -50,8 +50,9 @@ def test_a_big_context_with_small_output_is_not_given_ten_minutes(monkeypatch):
     mm.history.total_tokens = 600000          # would have been 600 s
     mm.note_call_usage(output_tokens=300, input_tokens=40000, cached_tokens=38000)
     mm.note_call_usage(output_tokens=250, input_tokens=41000, cached_tokens=39000)
-    # 90 + 300/40 + 2000/10000 = 97.7 -> floored at 120
-    assert mm.calculate_llm_timeout(tool_count=180) == pytest.approx(120.0)
+    # 90 + 300/40 + 2000/10000 = 97.7 -> floored at 240 (2026-11-23 prod: the
+    # 120 s floor timed the same shape out twice in a row and killed a job)
+    assert mm.calculate_llm_timeout(tool_count=180) == pytest.approx(240.0)
 
 
 def test_a_big_write_widens_the_next_budget(monkeypatch):
@@ -69,7 +70,7 @@ def test_the_expectation_is_capped_at_this_session_output_ceiling(monkeypatch):
     mm = _mm()
     mm.note_call_usage(output_tokens=60000, input_tokens=10000, cached_tokens=10000)
     # the provider may not emit more than 4096, so the budget must not assume it
-    assert mm.calculate_llm_timeout() == pytest.approx(max(120.0, 90.0 + 4096 / 40.0))
+    assert mm.calculate_llm_timeout() == pytest.approx(max(240.0, 90.0 + 4096 / 40.0))
 
 
 def test_uncached_input_adds_a_second_per_10k(monkeypatch):
@@ -83,7 +84,7 @@ def test_uncached_input_adds_a_second_per_10k(monkeypatch):
 def test_no_history_yet_uses_a_stated_default(monkeypatch):
     monkeypatch.setenv("LLM_TIMEOUT_BY_OUTPUT", "true")
     mm = _mm()
-    assert mm.calculate_llm_timeout() == pytest.approx(120.0)  # 90 + 1024/40 = 115.6 -> floor
+    assert mm.calculate_llm_timeout() == pytest.approx(240.0)  # 90 + 1024/40 = 115.6 -> floor
 
 
 def test_the_env_override_still_wins(monkeypatch):

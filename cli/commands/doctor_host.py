@@ -18,7 +18,9 @@ def _checkers() -> List[Checker]:
     from core.security.sandbox_doctor import docker_sandbox_lines
     from cli.commands.doctor_env_copies import env_copy_lines
     from cli.commands.doctor_apps import apps_publish_lines
-    return [data_home_split_lines, docker_sandbox_lines, env_copy_lines, apps_publish_lines]
+    from core.host_baseline import host_baseline_lines
+    return [data_home_split_lines, docker_sandbox_lines, env_copy_lines, apps_publish_lines,
+            host_baseline_lines]
 
 
 def host_readiness_lines(env: dict) -> List[str]:

@@ -240,6 +240,14 @@ def pause_headline_from(p: dict, live: Optional[dict] = None, *,
     alive = live.get("loops_alive") or {}
     loops = (f"{sum(1 for v in alive.values() if v)}/{len(alive)}"
              if alive and live.get("loops_checked", True) else "?")
+    # Autonomy on, but no enabled job and no open goal: nothing wakes the agent until a
+    # message comes. An unknown count (an unreadable store) is never read as zero, and a
+    # live run, a live turn or a dead loop keeps the full line (it must stay visible).
+    if (live.get("scheduled_cron") == 0 and live.get("open_goals") == 0
+            and live.get("running_cron") == 0 and not live.get("turn")
+            and alive and live.get("loops_checked", True) and all(alive.values())):
+        return (f"▶ RUNNING — nothing scheduled: no enabled job and no open goal, so the "
+                f"agent wakes only on a message — {pause_hint} to stop")
     rg = live.get("running_goals")
     rc = live.get("running_cron")
     turn = live.get("turn") or {}

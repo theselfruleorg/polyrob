@@ -10,11 +10,11 @@ caller-supplied mapping and the operator pins through ``core.runtime_config``.
 Grammar (any order after the name)::
 
     /model                                  show the live model and where it comes from
-    /model <name>                           this chat, from the next step (until /new)
-    /model <name> default                   also the default for every new owner chat
+    /model <name>                           this chat from the next step, and every new chat
+    /model <name> default                   the same (an older form; `default` is a no-op)
     /model <name> reasoning=<level>         with a reasoning level (off|on|low|medium|high|<tokens>)
     /model reasoning=<level>                only the reasoning level, same model
-    /model reset [default]                  back to the default (and clear the default)
+    /model reset                            back to the operator model (clears the saved one)
     /model aliases                          list the aliases
     /model alias <name> <provider>/<model>  add an owner alias (`/model alias <name> -` removes it)
     /model heavy <name> | /model light <name>   the owner's heavy / light model (121);

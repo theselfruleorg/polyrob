@@ -43,7 +43,7 @@ def resolve_job_provider(payload: Optional[dict]) -> tuple:
     alive, else the first live credentialed provider — or ``(None, True)`` when
     nothing can, which is the only case where skipping a paid tick is honest.
     """
-    from core.runtime_config import operator_provider_pin, resolve_live_provider
+    from core.runtime_config import main_provider_pin, resolve_live_provider
     from core.credit_sentinel import credit_sentinel_active
     pinned = (payload or {}).get("provider")
     # An UNPINNED job (payload={}) must prefer the operator's serving pin
@@ -52,7 +52,7 @@ def resolve_job_provider(payload: Optional[dict]) -> tuple:
     # OpenRouter, so every status/exit-monitor tick 402'd first, fell back
     # in-session, and re-tripped the credit sentinel every 6h (2026-08-24..28:
     # 1,323 402 lines, five false credit alerts to the owner).
-    preferred = pinned or operator_provider_pin()
+    preferred = pinned or main_provider_pin()   # the owner's saved model, else DEFAULT_PROVIDER
     live = resolve_live_provider(preferred)
     if live is not None:
         return (live, False)

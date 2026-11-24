@@ -539,7 +539,9 @@ class MessageRetrievalMixin:
 		timeout = 90.0 + (expected / 40.0) + (uncached / 10000.0)
 		if use_vision:
 			timeout += 20.0
-		timeout = max(timeout, 120.0)
+		# A small expected output does not mean a fast call: a lower floor cut working calls
+		# of about 1k tokens twice in a row and ended the run.
+		timeout = max(timeout, 240.0)
 		self.logger.info(
 			f"Timeout by output: expected_out={expected:,} (cap {ceiling:,}), "
 			f"uncached_in={uncached:,} -> {timeout:.0f}s")

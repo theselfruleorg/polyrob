@@ -129,6 +129,22 @@ def _origin(ctx: Any) -> str:
         else cards.ORIGIN_AGENT
 
 
+def turn_line(ctx: Any) -> str:
+    """Who asked, for a card body (audit 2026-11-21 L-1): the turn's origin and its
+    session, so the owner sees which run wants the call."""
+    from core.security.owner_turn import forged_kind, is_autonomous_session, is_room_turn
+    kind = forged_kind(ctx)
+    try:
+        auto = is_autonomous_session(ctx, None)
+    except Exception:  # noqa: BLE001 — a probe fault: the plain wording
+        auto = False
+    origin = (f"a {kind.replace('_', '-')} re-entry" if kind else "a room turn"
+              if is_room_turn(ctx) else "an autonomous run (goal or cron)" if auto
+              else "an agent turn")
+    sid = str(getattr(ctx, "session_id", "") or "unknown")
+    return f"Asked by the agent on {origin} (session {sid}), not by you."
+
+
 def _refusal(ctx: Any, user_id: str) -> Optional[str]:
     """Who may put a call card to the owner. A room, a correspondent's session and a
     forged turn never reach a money verb (the policy chain refuses them first)."""
@@ -136,13 +152,6 @@ def _refusal(ctx: Any, user_id: str) -> Optional[str]:
         from tools.controller.owner_ask_action import _is_leaf
         if _is_leaf(ctx):
             return "a leaf/sub-agent reports to its parent, never to the owner"
-        # An autonomous run (goal, cron, planner, an income-rule act) gets no card: a money
-        # call is never one tap away from an unattended run, and its own durable ask (or the
-        # act's needs-owner result) keeps the run's state true. The test approve_verb's
-        # grant card uses; a probe fault refuses.
-        from core.security.owner_turn import is_autonomous_session
-        if is_autonomous_session(ctx, None):
-            return "an autonomous run (goal, cron, planner) never puts a money call to a card"
         from core.instance import is_owner_uid
         if not is_owner_uid(user_id):
             return "cards go to the owner, and this tenant is not the owner"
@@ -169,6 +178,9 @@ async def need_owner(tool: Any, ctx: Any, *, title: str, body: str,
         if same is not None:
             return _owner_act_result(same, steps, "already", lead=lead)
         sid = str(getattr(ctx, "session_id", "") or "") or None
+        from core.security.owner_turn import is_autonomous_session
+        if is_autonomous_session(ctx, None):  # 2026-11-21: an unattended run's card says so
+            body = f"{body}\n{turn_line(ctx)}"
         card = call_cards.make(user_id, steps, title=title, body=body, rebuild=rebuild,
                                origin=_origin(ctx), session_id=sid)
     except Exception as exc:  # noqa: BLE001

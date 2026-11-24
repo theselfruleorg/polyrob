@@ -124,7 +124,7 @@ The console is a control plane, not only a monitor. Unless it is read-only, you 
   and retiring stay on `/offer` and the decisions the agent sends you;
 - approve, reject or kill a durable app, and read its logs;
 - write preferences and cataloged flags, and choose the model a new chat starts on (Agent › Settings,
-  the same as `/model <name> default`; a chat already open keeps its model);
+  the same as `/model <name>`; a chat already open keeps its model);
 - type an owner verb into the chat box.
 
 ### Owner verbs in the chat box

@@ -1,6 +1,6 @@
 """Controller hooks that classify, gate and record every outward act (proposal 033).
 
-Three hooks, all registered in ``Controller.__init__`` — never post-hoc on an
+Four hooks, all registered in ``Controller.__init__`` — never post-hoc on an
 instance, because a delegated sub-agent builds a fresh ``Controller`` and a fresh
 ``HookPipeline`` (``agents/task/agent/sub_agent_manager.py``), so a hook attached
 to a parent would never cover delegated work.
@@ -16,6 +16,12 @@ to a parent would never cover delegated work.
   (``VerbPolicy.subject``) acts once per subject in the window. The refusal is a
   fact with no ask; the owner typing passes. A verb with no subject never reads
   the log, so money stays with ``tx_guard``.
+- **claim** (pre, ``fail_mode="closed"``): a public post (a ``social``-effect
+  verb's text) that states an act (mint · fund · trade · sale) as done must name
+  a transaction hash a tool result of the CURRENT turn showed landed; a future
+  act is never announced (0023, ``core/public_claims.py``). No exemption, not
+  for the owner's turn — the remedy is to read the receipt and post naming it.
+  A detected claim whose turn evidence cannot be read refuses.
 - **record** (post, ``fail_mode="open"``): one ``external_write`` row per
   outward act, on success AND on the error/timeout path
   (``Controller._observe_error_result``), which is why ``outcome`` is real.
@@ -334,5 +340,113 @@ def make_repeat_act_hook(controller):
     return _repeat_act_hook
 
 
-__all__ = ["make_effect_gate_hook", "make_effect_record_hook", "make_repeat_act_hook",
-           "record_approved_send", "resolve_action_tool"]
+def _post_texts(params):
+    """The PUBLIC strings of a post: the body, a thread's parts, the alt text of
+    every image and the poll options — every word a reader sees."""
+    p = _params_dict(params)
+    out = []
+    for key in ("text", "texts", "media_alt_texts", "poll_options"):
+        value = p.get(key)
+        if isinstance(value, str):
+            out.append(value)
+        elif isinstance(value, (list, tuple)):
+            out.extend(v for v in value if isinstance(v, str))
+    return out
+
+
+def _turn_tool_texts(controller, execution_context):
+    """The tool-result texts of the CURRENT turn — the messages after the last
+    genuine user message — or None when they cannot be read.
+
+    ``None`` is not "empty": an unreadable turn has unknown evidence, which for
+    a detected claim means refuse (the hook), while an empty turn is simply a
+    turn that read nothing yet. A context that NAMES an agent the orchestrator
+    does not hold also reads as unreadable: judging a post on another agent's
+    turn would vouch with the wrong conversation.
+    """
+    try:
+        orch = getattr(controller, "orchestrator", None)
+        agents = getattr(orch, "agents", None) or {}
+        agent = None
+        agent_id = getattr(execution_context, "agent_id", None)
+        if agent_id:
+            session_id = (getattr(orch, "session_id", None)
+                          or getattr(controller, "session_id", "") or "")
+            for key in (agent_id, f"{agent_id}_{session_id}"):
+                if key in agents:
+                    agent = agents[key]
+                    break
+            if agent is None:
+                return None  # a named agent we cannot reach: unknown evidence
+        elif len(agents) == 1:
+            agent = next(iter(agents.values()))
+        if agent is None:
+            return None
+        messages = getattr(getattr(getattr(agent, "message_manager", None),
+                                   "history", None), "messages", None)
+        if messages is None:
+            return None
+        from modules.llm.messages import HumanMessage, MessageOrigin
+        texts = []
+        for entry in reversed(list(messages)):
+            # MessageHistory holds ManagedMessage wrappers (``.message``); a
+            # bare BaseMessage (tests, degraded shapes) unwraps to itself.
+            message = getattr(entry, "message", entry)
+            if (isinstance(message, HumanMessage)
+                    and getattr(message, "origin", MessageOrigin.USER) == MessageOrigin.USER):
+                break  # the turn ends at the last genuine user message
+            if getattr(message, "type", "") == "tool":
+                texts.append(str(getattr(message, "content", "") or ""))
+        texts.reverse()
+        return texts
+    except Exception:
+        logger.warning("claim guard: could not read this turn's tool results",
+                       exc_info=True)
+        return None
+
+
+def make_claim_guard_hook(controller):
+    """pre_tool_call: a public post states an act only with its receipt (0023).
+
+    A ``social``-effect verb's public text that claims an act (mint · fund ·
+    trade · sale) as done must name a transaction hash a tool result of the
+    current turn showed landed; a future act is never announced
+    (``core.public_claims.post_claim_refusal``). Register with
+    ``fail_mode="closed"`` — the guard is a truth gate, and it answers BEFORE
+    the approval hooks, so a refused post costs no owner tap and queues no ask.
+    """
+    async def _claim_guard_hook(action_name, params, execution_context):
+        tool_id, verdict = _classify(controller, action_name)
+        if verdict is None or verdict.effect != "social":
+            return None
+        texts = _post_texts(params)
+        if not texts:
+            return None
+        from core.public_claims import post_claim_refusal
+        finding = post_claim_refusal("\n".join(texts),
+                                     _turn_tool_texts(controller, execution_context))
+        if finding is None:
+            return None
+        state, claim = finding
+        from core.tool_gates import refusal_text
+        reason = refusal_text("post_claim", claim=claim, state=state)
+        try:
+            _record(controller, action_name, params, execution_context,
+                    tool_id, verdict, "denied")
+        except Exception:
+            logger.debug("claim denial record failed (fail-open)", exc_info=True)
+        try:
+            from core.security.refusals import record_refusal
+            record_refusal("public_claim", tool=tool_id or action_name,
+                           user_id=str(getattr(execution_context, "user_id", "") or ""),
+                           session_id=str(getattr(execution_context, "session_id", "") or ""),
+                           kind="post_claim", detail=f"{state}:{claim}")
+        except Exception:
+            logger.debug("claim refusal event failed (fail-open)", exc_info=True)
+        return reason
+
+    return _claim_guard_hook
+
+
+__all__ = ["make_claim_guard_hook", "make_effect_gate_hook", "make_effect_record_hook",
+           "make_repeat_act_hook", "record_approved_send", "resolve_action_tool"]

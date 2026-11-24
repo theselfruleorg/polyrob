@@ -396,6 +396,7 @@ A skill's stop, refusal and safety rules are binding. Only the procedure may ada
 - paused: owner-verb · now · /resume · no retry
 - strict_code_change: deploy · deploy · a row in core/effects.py WRITE_ACTIONS or NON_WRITE_ACTIONS · no retry
 - repeat_act: agent · next-turn · another post · no retry
+- post_claim: agent · now · read the receipt this turn, then post naming its tx hash · retry
 - retry_wall: agent · next-turn · change the call, or the owner's next message · no retry
 - unattended:goal: owner-verb · now · an owner turn · no retry
 - unattended:cron: owner-verb · now · an owner turn · no retry

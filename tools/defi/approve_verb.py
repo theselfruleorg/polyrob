@@ -19,17 +19,6 @@ def _autonomous_run(context, tool_self=None) -> bool:
     return is_autonomous_session(context, tool_self)
 
 
-def _turn_line(ctx) -> str:
-    """Who asked, for the card body (audit 2026-11-21 L-1): the turn's origin and its
-    session, so the owner sees which run wants the allowance."""
-    from core.security.owner_turn import forged_kind, is_room_turn
-    kind = forged_kind(ctx)
-    origin = (f"a {kind.replace('_', '-')} re-entry" if kind
-              else "a room turn" if is_room_turn(ctx) else "an agent turn")
-    sid = str(getattr(ctx, "session_id", "") or "unknown")
-    return f"Asked by the agent on {origin} (session {sid}), not by you."
-
-
 async def _grant_card(tool, params, ctx, spender: str, token: str):
     """126: a grant to an unpinned spender is the OWNER's act (CR-H02). When the
     caller is the owner tenant on an agent turn that cannot make it, the exact grant
@@ -50,7 +39,8 @@ async def _grant_card(tool, params, ctx, spender: str, token: str):
             ctx, forged_fn=_autonomous_run, tool_self=tool)
         if verdict.refused:
             return None
-        who = _turn_line(ctx)
+        from tools.controller.call_card_run import turn_line
+        who = turn_line(ctx)
     except Exception:  # noqa: BLE001
         return None
     from tools.controller.call_card_run import need_owner

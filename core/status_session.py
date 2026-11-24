@@ -96,7 +96,7 @@ def _providers_section(tele: Section, now: float) -> Section:
     latched = credit_sentinel_status()  # raises => whole section unavailable (honest)
     sec.data["sentinel"] = latched
     sec.data["sentinel_enabled"] = credit_sentinel_enabled()
-    from core.runtime_config import (operator_provider_pin, resolve_live_provider,
+    from core.runtime_config import (main_provider_pin, resolve_live_provider,
                                      usable_providers_with_credentials)
     usable_reason = None
     try:
@@ -109,7 +109,7 @@ def _providers_section(tele: Section, now: float) -> Section:
             key="providers_unreadable", severity=SEVERITY_WARN,
             text=f"could not read which providers have credentials ({usable_reason})",
             remedy="`polyrob doctor` and `polyrob auth list`"))
-    pin = operator_provider_pin()
+    pin = main_provider_pin()   # the provider runs nobody pinned use (the owner's saved model first)
     live = resolve_live_provider(pin)
     sec.data.update({"usable": usable, "pin": pin, "live": live})
     for name, entry in sorted(latched.items()):

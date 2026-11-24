@@ -86,6 +86,7 @@ async def handle(ctx, *, pick_fn) -> None:
         await _via_service(ctx, cmd, args, user_id)
         return
     agent = ctx.agent
+    cmd.default = True   # the model is the owner's setting: a switch is also the default
     # set — a cli.json alias (B6) is the REPL's own short name; it wins locally.
     if not cmd.provider and "/" not in cmd.name:
         legacy = resolve_model_alias(cmd.name)
@@ -114,7 +115,7 @@ async def _via_service(ctx, cmd, args, user_id: str) -> None:
     also clears the REPL's own ``cli.json`` default."""
     from agents.task.model_switch_service import model_command
     words = list(args)
-    if cmd.action == "reset" and (cmd.default or any(w.lower() == "default" for w in words)):
+    if cmd.action == "reset":   # a reset clears the saved model too, on every store
         from cli.model_default import clear_default
         ctx.emit(clear_default(tenant=user_id).line("cleared"))
         words = [w for w in words if w.lower() != "default"]

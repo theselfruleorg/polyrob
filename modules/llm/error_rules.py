@@ -43,7 +43,8 @@ ACCOUNT_RE = re.compile(r"account_deactivated|\bsuspended\b")
 _CODE_402_RE = re.compile(_codes(402))
 NOT_FOUND_RE = re.compile(rf"{_codes(404)}|not_found|model[_ ]not[_ ]found")
 #: OpenRouter has the model and no upstream may serve this request now. Another route may.
-_NO_ROUTE_RE = re.compile(r"\bno endpoints found\b|\bno allowed providers\b")
+NO_ROUTE_RE = re.compile(
+    r"\bno endpoints found\b|\bno allowed providers\b|\ball providers have been ignored\b")
 _RATE_RE = re.compile(
     r"\brate[_ ]?limit|too many requests|\bquota\b|resource exhausted|\blimit reached\b"
     rf"|{_codes(429)}"
@@ -82,7 +83,7 @@ def class_for_status(status: int, low: str, *, no_credit: bool, transient_budget
         return LLMContextLengthError
     if no_credit:
         return LLMPermanentError
-    if _NO_ROUTE_RE.search(low):
+    if NO_ROUTE_RE.search(low):
         return LLMConnectionError
     if status == 403 and _MODERATION_RE.search(low):
         return LLMModerationError  # a refusal: never another provider in its place
@@ -104,7 +105,7 @@ def class_for_text(low: str, *, no_credit: bool, transient_budget: bool) -> type
         return LLMRateLimitError
     if no_credit or _CODE_402_RE.search(low):
         return LLMPermanentError
-    if _NO_ROUTE_RE.search(low):
+    if NO_ROUTE_RE.search(low):
         return LLMConnectionError
     if NOT_FOUND_RE.search(low):
         return LLMPermanentError

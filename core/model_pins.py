@@ -100,7 +100,7 @@ OPERATOR_SOURCE = "the operator's default"
 
 def chat_runtime_for(user_id: Optional[str], env=None, home_dir=None):
     """094, the CHAT tier: ``(provider, model, reasoning, source)`` a NEW owner chat
-    starts on — the owner's default (``/model <name> default``) > the operator pin
+    starts on — the owner's saved model (``/model <name>``) > the operator pin
     (``DEFAULT_PROVIDER``/``DEFAULT_MODEL``) > the first keyed provider. ``model`` may
     be None = the caller fills the provider's registry default. It lives here, not in
     ``core.runtime_config`` (which it calls), so the import runs one way. A live
@@ -110,7 +110,7 @@ def chat_runtime_for(user_id: Optional[str], env=None, home_dir=None):
     pin = chat_pin_for(user_id, home_dir)
     if pin:
         return (canonicalize_provider(pin["provider"]) or pin["provider"], pin["model"],
-                pin.get("reasoning"), "your default (/model <name> default)")
+                pin.get("reasoning"), "your saved model (/model <name>)")
     provider, model = resolve_default_provider(env)[:2]
     source = OPERATOR_SOURCE if operator_model_pin(env) else "the provider default"
     _data, err = load(user_id, home_dir) if user_id else ({}, "")

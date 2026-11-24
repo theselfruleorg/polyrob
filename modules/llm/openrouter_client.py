@@ -25,7 +25,7 @@ from core.security.redaction import args_shape as _args_shape  # [RAW_TOOL_CALL]
 # No circular import: llm_client_registry imports openrouter_client lazily.
 from modules.llm.llm_client_registry import get_default_model
 from modules.llm.openrouter_reasoning import apply_request_extras, create_with_reasoning_fallback  # PROVIDER_SORT + REASONING_MAX_TOKENS
-from modules.llm.tool_schemas import schema_tool_names
+from modules.llm.tool_schemas import schema_tool_names, tools_in_model_order
 from modules.llm.usage_extract import chat_usage_fields
 
 logger = logging.getLogger(__name__)
@@ -686,7 +686,8 @@ class OpenRouterClient(LLMClient):
                     # Extend the cache breakpoint over the tools block for
                     # breakpoint-style models (no-op unless prompt caching is on).
                     from modules.llm.cache_hints import apply_openrouter_tools_cache_control
-                    tools = apply_openrouter_tools_cache_control(tools, self.model_type)
+                    tools = apply_openrouter_tools_cache_control(
+                        tools_in_model_order(tools, self.model_type), self.model_type)
                     request_params['tools'] = tools
                     request_params['tool_choice'] = tool_choice_for(self, tools, tool_choice)
 

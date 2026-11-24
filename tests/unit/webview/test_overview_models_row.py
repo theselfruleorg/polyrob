@@ -10,7 +10,7 @@ def test_the_models_row_reads_chat_runtime_for_the_owner(monkeypatch):
 
     def fake(user_id, env=None, home_dir=None):
         seen.append(user_id)
-        return ("zai", "glm-x", None, "your default (/model <name> default)")
+        return ("zai", "glm-x", None, "your saved model (/model <name>)")
 
     monkeypatch.setattr(model_pins, "chat_runtime_for", fake)
     assert pages._provider_model("owner1") == ("zai", "glm-x")

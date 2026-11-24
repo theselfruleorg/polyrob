@@ -108,7 +108,7 @@ CEILINGS = {
     # live size. Each is a split candidate (structural review dim 3, W9); lower
     # the row in the commit that splits the file, delete it once <= the default.
     "surfaces/telegram/harness.py":     2431,  # the unused catalogue re-exports go; /start -> help_menu.start_reply; 126: a typed /approve <card id> is the card tap (surfaces/card_press.py); 125 S14: the command catalogue + lifecycle gate -> core/surfaces, CANCEL_REACH, the read replies, the background rule and the console seam left; S11: the owner-gate literal is derived; W9: admin verbs -> admin_verbs.py + *_ops.py
-    "core/wallet/tx_guard.py": 1377,  # W6: _authorize -> core/wallet/tx_guard_steps/
+    "core/wallet/tx_guard.py": 1375,  # W6: _authorize -> core/wallet/tx_guard_steps/
     "packs/x/polyrob_x/twitter_tool.py": 2731,
     "packs/markets/polyrob_markets/polymarket/service.py": 2184,
     "packs/markets/polyrob_markets/hyperliquid/service.py": 1907,

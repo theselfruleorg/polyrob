@@ -34,9 +34,22 @@ Rules, per shared-state entry (symlinks are never followed and never judged):
 * ``wallet/`` is the ONE documented exception to group-write: the deploy pins
   it to ``polyrob-agent:polyrob-data`` mode 750 on purpose (only the agent
   identity signs), so its subtree is judged on group + root-ownership only.
+
+The audit must AGREE with the deploy's ownership pass about what that pass
+deliberately leaves alone, or it cries wolf on a healthy box (observed prod
+2026-11-22: a permanent ``data_perms`` WARN naming the designed posture). The
+pass's own read-only classes are exempt here, mirroring its constants:
+``users/`` and ``profiles/`` keep their owners' group and modes entirely
+(DATA-2); ROOT-owned entries under ``ops/`` are group-read-only (M13), as are
+the root-owned SOUL files (``identity.md``, ``operating.md``, ``public.md``,
+``.phase``) and ``characters/*.character.json`` (M-1: a group-writable one is
+a stored prompt injection); and ``locks/deploys.today`` is the deploy counter
+the pass itself writes as root. Each exemption is root-owned-only where the
+pass's is — an entry another identity owns keeps the normal share rule.
 """
 from __future__ import annotations
 
+import fnmatch
 import os
 import stat
 from dataclasses import dataclass, field
@@ -60,6 +73,37 @@ WRITER_MODE_DIRS = ("pylibs", "snapshots", "apps")
 
 #: Judged on group + root-ownership only — mode 750 is the deploy's rule.
 GROUP_WRITE_EXEMPT_DIRS = ("wallet",)
+
+#: Top-level trees the deploy ownership pass NEVER touches — per-identity homes and
+#: profile env files (DATA-2: a group-write pass there would let any polyrob-data
+#: identity plant state another identity trusts). The owner's group and modes are
+#: the design there, so neither group-write nor the group itself is judged.
+OWNER_MODE_DIRS = ("users", "profiles")
+
+#: Top-level trees whose ROOT-owned entries the group reads but never writes
+#: (deployment/hardening/data_permissions.py GROUP_READ_ONLY, security review
+#: 2026-11-10 M13): ``ops/`` holds the status files root jobs write
+#: (live_proof.jsonl, recall_gold.jsonl, host_jobs/). An entry another identity
+#: owns there keeps the normal group share — only the root-owned ones are exempt.
+GROUP_READ_ONLY_ROOT_DIRS = ("ops",)
+
+#: Root-owned files the group may read but never write, by top-level directory
+#: (the pass's ROOT_READ_ONLY_FILES, audit 2026-11-21 M-1): the operator's SOUL
+#: tier, the public page and the instance phase marker — and the character files,
+#: where a group-writable one is a stored prompt injection by any group identity.
+#: Entries are fnmatch patterns and apply to root-owned files only.
+ROOT_READ_ONLY_FILE_PATTERNS = {
+    "identity": frozenset({"identity.md", "operating.md", "public.md", ".phase"}),
+    "characters": frozenset({"*.character.json"}),
+}
+
+#: Root-owned files under the root-sensitive trees that are the deploy TOOLING's
+#: own state, not the 2026-09-18 lockout shape: the deploy counter is written
+#: (root, private inode, replaced never truncated) by the ownership pass itself
+#: on every deploy. Any other root-owned lock file is still named.
+ROOT_OWNED_EXEMPT_FILE_PATTERNS = {
+    "locks": frozenset({"deploys.today"}),
+}
 
 #: Top-level FILES that are 0600 BY DESIGN, where group-write is the defect and
 #: not the fix. `verdicts.key` is the per-install HMAC key behind
@@ -204,6 +248,11 @@ def _name_for_uid(uid: int) -> str:
         return str(uid)
 
 
+def _matches(name: str, patterns) -> bool:
+    """fnmatch against a pattern set (``None``/empty matches nothing)."""
+    return any(fnmatch.fnmatchcase(name, p) for p in (patterns or ()))
+
+
 def _rel_top(data_dir: str, path: str) -> str:
     try:
         rel = os.path.relpath(path, data_dir)
@@ -265,17 +314,26 @@ def audit_data_perms(data_dir: str, group: str = DEFAULT_DATA_GROUP,
 
     def judge(path: str, st: os.stat_result, is_dir: bool) -> List[str]:
         top = _rel_top(data_dir, path)
+        if top in OWNER_MODE_DIRS:
+            return []  # per-identity homes: the owner's group and modes are the design
+        name = os.path.basename(path)
+        root_owned = st.st_uid == 0
         reasons: List[str] = []
         if st.st_gid != gid:
             reasons.append(REASON_WRONG_GROUP)
         exempt = top in GROUP_WRITE_EXEMPT_DIRS or (
             not is_dir and top in GROUP_WRITE_EXEMPT_FILES)
+        if root_owned and (
+                top in GROUP_READ_ONLY_ROOT_DIRS
+                or (not is_dir and _matches(name, ROOT_READ_ONLY_FILE_PATTERNS.get(top)))):
+            exempt = True  # the pass pins these group-read-only on purpose
         if not exempt:
             if not st.st_mode & stat.S_IWGRP:
                 reasons.append(REASON_NOT_GROUP_WRITABLE)
             if is_dir and not st.st_mode & stat.S_ISGID:
                 reasons.append(REASON_NO_SETGID)
-        if st.st_uid == 0 and top in ROOT_SENSITIVE_DIRS:
+        if root_owned and top in ROOT_SENSITIVE_DIRS and not (
+                not is_dir and _matches(name, ROOT_OWNED_EXEMPT_FILE_PATTERNS.get(top))):
             reasons.append(REASON_ROOT_OWNED)
         return reasons
 

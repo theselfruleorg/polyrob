@@ -269,7 +269,7 @@ autonomy is on, where the data and the config live, and how to turn autonomy on.
 /help                    the grouped command list; /help <verb> explains one
 /status                  health first, then session, goals, loops, wallet
 /usage [days]            AI cost by kind of work, job, model and day
-/model <name> [default]    swap the model live (sonnet, glm, deepseek-pro …); default = keep it
+/model <name>              swap the model live and keep it for new chats (sonnet, glm, deepseek-pro …)
 /memory [search <query>]   the memory provider, or recall across sessions
 /tools                   the agent's registered tools
 /goals                   the goal board summary

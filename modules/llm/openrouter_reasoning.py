@@ -192,7 +192,8 @@ async def create_with_reasoning_fallback(client: Any, sdk: Any, request_params: 
     async def _call() -> Any:
         if create is not None:
             return await create(client, sdk, request_params)
-        return await sdk.chat.completions.create(**request_params)
+        from modules.llm.openrouter_routing import create_completion
+        return await create_completion(sdk, request_params)
     try:
         return await _call()
     except Exception as e:

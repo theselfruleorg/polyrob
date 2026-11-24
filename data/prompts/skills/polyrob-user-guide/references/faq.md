@@ -379,6 +379,10 @@ recent ones.
 
 `repeat_act` — who can act: the agent; what changes it: another post; a retry can help: no.
 
+#### the agent's post was held: it states an act ('{claim}') as {state} with no receipt read this turn
+
+`post_claim` — who can act: the agent; what changes it: read the receipt this turn, then post naming its tx hash; a retry can help: yes.
+
 #### you made the SAME call {attempts} times in this turn and it failed each time. Last error: {last_error} — The tool is not broken, locked or blocked: this limit counts only your identical call, and only the owner's next message resets it. Change the parameter the last error names, or stop and tell the owner that last error. Do not repeat this call
 
 `retry_wall` — who can act: the agent; what changes it: change the call, or the owner's next message; a retry can help: no.

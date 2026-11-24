@@ -492,6 +492,23 @@ def verify_pins(rpc, intent, tx):
     dex_registry.verify_hook(rpc, intent.chain, key["hooks"])
 
 
+def v4_grant_moves_nothing(chain, spender) -> bool:
+    """True when *spender* is the pinned v4 Permit2 or the pinned v4 PositionManager.
+
+    A grant to either moves no token by itself: Permit2 pays only a spender that holds
+    an exact, expiring Permit2 grant (the verb grants only the PositionManager;
+    sign_policy refuses every permit), and the PositionManager pulls only from its own
+    caller, inside a mint this guard simulates and prices. So the grant of a token no
+    source can price is judged at that mint, not refused here (2026-11-21: a v4 move of
+    the agent's own coin stopped on its Permit2 grant)."""
+    try:
+        row = dex_registry.row_for(chain, "v4")
+        pins = {a.lower() for a in (row.permit2, row.position_manager) if a} if row else set()
+        return bool(spender) and str(spender).lower() in pins
+    except Exception:
+        return False
+
+
 def permit2_grant_declared(intent, tx, permit2, token, spender, amount) -> bool:
     """True only for the ONE Permit2 grant a verb may author: an allowance op
     whose signed transaction is ``Permit2.approve(token, v4 PosM, amount,

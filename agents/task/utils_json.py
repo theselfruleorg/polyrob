@@ -80,6 +80,18 @@ def apply_action_field_corrections(action_name: str, params: Dict[str, Any]) -> 
     if not params:
         return params
 
+    # 2026-11-22 prod (session 028cdf47): the meta-verb `tool_call` arrived with
+    # its payload wrapped one level too deep — {'arguments': {'name': X,
+    # 'arguments': {...}}} — and failed validation with Missing required: ['name'].
+    # Unwrap ONLY that wrapper-only shape: the outer dict holds nothing but
+    # `arguments`, and the inner dict carries a string `name`. A top-level
+    # `name`, or any other outer field, means the payload is real and stands.
+    if action_name == "tool_call" and set(params) == {"arguments"} \
+            and isinstance(params["arguments"], dict) \
+            and isinstance(params["arguments"].get("name"), str):
+        logger.info("corrections: unwrapped tool_call payload nested in 'arguments'")
+        params = dict(params["arguments"])
+
     corrected = {}
 
     # Enhanced corrections with more variations

@@ -145,7 +145,7 @@ async def claim(tool, params, execution_context):
         return tool._ar(error=f"{exc}. Nothing was broadcast.")
     try:
         owed = await asyncio.to_thread(S.read_owed, rpc, sale, treasury)
-        head = int(rpc("eth_blockNumber", []), 16)
+        head = int(await asyncio.to_thread(rpc, "eth_blockNumber", []), 16)
     except Exception as exc:  # noqa: BLE001 — an unread balance is not an empty one
         return tool._ar(error=f"owed({treasury}) on the sale {sale} could not be read ({exc}). "
                               f"Nothing was broadcast, and this is not evidence that nothing is owed.")
@@ -181,11 +181,11 @@ async def settle(tool, params, execution_context):
     try:
         settled = await asyncio.to_thread(S.read_settled, rpc, sale)
         if not settled:
-            phase = _try(lambda: S.read_phase(rpc, sale))
+            phase = await asyncio.to_thread(_try, lambda: S.read_phase(rpc, sale))
             return tool._ar(content=(f"SALE SETTLE on {chain}: the sale {sale} is not settled "
                                      f"(phase {phase}) — settle() reverts NotSettled until then. "
                                      f"No transaction."))
-        head = int(rpc("eth_blockNumber", []), 16)
+        head = int(await asyncio.to_thread(rpc, "eth_blockNumber", []), 16)
         clearing = await asyncio.to_thread(S.read_clearing, rpc, sale)
         records = await asyncio.to_thread(own_open_records, rpc, profile, treasury, head=head,
                                           requested=params.records)

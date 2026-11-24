@@ -9,6 +9,7 @@ from .call_scope import call_timeout_param
 from .llm_client import LLMClient, raise_llm_error
 from .prefix_stamp import stamp_request  # request prefix identity
 from .sdk_caps import sdk_supports
+from .tool_schemas import tools_in_model_order
 from .retry_log import log_attempt
 from .usage_extract import chat_usage_fields
 from core.config import BotConfig
@@ -528,7 +529,7 @@ class OpenAIClient(LLMClient):
         request_params = {
             'model': self.model_type,
             'messages': formatted_messages,
-            'tools': tools,
+            'tools': tools_in_model_order(tools, self.model_type),
             'tool_choice': "auto" if tools else None,
             'max_completion_tokens': max_tokens_value,
         }

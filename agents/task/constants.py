@@ -124,6 +124,17 @@ from core.runtime_config import register_owner_tier_resolver as _register_owner_
 _register_owner_tier(_owner_tier_row)
 
 
+def _owner_main_row():
+    """The instance owner's saved model (``/model <name>``): every run nobody pinned."""
+    from core.instance import resolve_owner_principal
+    from core.model_pins import owner_default
+    return owner_default(resolve_owner_principal())
+
+
+from core.runtime_config import register_owner_main_resolver as _register_owner_main  # noqa: E402
+_register_owner_main(_owner_main_row)
+
+
 # Per-task explicit override env var names (the slot names, AUX_MODEL_<SLOT>).
 # UP-10 2.1: only `compaction` (live) and `judge` (wired into output validation,
 # default-off/fail-open) remain. `planner`/`vision` had zero call sites and were

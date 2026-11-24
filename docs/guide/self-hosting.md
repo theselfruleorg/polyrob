@@ -276,7 +276,53 @@ posture, owner credentials and read-only settings.
 memory, autonomy state, active pauses — and is the first thing to run when a unit
 misbehaves. Its `box:` lines name a provisioning step your settings need and the box
 lacks: the trusted lazy installer, the signer, the code-execution sandbox, the apps
-supervisor, or a `/tmp` tmpfs too small for an install.
+supervisor, or a `/tmp` tmpfs too small for an install. Its `host:` lines name host
+work the owner must do: SSH that still accepts passwords, a reboot a kernel update waits
+for, (security) updates that wait, and a unit that runs but is not enabled.
+
+### Host baseline (a VPS)
+
+A stock cloud image is not a safe agent host. A fresh box with password SSH on gets
+thousands of login attempts a day. Set these once, before the agent holds a key or a wallet:
+
+- **SSH: key logins only — after a key login works.** Log in with your key first, in a
+  second terminal. Then write `/etc/ssh/sshd_config.d/10-hardening.conf` (the `10-`
+  sorts before a cloud image's `50-cloud-init.conf`, which often sets passwords back on;
+  sshd keeps the FIRST value) and check it before the reload:
+
+  ```
+  PasswordAuthentication no
+  KbdInteractiveAuthentication no
+  X11Forwarding no
+  MaxAuthTries 3
+  LoginGraceTime 30
+  ```
+
+  `sudo sshd -t && sudo systemctl reload ssh`, then `sudo sshd -T | grep passwordauth`
+  must print `no`. Keep the old login open until a new key login works.
+- **Firewall:** deny inbound by default and open only 22, 80 and 443
+  (`ufw default deny incoming`, `ufw allow 22/tcp`, …). The agent API and the console
+  bind `127.0.0.1` and are reached only through your reverse proxy.
+- **nginx:** `server_tokens off;` in the `http` block, so no response names the version.
+- **Updates:** `unattended-upgrades` installed and on. A plain `apt upgrade` holds a new
+  kernel back; `apt-get upgrade --with-new-pkgs` installs it. When
+  `/var/run/reboot-required` exists, reboot while the agent is idle.
+- **Enable, not only start:** `systemctl enable --now polyrob.service`. A unit you only
+  `start` does not come back after a reboot.
+- **IPv6:** if the box has a global IPv6 address but no IPv6 egress, programs fail on any
+  host with an AAAA record. Fix IPv6 at the provider, or remove your AAAA records; until
+  then `precedence ::ffff:0:0/96  100` in `/etc/gai.conf` makes the box prefer IPv4.
+- **Key rotation:** a copy of the env file (`polyrob.env.bak-…`, `.orig`, `.save`) keeps
+  every old key. A rotation is complete only when those copies are deleted too;
+  `polyrob doctor` names a copy that holds a wallet key.
+
+What stays yours: the provider's firewall, the provider's network (IPv6), your SSH keys
+and their rotation, and the reboot itself. `polyrob update` changes neither the units nor
+the nginx files, so it never undoes this baseline.
+
+**With Docker:** Compose publishes only `127.0.0.1:8000`. A port you publish on
+`0.0.0.0` is opened by Docker's own firewall rules, past `ufw`, so keep every published
+port on `127.0.0.1` behind the proxy. The host baseline above is still yours to set.
 
 ### The isolated browser (required with a wallet)
 

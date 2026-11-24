@@ -478,6 +478,55 @@ def _queue_depth(user_id: str, data_dir, instance_id: str) -> int:
 		return 0
 
 
+def _soul_cited(home_dir, line: Optional[str]) -> bool:
+	"""128 D3: *line* is a real line of the soul (identity.md / operating.md), compared on
+	words and case only; a fragment under 12 characters cites nothing."""
+	want = " ".join(str(line or "").lower().split())
+	if len(want) < 12:
+		return False
+	try:
+		from core.instance import load_self_context
+		soul = " ".join(load_self_context(home_dir).lower().split())
+	except Exception:
+		return False
+	return want in soul
+
+
+def _self_write_on_its_own(controller, execution_context, user_id, data_dir, params):
+	"""128 D3: ``(applies_now, note)`` for a write of the agent's OWN scheduled run (a cron or
+	goal run of the main agent — never a sub-agent, a room or a self-wake). It applies at once
+	only when the owner turned ``self.autonomous_writes`` on and the write quotes a soul line;
+	otherwise it stays a draft and the note says why."""
+	try:
+		from core.security.owner_turn import is_autonomous_goal_turn
+		if not is_autonomous_goal_turn(execution_context, controller):
+			return False, ""
+		from core.prefs import resolve
+		if resolve("self.autonomous_writes", user_id, data_dir) is not True:
+			return False, ""
+	except Exception:
+		return False, ""
+	if not _soul_cited(data_dir, getattr(params, "soul_line", None)):
+		return False, (" Written as a draft: an at-once self write must quote, in soul_line=, "
+		               "the line of your identity or operating notes that it serves.")
+	return True, ""
+
+
+async def _tell_owner_self_write(controller, user_id, params) -> None:
+	"""128 D3: an at-once self write of the agent's own run reaches the owner in one line."""
+	try:
+		from core.surfaces.user_delivery import deliver_user_message
+		why = " ".join(str(getattr(params, "reason", "") or "").split())[:300]
+		soul = " ".join(str(getattr(params, "soul_line", "") or "").split())[:200]
+		await deliver_user_message(
+			getattr(controller, "container", None), user_id,
+			f"I changed my self notes on my own. Why: {why}\nServes: \"{soul}\"\n"
+			"The old text is archived.",
+			source="self_context")
+	except Exception as e:
+		logging.getLogger(__name__).warning("self-write owner notice failed: %s", e)
+
+
 class DocAuthoringMixin:
 	"""`self_context_manage` + `owner_doc_manage` registration."""
 
@@ -518,6 +567,8 @@ class DocAuthoringMixin:
 			observed_at: Optional[str] = None
 			# 096 W1/D3: why, one sentence for the owner (required on a write).
 			reason: Optional[str] = None
+			# 128 D3: the soul line (identity/operating notes) this change serves, quoted.
+			soul_line: Optional[str] = None
 
 		from core.prompt_text import owner_route
 
@@ -528,7 +579,9 @@ class DocAuthoringMixin:
 			f"returns the current text; action='update' replaces it (≤{SELF_DOC_MAX_CHARS} chars — "
 			"consolidate, don't sprawl); action='patch' edits by exact-string replace; "
 			"Every update/patch is a draft the owner reviews (/pending) and needs reason= "
-			"(one sentence for the owner: why this change). This is NOT your core "
+			"(one sentence for the owner: why this change); when the owner turned "
+			"self.autonomous_writes on, a write of your own scheduled run that quotes the soul "
+			"line it serves (soul_line=) is in effect at once. This is NOT your core "
 			"identity/boundaries (those are operator-owned). "
 			"Pass source= (where it came from: 'measured', 'owner said', 'room_read') "
 			"and observed_at=YYYY-MM-DD (defaults to today) so each new or changed line "
@@ -587,14 +640,16 @@ class DocAuthoringMixin:
 					error="Promotion requires owner review through /pending; a model tool call cannot approve its draft.",
 					include_in_memory=True)
 
-			created_by = PROVENANCE_BACKGROUND if is_forged else PROVENANCE_AGENT
+			_own_run, _own_note = (_self_write_on_its_own(self, execution_context, user_id, data_dir, params)
+			                       if is_forged else (False, ""))
+			created_by = PROVENANCE_AGENT if (_own_run or not is_forged) else PROVENANCE_BACKGROUND
 			_no_reason = _missing_reason(params, is_forged)
 			if _no_reason:
 				return ActionResult(error=NOTHING_WRITTEN + _no_reason, include_in_memory=True)
 			try:
 				res, err, _now = _write_owner_rule(
 					writer, params, user_id=user_id, created_by=created_by,
-					now=_owner_doc_applies_now(self, params, execution_context))
+					now=_own_run or _owner_doc_applies_now(self, params, execution_context))
 				if err:
 					return ActionResult(error=NOTHING_WRITTEN + err, include_in_memory=True)
 			except Exception as e:
@@ -610,6 +665,12 @@ class DocAuthoringMixin:
 			_room = _headroom_note(writer, res, "self.md", replace_hint=False)
 			_self_mod_ev(params.action, pending=res.pending, created_by=created_by)
 			if _now and not res.pending:
+				if _own_run:
+					await _tell_owner_self_write(self, user_id, params)
+					return ActionResult(
+						extracted_content=("Self-context IN EFFECT now (your own run; the owner "
+						                   "was told; the old text is archived).") + _room,
+						include_in_memory=True)
 				return ActionResult(
 					extracted_content="Self-context IN EFFECT now, with no tap." + _room,
 					include_in_memory=True)
@@ -626,7 +687,7 @@ class DocAuthoringMixin:
 				extracted_content=_queued_text(
 					"Self-context", "self_context", user_id,
 					_queue_depth(user_id, data_dir, resolve_instance_id()),
-					changes=_doc_changes(writer, user_id)) + _room,
+					changes=_doc_changes(writer, user_id)) + _own_note + _room,
 				include_in_memory=True,
 			)
 

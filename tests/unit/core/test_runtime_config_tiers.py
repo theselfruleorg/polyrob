@@ -39,7 +39,7 @@ def test_tier_refusals():
     assert rc.tier_refusal("heavy", "openrouter", ENV) == ""
     assert "not configured" in rc.tier_refusal("heavy", "openrouter",
                                                 {k: v for k, v in ENV.items() if k != "HEAVY_MODEL"})
-    assert "operator's provider" in rc.tier_refusal("heavy", "deepseek", ENV)
+    assert "main provider" in rc.tier_refusal("heavy", "deepseek", ENV)
     assert "must be one of" in rc.tier_refusal("inherit", "openrouter", ENV)
 
 

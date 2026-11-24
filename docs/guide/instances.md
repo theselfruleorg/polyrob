@@ -76,6 +76,12 @@ The agent's own evolving **SELF** docs (`self.md`, plus `owner.md` owner-facts a
 stored per-user under `identity/{instance_id}/user_{uid}/`. Author the SOUL; let the
 agent earn the SELF.
 
+By default an agent's change to its `self.md` in a scheduled run is a draft you approve
+(`/pending`). Set the preference `self.autonomous_writes` to `true` to let the agent's own scheduled jobs
+and goals write it at once: each such write must quote the line of the SOUL it serves, the
+old text is archived, and you get one message per change. A group chat, a helper agent or a
+self-wake still writes only drafts.
+
 ### Public knowledge
 
 The SOUL never reaches a group or a stranger's chat. What any stranger may know goes

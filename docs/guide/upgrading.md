@@ -101,9 +101,29 @@ polyrob doctor --flags --changed
 polyrob config check
 ```
 
+`polyrob update` changes the code and the data home only: it never rewrites a systemd
+unit or an nginx file, so the host baseline
+([self-hosting.md](self-hosting.md#host-baseline-a-vps)) stays as you set it. The
+`host:` lines of `polyrob doctor` say when the host itself needs work (a reboot a kernel
+update waits for, security updates that wait, password SSH, a unit that is not enabled).
+
 ---
 
 ## 3. Version notes
+
+### Upgrading to 1.7.15
+
+No database migration and no setting to change.
+
+- **On a VPS, read the new `host:` lines of `polyrob doctor`.** They name SSH that still accepts
+  passwords, a reboot a kernel update waits for, security updates that wait, and a unit that runs
+  but is not enabled (it does not come back after a reboot). Each line names the fix; the full list
+  is the "Host baseline" in [self-hosting.md](self-hosting.md#host-baseline-a-vps).
+- **New owner preference `self.autonomous_writes`** (off by default): with it on, the agent's own
+  scheduled jobs and goals may change its self notes at once, each change quoting the soul line it
+  serves; you get one line per change and the old text is archived.
+- **`/model <name>` now saves the model.** It also runs new chats, goals and scheduled jobs that nobody
+  pinned, above `DEFAULT_MODEL`. `/model reset` returns to the operator's model.
 
 ### Upgrading to 1.7.14
 
