@@ -78,9 +78,23 @@ async def test_reasoning_default_write_failure_is_reported(homes, monkeypatch):
     from core import model_pins
     monkeypatch.setattr(model_pins, "set_default_reasoning",
                         lambda uid, r, home_dir=None: (False, "disk full"))
+    monkeypatch.setattr(model_pins, "owner_default",   # a saved model to keep the level on
+                        lambda uid, home_dir=None: {"provider": "anthropic", "model": "claude-x"})
     monkeypatch.setattr("agents.task.model_pin_state.set_session_reasoning",
                         lambda sid, r: None)
     ctx, buf = _ctx({"ok": True, "provider": "anthropic", "model": "claude-x", "previous": {}})
     await default_registry().dispatch("/model reasoning=high default", ctx)
     out = buf.getvalue()
     assert "Reasoning high" in out and "NOT saved" in out and "disk full" in out
+
+
+@pytest.mark.asyncio
+async def test_a_plain_switch_saves_and_a_plain_reset_clears(homes):
+    """The model is the owner's setting on the REPL too: `/model <name>` (no `default`)
+    is saved after the live swap, and `/model reset` clears every store."""
+    ctx, buf = _ctx({"ok": True, "provider": "anthropic", "model": "claude-x", "previous": {}})
+    await default_registry().dispatch("/model anthropic claude-x", ctx)
+    prov_model, env_has, pin = _stores(homes)
+    assert prov_model == ("anthropic", "claude-x") and env_has and pin["model"] == "claude-x"
+    await default_registry().dispatch("/model reset", ctx)
+    assert _stores(homes) == ((None, None), False, None)

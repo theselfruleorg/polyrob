@@ -661,7 +661,9 @@ class LLMManager(InventoryMixin, BaseComponent):
                  for name, model in self.FALLBACK_HIERARCHY]
         primary = self.primary_client_name
         if primary:
-            primary_model = (getattr(self.clients.get(primary), 'model_type', None)
+            # The live default first: the client's boot model is stale after a /model save.
+            primary_model = (operator_model_for(_provider_of(primary))
+                             or getattr(self.clients.get(primary), 'model_type', None)
                              or get_default_model(_provider_of(primary)))
             rungs = [(primary, primary_model)] + [r for r in rungs if r[0] != primary]
         return rungs

@@ -10,6 +10,53 @@ short, user-facing notes for each release are on its GitHub Release page.
 
 ## [Unreleased]
 
+## [1.7.15] — 2026-11-24
+
+### Security
+
+- A VPS host baseline: `polyrob doctor` names password SSH, a pending reboot or security update and a unit that runs but is not enabled;
+  the self-hosting guide lists the host settings (key-only SSH, `server_tokens off`, enabled units, IPv6, env-copy cleanup).
+
+### Added
+
+- Post-claim guard: a public post that states an act (mint, fund, trade, sale) as done must name a tx hash a tool
+  result of the same turn showed landed; future-tense act posts are refused (`claim_guard` pre-hook, EVM hashes).
+- The owner preference `self.autonomous_writes` lets the agent's own scheduled jobs and goals write its
+  `self.md` at once: each write quotes the soul line it serves, the old text is archived and the owner
+  gets one line.
+
+### Changed
+
+- `/model <name>` and a model button save the model for every new chat, so `/new` keeps it (it ended at `/new`);
+  `/model reset` clears it; a failed swap puts the earlier model back, and the reasoning level rides a switch.
+- The owner's saved model runs every goal, scheduled job and new chat nobody pinned, above `DEFAULT_MODEL`,
+  while its provider has a key; `/model reset` returns them to the operator's model.
+- `/status` reads "RUNNING — nothing scheduled" when autonomy is on with no enabled job and no open
+  goal, so a sleeping agent shows at once; the public-knowledge header says "facts for any audience".
+
+### Fixed
+
+- A run whose step repeats asks OpenRouter for any upstream but the one that served it, until the run ends: no list of
+  names, and the model's only route is used again when no other one is left.
+- GLM on OpenRouter and the OpenAI-shaped routes gets its tool schemas in alphabetical property order: an upstream that
+  fixes the schema order dropped arguments (`room_read` without `room`) and the run ended as "repeated the same step".
+- The GLM Coding Plan 5-hour limit (code 1308) moves runs to the fallback provider at once and returns at the stated
+  reset; it was retried as a rate limit on every step. The notice names the provider that serves, not "paused".
+- A repeated call that worked is no longer told "your tool calls fail with the same validation error".
+- The model-call timeout that follows the expected output has a floor of 240 s (was 120 s): short working calls were cut.
+- `tool_call` payloads the model wraps one level too deep (`{'arguments': {'name': …, 'arguments': …}}`) are
+  unwrapped by the corrections layer instead of failing validation.
+- The perms audit agrees with the deploy's ownership pass about the read-only-by-design classes: no more permanent
+  `data_perms` WARN that names the designed posture.
+- The agent's event loop no longer blocks on chain reads: every async verb of `tools/agent_nft` dispatches its RPC
+  round trips through `asyncio.to_thread`, ratcheted.
+- Cards: a goal or cron run's money call is one card again, not a line for the owner to type; the card says an
+  unattended run asked, and Confirm runs every gate again as the owner seat.
+- LP: a v4 deposit or move of a token no source can price no longer stops on its Permit2 grant; a grant to the
+  pinned Permit2 or v4 PositionManager moves nothing by itself, so the guarded mint judges and prices it.
+- Avatar: an NFT whose IPFS image the public gateway refuses is read from the `image_arweave` copy its metadata
+  names; an image read asks for an image (arweave.net hid its redirect from a JSON-first request), and `ar://` reads.
+
 ## [1.7.14] — 2026-11-21
 
 ### Added

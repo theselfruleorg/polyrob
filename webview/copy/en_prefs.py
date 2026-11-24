@@ -88,6 +88,8 @@ PREF_WORDS = {
     "pref.owner.timezone.help": "For example Europe/Berlin. Quiet hours, the agent's clock and status times use it. Empty uses the server clock.",
     "pref.report.acts.label": "Report of what the agent does on its own",
     "pref.report.acts.help": "Money acts always come at once, with the reason. every_act: the other acts each hour. digest: the other acts once a day. money_only: no other report.",
+    "pref.self.autonomous_writes.label": "The agent's own runs change its self notes at once",
+    "pref.self.autonomous_writes.help": "On: a scheduled job or goal of the agent may change its self notes with no draft. Each change quotes the soul line it serves, you get one message, and the old text is archived. Off: every such change waits for you.",
     "pref.launch.pair.label": "The one pair for a token launch",
     "pref.launch.pair.help": "network:token address, for example base:0x... The native coin is the zero address. Every launch must pair to it. Empty allows any pair.",
     "pref.launch.per_day.label": "Token launches a day",

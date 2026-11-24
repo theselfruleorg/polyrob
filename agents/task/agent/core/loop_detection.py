@@ -101,13 +101,9 @@ class LoopDetectionMixin:
                 MessageOrigin.INTERVENTION))
             return
 
-        # Check if this looks like a validation/parameter error loop
-        is_validation_error = any(x in reason.lower() for x in [
-            'validation', 'parameter', 'missing required', 'invalid argument',
-            'schema', 'type error', 'arguments'
-        ])
-
-        # Also check if recent results have validation errors
+        # A validation loop is one whose RESULTS are validation errors. The reason is our
+        # own text ("… with the same arguments and the same result") and proves nothing.
+        is_validation_error = False
         if hasattr(self, '_last_result') and self._last_result:
             for result in self._last_result[-3:]:
                 if hasattr(result, 'error') and result.error:
@@ -260,6 +256,7 @@ TAKE A DIFFERENT ACTION IMMEDIATELY.{_next}""", MessageOrigin.INTERVENTION)
     def _reset_loop_guard(self) -> None:
         """A new run starts with a clean escalation (the run loop calls this)."""
         self._loop_escalation = None
+        self._left_upstreams = []
         self._loop_observe_hashes = set()
         self._loop_blocked_step = False
         self._loop_stop_text = None
@@ -273,11 +270,24 @@ TAKE A DIFFERENT ACTION IMMEDIATELY.{_next}""", MessageOrigin.INTERVENTION)
         # new owner batch may earn it again, even with the same words ("status?").
         self._owner_answer_nudged = None
         self._last_step_key = None
+        self._last_step_seen = None
         self._action_repetition_counter = 0
         # 098 AG-04: the A-B-A-B window is per run too (a cycle never spans turns).
         previous = getattr(self, '_previous_actions', None)
         if previous is not None:
             previous.clear()
+
+    def _leave_upstream(self) -> None:
+        """A step repeated: the next calls of this run ask for any upstream but the one that
+        served it. The name comes from the call itself and the run ends with it; a provider
+        with one server (no ``upstream``) changes nothing."""
+        name = getattr(getattr(self, 'last_call_facts', None), 'upstream', None)
+        left = getattr(self, '_left_upstreams', None)
+        if left is None:
+            left = self._left_upstreams = []
+        if name and name not in left:
+            left.append(name)
+            self.logger.warning(f"event=upstream_left upstream={name} reason=repeated_step")
 
     def _take_loop_stop(self) -> Optional[str]:
         """The loop-stop reason once (the run loop ends the run on it), else None."""
@@ -532,6 +542,7 @@ TAKE A DIFFERENT ACTION IMMEDIATELY.{_next}""", MessageOrigin.INTERVENTION)
         # progress, so the escalation state stays as it is.
         if getattr(self, '_loop_blocked_step', False):
             self._loop_blocked_step = False
+            self._leave_upstream()
             return
 
         # Before the error return below: a send refused as a duplicate is still a
@@ -546,13 +557,22 @@ TAKE A DIFFERENT ACTION IMMEDIATELY.{_next}""", MessageOrigin.INTERVENTION)
         # FAILING call toward two different stops (LOOP and FAILURES); the wall
         # also catches a failure whose text changes. It breaks a same-result run.
         last = list(getattr(self, '_last_result', None) or [])
+        failed = any(getattr(r, 'error', None) for r in last)
+        result_text = self._step_result_text(last)
+        # The same arguments again after a failure or with the same result. A poll whose
+        # result changes is not a repeat.
+        again = (action_hash, result_text)
+        before = getattr(self, '_last_step_seen', None)
+        self._last_step_seen = again
+        if (before and before[0] == action_hash and (failed or before == again)
+                and not self._is_observe_step(action_dump)):
+            self._leave_upstream()
         if last and all(getattr(r, 'error', None) for r in last):
             self._action_repetition_counter = 0
             self._last_step_key = None
             self._previous_actions.clear()
             return
 
-        result_text = self._step_result_text(last)
         step_key = f"{action_hash}:{hashlib.md5(result_text.encode()).hexdigest()}"
         observe = self._is_observe_step(action_dump)
         if observe:
@@ -600,6 +620,8 @@ TAKE A DIFFERENT ACTION IMMEDIATELY.{_next}""", MessageOrigin.INTERVENTION)
                 self.logger.warning(f"🔄 {pattern} - INTERVENING NOW")
                 observed = getattr(self, '_loop_observe_hashes', None) or set()
                 cycle_observe = bool(cycle) and cycle <= observed
+                if not cycle_observe:
+                    self._leave_upstream()
                 # L4: an identical two-call cycle (same arguments, same results)
                 # escalates like one repeated call: the next call of the cycle is
                 # not run, the one after ends the run. An observe-only cycle and

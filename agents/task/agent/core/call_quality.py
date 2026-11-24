@@ -82,11 +82,13 @@ def scope_step_call(agent) -> None:
     try:
         from agents.task.agent.core.timeout_reroute import SORT_ATTR
         from agents.task.session_class import apply_session_cache_ttl
-        from modules.llm.call_scope import set_foundation_len, set_session_tag
+        from modules.llm.call_scope import (
+            set_avoided_upstreams, set_foundation_len, set_session_tag)
         from modules.llm.openrouter_routing import set_provider_sort
         set_foundation_len(getattr(agent.message_manager, "_last_foundation_len", None))
         set_session_tag(getattr(agent, "session_id", None))
         set_provider_sort(getattr(agent, SORT_ATTR, None))
+        set_avoided_upstreams(getattr(agent, "_left_upstreams", None))
         apply_session_cache_ttl(getattr(agent, "session_id", None))
     except Exception:
         logger.debug("call scope skipped", exc_info=True)

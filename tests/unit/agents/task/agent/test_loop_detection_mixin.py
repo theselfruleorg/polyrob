@@ -41,7 +41,7 @@ class _MM:
         self.added.append(msg)
 
 
-def _intervene(names, reason):
+def _intervene(names, reason, result_error=None):
     h = _Host()
     h.state = types.SimpleNamespace(stopped=False, paused=False, loop_warning_count=0,
                                     reset_loop_detection=lambda: None)
@@ -49,7 +49,7 @@ def _intervene(names, reason):
     h.message_manager = _MM()
     h._previous_actions = []
     h._action_repetition_counter = 0
-    h._last_result = []
+    h._last_result = [types.SimpleNamespace(error=result_error)] if result_error else []
     h._trigger_loop_intervention(reason)
     return h.message_manager.added[-1].content
 
@@ -62,9 +62,19 @@ def test_intervention_omits_unregistered_tools(reason):
 
 
 def test_intervention_names_registered_tools():
-    assert "mcp_execute_tool" in _intervene(["done", "mcp_execute_tool"], "validation failed")
+    assert "mcp_execute_tool" in _intervene(
+        ["done", "mcp_execute_tool"], "validation failed", "validation failed")
     assert "filesystem_write_file" in _intervene(["done", "filesystem_write_file"],
                                                  "Action repeated 3 times")
+
+
+def test_a_repeat_of_a_call_that_worked_is_not_called_a_validation_error():
+    """The reason of every identical call says "the same arguments": the word made each one
+    a "validation error" and told the model to fix parameters that were accepted."""
+    text = _intervene(["done"], "room_read repeated 4 times in a row with the same "
+                                "arguments and the same result")
+    assert "validation error" not in text and "TOOL CALL ERROR" not in text
+    assert "MUST DO SOMETHING DIFFERENT" in text
 
 
 def test_reset_clears_pattern_window():

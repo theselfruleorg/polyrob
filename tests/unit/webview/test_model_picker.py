@@ -82,7 +82,7 @@ def test_read_only_refuses_the_write(rig, monkeypatch):
 def test_the_read_says_whose_choice_it_is(rig, monkeypatch):
     from core import model_pins
     monkeypatch.setattr(model_pins, "chat_runtime_for",
-                        lambda uid: ("p1", "m1", None, "your default (/model <name> default)"))
+                        lambda uid: ("p1", "m1", None, "your saved model (/model <name>)"))
     monkeypatch.setattr(model_pins, "load", lambda uid: ({"default": {}}, ""))
     monkeypatch.setattr(model_pins, "chat_pin_for", lambda uid: {"provider": "p1", "model": "m1"})
     body = rig.client.get("/api/webgate/model").json()

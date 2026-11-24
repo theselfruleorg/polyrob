@@ -14,6 +14,7 @@ ORDER = (
     ("wallet_authority", "controller", "pre", "closed"),
     ("effect_gate", "controller", "pre", "closed"),
     ("repeat_act", "controller", "pre", "open"),
+    ("claim_guard", "controller", "pre", "closed"),
     ("effect_record", "controller", "post", "open"),
     ("command_guard", "controller", "pre", "closed"),
     ("approval", "controller", "pre", "closed"),

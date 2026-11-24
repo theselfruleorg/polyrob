@@ -88,7 +88,8 @@ def test_reset_resolves_through_the_chat_runtime_and_swaps_now(monkeypatch):
     asyncio.run(h_model.handle(ctx, pick_fn=_pick))
     assert agent.applied and agent.applied[0]["model"] == "vendor/m1"
     assert ctx.state.model == "vendor/m1" and ctx.state.provider == "openrouter"
-    assert "Back to vendor/m1" in out[0]
+    assert any("Back to vendor/m1" in line for line in out)
+    assert any("cleared" in line for line in out)   # a reset clears the saved model too
 
 
 def test_aliases_route_through_the_service(monkeypatch):

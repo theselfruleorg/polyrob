@@ -201,6 +201,58 @@ async def test_a_refused_fetch_names_the_step_and_the_host(monkeypatch):
     assert str(e.value) == "meta.example answered HTTP 403 for the token metadata"
 
 
+@pytest.mark.asyncio
+async def test_each_step_asks_for_its_own_content_type(monkeypatch):
+    """arweave.net puts its redirect in a JSON body when the request prefers JSON
+    (prod 2026-11-21): an image read asks for an image."""
+    import core.security.safe_fetch as fetcher
+    seen = {}
+
+    async def _fetch(url, **kw):
+        seen[url] = kw["extra_headers"]["Accept"]
+        return _Res(200, body=b"x", final_url=url)
+
+    monkeypatch.setattr(fetcher, "safe_fetch", _fetch)
+    await avatar_sources.fetch_bytes("ar://abc")
+    await avatar_sources.fetch_bytes("https://meta.example/1.json", what="the token metadata")
+    assert seen["https://arweave.net/abc"].startswith("image/")
+    assert seen["https://meta.example/1.json"].startswith("application/json")
+
+
+@pytest.mark.asyncio
+async def test_a_refused_ipfs_image_falls_back_to_the_arweave_copy(monkeypatch):
+    meta = {"image": "ipfs://bafyimg", "image_arweave": "ar://txid"}
+    uri = "data:application/json;base64," + base64.b64encode(json.dumps(meta).encode()).decode()
+    monkeypatch.setattr(avatar_sources, "_token_uri", lambda c, a, t: uri)
+    import core.security.safe_fetch as fetcher
+
+    async def _fetch(url, **_kw):
+        if "arweave.net" in url:
+            return _Res(200, body=SVG, final_url=url)
+        return _Res(403, final_url=url)
+
+    monkeypatch.setattr(fetcher, "safe_fetch", _fetch)
+    data, _ = await avatar_sources.image_from_nft("base", "0x" + "ab" * 20, 1)
+    assert data == SVG
+
+
+@pytest.mark.asyncio
+async def test_both_refusals_are_named_when_the_copy_fails_too(monkeypatch):
+    meta = {"image": "ipfs://bafyimg", "image_arweave": "ar://txid"}
+    uri = "data:application/json;base64," + base64.b64encode(json.dumps(meta).encode()).decode()
+    monkeypatch.setattr(avatar_sources, "_token_uri", lambda c, a, t: uri)
+    import core.security.safe_fetch as fetcher
+
+    async def _fetch(url, **_kw):
+        return _Res(403 if "ipfs" in url else 404, final_url=url)
+
+    monkeypatch.setattr(fetcher, "safe_fetch", _fetch)
+    with pytest.raises(avatar.AvatarError) as e:
+        await avatar_sources.image_from_nft("base", "0x" + "ab" * 20, 1)
+    assert "HTTP 403 for the token image" in str(e.value)
+    assert "arweave.net answered HTTP 404 for the token image (arweave copy)" in str(e.value)
+
+
 def test_a_node_that_cannot_be_read_is_named_not_reported_as_no_metadata(monkeypatch):
     import core.wallet.onchain as onchain
 

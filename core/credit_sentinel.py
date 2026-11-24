@@ -46,6 +46,10 @@ _CREDIT_DEATH_MARKERS = (
     # dispatcher ground 63 dead sessions/day against an account that could not
     # serve until its weekly reset.
     "limit exhausted",
+    # Code 1308, the same plan's 5-hour window ("Usage limit reached for 5 hour. Your
+    # limit will reset at <ts>"). Read as a rate limit it was retried on every step of
+    # every run (1,126 refusals in 3.5 h) while a funded provider could serve.
+    "usage limit reached",
     "insufficient balance",
     "please recharge",
     "add credits",
@@ -158,6 +162,10 @@ def extract_reset_ts(text: Optional[str]) -> Optional[float]:
     now = time.time()
     for offset in _TS_CANDIDATE_OFFSETS_SEC:
         cand = as_utc - offset
+        if offset and abs(cand - now) <= 900:
+            # The reset is due now. The next reading is hours later and would hold the
+            # latch over an account that already serves.
+            return now + 900
         if cand > now + 900:
             return min(cand, now + _MAX_RELEASE_AHEAD_SEC)
     return None
@@ -494,10 +502,16 @@ async def trip_credit_sentinel(reason: str, *, provider: Optional[str] = None,
                 resume_text = f"at the provider's stated quota reset (~{resume})"
             else:
                 resume_text = f"in {_release_hours()}h"
-            text = (f"⛔ Autonomy paused ({trip_stamp}): provider credit failure — "
-                    f"{str(reason)[:300]}. "
-                    f"Goal dispatch and LLM cron ticks resume automatically "
-                    f"{resume_text} (or remove {_sentinel_path()} after topping up).")
+            from core.runtime_config import resolve_live_provider
+            live = resolve_live_provider(None) if provider else None
+            if live:
+                text = (f"⚠️ {key} refuses calls ({trip_stamp}): {str(reason)[:300]}. "
+                        f"Runs use {live} and go back to {key} {resume_text}.")
+            else:
+                text = (f"⛔ Autonomy paused ({trip_stamp}): provider credit failure — "
+                        f"{str(reason)[:300]}. "
+                        f"Goal dispatch and LLM cron ticks resume automatically "
+                        f"{resume_text} (or remove {_sentinel_path()} after topping up).")
             # The provider account is the operator's. The run's tenant (``user_id``,
             # kept on the event above) may be any API user: that person cannot top the
             # account up and must not read a server path.

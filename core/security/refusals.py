@@ -23,6 +23,7 @@ REFUSAL_REASONS = frozenset({
     "money_gate",            # core/wallet/tx_guard.py, core/config_policy/spend_lane.py
     "room_toolset",          # 044 Phase 0 core/surfaces/room_policy.py
     "pause",                 # core/autonomy_control.py refusal of an autonomous verb
+    "public_claim",          # 0023 tools/controller/effect_hooks.py claim guard
 })
 
 

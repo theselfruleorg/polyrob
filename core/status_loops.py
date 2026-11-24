@@ -240,8 +240,19 @@ def _live_actor_lines(sec: Section, user_id: str, cron_db: str,
     try:
         live["running_cron"] = len(_rows(
             cron_db, "SELECT id FROM cron_jobs WHERE status='running' AND user_id=?", (user_id,)))
+        live["scheduled_cron"] = len(_rows(
+            cron_db, "SELECT id FROM cron_jobs WHERE enabled=1 AND user_id=?", (user_id,)))
     except Exception as e:
         live["cron_reason"] = f"{type(e).__name__}: {str(e)[:80]}"
+    try:
+        from core.goal_vocab import LIVE_STATUS_ORDER
+        marks = ",".join("?" for _ in LIVE_STATUS_ORDER)
+        og = _rows(goals_db or "", f"SELECT COUNT(*) AS n FROM goals WHERE kind='goal' "
+                                   f"AND user_id=? AND status IN ({marks})",
+                   (user_id, *LIVE_STATUS_ORDER))
+        live["open_goals"] = int((og[0] or {}).get("n") or 0) if og else 0
+    except Exception as e:
+        live["goals_reason"] = live.get("goals_reason") or f"{type(e).__name__}: {str(e)[:80]}"
     # 056 WS3: a live human turn holds the shared workspace (turn.active marker,
     # written by owner_turn/interactive_turn; a dead pid reads as none). Shown
     # so "why did the rail start late" has an answer on every seat.

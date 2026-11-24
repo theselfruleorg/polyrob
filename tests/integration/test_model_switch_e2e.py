@@ -153,7 +153,7 @@ async def test_new_owner_chat_starts_on_the_pin(monkeypatch, tmp_path):
     out = await model_command(task_agent, user_id="local", words=["haiku", "default",
                                                                   "reasoning=off"],
                               chat_key="telegram:dm:7")
-    assert "your default" in out, out
+    assert "every new chat" in out, out
     pin = owner_chat_pin("telegram:dm:7", "local")
     assert pin["model"] == "anthropic/claude-haiku-5.5"
     info = await task_agent.create_session(

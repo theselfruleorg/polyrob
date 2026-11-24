@@ -5,8 +5,8 @@ image bytes for it. Every network read goes through ``tools.web_fetch.safe_fetch
 (per-hop SSRF validation, IP pinning, size cap) — a URL the owner pastes is still
 an outbound request from the box.
 
-``data:`` URIs (an on-chain ``tokenURI`` returns these) are decoded locally, and
-``ipfs://`` is read through one public gateway.
+``data:`` URIs (an on-chain ``tokenURI`` returns these) are decoded locally,
+``ipfs://`` is read through one public gateway and ``ar://`` through arweave.net.
 """
 from __future__ import annotations
 
@@ -22,7 +22,17 @@ def _host(url: str) -> str:
     return urllib.parse.urlsplit(url).hostname or "that host"
 
 
+_ARWEAVE = "https://arweave.net/"
+
+# The Accept header per step. arweave.net answers a request that prefers JSON
+# with its redirect in a JSON body and no Location header (prod 2026-11-21).
+_ACCEPT = {"the token metadata": "application/json,*/*;q=0.8"}
+_ACCEPT_IMAGE = "image/*,*/*;q=0.8"
+
+
 def _gateway(url: str) -> str:
+    if url.startswith("ar://"):
+        return _ARWEAVE + url[len("ar://"):]
     if url.startswith("ipfs://"):
         from modules.eip8004.registration import ipfs_gateway
         gw = ipfs_gateway()
@@ -46,7 +56,7 @@ def _decode_data_uri(uri: str) -> bytes:
 
 
 async def fetch_bytes(url: str, *, max_bytes: int = MAX_BYTES, what: str = "the image") -> bytes:
-    """The bytes at ``url`` (``https``/``http``/``ipfs``/``data``). Raises :class:`AvatarError`.
+    """The bytes at ``url`` (``https``/``http``/``ipfs``/``ar``/``data``). Raises :class:`AvatarError`.
 
     ``what`` names the step in a refusal ("the image", "the token metadata"), and
     the refusal names the host that answered: an NFT read makes two fetches on two
@@ -59,10 +69,12 @@ async def fetch_bytes(url: str, *, max_bytes: int = MAX_BYTES, what: str = "the 
         return data
     url = _gateway(url)
     if not url.startswith(("https://", "http://")):
-        raise AvatarError("only https, http, ipfs and data URLs can be read")
+        raise AvatarError("only https, http, ipfs, ar and data URLs can be read")
     from core.security.safe_fetch import WebFetchError, safe_fetch
+    accept = _ACCEPT.get(what, _ACCEPT_IMAGE)
     try:
-        res = await safe_fetch(url, max_bytes=max_bytes, timeout_sec=20.0)
+        res = await safe_fetch(url, max_bytes=max_bytes, timeout_sec=20.0,
+                               extra_headers={"Accept": accept})
     except WebFetchError as e:
         raise AvatarError(f"the fetch of {what} from {_host(url)} was refused: {e}") from e
     except Exception as e:
@@ -133,8 +145,24 @@ async def image_from_nft(chain: str, contract: str, token_id: int) -> Tuple[byte
     if image.lstrip().startswith("<svg"):  # `image_data` carries raw SVG
         data = image.encode("utf-8")
     else:
-        data = await fetch_bytes(image, what="the token image")
+        data = await _token_image(image, meta.get("image_arweave"))
     return data, f"nft:{chain}:{contract.lower()}:{int(token_id)}"
+
+
+async def _token_image(image: str, mirror) -> bytes:
+    """The token image; when that read fails, the ``image_arweave`` copy the
+    metadata names. The public IPFS gateways refuse a plain fetch more and more
+    (ipfs.io and dweb.link answer 403/429 since 2026-11), so a token that names a
+    second copy gets it read. Both refusals are named when both fail."""
+    try:
+        return await fetch_bytes(image, what="the token image")
+    except AvatarError as first:
+        if not (isinstance(mirror, str) and mirror.strip()):
+            raise
+        try:
+            return await fetch_bytes(mirror.strip(), what="the token image (arweave copy)")
+        except AvatarError as second:
+            raise AvatarError(f"{first}; {second}") from second
 
 
 def _own_avatar_url(url: str) -> bool:

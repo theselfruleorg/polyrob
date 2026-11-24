@@ -18,7 +18,7 @@ from typing import Optional
 from core.exceptions import LLMPermanentError
 
 #: z.ai/GLM business codes that mean "the account cannot pay": 1113 = insufficient
-#: balance / no resource package; 1310 = weekly/monthly plan limit exhausted.
+#: balance / no resource package; 1308 = the plan's 5-hour limit; 1310 = weekly/monthly plan limit exhausted.
 _CODE_RE = re.compile(r"""['"]code['"]\s*:\s*['"]?(\d{3,5})|\[(\d{4})\]""")
 
 
@@ -30,7 +30,8 @@ def _provider_code(text: str) -> str:
 def provider_credit_error(provider_label: str, exc: BaseException) -> Optional[LLMPermanentError]:
     """``LLMPermanentError`` naming the provider and "no balance" — or None when
     ``exc`` is not a credit refusal (the caller then keeps its own wrapping)."""
-    if isinstance(exc, LLMPermanentError) and "NO BALANCE" in str(exc):
+    if isinstance(exc, LLMPermanentError) and (
+            "NO BALANCE" in str(exc) or "PLAN LIMIT" in str(exc)):
         return exc
     text = str(exc)
     try:
@@ -41,6 +42,11 @@ def provider_credit_error(provider_label: str, exc: BaseException) -> Optional[L
         return None
     code = _provider_code(text)
     code_part = f" (provider code {code})" if code else ""
+    if "will reset at" in text.lower():
+        return LLMPermanentError(
+            f"{provider_label}: PLAN LIMIT — the plan's usage limit is reached{code_part} and "
+            f"resets by itself, so it is not retried before that. "
+            f"Provider said: {text[:300]}")
     return LLMPermanentError(
         f"{provider_label}: NO BALANCE — the provider refused for lack of credit"
         f"{code_part}; this is billing, not a rate limit, so it is not retried. "

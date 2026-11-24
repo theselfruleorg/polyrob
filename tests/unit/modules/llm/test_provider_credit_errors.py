@@ -24,6 +24,21 @@ def test_1113_becomes_a_named_no_balance_permanent_error():
     assert "not a rate limit" in text
 
 
+ZAI_1308 = ("Error code: 429 - {'type': 'error', 'error': {'type': 'rate_limit_error', "
+            "'code': '1308', 'message': '[1308][Usage limit reached for 5 hour. Your limit "
+            "will reset at 2026-11-23 21:56:09][2026112320410000000000]'}}")
+
+
+def test_the_five_hour_plan_limit_is_permanent_and_says_it_resets():
+    from modules.llm.llm_client import translate_llm_error
+    err = provider_credit_error("z.ai GLM Coding Plan", RuntimeError(ZAI_1308))
+    assert isinstance(err, LLMPermanentError)
+    assert "PLAN LIMIT" in str(err) and "provider code 1308" in str(err)
+    assert "Recharge" not in str(err) and "NO BALANCE" not in str(err)
+    assert provider_credit_error("z.ai", err) is err
+    assert isinstance(translate_llm_error(RuntimeError(ZAI_1308)), LLMPermanentError)
+
+
 def test_a_real_rate_limit_is_left_alone():
     assert provider_credit_error("z.ai", RuntimeError(
         "Error code: 429 - rate_limit_error: too many requests")) is None

@@ -7,10 +7,10 @@ validate, guard, then pin and swap at the next step boundary.
 * the swap: ``Agent.request_model_pin`` → applied in the user-message drain
   (``agents/task/agent/core/user_ingress.py``) by ``swap_model``.
 
-Scopes: ``/model <name>`` pins THIS chat's session (its record's
-``request.model/provider`` + ``model_pin``; survives a restart, ends at ``/new``);
-``default`` also writes the owner's default for every new owner chat.
-The operator env (``DEFAULT_MODEL``) stays the floor and is never written here,
+The model is ONE owner setting: ``/model <name>`` (a picker tap too) pins THIS chat's
+session (its record's ``request.model/provider`` + ``model_pin``; survives a restart) AND
+saves the owner's default, so ``/new`` and every new owner chat start on it; ``default`` is
+a no-op word. ``/model reset`` clears both. The operator env (``DEFAULT_MODEL``) stays the floor and is never written here,
 so the systemd pin can never refuse a chat switch.
 """
 from __future__ import annotations
@@ -217,13 +217,36 @@ def _switch_snapshot(task_agent: Any, session_id: Optional[str], agent: Any) -> 
     return _snapshot(task_agent, session_id)
 
 
-def _failure_callback(task_agent, user_id, sid, snapshot, attrs, target, current_model):
+def _restore_default(user_id, failed: dict, prev: Optional[dict]) -> None:
+    """A failed swap must not stay the model of every new chat: put back the default the
+    switch replaced — only while the store still holds the failed model (a later switch
+    from another seat wins)."""
+    from core import model_pins
+    now = model_pins.owner_default(user_id) or {}
+    if (now.get("provider"), now.get("model")) != (failed.get("provider"), failed.get("model")):
+        return
+    ok, err = (model_pins.set_default(user_id, prev["provider"], prev["model"],
+                                      prev.get("reasoning")) if prev
+               else model_pins.clear_default(user_id))
+    if not ok:
+        logger.warning("default not restored after a failed switch: %s", err)
+
+
+def _failure_callback(task_agent, user_id, sid, snapshot, attrs, target, current_model,
+                      default_undo: Optional[Tuple[dict, Optional[dict]]] = None):
     """``on_applied`` for a queued swap: success records it; a failed build puts the
-    session record back EXACTLY as it was and tells the owner."""
+    session record back EXACTLY as it was, puts back the saved default the switch
+    replaced (``default_undo`` = ``(the failed pair, the previous default)``) and tells
+    the owner."""
     async def _on_applied(result: dict) -> None:
         if result.get("ok"):
             _emit("model_switched", user_id, sid, attrs)
             return
+        if default_undo is not None:
+            try:
+                _restore_default(user_id, *default_undo)
+            except Exception:
+                logger.warning("default not restored after a failed switch", exc_info=True)
         if sid and snapshot:
             try:
                 task_agent.session_manager.update_session_metadata(sid, dict(snapshot))
@@ -292,13 +315,13 @@ def _emit(kind: str, user_id: str, session_id: str, attrs: dict) -> None:
 
 def owner_chat_pin(chat_key: Optional[str], user_id: str,
                    task_agent: Any = None) -> Optional[dict]:
-    """094: the pin a NEW owner chat starts on — a switch queued for this chat
-    while it had no session, else the pin of the session this chat rolls over from,
-    else the owner's default — or None (operator pin)."""
+    """094: the pin a NEW owner chat starts on — a switch queued for this chat whose
+    default could not be saved, else the owner's saved model (every switch saves it, so
+    a rollover, ``/new`` and another seat all read the newest choice) — or None (the
+    operator pin)."""
     from agents.task.model_pin_state import take_chat_pin
     from core.model_pins import chat_pin_for
-    return (take_chat_pin(chat_key) or _rolled_over_pin(task_agent, chat_key)
-            or chat_pin_for(user_id))
+    return take_chat_pin(chat_key) or chat_pin_for(user_id)
 
 
 def _raw_bound_sid(task_agent: Any, chat_key: Optional[str]) -> Optional[str]:
@@ -313,19 +336,6 @@ def _raw_bound_sid(task_agent: Any, chat_key: Optional[str]) -> Optional[str]:
     except Exception:
         logger.debug("binding not read for %s", chat_key, exc_info=True)
         return None
-
-
-def _rolled_over_pin(task_agent: Any, chat_key: Optional[str]) -> Optional[dict]:
-    """The owner's ``/model`` pin on the session this chat is still bound to. A chat
-    whose binding is still there rolls over (idle or daily reset), so its pin goes on:
-    "this chat until /new" holds across the rollover. ``/new`` deletes the binding, so
-    a chat after ``/new`` never finds one. A reset onto the operator model stores no pin."""
-    sid = _raw_bound_sid(task_agent, chat_key)
-    pin = _record(task_agent, sid).get("model_pin") if sid else None
-    if not (isinstance(pin, dict) and pin.get("provider") and pin.get("model")):
-        return None
-    return {"provider": pin["provider"], "model": pin["model"],
-            "reasoning": pin.get("reasoning")}
 
 
 def start_with_pin(task_agent: Any, session_id: Optional[str], pin: Optional[dict]) -> None:
@@ -362,6 +372,9 @@ async def model_command(task_agent: Any, *, user_id: str, words, chat_key: Optio
     if cmd.action == "choice" or cmd.tier:   # 121: an owner setting, not this chat
         from agents.task.model_settings import settings_command
         return await settings_command(cmd, user_id, seat)
+    # The model is the owner's setting: a switch moves the chat in use AND is saved as the
+    # default, so /new and every new chat keep it (`default` is still accepted, a no-op).
+    cmd.default = True
     sid = _bound_session_id(task_agent, chat_key, session_id)
     if agent is None or not hasattr(agent, "request_model_pin"):
         agent = _live_agent(task_agent, sid)
@@ -391,43 +404,50 @@ def _current(task_agent, sid, agent) -> Tuple[Optional[str], Optional[str]]:
 def _apply(task_agent, user_id, sid, agent, chat_key, plan: Plan, current, seat) -> str:
     from core import model_pins
     from agents.task.model_pin_state import queue_chat_pin
-    scope = "this chat until /new"
-    if plan.default:
-        ok, err = model_pins.set_default(user_id, plan.provider, plan.model, plan.reasoning)
-        if not ok:
-            return f"❌ Default not saved ({err}). Nothing changed."
-        scope += " · also your default for every new chat"
+    prev = model_pins.owner_default(user_id)
+    # A level the owner set (this chat's, else the saved one) rides a switch onto a model
+    # that takes one; a switch never drops it silently.
+    reasoning = plan.reasoning
+    if reasoning is None and plan.reasoning_ok:
+        reasoning = (_keep_level(sid) if sid else None) or (prev or {}).get("reasoning")
+    ok, err = model_pins.set_default(user_id, plan.provider, plan.model, reasoning)
+    if not ok and agent is None and not sid and not chat_key:
+        return f"❌ Default not saved ({err}). Nothing changed."
+    # An unwritable store never blocks the switch of the chat in use: it is named.
+    scope = ("this chat and every new chat" if ok
+             else f"this chat only — ⚠️ NOT saved for new chats ({err})")
     attrs = {"from": f"{current[0] or '?'}/{current[1] or '?'}",
              "to": f"{plan.provider}/{plan.model}", "via": plan.via, "seat": seat,
-             "default": plan.default, "reasoning": plan.reasoning or ""}
+             "default": ok, "reasoning": reasoning or ""}
     if agent is not None:
-        reasoning = plan.reasoning if plan.reasoning is not None else (
-            _keep_level(sid) if plan.reasoning_ok else None)
-
+        pending = agent.pending_model_pin()
+        # A switch that replaces a queued, unapplied one undoes to the default from
+        # BEFORE the first (that one never ran), as the record snapshot does.
+        before = pending["prev_default"] if pending and "prev_default" in pending else prev
         snapshot = _switch_snapshot(task_agent, sid, agent)
+        undo = ({"provider": plan.provider, "model": plan.model}, before) if ok else None
         _on_applied = _failure_callback(task_agent, user_id, sid, snapshot,
-                                        attrs, plan.model, current[1])
+                                        attrs, plan.model, current[1], undo)
         agent.request_model_pin({"provider": plan.provider, "model": plan.model,
                                  "reasoning": reasoning, "on_applied": _on_applied,
-                                 "snapshot": snapshot})
+                                 "snapshot": snapshot, "prev_default": before})
         _persist_session_pin(task_agent, sid, plan.provider, plan.model, reasoning, seat,
                              switched_from=current[1])
         when = "from my next step"
     elif sid:
-        _persist_session_pin(task_agent, sid, plan.provider, plan.model, plan.reasoning, seat,
+        _persist_session_pin(task_agent, sid, plan.provider, plan.model, reasoning, seat,
                              switched_from=current[1])
         _emit("model_switched", user_id, sid, attrs)
         when = "from your next message"
     elif not chat_key:
         # No chat is named (the console's Settings picker): only the default moved.
-        if not plan.default:
-            return "Name a chat to switch, or add `default` to set the model of every new chat."
         _emit("model_switched", user_id, "", attrs)
-        return (f"✅ Model: {describe(plan)}\nYour default for every new chat. "
+        return (f"✅ Model: {describe(plan)}\nSaved for every new chat. "
                 "A chat that is open keeps its model.")
     else:
-        queue_chat_pin(chat_key, {"provider": plan.provider, "model": plan.model,
-                                  "reasoning": plan.reasoning})
+        if not ok:   # the saved model carries a cold start; an unsaved one rides the queue
+            queue_chat_pin(chat_key, {"provider": plan.provider, "model": plan.model,
+                                      "reasoning": reasoning})
         _emit("model_switched", user_id, "", attrs)
         when = "when this chat starts (your next message)"
     return f"✅ Model: {describe(plan)}\nApplies {when}. Scope: {scope}."
@@ -443,11 +463,12 @@ async def _set_reasoning(task_agent, user_id, sid, agent, cmd, current, seat) ->
     from agents.task.model_pin_state import set_session_reasoning
     level = cmd.reasoning
     if not sid:
-        if cmd.default:
-            ok, err = model_pins.set_default_reasoning(user_id, level)
-            return ("✅ Default reasoning saved." if ok else
-                    f"❌ Reasoning {level}: the default was NOT saved: {err or 'the write failed'}.")
-        return "No live chat: write /model <name> reasoning=<level> to start one with it."
+        if model_pins.owner_default(user_id) is None:
+            return ("No live chat and no saved model to keep a level on: write "
+                    "/model <name> reasoning=<level>.")
+        ok, err = model_pins.set_default_reasoning(user_id, level)
+        return ("✅ Reasoning saved for every new chat." if ok else
+                f"❌ Reasoning {level}: NOT saved: {err or 'the write failed'}.")
     first = getattr(agent, "_first_model", None) if agent is not None else None
     if first is not None:
         # A provider fallback is temporary: the record keeps the session's own model,
@@ -468,11 +489,14 @@ async def _set_reasoning(task_agent, user_id, sid, agent, cmd, current, seat) ->
         pending["reasoning"] = level
     if current[1]:
         _persist_session_pin(task_agent, sid, current[0] or "", current[1], level, seat)
-    saved = ""
-    if cmd.default:   # an unwritten default is said, never reported as saved
+    # The level rides the saved model; with none saved (the operator model) it is this
+    # chat's only — said, never reported as saved.
+    if model_pins.owner_default(user_id) is None:
+        saved = " New chats start on the operator model without it."
+    else:
         ok, err = model_pins.set_default_reasoning(user_id, level)
-        saved = (" Saved as the default." if ok
-                 else f" The default was NOT saved: {err or 'the write failed'}.")
+        saved = (" Saved for every new chat." if ok
+                 else f" NOT saved for new chats: {err or 'the write failed'}.")
     _emit("model_reasoning_set", user_id, sid, {"level": level, "seat": seat})
     tail = "" if (current[0] or "").lower() in REASONING_PROVIDERS else " It is sent on OpenRouter and DeepSeek only."
     return f"✅ Reasoning {level} for this chat, from my next step.{tail}{saved}"
@@ -483,9 +507,11 @@ async def _reset(task_agent, user_id, sid, agent, cmd, seat, chat_key=None) -> s
     from agents.task.model_pin_state import take_chat_pin
     from core.model_pins import chat_runtime_for
     notes = []
-    if cmd.default or "default" in [w.lower() for w in cmd.words]:
+    # The saved model goes too: a reset that kept it would only come back to it.
+    saved, unread = model_pins.load(user_id)
+    if unread or saved.get("default"):   # an unreadable store is tried, and named if it fails
         ok, err = model_pins.clear_default(user_id)
-        notes.append("your default cleared" if ok else f"default not cleared ({err})")
+        notes.append("your saved model cleared" if ok else f"saved model NOT cleared ({err})")
     take_chat_pin(chat_key)
     stale = None if sid else _raw_bound_sid(task_agent, chat_key)
     if stale:   # the chat rolls over next: its old pin must not carry on
@@ -532,7 +558,8 @@ async def _show(task_agent, user_id, sid, agent, chat_key) -> str:
         provider, model = _current(task_agent, sid, agent)
         pin = (_record(task_agent, sid).get("model_pin") or {}) if sid else {}
         pending = agent.pending_model_pin() if agent is not None else None
-        source = ("you set it for this chat" if pin else "how this chat started")
+        source = ("your saved model" if pin.get("seat") == "start"
+                  else "you set it" if pin else "how this chat started")
         price, cached, context, *_ = await _model_facts(provider or "", model or "")
         lines.append(f"**This chat:** `{model or '?'}` ({provider or '?'}) — {source}")
         lines.append(f"Price: {ms.fmt_price(price, cached)}"
@@ -542,7 +569,8 @@ async def _show(task_agent, user_id, sid, agent, chat_key) -> str:
             lines.append(f"Queued: {pending.get('model')} ({pending.get('provider')}) — "
                          "applies at my next step")
     else:
-        queued = peek_chat_pin(chat_key) or _rolled_over_pin(task_agent, chat_key)
+        # Only a switch that could not be saved differs from the New chats line below.
+        queued = peek_chat_pin(chat_key)
         lines.append("No live chat now." + (f" The next one starts on: {queued['model']} "
                                              f"({queued['provider']})." if queued else ""))
     c_provider, c_model, c_reason, c_source = chat_runtime_for(user_id)
@@ -553,8 +581,8 @@ async def _show(task_agent, user_id, sid, agent, chat_key) -> str:
     from agents.task.model_settings import settings_lines   # 121: heavy, light, choice
     lines += settings_lines(user_id)
     # 095 W1c (SC-16): name the lever each form moves (two model levers exist).
-    lines += ["", "Switch this chat: `/model <name>` · every new chat: `/model <name> default`",
-              "Reasoning: `/model reasoning=off|low|medium|high` · back to the default: "
+    lines += ["", "Switch: `/model <name>` (this chat and every new chat) · reasoning: "
+              "`/model reasoning=off|low|medium|high` · back to the operator model: "
               "`/model reset` · names: `/model aliases`"]
     return "\n".join(lines)
 
@@ -570,12 +598,16 @@ def picker_buttons(task_agent: Any, *, user_id: str, chat_key: Optional[str] = N
                    session_id: Optional[str] = None) -> list:
     """The bare ``/model`` buttons (2026-11-20 UX review, H5): the owner's names and
     the built-in names this box has a key for (never the model the chat runs now),
-    the reasoning levels, "every new chat" for the current model, and Reset. Each is
+    the reasoning levels, and Reset. A name tap is also the default for new chats. Each is
     the typed line (``core.surfaces.nav``), so a tap meets the same gates."""
     from core import model_pins
     from core.surfaces.nav import NavButton
     sid = _bound_session_id(task_agent, chat_key, session_id)
-    provider, model = _current(task_agent, sid, _live_agent(task_agent, sid))
+    live = _live_agent(task_agent, sid)
+    provider, model = _current(task_agent, sid, live)
+    pending = live.pending_model_pin() if live is not None else None
+    if pending and pending.get("model"):   # a queued switch: hide its target, offer the old
+        provider, model = pending.get("provider") or provider, pending["model"]
     keyed = {p.lower() for p in _keyed_providers()}
     names = [str(n).lower() for n in (model_pins.aliases(user_id) or {})]
     for n in PICKER_ORDER:
@@ -592,9 +624,6 @@ def picker_buttons(task_agent: Any, *, user_id: str, chat_key: Optional[str] = N
     if (provider or "").lower() in REASONING_PROVIDERS:
         out += [NavButton(f"Reasoning {lvl}", f"/model reasoning={lvl}")
                 for lvl in ("off", "low", "high")]
-    if provider and model:
-        out.append(NavButton("Use for every new chat", f"/model {provider} {model} default",
-                             "primary"))
     out.append(NavButton("Reset", "/model reset"))
     return out
 

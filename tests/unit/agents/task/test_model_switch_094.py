@@ -132,7 +132,7 @@ def test_chat_tier_precedence(home):
     assert source == model_pins.OPERATOR_SOURCE
     model_pins.set_default("owner1", "openrouter", "z-ai/glm-5.3")
     provider, model, _r, source = chat_runtime_for("owner1")
-    assert model == "z-ai/glm-5.3" and "your default" in source
+    assert model == "z-ai/glm-5.3" and "your saved model" in source
 
 
 # --- reasoning per session ------------------------------------------------------- #
@@ -335,7 +335,7 @@ def test_switch_queues_on_the_live_agent_and_pins_the_record(home, catalog, keye
     agent = _FakeAgent()
     ta = _task_agent(agent)
     out = _cmd(ta, ["haiku", "reasoning=off"])
-    assert out.startswith("✅") and "from my next step" in out and "until /new" in out
+    assert out.startswith("✅") and "from my next step" in out and "every new chat" in out
     assert agent.pinned["model"] == "anthropic/claude-haiku-5.5"
     assert agent.pinned["reasoning"] == "off"
     meta = ta.session_manager.meta["s-1"]
@@ -413,7 +413,8 @@ def test_no_session_queues_for_the_next_chat(home, catalog, keyed):
     out = _cmd(ta, ["haiku"], chat_key="tg:dm:9")
     assert "when this chat starts" in out
     assert owner_chat_pin("tg:dm:9", "owner1")["model"] == "anthropic/claude-haiku-5.5"
-    assert owner_chat_pin("tg:dm:9", "owner1") is None   # consumed once
+    # the queued pin is consumed once; the saved default keeps every later chat on it
+    assert owner_chat_pin("tg:dm:9", "owner1")["model"] == "anthropic/claude-haiku-5.5"
 
 
 def test_a_call_with_no_chat_moves_only_the_default(home, catalog, keyed, no_env_write):
@@ -421,21 +422,37 @@ def test_a_call_with_no_chat_moves_only_the_default(home, catalog, keyed, no_env
     from core.model_pins import chat_runtime_for
     ta = _task_agent(None, bound=None)
     out = _cmd(ta, ["glm", "default"], chat_key=None)
-    assert out.startswith("✅") and "default for every new chat" in out
+    assert out.startswith("✅") and "Saved for every new chat" in out
     assert "this chat" not in out and "next message" not in out
     assert chat_runtime_for("owner1")[1] == "z-ai/glm-5.3"
-    out = _cmd(ta, ["haiku"], chat_key=None)
-    assert not out.startswith("✅") and "default" in out
-    assert chat_runtime_for("owner1")[1] == "z-ai/glm-5.3"
+    out = _cmd(ta, ["haiku"], chat_key=None)   # `default` is implied: a switch is saved
+    assert out.startswith("✅") and "Saved for every new chat" in out
+    assert chat_runtime_for("owner1")[1] == "anthropic/claude-haiku-5.5"
 
 
 def test_default_writes_the_owner_store_not_the_env(home, catalog, keyed, no_env_write):
     from core.model_pins import chat_runtime_for
     ta = _task_agent(_FakeAgent())
-    assert "also your default" in _cmd(ta, ["glm", "default"])
+    assert "every new chat" in _cmd(ta, ["glm", "default"])
     assert chat_runtime_for("owner1")[1] == "z-ai/glm-5.3"
     out = _cmd(ta, ["reset", "default"])
-    assert "Back to deepseek/deepseek-v4.1-flash" in out and "default cleared" in out
+    assert "Back to deepseek/deepseek-v4.1-flash" in out and "saved model cleared" in out
+
+
+def test_a_plain_switch_is_saved_for_every_new_chat(home, catalog, keyed, no_env_write):
+    """The model is an owner setting: `/model <name>` (or a picker tap) moves this chat
+    AND is the default, so /new keeps it (2026-11-21: a tap, then /new, lost it)."""
+    from agents.task.model_switch_service import owner_chat_pin
+    from core.model_pins import chat_runtime_for
+    ta = _task_agent(_FakeAgent())
+    assert _cmd(ta, ["glm"]).startswith("✅")
+    assert chat_runtime_for("owner1")[1] == "z-ai/glm-5.3"
+    unbound = _task_agent(None, bound=None)          # /new deleted the binding
+    unbound.session_manager = ta.session_manager
+    assert owner_chat_pin("tg:dm:1", "owner1", unbound)["model"] == "z-ai/glm-5.3"
+    out = _cmd(ta, ["reset"])                         # reset clears the saved model
+    assert "saved model cleared" in out and chat_runtime_for("owner1")[0:2] == (
+        "openrouter", "deepseek/deepseek-v4.1-flash")
 
 
 def test_show_names_the_live_model_and_the_tiers(home, catalog, keyed):
@@ -1159,23 +1176,23 @@ def _stale(monkeypatch):
     monkeypatch.setattr(sp, "with_agent_activity", lambda row, c: row)
 
 
-def test_a_rolled_over_chat_keeps_its_model(home, catalog, keyed):
-    """`/model <name>` is "this chat until /new": an idle rollover is not /new."""
+def test_a_rolled_over_chat_keeps_its_model_and_level(home, catalog, keyed):
+    """A rollover (idle or daily) starts on the saved model with its level."""
     from agents.task.model_switch_service import owner_chat_pin
     ta = _task_agent(_FakeAgent())
     _cmd(ta, ["haiku", "reasoning=low"])
     pin = owner_chat_pin("tg:dm:1", "owner1", ta)
-    assert pin == {"provider": "openrouter", "model": "anthropic/claude-haiku-5.5",
-                   "reasoning": "low"}
+    assert (pin["provider"], pin["model"], pin["reasoning"]) == (
+        "openrouter", "anthropic/claude-haiku-5.5", "low")
 
 
-def test_after_new_the_chat_starts_on_the_default(home, catalog, keyed):
+def test_after_new_the_chat_starts_on_the_saved_model(home, catalog, keyed):
     from agents.task.model_switch_service import owner_chat_pin
     ta = _task_agent(_FakeAgent())
     _cmd(ta, ["haiku"])
     unbound = _task_agent(None, bound=None)          # /new deleted the binding
     unbound.session_manager = ta.session_manager
-    assert owner_chat_pin("tg:dm:1", "owner1", unbound) is None
+    assert owner_chat_pin("tg:dm:1", "owner1", unbound)["model"] == "anthropic/claude-haiku-5.5"
 
 
 def test_an_unpinned_rollover_starts_on_the_default(home, catalog, keyed):
@@ -1189,7 +1206,7 @@ def test_reset_on_a_stale_chat_drops_the_carried_pin(home, catalog, keyed, monke
     _cmd(ta, ["haiku"])
     _stale(monkeypatch)
     show = _cmd(ta, [])
-    assert "The next one starts on: anthropic/claude-haiku-5.5" in show
+    assert "**New chats:** `anthropic/claude-haiku-5.5`" in show and "next one starts" not in show
     assert _cmd(ta, ["reset"]).startswith("✅")
     assert owner_chat_pin("tg:dm:1", "owner1", ta) is None
 
@@ -1202,7 +1219,7 @@ def test_the_picker_offers_keyed_names_and_never_the_current_model(home, catalog
     lines = [b.line for b in buttons]
     assert "/model deepseek" not in lines            # the chat already runs it
     assert "/model glm" in lines and "/model reset" in lines
-    assert "/model openrouter deepseek/deepseek-v4.1-flash default" in lines
+    assert not any(line.endswith(" default") for line in lines)   # a tap is saved anyway
     assert "/model reasoning=low" in lines
 
 
@@ -1215,16 +1232,132 @@ def test_a_picker_line_parses_to_what_its_label_says():
     assert cmd.provider == "openrouter" and cmd.default is True
 
 
-def test_reset_onto_the_owner_default_stores_no_chat_pin(home, catalog, keyed):
-    """A reset is not "this chat until /new": when the default is the OWNER's (not the
-    operator's), the reset still stores no chat pin, so a later rollover starts on the
-    owner's default of that time, not on the one the reset saw."""
+def test_reset_clears_the_saved_model_and_follows_the_operator(home, catalog, keyed):
+    """A reset is back to the OPERATOR model: the saved model goes, the chat stores no
+    pin and is stamped to follow the operator pin, so nothing carries the old choice."""
     from agents.task.model_switch_service import owner_chat_pin
     ta = _task_agent(_FakeAgent())
-    assert _cmd(ta, ["glm", "default"]).startswith("✅")
+    assert _cmd(ta, ["glm"]).startswith("✅")
     _cmd(ta, ["haiku"])
     assert _cmd(ta, ["reset"]).startswith("✅")
     meta = ta.session_manager.meta["s-1"]
-    assert meta["model_pin"] is None and meta["operator_pin"] is None
-    pin = owner_chat_pin("tg:dm:1", "owner1", ta) or {}
-    assert pin.get("model") != "anthropic/claude-haiku-5.5"   # no chat pin carried
+    assert meta["model_pin"] is None
+    assert meta["operator_pin"] == {"provider": "openrouter",
+                                    "model": "deepseek/deepseek-v4.1-flash"}
+    assert owner_chat_pin("tg:dm:1", "owner1", ta) is None   # nothing carried, no default
+
+
+# --- the saved model: corner cases (2026-11-21 deep review) ---------------------------- #
+
+def _fail_swap(agent, monkeypatch):
+    """Run the queued pin's on_applied as a FAILED build."""
+    monkeypatch.setattr("agents.task.model_switch_service._notify_owner", lambda *a, **k: None)
+    pin = agent.pinned
+    asyncio.run(pin["on_applied"]({"ok": False, "error": "boom"}))
+
+
+def test_a_failed_swap_puts_the_previous_saved_model_back(home, catalog, keyed, monkeypatch):
+    from core.model_pins import chat_runtime_for
+    agent = _FakeAgent()
+    ta = _task_agent(agent)
+    assert _cmd(ta, ["glm"]).startswith("✅")
+    agent.pinned = None                                  # glm applied
+    assert _cmd(ta, ["haiku"]).startswith("✅")
+    _fail_swap(agent, monkeypatch)
+    assert chat_runtime_for("owner1")[1] == "z-ai/glm-5.3"   # not the model that failed
+
+
+def test_a_failed_swap_with_nothing_saved_before_clears_it(home, catalog, keyed, monkeypatch):
+    from core.model_pins import chat_pin_for
+    agent = _FakeAgent()
+    assert _cmd(_task_agent(agent), ["haiku"]).startswith("✅")
+    _fail_swap(agent, monkeypatch)
+    assert chat_pin_for("owner1") is None
+
+
+def test_a_replaced_queued_switch_undoes_to_before_the_first(home, catalog, keyed, monkeypatch):
+    from core.model_pins import chat_pin_for
+    agent = _FakeAgent()
+    ta = _task_agent(agent)
+    _cmd(ta, ["glm"])                                    # queued, never applied
+    _cmd(ta, ["haiku"])                                  # replaces it
+    _fail_swap(agent, monkeypatch)
+    assert chat_pin_for("owner1") is None                # glm never ran: not put back
+
+
+def test_a_failed_swap_keeps_a_newer_choice_from_another_seat(home, catalog, keyed, monkeypatch):
+    from core import model_pins
+    agent = _FakeAgent()
+    assert _cmd(_task_agent(agent), ["haiku"]).startswith("✅")
+    model_pins.set_default("owner1", "openrouter", "z-ai/glm-5.3")   # the console, meanwhile
+    _fail_swap(agent, monkeypatch)
+    assert model_pins.chat_pin_for("owner1")["model"] == "z-ai/glm-5.3"
+
+
+def test_a_plain_switch_keeps_the_saved_reasoning_level(home, catalog, keyed):
+    from core.model_pins import chat_pin_for
+    ta = _task_agent(None, bound=None)
+    _cmd(ta, ["haiku", "reasoning=high"], chat_key=None)
+    _cmd(ta, ["deepseek"], chat_key=None)                # takes a level: it rides along
+    assert chat_pin_for("owner1")["reasoning"] == "high"
+    _cmd(ta, ["glm"], chat_key=None)                     # takes none: it is not sent
+    assert "reasoning" not in chat_pin_for("owner1")
+
+
+def test_an_unwritable_store_still_switches_the_chat_and_says_so(home, catalog, keyed, monkeypatch):
+    from core import model_pins
+    monkeypatch.setattr(model_pins, "set_default", lambda *a, **k: (False, "disk full"))
+    agent = _FakeAgent()
+    out = _cmd(_task_agent(agent), ["haiku"])
+    assert out.startswith("✅") and "NOT saved for new chats" in out and "disk full" in out
+    assert agent.pinned["model"] == "anthropic/claude-haiku-5.5"
+
+
+def test_an_unwritable_store_queues_the_switch_for_a_cold_chat(home, catalog, keyed, monkeypatch):
+    from core import model_pins
+    from agents.task.model_switch_service import owner_chat_pin
+    monkeypatch.setattr(model_pins, "set_default", lambda *a, **k: (False, "disk full"))
+    _cmd(_task_agent(None, bound=None), ["haiku"], chat_key="tg:dm:7")
+    assert owner_chat_pin("tg:dm:7", "owner1")["model"] == "anthropic/claude-haiku-5.5"
+
+
+def test_a_switch_from_another_seat_wins_at_the_rollover(home, catalog, keyed):
+    """The rollover reads the newest choice, never this chat's older pin."""
+    from agents.task.model_switch_service import owner_chat_pin
+    ta = _task_agent(_FakeAgent())
+    _cmd(ta, ["haiku"])                                  # Telegram
+    _cmd(_task_agent(None, bound=None), ["glm"], chat_key=None)   # the console, later
+    assert owner_chat_pin("tg:dm:1", "owner1", ta)["model"] == "z-ai/glm-5.3"
+
+
+def test_reasoning_with_no_saved_model_is_not_reported_saved(home, catalog, keyed):
+    agent = _FakeAgent()
+    out = _cmd(_task_agent(agent), ["reasoning=high"])
+    assert out.startswith("✅") and "Saved" not in out and "operator model without it" in out
+    out = _cmd(_task_agent(None, bound=None), ["reasoning=high"], chat_key=None)
+    assert not out.startswith("✅") and "no saved model" in out
+
+
+def test_the_picker_offers_the_old_model_while_a_switch_is_queued(home, catalog, keyed):
+    from agents.task.model_switch_service import picker_buttons
+    agent = _FakeAgent()
+    ta = _task_agent(agent)
+    _cmd(ta, ["glm"])                                    # queued, not applied
+    lines = [b.line for b in picker_buttons(ta, user_id="owner1", chat_key="tg:dm:1")]
+    assert "/model glm" not in lines and "/model deepseek" in lines
+
+
+def test_goals_and_jobs_follow_the_saved_model(home, catalog, keyed, monkeypatch):
+    """Option A (owner 2026-11-22): the saved model is the model of every run nobody
+    pinned, so /model glm moves goals and jobs too, and /model reset moves them back."""
+    import core.runtime_config as rc
+    from core import model_pins
+    monkeypatch.setattr(rc, "_OWNER_MAIN_RESOLVER", lambda: model_pins.owner_default("owner1"))
+    monkeypatch.setattr(rc, "usable_providers_with_credentials", lambda e=None: ["openrouter"])
+    ta = _task_agent(_FakeAgent())
+    assert rc.resolve_default_provider()[1] == "deepseek/deepseek-v4.1-flash"
+    _cmd(ta, ["glm"])
+    assert rc.resolve_default_provider()[:2] == ("openrouter", "z-ai/glm-5.3")
+    assert "**Goals and jobs:** `z-ai/glm-5.3`" in _cmd(ta, [])
+    _cmd(ta, ["reset"])
+    assert rc.resolve_default_provider()[1] == "deepseek/deepseek-v4.1-flash"

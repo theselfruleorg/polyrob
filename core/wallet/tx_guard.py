@@ -1213,14 +1213,12 @@ def _price_allowance_grants(intent: TxIntent, *, price_fn, fallback_price_fn,
             unit_price = _spend_price(price_fn(intent.chain, g_token) if price_fn else None, intent.chain)
         except Exception:
             unit_price = None
+        from core.wallet.liquidity_guard import v4_grant_moves_nothing
+        if unit_price is None and v4_grant_moves_nothing(intent.chain, g_spender):
+            continue  # judged and priced at the guarded mint it serves
         if unit_price is None:
-            # 028 (2026-08-22): a grant that cannot exceed what the wallet
-            # ALREADY holds of g_token, to the router the sell leg approves,
-            # puts no NEW value at risk — the high-confidence price bar exists
-            # to bound a grant that could move more than intended, and an exit
-            # within held balance structurally cannot. It is priced by
-            # fallback_price_fn (unconstrained by the liquidity/pool-count
-            # floor) for the cap checks.
+            # 028: a grant within held balance to the pinned router (the sell leg) puts no
+            # NEW value at risk; fallback_price_fn (no liquidity floor) prices it for the caps.
             exit_bounded = _grant_is_exit_bounded(intent, g_token, g_spender,
                                                   g_amount)
             if exit_bounded and fallback_price_fn:

@@ -52,7 +52,9 @@ async def guarded_call(tool, *, execution_context, verb: str, intent, inner_to: 
     rpc = rpc or tool.rpc_for(chain)
     try:
         rail = (getattr(tool, "_rail_factory", None) or EvmRail)(chain=chain, signer=signer)
-        state = erc6551.read_state(rpc, held.account) if held is not None else None
+        # off the event loop: the account state read is a sync RPC round trip
+        state = (await asyncio.to_thread(erc6551.read_state, rpc, held.account)) \
+            if held is not None else None
         idem = idempotency_key(verb=verb, chain=chain, via=getattr(held, "account", None),
                                state=state, to=inner_to, value=int(inner_value), data=inner_data,
                                hint=hint)

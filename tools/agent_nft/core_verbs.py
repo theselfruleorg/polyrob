@@ -138,9 +138,12 @@ async def journal(tool, params, execution_context) -> Any:
         if not entries:
             raise V.ViewError("the entry is not in the history yet")
         from core.wallet.nft_account import profile_of
+        import asyncio
         profile = profile_of(held)
-        agent_id = V.identity_agent_id(rpc, held.chain, held.account, profile.deploy_block,
-                                       int(rpc("eth_blockNumber", []), 16))
+        # off the event loop: both reads are sync RPC round trips
+        head = int(await asyncio.to_thread(rpc, "eth_blockNumber", []), 16)
+        agent_id = await asyncio.to_thread(V.identity_agent_id, rpc, held.chain, held.account,
+                                           profile.deploy_block, head)
     except Exception as exc:  # noqa: BLE001
         return tool._ar(content=out + f"\n  anchor: skipped — {exc}")
     if agent_id is None:     # agentId 0 is a real id

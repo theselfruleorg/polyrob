@@ -36,9 +36,9 @@ async def provider_balance_usd() -> Optional[float]:
     # The operator pin names the actually-active provider — it must win over
     # the first-keyed guess, or this probe could show a real-but-wrong
     # provider's balance (a lie).
-    from core.runtime_config import operator_provider_pin
+    from core.runtime_config import main_provider_pin
     from modules.llm.profiles import canonicalize_provider
-    provider = (canonicalize_provider(operator_provider_pin()) or "").lower()
+    provider = (canonicalize_provider(main_provider_pin()) or "").lower()
     if provider != "openrouter":
         return None
     key = os.getenv("OPENROUTER_API_KEY")

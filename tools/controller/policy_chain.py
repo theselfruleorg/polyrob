@@ -87,11 +87,17 @@ def install_controller_policy(controller):
 	# Registered here, never on an instance: a delegated sub-agent builds a fresh
 	# Controller, so a hook attached post-hoc would miss delegated work.
 	from tools.controller.effect_hooks import (
-		make_effect_gate_hook, make_effect_record_hook, make_repeat_act_hook)
+		make_claim_guard_hook, make_effect_gate_hook, make_effect_record_hook,
+		make_repeat_act_hook)
 	controller.register_pre_tool_call_hook(make_effect_gate_hook(controller), fail_mode="closed")
 	# 108: a repeat is refused before any approval ask is queued, so it costs no tap. Open:
 	# a telemetry fault must not stop a post.
 	controller.register_pre_tool_call_hook(make_repeat_act_hook(controller), fail_mode="open")
+	# 0023: a public post states an act only with its receipt (a tx hash a tool
+	# result of THIS turn showed landed; a future act is never announced). Closed:
+	# a truth gate crashes refusing, and a claim whose evidence cannot be read
+	# refuses. Before the approval hooks, so a refusal costs no tap and no ask.
+	controller.register_pre_tool_call_hook(make_claim_guard_hook(controller), fail_mode="closed")
 	controller.register_post_tool_call_hook(make_effect_record_hook(controller), fail_mode="open")
 
 	# Approval seam (Item 7E): gate the resolved action set through an

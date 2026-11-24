@@ -7,7 +7,7 @@ import contextvars
 import hashlib
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, ContextManager, Dict, Iterator, Optional
+from typing import Any, ContextManager, Dict, Iterable, Iterator, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -25,6 +25,8 @@ _foundation_len: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
     "llm_foundation_len", default=None)
 _provider_sort: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "llm_provider_sort", default=None)
+_avoided_upstreams: contextvars.ContextVar[Tuple[str, ...]] = contextvars.ContextVar(
+    "llm_avoided_upstreams", default=())
 _session_tag: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "llm_session_tag", default=None)
 _step_context: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextvars.ContextVar(
@@ -38,7 +40,8 @@ _reasoning_level: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar
 
 
 #: The values a setter below writes for the calls of one :func:`call_scope` block.
-_SCOPED_VALUES = (_cache_ttl, _foundation_len, _provider_sort, _session_tag, _step_context)
+_SCOPED_VALUES = (_cache_ttl, _foundation_len, _provider_sort, _avoided_upstreams,
+                  _session_tag, _step_context)
 
 
 @contextmanager
@@ -99,6 +102,15 @@ def set_scoped_provider_sort(sort: Optional[str]) -> None:
 
 def scoped_provider_sort() -> Optional[str]:
     return _provider_sort.get()
+
+
+def set_avoided_upstreams(names: Optional[Iterable[str]]) -> None:
+    """The upstreams this run left because a step repeated on them."""
+    _avoided_upstreams.set(tuple(names or ()))
+
+
+def avoided_upstreams() -> Tuple[str, ...]:
+    return _avoided_upstreams.get()
 
 
 def set_session_tag(session_id: Optional[str]) -> None:

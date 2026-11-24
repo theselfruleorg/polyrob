@@ -111,11 +111,13 @@ async def test_a_retried_call_reuses_its_open_card_never_a_second(owner, tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_an_autonomous_run_gets_no_card(owner, monkeypatch):
-    """A goal, cron or income-rule run never puts a money call one tap away."""
+async def test_an_autonomous_run_gets_a_card_that_names_the_run(owner, monkeypatch):
+    """2026-11-21: a cron run's money call is ONE card, not a line for the owner to type;
+    the card says an unattended run asked, and Confirm runs every gate as the owner seat."""
     monkeypatch.setattr("core.security.owner_turn.is_autonomous_session",
                         lambda ctx, ts=None: True)
     res = await RUN.need_owner(RUN._Seat(), _ctx(), title="t", body="b",
                                steps=[{"do": "defi_trade_transfer", "args": dict(PARAMS)}])
-    assert res.error and "autonomous run" in res.error and "No card was made" in res.error
-    assert not owner and not cards.store().open_cards("u1")
+    assert not res.error
+    card, = owner
+    assert "an autonomous run (goal or cron)" in card.body and "not by you" in card.body

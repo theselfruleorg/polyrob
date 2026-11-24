@@ -220,8 +220,8 @@ title you stopped with `--forever`. Background work:
 **next** session; they do not change the tools or the voice of the session you
 are in. `/persona` shows the voice: the character file, what the model receives and a
 filled field it never sees. `/persona <name>` sets the voice of every new chat, in each chat
-app and the terminal; `/persona reset` goes back to the default. `/model` changes the model of this chat at once, and the chat keeps it
-until `/new`, also after a quiet period; add `default` to keep it for new chats too.
+app and the terminal; `/persona reset` goes back to the default. `/model <name>` (or a model button) changes the model of this chat at once and
+saves it for every new chat, so `/new` keeps it; `/model reset` goes back to the operator's model.
 
 **The agent's own model choices.** The agent can start a helper, a goal or a scheduled job
 on a model that it names, and it gives its reason. `/model heavy <name>` and

@@ -263,3 +263,125 @@ def test_headline_labels_the_breakdown_and_the_budget(home):
     assert "(by reason: not_group_writable=4)" in r.headline
     r = audit_data_perms(str(home), group=_own_group(), max_entries=3)
     assert r.truncated and "first 3 checked" in r.headline
+
+
+# --- the read-only-by-design classes (audit M-1 / review M13, 2026-11-22) ----
+# The deploy ownership pass DELIBERATELY keeps these entries group-read-only; the
+# audit must agree with the pass or it cries wolf on a healthy box (observed prod
+# 2026-11-22: a permanent data_perms WARN naming the designed posture).
+
+def _chown_other(path):
+    """Give an entry to a NON-root uid (root-only helper for the negative cases)."""
+    os.chown(path, 1000, -1)
+
+
+@pytest.mark.skipif(os.getuid() != 0, reason="root-owned fixture entries need root")
+def test_ops_root_status_files_are_read_only_by_design(home):
+    """M13: root jobs write ops/ status files; the group reads them, never writes."""
+    _clean_tree(home)
+    ops = home / "ops"
+    ops.mkdir()
+    os.chmod(ops, 0o2750)
+    f = ops / "live_proof.jsonl"
+    f.write_text("{}\n")
+    os.chmod(f, 0o640)
+    r = audit_data_perms(str(home), group=_own_group())
+    named = [o.render() for o in r.offenders if o.path in (str(ops), str(f))]
+    assert named == [], named
+
+
+@pytest.mark.skipif(os.getuid() != 0, reason="root-owned fixture entries need root")
+def test_ops_entry_another_identity_owns_keeps_the_share(home):
+    """Only the ROOT-owned ops/ entries are read-only; an agent-owned file that
+    lost group write is still a defect (the pass would share it)."""
+    _clean_tree(home)
+    ops = home / "ops"
+    ops.mkdir()
+    os.chmod(ops, 0o2770)
+    f = ops / "contest_collect.json"
+    f.write_text("{}\n")
+    os.chmod(f, 0o640)
+    _chown_other(f)
+    r = audit_data_perms(str(home), group=_own_group())
+    hits = [o for o in r.offenders if o.path == str(f)]
+    assert hits and REASON_NOT_GROUP_WRITABLE in hits[0].reasons
+
+
+@pytest.mark.skipif(os.getuid() != 0, reason="root-owned fixture entries need root")
+def test_soul_and_character_files_root_owned_read_only_by_design(home):
+    """M-1 (2026-11-21): the SOUL tier and characters/*.character.json root-owned
+    and group-read-only are tamper PROTECTION — a group-writable character file
+    is a stored prompt injection by any group identity."""
+    _clean_tree(home)
+    ident = home / "identity"
+    ident.mkdir()
+    os.chmod(ident, 0o3770)
+    for name, mode in (("identity.md", 0o640), ("operating.md", 0o640),
+                       ("public.md", 0o640), (".phase", 0o640)):
+        p = ident / name
+        p.write_text("x")
+        os.chmod(p, mode)
+    chars = home / "characters"
+    chars.mkdir()
+    os.chmod(chars, 0o2770)
+    c = chars / "agent.character.json"
+    c.write_text("{}")
+    os.chmod(c, 0o750)
+    r = audit_data_perms(str(home), group=_own_group())
+    named = [o.render() for o in r.offenders
+             if o.path in (str(ident / "identity.md"), str(ident / "operating.md"),
+                           str(ident / "public.md"), str(ident / ".phase"), str(c))]
+    assert named == [], named
+
+
+@pytest.mark.skipif(os.getuid() != 0, reason="root-owned fixture entries need root")
+def test_soul_file_another_identity_owns_is_still_judged(home):
+    """The read-only design guards the OPERATOR's files; an identity-owned file
+    of the same name under identity/ keeps the normal group-share rule."""
+    _clean_tree(home)
+    ident = home / "identity"
+    ident.mkdir()
+    os.chmod(ident, 0o3770)
+    p = ident / "identity.md"
+    p.write_text("x")
+    os.chmod(p, 0o640)
+    _chown_other(p)
+    r = audit_data_perms(str(home), group=_own_group())
+    hits = [o for o in r.offenders if o.path == str(p)]
+    assert hits and REASON_NOT_GROUP_WRITABLE in hits[0].reasons
+
+
+def test_users_and_profiles_keep_their_owners_modes(home):
+    """DATA-2: per-identity homes are never group-shared by the pass — the
+    owner's group and modes are the design, not drift."""
+    _clean_tree(home)
+    for top in ("users", "profiles"):
+        d = home / top
+        d.mkdir()
+        os.chmod(d, 0o700)
+    agent = home / "users" / "agent"
+    agent.mkdir()
+    os.chmod(agent, 0o700)
+    r = audit_data_perms(str(home), group=_own_group())
+    named = [o.render() for o in r.offenders
+             if o.path in (str(home / "users"), str(agent), str(home / "profiles"))]
+    assert named == [], named
+
+
+@pytest.mark.skipif(os.getuid() != 0, reason="root-owned fixture entries need root")
+def test_deploy_counter_root_owned_by_design(home):
+    """locks/deploys.today is written by the deploy tooling itself (root, private
+    inode); root ownership there is the counter's design, not the 2026-09-18
+    lockout shape. Any OTHER root-owned lock file is still named."""
+    _clean_tree(home)
+    (home / "locks").mkdir()
+    counter = home / "locks" / "deploys.today"
+    counter.write_text("1\n")
+    os.chmod(counter, 0o660)
+    stranger = home / "locks" / "turn.lock"
+    stranger.write_text("")
+    os.chmod(stranger, 0o660)
+    r = audit_data_perms(str(home), group=_own_group())
+    assert [o for o in r.offenders if o.path == str(counter)] == []
+    hits = [o for o in r.offenders if o.path == str(stranger)]
+    assert hits and REASON_ROOT_OWNED in hits[0].reasons

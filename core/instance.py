@@ -877,7 +877,7 @@ def load_public_doc(home_dir: Path | str) -> str:
         text = (f"[⚠ TRUNCATED: public.md is {len(text)} chars, over the "
                 f"{PUBLIC_DOC_MAX_CHARS} cap; the tail is not in context]\n"
                 + text[:PUBLIC_DOC_MAX_CHARS])
-    return ("## Public knowledge (written by your operator for any audience: you may "
+    return ("## Public knowledge (facts for any audience: you may "
             "share it in any chat, a group or a stranger's included)\n\n" + text)
 
 

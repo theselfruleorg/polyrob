@@ -30,7 +30,7 @@ from core.credit_sentinel import looks_like_credit_death
 #: The provider codes that mean "this account cannot pay", as opposed to
 #: "slow down". z.ai dresses BOTH as HTTP 429, so the status alone would make
 #: credit death look retryable and a retry storm look like a billing problem.
-_ZAI_CREDIT_CODES = ("1113", "1310", "1311")
+_ZAI_CREDIT_CODES = ("1113", "1308", "1310", "1311")
 
 OPENROUTER_CREDITS_URL = "https://openrouter.ai/api/v1/credits"
 ZAI_MESSAGES_URL = "https://api.z.ai/api/anthropic/v1/messages"

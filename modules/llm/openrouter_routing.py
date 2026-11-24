@@ -22,10 +22,16 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
-from modules.llm.call_scope import scoped_provider_sort, session_tag, set_scoped_provider_sort
+from modules.llm.call_scope import (
+    avoided_upstreams,
+    scoped_provider_sort,
+    session_tag,
+    set_scoped_provider_sort,
+)
 from modules.llm.catalog_lookup import catalog_wire_id
+from modules.llm.error_rules import NO_ROUTE_RE
 from modules.llm.model_types import model_family
 from modules.llm.tool_schemas import schema_tool_names
 
@@ -75,6 +81,12 @@ def _provider_order(model: Optional[str]) -> List[str]:
     return plain
 
 
+def _ignored(avoided: Iterable[str]) -> List[str]:
+    """`OPENROUTER_PROVIDER_IGNORE` plus the upstreams this run left (a repeated step)."""
+    names = _names(os.getenv("OPENROUTER_PROVIDER_IGNORE") or "")
+    return names + [n for n in avoided if n not in names]
+
+
 def provider_routing_extra_body(model: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """The `extra_body` OpenRouter routing block, or None when every knob is unset."""
     provider: Dict[str, Any] = {}
@@ -84,7 +96,7 @@ def provider_routing_extra_body(model: Optional[str] = None) -> Optional[Dict[st
     order = _provider_order(model)
     if order:
         provider["order"] = order
-    ignore = _names(os.getenv("OPENROUTER_PROVIDER_IGNORE") or "")
+    ignore = _ignored(avoided_upstreams())
     if ignore:
         provider["ignore"] = ignore
     return {"provider": provider} if provider else None
@@ -176,13 +188,34 @@ def tool_choice_for(client: Any, tools: Any, explicit: Optional[str] = None) -> 
     return resolve_tool_choice(tools, getattr(client, "model_type", None), explicit)
 
 
+async def create_completion(sdk: Any, request_params: Dict[str, Any]) -> Any:
+    """One `chat.completions.create`. When the upstreams this run left were the model's only
+    routes, the call is retried ONCE without them: a weak upstream is better than none."""
+    try:
+        return await sdk.chat.completions.create(**request_params)
+    except Exception as e:
+        extra = dict(request_params.get("extra_body") or {})
+        provider = dict(extra.get("provider") or {})
+        configured = _ignored(())
+        if not NO_ROUTE_RE.search(str(e).lower()) or provider.get("ignore", configured) == configured:
+            raise
+        provider["ignore"] = configured
+        if not configured:
+            provider.pop("ignore")
+        extra["provider"] = provider
+        if not provider:
+            extra.pop("provider")
+        request_params["extra_body"] = extra
+        return await sdk.chat.completions.create(**request_params)
+
+
 async def create_with_tool_choice_fallback(client: Any, sdk: Any,
                                            request_params: Dict[str, Any]) -> Any:
     """One `chat.completions.create`. An upstream that refuses
     ``tool_choice:"required"`` is retried ONCE with ``auto``, and the model is
     remembered for the process. Any other error propagates unchanged."""
     try:
-        return await sdk.chat.completions.create(**request_params)
+        return await create_completion(sdk, request_params)
     except Exception as e:
         if request_params.get("tool_choice") != "required" or not is_tool_choice_rejection(e):
             raise
@@ -193,4 +226,4 @@ async def create_with_tool_choice_fallback(client: Any, sdk: Any,
             logger.warning(f"event=tool_choice_required_rejected model={model} "
                            f"action=retry_auto ({str(e)[:160]})")
         request_params["tool_choice"] = "auto"
-        return await sdk.chat.completions.create(**request_params)
+        return await create_completion(sdk, request_params)

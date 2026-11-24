@@ -39,7 +39,7 @@ describe("the model for new chats", () => {
     const fetcher = vi.fn(async (url, init) => {
       if (!init || init.method !== "POST") return { ok: true, json: async () => ({ ...READ, mine: true }) };
       return { ok: true, status: 200, json: async () => ({ ok: true, message: "✅ Model: deepseek-pro (deepseek)",
-        now: { model: "deepseek-pro", provider: "deepseek", source: "your default (/model <name> default)" } }) };
+        now: { model: "deepseek-pro", provider: "deepseek", source: "your saved model (/model <name>)" } }) };
     });
     await loadModel(root, COPY, fetcher);
     root.querySelector("input").value = "deepseek-pro";

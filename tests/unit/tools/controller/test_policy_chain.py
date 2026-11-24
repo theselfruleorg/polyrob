@@ -15,6 +15,7 @@ _FACTORIES = {
     "wallet_authority": ("tools.controller.wallet_authority", "make_wallet_authority_hook"),
     "effect_gate": ("tools.controller.effect_hooks", "make_effect_gate_hook"),
     "repeat_act": ("tools.controller.effect_hooks", "make_repeat_act_hook"),
+    "claim_guard": ("tools.controller.effect_hooks", "make_claim_guard_hook"),
     "effect_record": ("tools.controller.effect_hooks", "make_effect_record_hook"),
     "command_guard": ("tools.controller.command_guard_hook", "make_command_guard_hook"),
 }

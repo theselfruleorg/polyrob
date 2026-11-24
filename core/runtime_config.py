@@ -159,11 +159,64 @@ def operator_model_for(provider, env=None):
     2026-10-12). Any other provider (a job's own pin, a credit-dead re-route) gets
     ``None`` here and keeps its own default.
     """
+    own = _owner_main(env)
+    if own and provider and canonicalize_provider(provider) == own[0]:
+        return own[1]
     env = _os.environ if env is None else env
     pinned = canonicalize_provider(operator_provider_pin(env))
     if not provider or not pinned or canonicalize_provider(provider) != pinned:
         return None
     return operator_model_pin(env)
+
+
+_OWNER_MAIN_RESOLVER = None
+
+
+def register_owner_main_resolver(fn) -> None:
+    """``fn() -> {"provider", "model"} | None`` — the instance owner's saved model
+    (``/model <name>``, ``model.json``), registered from ``agents/task/constants.py`` (an
+    import of the owner store here closes an import cycle)."""
+    global _OWNER_MAIN_RESOLVER
+    _OWNER_MAIN_RESOLVER = fn
+
+
+def _owner_main(env=None):
+    """``(provider, model)`` of the instance owner's saved model, or ``None``. It is the
+    model of every run nobody pinned (goals, jobs, a new chat) — above ``DEFAULT_*``: one
+    saved model drives the agent. Only for the process env (an explicit *env*
+    mapping is a caller's what-if) and only while its provider has a key; fail-open to
+    ``None`` (the operator pair)."""
+    if (env is not None and env is not _os.environ) or _OWNER_MAIN_RESOLVER is None:
+        return None
+    try:
+        from core.billing_context import is_billed
+        if is_billed():   # a billed tenant never runs on the owner's choice: the operator pays
+            return None
+        row = _OWNER_MAIN_RESOLVER()
+    except Exception:
+        return None
+    if not (isinstance(row, dict) and row.get("provider") and row.get("model")):
+        return None
+    provider = canonicalize_provider(row["provider"])
+    try:
+        keyed = {canonicalize_provider(p) for p in usable_providers_with_credentials(_os.environ)}
+    except Exception:
+        return None
+    return (provider, row["model"]) if provider in keyed else None
+
+
+def main_provider_pin(env=None):
+    """The provider of a run nobody pinned: the owner's saved model's, else
+    ``DEFAULT_PROVIDER``. :func:`operator_provider_pin` stays the raw operator pin (the
+    primary client at start, the tier rows, the credit status)."""
+    return main_pair(env)[0]
+
+
+def main_pair(env=None):
+    """``(provider, model)`` of a run nobody pinned: the owner's saved model, else the
+    operator pin pair (either half may be ``None``)."""
+    own = _owner_main(env)
+    return own if own else (operator_provider_pin(env), operator_model_pin(env))
 
 
 #: Model tiers a ``REGIME_POLICY`` row may name (``agents/task/session_class.py``).
@@ -212,7 +265,7 @@ def _owner_tier(tier, env=None):
         return None
     if not row:
         return None
-    pinned = canonicalize_provider(operator_provider_pin())
+    pinned = canonicalize_provider(main_provider_pin())
     if pinned and canonicalize_provider(row.get("provider")) != pinned:
         return None
     return row.get("model")
@@ -222,10 +275,10 @@ def _light_model(provider, env=None):
     """The ``light`` tier on *provider*: its cheap aux model for the operator's model, or the
     operator's model itself when that already is the cheap one (prod: flash). ``None`` when
     the provider is not the operator's pin."""
-    pinned = canonicalize_provider(operator_provider_pin(env))
+    pinned, main = main_pair(env)
+    pinned = canonicalize_provider(pinned)
     if not provider or not pinned or canonicalize_provider(provider) != pinned:
         return None
-    main = operator_model_pin(env)
     cheap = _owner_tier("light", env)
     if cheap:
         return cheap
@@ -242,10 +295,11 @@ def tier_models(provider, env=None) -> dict:
     not configured there). ``default`` is the operator's model on its pinned provider."""
     env = _os.environ if env is None else env
     out = {}
-    pinned = canonicalize_provider(operator_provider_pin(env))
+    pinned, main = main_pair(env)
+    pinned = canonicalize_provider(pinned)
     if provider and pinned and canonicalize_provider(provider) == pinned:
-        if operator_model_pin(env):
-            out["default"] = operator_model_pin(env)
+        if main:
+            out["default"] = main
         heavy = heavy_model_pin(env)
         if heavy:
             out["heavy"] = heavy
@@ -266,12 +320,12 @@ def tier_refusal(tier, provider, env=None) -> str:
         return ""
     if tier == "heavy" and not heavy_model_pin(env):
         return "refused: the heavy tier is not configured (HEAVY_MODEL is unset)"
-    pinned = canonicalize_provider(operator_provider_pin(env))
+    pinned = canonicalize_provider(main_provider_pin(env))
     if tier == "light" and provider and pinned and canonicalize_provider(provider) == pinned:
         return ("refused: the light tier is not configured (no DEFAULT_MODEL and no cheap "
                 "model for this provider)")
-    return (f"refused: the {tier} tier is set only on the operator's provider "
-            f"({operator_provider_pin(env) or 'none pinned'}), not on {provider or '?'}")
+    return (f"refused: the {tier} tier is set only on the main provider "
+            f"({main_provider_pin(env) or 'none pinned'}), not on {provider or '?'}")
 
 
 def heavy_model_pin(env=None):
@@ -281,7 +335,13 @@ def heavy_model_pin(env=None):
     if own:
         return own
     env = _os.environ if env is None else env
-    return (env.get("HEAVY_MODEL") or "").strip() or None
+    heavy = (env.get("HEAVY_MODEL") or "").strip() or None
+    # HEAVY_MODEL is an id of the operator's provider: on another main provider (the
+    # owner's saved model) it would name a model that provider does not serve.
+    if heavy and canonicalize_provider(main_provider_pin(env)) != canonicalize_provider(
+            operator_provider_pin(env)):
+        return None
+    return heavy
 
 
 def fallback_provider_allowlist(env=None):
@@ -337,7 +397,7 @@ def model_for(payload, provider, *, tier="default", env=None):
     model = heavy_model_pin(env)
     if not model:
         return None
-    pinned = canonicalize_provider(operator_provider_pin(env))
+    pinned = canonicalize_provider(main_provider_pin(env))
     if not provider or not pinned or canonicalize_provider(provider) != pinned:
         return None
     return model
@@ -350,18 +410,18 @@ def heavy_model_for(payload, provider, env=None):
 
 
 def resolve_default_provider(env=None, *, last_resort=("openai", None)):
-    """Resolve the operator's default (provider, model) for an autonomous run.
+    """Resolve the default (provider, model) for an autonomous run: the owner's saved
+    model (``/model <name>``) when one is set and keyed, else the operator pin.
 
     Thin wrapper over ``resolve_runtime_config`` that threads the operator pin
     (``DEFAULT_PROVIDER``) so autonomous dispatch honors it. ``model``
     is the operator's model pin for a pinned provider, else ``None`` (the caller fills it
     from the registry via ``get_default_model``, which applies the same pin).
     """
+    provider, model = main_pair(env)
     env = _os.environ if env is None else env
     return resolve_runtime_config(
-        None, None, env=env,
-        pinned_provider=operator_provider_pin(env),
-        pinned_model=operator_model_pin(env),
+        None, None, env=env, pinned_provider=provider, pinned_model=model,
         last_resort=last_resort,
     )
 
@@ -413,12 +473,12 @@ def resolve_session_runtime(provider=None, model=None, env=None):
 
         # The pin pair is read as a unit, so a pinned operator is not silently
         # served the registry default for their pinned provider.
-        pinned_model = operator_model_pin(env)
+        pinned_provider, pinned_model = main_pair(env)   # the owner's saved model first
         resolved_provider, resolved_model = resolve_runtime_config(
             provider or None,
             model or None,
             env=env,
-            pinned_provider=operator_provider_pin(env),
+            pinned_provider=pinned_provider,
             pinned_model=pinned_model,
             last_resort=("openai", None),
         )

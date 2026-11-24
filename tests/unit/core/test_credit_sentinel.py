@@ -346,6 +346,38 @@ def test_extract_reset_ts(monkeypatch):
     assert cs.extract_reset_ts(far) == now + 7 * 86400
 
 
+def test_the_five_hour_limit_is_credit_death_and_releases_at_its_reset(monkeypatch):
+    import calendar
+    import time as _time
+    from core import credit_sentinel as cs
+    text = ("Error code: 429 - [1308][Usage limit reached for 5 hour. Your limit will "
+            "reset at 2026-11-23 21:56:09]")
+    assert cs.looks_like_credit_death(text) is True
+    reset = float(calendar.timegm((2026, 11, 23, 13, 56, 9, 0, 0, 0)))   # stamped UTC+8
+    monkeypatch.setattr(_time, "time", lambda: reset - 3 * 3600)
+    assert cs.extract_reset_ts(text) == reset
+    # Minutes before the reset, or just after it, the UTC reading is 8 h late.
+    for now in (reset - 300, reset + 300):
+        monkeypatch.setattr(_time, "time", lambda now=now: now)
+        assert cs.extract_reset_ts(text) == now + 900
+
+
+def test_the_notice_names_the_live_provider_when_one_can_serve(data_dir, monkeypatch):
+    import core.runtime_config as rc
+    import core.surfaces.user_delivery as ud
+    from core.credit_sentinel import trip_credit_sentinel
+    sent = []
+
+    async def _deliver(container, user_id, text, **kw):
+        sent.append(text)
+        return "sent"
+    monkeypatch.setattr(ud, "deliver_user_message", _deliver)
+    monkeypatch.setattr(rc, "resolve_live_provider", lambda *a, **k: "openrouter")
+    asyncio.run(trip_credit_sentinel("plan limit", provider="zai-coding",
+                                     release_ts=time.time() + 3600))
+    assert "Runs use openrouter" in sent[0] and "Autonomy paused" not in sent[0]
+
+
 def test_release_ts_overrides_fixed_window(data_dir, monkeypatch):
     from core.credit_sentinel import credit_sentinel_active, trip_credit_sentinel
     # a 0h window would release instantly under the legacy clock…
